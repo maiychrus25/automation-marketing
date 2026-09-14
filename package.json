@@ -1,5 +1,5 @@
 {
-  "name": "Deplao",
+  "name": "ahv-connect",
   "version": "26.8.5",
   "description": "Phần mềm desktop quản lý Zalo, Facebook & Telegram cá nhân Đa tài khoản tích hợp CRM, ERP, POS, Workflow và AI Assistant giúp đội nhóm bán hàng, chăm sóc khách hàng và marketing trên Zalo vận hành tập trung trong một ứng dụng duy nhất.",
   "main": "dist-electron/electron/main.js",
@@ -15,7 +15,7 @@
     "production": "npm run build:bridge-e2ee && tsc -p tsconfig.electron.prod.json && node scripts/strip-console.js && npm run build:renderer && npm run rebuild:native && electron-builder --publish never"
   },
   "author": "babyvibe <babyvibe@users.noreply.github.com>",
-  "homepage": "https://deplaoapp.com",
+  "homepage": "https://cms-dev.ahvdtlx.com",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.7.8",
@@ -96,8 +96,8 @@
     "zustand": "^5.0.12"
   },
   "build": {
-    "appId": "com.Deplao.app",
-    "productName": "Deplao",
+    "appId": "com.ahv.connect",
+    "productName": "AHV Connect",
     "forceCodeSigning": false,
     "npmRebuild": false,
     "publish": [],

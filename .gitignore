@@ -14,3 +14,7 @@ agents/
 tmp/
 docs/
 .vscode/
+
+# AHV Connect
+dist/
+dist-electron/

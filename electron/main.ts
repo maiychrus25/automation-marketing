@@ -35,7 +35,6 @@ import IntegrationRegistry from '../src/services/integrations/IntegrationRegistr
 import EventBroadcaster from '../src/services/event/EventBroadcaster';
 import CRMQueueService from '../src/services/crm/CRMQueueService';
 import FileStorageService from '../src/services/file/FileStorageService';
-import TrackingService from '../src/services/tracking/TrackingService';
 import { SHOW_DEV_TOOLS, IS_DEV_BUILD } from '../src/configs/BuildConfig';
 import Logger from '../src/utils/Logger';
 
@@ -144,13 +143,13 @@ app.commandLine.appendSwitch('lang', 'vi-VN');
 app.commandLine.appendSwitch('accept-lang', 'vi-VN,vi;q=0.9');
 
 // Đặt tên app (hiện trên taskbar, tray, macOS dock)
-app.setName('Deplao');
+app.setName('AHV Connect');
 
 // Windows: đặt AppUserModelId để taskbar/notification hiển thị đúng icon & tên
 // Dev: AUMID unique mỗi lần chạy → Windows tạo icon cache mới → hiện đúng icon
 // Production: AUMID cố định (khớp appId electron-builder, exe đã embed icon qua afterPack)
 if (process.platform === 'win32') {
-  app.setAppUserModelId(isDev ? `com.Deplao.dev.${Date.now()}` : 'com.Deplao.app');
+  app.setAppUserModelId(isDev ? `com.ahv.connect.dev.${Date.now()}` : 'com.ahv.connect');
 }
 
 // ─── Register custom protocol BEFORE app ready (required by Electron) ─────────
@@ -1148,14 +1147,12 @@ app.whenReady().then(async () => {
     });
   }, 3000);
 
-  // Initialize Tracking Service (chỉ chạy trong production build)
-  setTimeout(() => {
-    try {
-      TrackingService.getInstance().start();
-    } catch (err: any) {
-      console.error('[main] TrackingService init error:', err.message);
-    }
-  }, 5000);
+  // AHV Connect: KHÔNG khởi động TrackingService.
+  //
+  // Bản gốc gửi pageId (zalo_id/facebook_id/telegram id của tài khoản đang
+  // đăng nhập) và machineId lên máy chủ của tác giả thượng nguồn để phục vụ
+  // tính năng premium. Bản nội bộ của trung tâm không dùng premium và không
+  // gửi dữ liệu tài khoản ra ngoài.
 
   // ─── Media cleanup scheduler (tự động xoá media cũ) ─────────────────────
   // Chạy mỗi ngày lúc 3:00 sáng, kiểm tra tất cả tài khoản có cấu hình auto-delete
@@ -1188,17 +1185,12 @@ app.whenReady().then(async () => {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
 
-    // Đợi renderer load xong rồi mới check update (tránh race condition)
-    // IPC: renderer báo đã sẵn sàng nhận update events
-    ipcMain.once('update:renderer-ready', () => {
-      console.log('[AutoUpdate] Renderer ready — checking for updates');
-      autoUpdater.checkForUpdates();
-    });
-    // Fallback: nếu renderer không báo sau 10s, tự check
-    setTimeout(() => {
-      autoUpdater.checkForUpdates();
-    }, 10_000);
-    setInterval(() => autoUpdater.checkForUpdates(), 4 * 60 * 60 * 1000);
+    // ── AHV Connect: TẮT KIỂM TRA CẬP NHẬT ────────────────────────────────
+    // Bản gốc lấy bản mới từ kho phát hành của tác giả thượng nguồn; để nguyên
+    // thì bản nội bộ sẽ bị bản của họ ghi đè. Bản dựng nội bộ được phát theo
+    // kênh riêng của trung tâm. Khi nào trung tâm tự phát hành thì cấu hình
+    // `build.publish` trỏ về kho nội bộ rồi mở lại khối này.
+    console.log('[AutoUpdate] Đã tắt trong bản AHV Connect — phát hành theo kênh nội bộ');
 
     autoUpdater.on('update-available', (info) => {
       mainWindow?.webContents.send('update:available', {

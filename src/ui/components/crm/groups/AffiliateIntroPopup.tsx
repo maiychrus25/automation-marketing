@@ -6,6 +6,12 @@ interface Props {
 }
 
 export default function AffiliateIntroPopup({ onClose }: Props) {
+  // AHV Connect: chương trình giới thiệu (affiliate) là của sản phẩm thượng
+  // nguồn, không áp dụng cho bản nội bộ của trung tâm. Không hiển thị popup.
+  void onClose;
+  return null;
+
+  // eslint-disable-next-line no-unreachable
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
       <div

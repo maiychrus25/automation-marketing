@@ -70,7 +70,15 @@ class TrackingService {
    * Chỉ hoạt động trong production build.
    */
   public start(): void {
-    // ── Guard: chỉ chạy trong production ────────────────────────────────
+    // ── AHV Connect: TẮT VĨNH VIỄN ──────────────────────────────────────
+    // Bản gốc gửi pageId (zalo_id/facebook_id/telegram id của tài khoản đang
+    // đăng nhập) và machineId lên máy chủ thượng nguồn. Bản nội bộ không gửi
+    // dữ liệu tài khoản của trung tâm ra ngoài. Giữ lớp chặn ngay tại đây để
+    // mọi lời gọi trong tương lai cũng không làm rò dữ liệu.
+    Logger.log('[TrackingService] 🔇 Đã tắt trong bản AHV Connect — không gửi dữ liệu ra ngoài');
+    return;
+
+    // eslint-disable-next-line no-unreachable
     if (IS_DEV_BUILD) {
       Logger.log('[TrackingService] 🔇 Bỏ qua - đang chạy ở môi trường development');
       return;

@@ -9,6 +9,9 @@ const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSI
 /** Fetch aggregated release notes from GitHub for all versions between current and target */
 async function fetchAggregatedNotes(currentVersion: string, targetVersion: string): Promise<string> {
   try {
+    // AHV Connect: không lấy ghi chú phát hành từ kho thượng nguồn.
+    return '';
+    // eslint-disable-next-line no-unreachable
     const res = await fetch(`https://api.github.com/repos/babyvibe/deplao-builder/releases?per_page=30`);
     if (!res.ok) return '';
     const releases: any[] = await res.json();
