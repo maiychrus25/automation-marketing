@@ -33,13 +33,28 @@ Hai thay đổi 6–7 do phía trung tâm thực hiện trước; cách tắt te
 lấy theo bản của trung tâm (trả về kết quả rỗng có thông báo, phủ đủ 7 hàm)
 thay vì ném lỗi.
 
+## ⚠️ Thư mục dữ liệu ĐÃ đổi — bản cài Deplao cũ không tự chuyển sang
+
+`electron/main.ts` gọi `app.setName('AHV Connect')` trước `app.whenReady()`,
+nên Electron phân giải `userData` thành `%AppData%\AHV Connect` thay vì
+`%AppData%\Deplao`. Hệ quả: máy nào **đã dùng Deplao từ trước** thì khi cài AHV
+Connect sẽ mở ra một cơ sở dữ liệu **rỗng** — dữ liệu cũ vẫn còn nguyên trong
+thư mục `Deplao`, không mất, nhưng không tự nạp.
+
+Đây là chủ ý (hai bản chạy song song được, danh tính tách bạch). Nếu cần
+chuyển dữ liệu: chép `deplao-tool.db`, `deplao-config.json` và thư mục `media`
+từ `%AppData%\Deplao` sang `%AppData%\AHV Connect` khi ứng dụng đang tắt.
+
+*Chưa kiểm chứng bằng cách chạy thật* — máy dựng không có Xvfb và chưa tải
+binary electron. Cần xác nhận lại ở lần chạy đầu tiên trên máy Windows.
+
 ## Những chỗ CỐ Ý giữ nguyên tên "deplao"
 
-Không phải sót — đổi sẽ gây mất dữ liệu hoặc phá tương thích:
+Không phải sót — đổi sẽ phá tương thích hoặc gây rủi ro không tương xứng:
 
 | Chỗ giữ nguyên | Lý do |
 |---|---|
-| Tên tệp trên đĩa: `deplao-tool.db`, `deplao-config.json` | Bản cài đã có sẵn sẽ mất toàn bộ dữ liệu nếu đổi tên mà không viết bước di trú |
+| Tên tệp trong thư mục dữ liệu: `deplao-tool.db`, `deplao-config.json` | Tên tệp xuất hiện ở ~40 vị trí trong mã (`WorkspaceManager`, `DatabaseService`, IPC workspace/database) và trong cấu hình workspace đã lưu. Đổi tên là một việc riêng có bước di trú, không gộp vào đợt đổi thương hiệu |
 | Khoá `localStorage`: `deplao_employee_login`, `deplao_employee_password`, `deplao_forum_topics_*` | Đổi khoá là đăng xuất toàn bộ nhân viên và mất cache |
 | Khoá nhận dạng tệp workflow xuất ra: `_deplaoWorkflow` | Đổi thì không nhập lại được các tệp workflow đã xuất trước đó |
 | Thư mục tạm: `deplao-clipboard`, `deplao-videometa`, `deplao-workflow-images` | Nội bộ, không hiển thị cho người dùng |

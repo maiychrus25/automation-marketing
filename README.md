@@ -69,9 +69,10 @@ Dữ liệu nằm hoàn toàn trên máy người dùng (SQLite trong thư mục
 ứng dụng). **Không có bản sao lưu tự động** — tự sao lưu định kỳ trước khi nâng
 cấp phiên bản.
 
-Tên tệp dữ liệu trên đĩa (`deplao-tool.db`, `deplao-config.json`) được **giữ
-nguyên có chủ đích** để những bản cài đã có sẵn không bị mất dữ liệu khi nâng
-cấp lên AHV Connect.
+⚠️ Thư mục dữ liệu là `%AppData%\AHV Connect`, **không phải** `%AppData%\Deplao`.
+Máy nào đã dùng Deplao từ trước sẽ thấy cơ sở dữ liệu rỗng khi mở AHV Connect —
+dữ liệu cũ không mất, chỉ nằm ở thư mục khác. Cách chuyển và lý do giữ nguyên
+tên tệp `deplao-tool.db` / `deplao-config.json`: xem [NOTICE.md](./NOTICE.md).
 
 ## Hỗ trợ
 
