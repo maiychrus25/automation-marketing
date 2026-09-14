@@ -13,10 +13,9 @@
  *   GET  https://deplaoapp.com/api/shared-groups/list     → danh sách nhóm chung
  */
 
-// AHV Connect: đã cắt đường ra máy chủ thượng nguồn. Giữ hằng số rỗng để
-// mọi URL dựng từ nó đều không hợp lệ, phòng khi có nhánh gọi sót.
-const BACKEND_URL = '';
+const BACKEND_URL = 'https://deplaoapp.com';
 const SECRET_KEY = 'fb7457b7a39bdc9e742f08b657a8059a5e6a8fda6e32bfe0bfecf37eadf519eb';
+const BACKEND_DISABLED = true; // ngắt kết nối tới deplaoapp.com theo yêu cầu
 
 interface PremiumStatus {
   isPremium: boolean;
@@ -68,17 +67,6 @@ async function encryptBody(body: object): Promise<string> {
  * Gọi API backend.
  */
 async function callBackend<T>(endpoint: string, body: object): Promise<T> {
-  // ── AHV Connect: CHẶN MỌI LỜI GỌI RA MÁY CHỦ THƯỢNG NGUỒN ──────────────
-  // Các endpoint này (premium, quét nhóm, thanh toán, affiliate, chia sẻ
-  // nhóm) gửi dữ liệu nhóm và tài khoản của trung tâm ra ngoài. Bản nội bộ
-  // không dùng gói premium nên chặn tại một chỗ duy nhất thay vì sửa rải rác
-  // ở 9 file giao diện. Giao diện phụ thuộc đã được ẩn; lời gọi sót lại sẽ
-  // nhận lỗi rõ ràng thay vì âm thầm gửi dữ liệu đi.
-  const chan = `[AHV Connect] Tính năng này đã được gỡ ở bản nội bộ (${endpoint}).`;
-  console.warn(chan);
-  throw new Error(chan);
-
-  // eslint-disable-next-line no-unreachable
   const url = `${BACKEND_URL}${endpoint}`;
   console.log(`[backendService] calling ${url}`, body);
 
@@ -118,6 +106,7 @@ async function callBackend<T>(endpoint: string, body: object): Promise<T> {
  * FE gọi lúc mở tab "Quét thành viên" (lần đầu) hoặc ấn "Cập nhật"
  */
 export async function getPremiumStatus(pageId: string): Promise<PremiumStatus> {
+  if (BACKEND_DISABLED) return { isPremium: false, expiresAt: null };
   try {
     const res = await callBackend<any>('/api/scan/premium-status', { page_id: pageId });
     return {
@@ -143,10 +132,7 @@ export interface ValidateAffCodeResult {
  * GET /api/affiliate/validate/:code
  */
 export async function validateAffCode(code: string): Promise<ValidateAffCodeResult> {
-  // AHV Connect: tính năng phụ thuộc máy chủ thượng nguồn, đã gỡ ở bản nội bộ.
-  throw new Error('[AHV Connect] Tính năng này đã được gỡ ở bản nội bộ.');
-
-  // eslint-disable-next-line no-unreachable
+  if (BACKEND_DISABLED) return { valid: false, error: 'Tính năng đã tắt (không kết nối backend)' };
   if (!code?.trim()) return { valid: false, error: 'Vui lòng nhập mã' };
   try {
     const url = `${BACKEND_URL}/api/affiliate/validate/${encodeURIComponent(code.trim())}`;
@@ -175,6 +161,9 @@ export async function scanGroupViaBackend(params: {
   imei: string;
   groupId: string;
 }): Promise<ScanGroupResult> {
+  if (BACKEND_DISABLED) {
+    return { success: false, groupId: params.groupId, totalMembers: 0, members: [], error: 'Tính năng đã tắt (không kết nối backend)' };
+  }
   try {
     const res = await callBackend<ScanGroupResult>('/api/scan/group', {
       page_id: params.pageId,
@@ -239,10 +228,14 @@ export async function createPaymentQr(params: {
   pageId: string;
   affCode?: string;
 }): Promise<CreateQrResponse> {
-  // AHV Connect: tính năng phụ thuộc máy chủ thượng nguồn, đã gỡ ở bản nội bộ.
-  throw new Error('[AHV Connect] Tính năng này đã được gỡ ở bản nội bộ.');
-
-  // eslint-disable-next-line no-unreachable
+  if (BACKEND_DISABLED) {
+    return {
+      success: false, paymentId: '', amount: 0, qrCodeUrl: '',
+      bankInfo: { bankName: '', accountNumber: '', accountName: '' },
+      transferContent: '', expiresAt: '', breakdown: [],
+      error: 'Tính năng đã tắt (không kết nối backend)',
+    };
+  }
   const pageIdsArray = Array.isArray(params.pageIds) ? params.pageIds : [params.pageIds];
   const body: Record<string, any> = {
     page_ids: pageIdsArray,
@@ -298,10 +291,7 @@ export async function createPaymentQr(params: {
  * KHÔNG tự confirm — chỉ SePay webhook mới trigger confirm trên BE.
  */
 export async function checkPaymentStatus(paymentId: string, pageId: string): Promise<CheckPaymentResponse> {
-  // AHV Connect: tính năng phụ thuộc máy chủ thượng nguồn, đã gỡ ở bản nội bộ.
-  throw new Error('[AHV Connect] Tính năng này đã được gỡ ở bản nội bộ.');
-
-  // eslint-disable-next-line no-unreachable
+  if (BACKEND_DISABLED) return { success: false, status: 'failed', message: 'Tính năng đã tắt (không kết nối backend)' };
   const url = `${BACKEND_URL}/api/payment/check-status`;
   const res = await fetch(url, {
     method: 'POST',
@@ -393,6 +383,7 @@ export async function submitSharedGroup(params: {
   categoryId: number;
   note?: string;
 }): Promise<{ success: boolean; shareId: string; status: string; message: string }> {
+  if (BACKEND_DISABLED) return { success: false, shareId: '', status: 'failed', message: 'Tính năng đã tắt (không kết nối backend)' };
   const url = `${BACKEND_URL}/api/shared-groups/submit`;
   const res = await fetch(url, {
     method: 'POST',
@@ -429,6 +420,9 @@ export async function getSharedGroups(params: {
   page?: number;
   limit?: number;
 }): Promise<SharedGroupsListResponse> {
+  if (BACKEND_DISABLED) {
+    return { success: false, items: [], pagination: { page: 1, limit: 0, total: 0 }, categories: [] };
+  }
   const query = new URLSearchParams({
     page_id: params.pageId,
     ...(params.categoryId ? { category_id: String(params.categoryId) } : {}),

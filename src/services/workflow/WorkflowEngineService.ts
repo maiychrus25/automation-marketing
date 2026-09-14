@@ -2701,7 +2701,7 @@ class WorkflowEngineService {
         // Parse structured AI response (same as zalo.sendMessage)
         const tgSegments = parseStructuredResponse(cfg.message);
         const tgMsg = tgSegments
-          ? tgSegments.filter((s: any) => s.type === 'text').map((s: any) => s.text).join('')
+          ? tgSegments.filter((s: any) => s.type === 'text' && s.content).map((s: any) => String(s.content).trim()).join('\n\n')
           : cfg.message;
         const tgSendResult = await this.sendTelegramMessage(tgAccountId, String(tgChatId), tgMsg);
         return { success: tgSendResult.success, messageId: tgSendResult.messageId, ...(tgSendResult.error ? { error: tgSendResult.error } : {}) };

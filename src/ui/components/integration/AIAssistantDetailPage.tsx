@@ -24,6 +24,7 @@ const PLATFORMS = [
   { value: 'mistral',  label: 'Mistral AI',      icon: <RefreshIcon className="w-4 h-4" />, color: 'bg-sky-600' },
   { value: '9router',  label: '9Router Proxy',   icon: <ShuffleIcon className="w-4 h-4" />, color: 'bg-cyan-600' },
   { value: 'openrouter', label: 'OpenRouter',    icon: <ShuffleIcon className="w-4 h-4" />, color: 'bg-indigo-600' },
+  { value: 'ahvchat',  label: 'AHV Chat',        icon: <ShuffleIcon className="w-4 h-4" />, color: 'bg-teal-600' },
 ] as const;
 
 const MODELS_BY_PLATFORM: Record<string, { value: string; label: string }[]> = {
@@ -104,6 +105,20 @@ const MODELS_BY_PLATFORM: Record<string, { value: string; label: string }[]> = {
     { value: 'qwen/qwen3-max',              label: 'Qwen3 Max (Alibaba)' },
     { value: 'mistralai/mistral-large-2',   label: 'Mistral Large 2' },
     { value: '__custom__',                  label: 'Custom model - tự nhập...' },
+  ],
+  ahvchat: [
+    { value: 'ahvholding/model/gpt-5.4-mini',        label: 'GPT-5.4 Mini (khuyên dùng)' },
+    { value: 'ahvholding/model/gpt-5.4',             label: 'GPT-5.4 (flagship)' },
+    { value: 'ahvholding/model/claude-opus-4-7',     label: 'Claude Opus 4.7' },
+    { value: 'ahvholding/model/claude-sonnet-4-6',   label: 'Claude Sonnet 4.6' },
+    { value: 'ahvholding/model/gemini-3-pro-preview', label: 'Gemini 3 Pro Preview' },
+    { value: 'ahvholding/model/deepseek-v3.2',       label: 'DeepSeek V3.2' },
+    { value: 'ahvholding/model/qwen3-max',           label: 'Qwen3 Max' },
+    { value: 'ahvholding/model/grok-4.2',            label: 'Grok 4.2' },
+    { value: 'ahvholding/model/glm-5.3',             label: 'GLM-5.3' },
+    { value: 'ahvholding/model/kimi-k2.5',           label: 'Kimi K2.5' },
+    { value: 'ahvholding/minimax/MiniMax-M3',        label: 'MiniMax M3' },
+    { value: '__custom__',                  label: 'Custom model - tự nhập... (hơn 1000 model, xem danh sách)' },
   ],
 };
 
@@ -304,7 +319,7 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
 
   // Auto-set first model when platform changes (skip for platforms that support custom models)
   useEffect(() => {
-    if (platform === '9router' || platform === 'openrouter') return; // these support any model name
+    if (platform === '9router' || platform === 'openrouter' || platform === 'ahvchat') return; // these support any model name
     const models = MODELS_BY_PLATFORM[platform] || [];
     const inList = models.find(m => m.value === model);
     if (models.length && !inList && model !== '__custom__') {
@@ -314,7 +329,7 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
 
   // Derived: check if current model is a custom (free-text) model not in the predefined list
   const getPlatformModels = () => MODELS_BY_PLATFORM[platform] || [];
-  const isCustomModel = model === '__custom__' || ((platform === '9router' || platform === 'openrouter') &&
+  const isCustomModel = model === '__custom__' || ((platform === '9router' || platform === 'openrouter' || platform === 'ahvchat') &&
     !getPlatformModels().find(m => m.value === model) && model.length > 0);
 
   // Keep customModelInput in sync when model is a custom name (not __custom__ sentinel)
@@ -656,7 +671,7 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
                 </div>
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Model</label>
-                  {(platform === '9router' || platform === 'openrouter') ? (
+                  {(platform === '9router' || platform === 'openrouter' || platform === 'ahvchat') ? (
                     <div className="space-y-1.5">
                       <select value={isCustomModel && model !== '__custom__' ? '__custom__' : model}
                         onChange={e => {
@@ -716,6 +731,7 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
                 {platform === 'mistral' && 'Lấy tại: console.mistral.ai/api-keys'}
                 {platform === '9router' && 'Lấy từ Dashboard -> API Keys 9router tại http://localhost:20128/dashboard'}
                 {platform === 'openrouter' && 'Lấy tại: openrouter.ai/settings/keys'}
+                {platform === 'ahvchat' && 'API Key do AHV cấp — liên hệ quản trị nội bộ để lấy.'}
               </p>
               {platform === '9router' && (
                 <div className="mt-2 flex items-center gap-2">
@@ -1009,7 +1025,7 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Base URL (tuỳ chọn)</label>
                 <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
-                  placeholder={platform === '9router' ? 'http://localhost:20128' : platform === 'openrouter' ? 'https://openrouter.ai/api' : 'https://api.custom-proxy.com'}
+                  placeholder={platform === '9router' ? 'http://localhost:20128' : platform === 'openrouter' ? 'https://openrouter.ai/api' : platform === 'ahvchat' ? 'https://auto.ahvchat.com/v1' : 'https://api.custom-proxy.com'}
                   className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"/>
                 <p className="text-[10px] text-gray-400 mt-1">
                   Ghi đè endpoint API. Để trống để dùng URL mặc định. Hữu ích khi dùng proxy như 9Router, OpenRouter, hoặc các API gateway khác.

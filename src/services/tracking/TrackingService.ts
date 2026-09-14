@@ -46,6 +46,7 @@ interface TrackingApiResponse {
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const API_URL = 'https://deplaoapp.com/api/tracking/page';
+const TRACKING_DISABLED = true; // ngắt kết nối tới deplaoapp.com theo yêu cầu
 const CACHE_FILENAME = 'tracking-cache.json';
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 60 phút
 
@@ -70,15 +71,13 @@ class TrackingService {
    * Chỉ hoạt động trong production build.
    */
   public start(): void {
-    // ── AHV Connect: TẮT VĨNH VIỄN ──────────────────────────────────────
-    // Bản gốc gửi pageId (zalo_id/facebook_id/telegram id của tài khoản đang
-    // đăng nhập) và machineId lên máy chủ thượng nguồn. Bản nội bộ không gửi
-    // dữ liệu tài khoản của trung tâm ra ngoài. Giữ lớp chặn ngay tại đây để
-    // mọi lời gọi trong tương lai cũng không làm rò dữ liệu.
-    Logger.log('[TrackingService] 🔇 Đã tắt trong bản AHV Connect — không gửi dữ liệu ra ngoài');
-    return;
+    // ── Đã tắt: không kết nối/gửi dữ liệu lên deplaoapp.com nữa ──────────
+    if (TRACKING_DISABLED) {
+      Logger.log('[TrackingService] 🔇 Đã vô hiệu hóa - không kết nối tới deplaoapp.com');
+      return;
+    }
 
-    // eslint-disable-next-line no-unreachable
+    // ── Guard: chỉ chạy trong production ────────────────────────────────
     if (IS_DEV_BUILD) {
       Logger.log('[TrackingService] 🔇 Bỏ qua - đang chạy ở môi trường development');
       return;

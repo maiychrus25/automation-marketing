@@ -46,6 +46,7 @@ function getOpenAICompatibleUrl(platform: string): string {
     case 'mistral':    return 'https://api.mistral.ai/v1/chat/completions';
     case '9router':    return 'http://localhost:20128/v1/chat/completions';
     case 'openrouter': return 'https://openrouter.ai/api/v1/chat/completions';
+    case 'ahvchat':    return 'https://auto.ahvchat.com/v1/chat/completions';
     case 'openai':
     default:           return 'https://api.openai.com/v1/chat/completions';
   }
