@@ -46,6 +46,7 @@ interface TrackingApiResponse {
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const API_URL = 'https://deplaoapp.com/api/tracking/page';
+const TRACKING_DISABLED = true; // ngắt kết nối tới deplaoapp.com theo yêu cầu
 const CACHE_FILENAME = 'tracking-cache.json';
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 60 phút
 
@@ -70,6 +71,12 @@ class TrackingService {
    * Chỉ hoạt động trong production build.
    */
   public start(): void {
+    // ── Đã tắt: không kết nối/gửi dữ liệu lên deplaoapp.com nữa ──────────
+    if (TRACKING_DISABLED) {
+      Logger.log('[TrackingService] 🔇 Đã vô hiệu hóa - không kết nối tới deplaoapp.com');
+      return;
+    }
+
     // ── Guard: chỉ chạy trong production ────────────────────────────────
     if (IS_DEV_BUILD) {
       Logger.log('[TrackingService] 🔇 Bỏ qua - đang chạy ở môi trường development');

@@ -15,6 +15,7 @@
 
 const BACKEND_URL = 'https://deplaoapp.com';
 const SECRET_KEY = 'fb7457b7a39bdc9e742f08b657a8059a5e6a8fda6e32bfe0bfecf37eadf519eb';
+const BACKEND_DISABLED = true; // ngắt kết nối tới deplaoapp.com theo yêu cầu
 
 interface PremiumStatus {
   isPremium: boolean;
@@ -105,6 +106,7 @@ async function callBackend<T>(endpoint: string, body: object): Promise<T> {
  * FE gọi lúc mở tab "Quét thành viên" (lần đầu) hoặc ấn "Cập nhật"
  */
 export async function getPremiumStatus(pageId: string): Promise<PremiumStatus> {
+  if (BACKEND_DISABLED) return { isPremium: false, expiresAt: null };
   try {
     const res = await callBackend<any>('/api/scan/premium-status', { page_id: pageId });
     return {
@@ -130,6 +132,7 @@ export interface ValidateAffCodeResult {
  * GET /api/affiliate/validate/:code
  */
 export async function validateAffCode(code: string): Promise<ValidateAffCodeResult> {
+  if (BACKEND_DISABLED) return { valid: false, error: 'Tính năng đã tắt (không kết nối backend)' };
   if (!code?.trim()) return { valid: false, error: 'Vui lòng nhập mã' };
   try {
     const url = `${BACKEND_URL}/api/affiliate/validate/${encodeURIComponent(code.trim())}`;
@@ -158,6 +161,9 @@ export async function scanGroupViaBackend(params: {
   imei: string;
   groupId: string;
 }): Promise<ScanGroupResult> {
+  if (BACKEND_DISABLED) {
+    return { success: false, groupId: params.groupId, totalMembers: 0, members: [], error: 'Tính năng đã tắt (không kết nối backend)' };
+  }
   try {
     const res = await callBackend<ScanGroupResult>('/api/scan/group', {
       page_id: params.pageId,
@@ -222,6 +228,14 @@ export async function createPaymentQr(params: {
   pageId: string;
   affCode?: string;
 }): Promise<CreateQrResponse> {
+  if (BACKEND_DISABLED) {
+    return {
+      success: false, paymentId: '', amount: 0, qrCodeUrl: '',
+      bankInfo: { bankName: '', accountNumber: '', accountName: '' },
+      transferContent: '', expiresAt: '', breakdown: [],
+      error: 'Tính năng đã tắt (không kết nối backend)',
+    };
+  }
   const pageIdsArray = Array.isArray(params.pageIds) ? params.pageIds : [params.pageIds];
   const body: Record<string, any> = {
     page_ids: pageIdsArray,
@@ -277,6 +291,7 @@ export async function createPaymentQr(params: {
  * KHÔNG tự confirm — chỉ SePay webhook mới trigger confirm trên BE.
  */
 export async function checkPaymentStatus(paymentId: string, pageId: string): Promise<CheckPaymentResponse> {
+  if (BACKEND_DISABLED) return { success: false, status: 'failed', message: 'Tính năng đã tắt (không kết nối backend)' };
   const url = `${BACKEND_URL}/api/payment/check-status`;
   const res = await fetch(url, {
     method: 'POST',
@@ -368,6 +383,7 @@ export async function submitSharedGroup(params: {
   categoryId: number;
   note?: string;
 }): Promise<{ success: boolean; shareId: string; status: string; message: string }> {
+  if (BACKEND_DISABLED) return { success: false, shareId: '', status: 'failed', message: 'Tính năng đã tắt (không kết nối backend)' };
   const url = `${BACKEND_URL}/api/shared-groups/submit`;
   const res = await fetch(url, {
     method: 'POST',
@@ -404,6 +420,9 @@ export async function getSharedGroups(params: {
   page?: number;
   limit?: number;
 }): Promise<SharedGroupsListResponse> {
+  if (BACKEND_DISABLED) {
+    return { success: false, items: [], pagination: { page: 1, limit: 0, total: 0 }, categories: [] };
+  }
   const query = new URLSearchParams({
     page_id: params.pageId,
     ...(params.categoryId ? { category_id: String(params.categoryId) } : {}),
