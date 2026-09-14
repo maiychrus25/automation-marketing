@@ -6,6 +6,7 @@
   "scripts": {
     "postinstall": "node scripts/patch-electron-icon.js",
     "patch-icon": "node scripts/patch-electron-icon.js",
+    "build:icons": "node scripts/build-icons.mjs",
     "build:bridge-e2ee": "node scripts/build-bridge-e2ee.js",
     "predev": "npm run build:bridge-e2ee || echo 'WARN: E2EE bridge build failed, app will work without E2EE'",
     "dev": "npm run build:electron && concurrently -n VITE,TSC,ELECTRON -c cyan,magenta,yellow \"vite\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on http://localhost:27799 && cross-env NODE_ENV=development electron dist-electron/electron/main.js\"",
@@ -14,7 +15,7 @@
     "rebuild:native": "node scripts/rebuild-native.js",
     "production": "npm run build:bridge-e2ee && tsc -p tsconfig.electron.prod.json && node scripts/strip-console.js && npm run build:renderer && npm run rebuild:native && electron-builder --publish never"
   },
-  "author": "babyvibe <babyvibe@users.noreply.github.com>",
+  "author": "Trung tam Dao tao Lai xe AHV <it@ahvdtlx.com>",
   "homepage": "https://cms-dev.ahvdtlx.com",
   "license": "MIT",
   "dependencies": {

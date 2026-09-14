@@ -1,0 +1,62 @@
+<!--
+  AHV Connect — dấu hiệu nhận diện. ĐÂY LÀ FILE GỐC DUY NHẤT.
+
+  Mọi file .png/.ico/.icns trong thư mục này đều được dựng ra từ đây bằng
+  `node scripts/build-icons.mjs`. Sửa logo thì sửa file này rồi chạy lại
+  script — đừng sửa tay file ảnh, lần dựng sau sẽ ghi đè.
+
+  Ý TƯỞNG
+  Một con đường nhìn theo phối cảnh, hai mép đường chụm lại thành chữ "A" của
+  AHV. Vạch kẻ ngang đường đồng thời là vạch ngang của chữ A; vạch tim đường
+  thu nhỏ dần về điểm tụ. Không dùng hình vô-lăng: nan vô-lăng tan hết ở cỡ
+  16px (icon khay hệ thống), còn chữ A thì vẫn đọc được.
+
+  VÌ SAO ĐẶT TỈ LỆ NHƯ VẬY
+  - Mép đường (chân chữ) cố tình mảnh (~15 đơn vị) để lòng đường đủ rộng cho
+    phối cảnh đọc ra. Chân chữ dày thì chỉ còn là chữ A, mất hẳn ý con đường.
+  - Vạch ngang hạ thấp (y=72..79) để phần lớn lòng đường nằm phía trên nó, đủ
+    chỗ cho ba vạch tim thu xa.
+  - Vạch ngang kéo từ x=26 tới x=74, nằm sâu trong hai chân chữ ở MỌI độ cao
+    của khoảng y=72..79, nên mối nối luôn liền mạch, không hở ở đáy.
+  - Đỉnh chữ cắt bằng (không nhọn) để cỡ nhỏ không bị mảnh và tối đi.
+  - Ở cỡ 16px ba vạch tim biến mất, vạch ngang nhoè thành một gạch liền: còn
+    lại đúng một chữ A đặc, vẫn nhận ra được.
+
+  Lớp chấm báo tin chưa đọc (`.unread-badge`) mặc định ẩn. Script dựng bật nó
+  lên để tạo bộ `icon_dot.*`. Nhờ vậy chỉ có một bản hình duy nhất, hai biến
+  thể không thể lệch nhau.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="ahvBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1E40AF"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+    <style>.unread-badge { display: none; }</style>
+  </defs>
+
+  <!-- Nền bo tròn 22% - cùng tỉ lệ bo với icon ứng dụng hiện đại -->
+  <rect width="100" height="100" rx="22" ry="22" fill="url(#ahvBg)"/>
+
+  <g fill="#FFFFFF">
+    <!-- Hai mép đường chụm về điểm tụ = chữ A -->
+    <path d="M46 17 H54 L85 84 H70 L50 32 L30 84 H15 Z"/>
+
+    <!-- Vạch kẻ ngang đường = vạch ngang chữ A -->
+    <path d="M26 72 H74 V79 H26 Z"/>
+
+    <!-- Vạch tim đường: hai vạch, vạch gần dài và rộng hơn vạch xa.
+         Chỉ hai vạch chứ không ba - vạch thứ ba chỉ rộng 1 đơn vị nên ở cỡ
+         nhỏ thành sợi mờ, lại dính vào vạch giữa làm lấp lòng đường. Khe
+         giữa hai vạch để rộng 5 đơn vị vì cùng lý do. -->
+    <path d="M47.2 69 H52.8 L52.3 57 H47.7 Z"/>
+    <path d="M48.3 52 H51.7 L51.2 44 H48.8 Z"/>
+  </g>
+
+  <!-- Chấm báo tin chưa đọc. Vòng ngoài cùng màu nền để tách chấm khỏi thân
+       chữ khi hai hình chạm nhau ở các cỡ nhỏ. -->
+  <g class="unread-badge">
+    <circle cx="77" cy="23" r="15" fill="#1E40AF"/>
+    <circle cx="77" cy="23" r="12.5" fill="#EF4444"/>
+  </g>
+</svg>

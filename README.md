@@ -14,6 +14,13 @@ Vận hành tài khoản Zalo / Facebook / Telegram, CRM, workflow tự động 
 
 ---
 
+## Nhận diện
+
+Logo được vẽ riêng cho trung tâm: con đường thu xa, hai mép đường chụm thành
+chữ "A" của AHV. Nguồn gốc là `resources/icons/icon.svg`; mọi file PNG/ICO/ICNS
+đều dựng ra từ đó bằng `npm run build:icons`. Lý do thiết kế và các ràng buộc
+tỉ lệ: [DESIGN.md](./DESIGN.md).
+
 ## Nguồn gốc
 
 AHV Connect là bản phái sinh nội bộ của dự án mã nguồn mở
