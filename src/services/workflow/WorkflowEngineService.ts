@@ -1021,7 +1021,11 @@ class WorkflowEngineService {
       };
     }
     if (triggerType === 'trigger.groupEvent' || triggerType.startsWith('event:groupEvent')) {
-      const d = data.data || data;
+      // data.data is the raw Zalo "group_event" payload ({ type, data: { updateMembers, ... } });
+      // updateMembers lives one level deeper, inside that raw event's own `.data` field — same
+      // unwrap EventBroadcaster.generateGroupEventText() uses to build systemText correctly.
+      const rawEvent = data.data || data;
+      const d = rawEvent.data || rawEvent;
       const members: any[] = d.updateMembers || [];
       return {
         groupId: data.groupId || d.groupId || '',

@@ -258,16 +258,26 @@ func (c *Client) handleTable(tbl *table.LSTable) {
 	}
 
 	// Process wrapped messages (includes attachments info)
-	// upsert = sync/backfill messages (should NOT emit events)
-	// insert = new real-time messages (should emit events)
-	_, insert := tbl.WrapMessages()
+	// upsert = sync/backfill messages (historical, returned during thread fetch or initial sync)
+	// insert = new real-time messages
+	upsert, insert := tbl.WrapMessages()
 
 	// Track handled message IDs to avoid duplicates
 	handledMsgIds := make(map[string]bool)
 
-	// NOTE: We do NOT emit events for upserted messages (sync/backfill)
-	// These are historical messages returned during thread fetch or initial sync
-	// Only insert messages (real-time new messages) should trigger events
+	// Handle upserted messages (historical backfill) so the client can
+	// populate conversation history, not just messages received from now on.
+	for _, chatUpsert := range upsert {
+		for _, msg := range chatUpsert.Messages {
+			if msg.MessageId != "" {
+				if handledMsgIds[msg.MessageId] {
+					continue
+				}
+				handledMsgIds[msg.MessageId] = true
+			}
+			c.emitEvent(EventTypeMessage, c.convertWrappedMessage(msg))
+		}
+	}
 
 	// Handle inserted messages (new real-time messages)
 	for _, msg := range insert {

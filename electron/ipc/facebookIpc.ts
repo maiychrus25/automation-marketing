@@ -985,11 +985,18 @@ export function registerFacebookIpc(): void {
           if (/^\d+$/.test(msg.thread_id)) {
             const { normalizeChatJid } = require('../../src/services/facebook/FacebookUtils');
             const chatJid = normalizeChatJid(msg.thread_id);
-            const senderJid = normalizeChatJid(resolveRealFacebookId(internalId, service));
+            // senderJid must be the ORIGINAL SENDER of the target message (per whatsmeow's
+            // BuildMessageKey: it sets FromMe=true only when sender matches our own account).
+            // Using our own account here unconditionally made every reaction to a message the
+            // OTHER party sent carry a wrong FromMe=true key, so Facebook silently dropped it
+            // even though our own outgoing packet still got delivery-acked.
+            const senderJid = normalizeChatJid(msg.sender_id);
             try {
               const result = await service.sendE2EEReaction(chatJid, params.messageId, senderJid, params.emoji);
               if (result.success) success = true;
-            } catch {}
+            } catch (e: any) {
+              Logger.warn(`[facebookIpc] fb:addReaction E2EE path failed: ${e.message}`);
+            }
           } else {
             // Group message (non-numeric thread ID) - try bridge sendReaction
             try {

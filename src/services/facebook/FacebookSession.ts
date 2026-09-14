@@ -260,19 +260,30 @@ export async function getUserInfoFacebookHtml(cookie: string, userId: string, ht
       if (picMatch?.[1]) avatarUrl = picMatch[1].replace(/\\\//g, '/');
     }
 
-    // ── Tên: <h1> → <div role="button" tabindex="0"> text content ─────
-    const h1Match = html.match(/<h1[^>]*>[\s\S]*?<div[^>]*role="button"[^>]*>([^<&]+)/);
-    if (h1Match?.[1]) {
-      name = h1Match[1].trim();
+    // ── Tên: <svg aria-label="..." ... style="height:168px;width:168px"> ────
+    // Facebook hiện đặt tên profile vào aria-label của thẻ <svg> bọc avatar tròn
+    // (cùng thẻ 168px dùng để lấy avatar ở trên) — xác minh trực tiếp từ HTML thô 09/2026.
+    if (imgTagMatch) {
+      // imgTagMatch chỉ khớp <image>; cần khớp lại toàn bộ <svg ...> bao ngoài nó
+      // để lấy aria-label, vì aria-label nằm trên thẻ svg cha chứ không phải <image>.
+      const svgTagMatch = html.match(/<svg[^>]*style="[^"]*height:\s*168px[^"]*width:\s*168px[^"]*"[^>]*>/i);
+      const ariaMatch = svgTagMatch?.[0].match(/aria-label="([^"]+)"/);
+      if (ariaMatch?.[1]) name = decodeHtmlEntities(ariaMatch[1]).trim();
     }
 
-    // Fallback tên: "NAME":"..." trong JSON
+    // Fallback tên: <h1> → <div role="button" tabindex="0"> text content
     if (!name) {
-      const nameMatch = html.match(/"NAME":"(.*?)"/);
-      if (nameMatch?.[1] && !nameMatch[1].match(/^\d+$/) && nameMatch[1].length < 100) {
-        name = decodeHtmlEntities(nameMatch[1]);
+      const h1Match = html.match(/<h1[^>]*>[\s\S]*?<div[^>]*role="button"[^>]*>([^<&]+)/);
+      if (h1Match?.[1]) {
+        name = h1Match[1].trim();
       }
     }
+
+    // NOTE: the previous "NAME":"..." JSON fallback was removed — verified live that it
+    // matches the viewer's OWN name (appears earlier in the page's bootstrap JSON), not
+    // the visited profile's name, causing every contact to be mislabeled with the logged-in
+    // account's own name. Only the <h1> match above is trustworthy; leave name empty otherwise
+    // rather than writing a confidently-wrong name.
 
     // ── Fallback CDN + mbasic cho avatar nếu www không có ────────
     if (!avatarUrl) {
