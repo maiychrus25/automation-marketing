@@ -156,9 +156,9 @@
       "signAndEditExecutable": false
     },
     "protocols": {
-      "name": "Deplao Deep Link",
+      "name": "AHV Connect Deep Link",
       "schemes": [
-        "deplao"
+        "ahvconnect"
       ]
     },
     "nsis": {
@@ -192,7 +192,7 @@
       "gatekeeperAssess": false
     },
     "dmg": {
-      "title": "Deplao"
+      "title": "AHV Connect"
     },
     "linux": {
       "target": [
@@ -203,7 +203,7 @@
       "category": "Network"
     },
     "deb": {
-      "maintainer": "babyvibe <babyvibe@users.noreply.github.com>"
+      "maintainer": "Trung tam Dao tao Lai xe AHV <it@ahvdtlx.com>"
     }
   }
 }

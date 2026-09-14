@@ -478,7 +478,7 @@ export default function PaymentQrSection({ accounts, onClose, onPaymentSuccess }
 
               {!polling && checkResult?.status === 'pending' && (
                 <div className="px-4 py-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-xs text-yellow-400 flex items-center gap-2">
-                  {AlertIcon} Chưa phát hiện giao dịch. Có thể ngân hàng đang xử lý chậm. Vui lòng liên hệ <a href={'https://t.me/babyvibe9'}>Admin</a> để được hỗ trợ
+                  {AlertIcon} Chưa phát hiện giao dịch. Có thể ngân hàng đang xử lý chậm. Vui lòng liên hệ bộ phận CNTT của trung tâm để được hỗ trợ
                 </div>
               )}
 

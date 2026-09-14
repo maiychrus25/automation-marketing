@@ -43,8 +43,8 @@ module.exports = async function afterPack(context) {
       'version-string': {
         ProductName:      pkg.build.productName || pkg.name,
         FileDescription:  pkg.description || pkg.name,
-        CompanyName:      'Deplao',
-        LegalCopyright:   `Copyright © ${new Date().getFullYear()} Deplao`,
+        CompanyName:      'Trung tam Dao tao Lai xe AHV',
+        LegalCopyright:   `Copyright © ${new Date().getFullYear()} Trung tam Dao tao Lai xe AHV`,
         OriginalFilename: `${productName}.exe`,
       },
       'file-version':    pkg.version,

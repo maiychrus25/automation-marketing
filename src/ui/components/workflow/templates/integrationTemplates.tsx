@@ -1,5 +1,6 @@
 import { DEFAULT_CONFIGS } from '../workflowConfig';
-import { WorkflowTemplate } from './workflowTemplates';import { BellIcon, BookmarkIcon, BotIcon, CalendarIcon, ChartIcon, ClipboardListIcon, CreditCardIcon, DollarIcon, EditIcon, GiftIcon, LightningIcon, PackageIcon, PinIcon, ShoppingCartIcon, StarIcon, StoreIcon, TagIcon, TrendingDownIcon, TrendingUpIcon, TruckIcon, UserIcon } from '@/components/common/icons';
+import { WorkflowTemplate } from './workflowTemplates';
+import { BellIcon, BookmarkIcon, BotIcon, CalendarIcon, ChartIcon, ClipboardListIcon, CreditCardIcon, DollarIcon, EditIcon, GiftIcon, LightningIcon, PackageIcon, PinIcon, ShoppingCartIcon, StarIcon, StoreIcon, TagIcon, TrendingDownIcon, TrendingUpIcon, TruckIcon, UserIcon } from '@/components/common/icons';
 
 
 // ── Integration Templates ──────────────────────────────────────────────────────
@@ -446,7 +447,7 @@ export const INTEGRATION_TEMPLATES: WorkflowTemplate[] = [
             '💰 Tổng thu: `{{ $node.n2.transactions | sumBy("amount") | formatVND }}`\n' +
             '📋 Số GD: `{{ $node.n2.transactions.length }}` giao dịch\n' +
             '⬆️ Cao nhất: `{{ $node.n2.transactions | maxBy("amount") | formatVND }}`\n\n' +
-            '- _Deplao AutoReport_ 🤖',
+            '- _AHV Connect AutoReport_ 🤖',
         },
       },
       {

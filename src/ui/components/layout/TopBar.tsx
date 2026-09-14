@@ -2,14 +2,12 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ipc from '@/lib/ipc';
 import { DataAccessor } from '@/lib/data/DataAccessor';
 
-const SUPPORT_GITHUB_URL = 'https://github.com/babyvibe/deplao-builder';
 import { useAppStore, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP } from '@/store/appStore';
 import { useAccountStore } from '@/store/accountStore';
 import { useUpdateStore } from '@/store/updateStore';
 import { useEmployeeStore } from '@/store/employeeStore';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 import { useCRMStore } from '@/store/crmStore';
-import { hasUnseenAffiliate, markAffiliateSeen } from '@/utils/settingsSeenTabs';
 import { useChatStore } from '@/store/chatStore';
 import WorkspaceSwitcher from '@/components/common/WorkspaceSwitcher';
 import { useErpNotificationStore } from '@/store/erp/erpNotificationStore';
@@ -38,14 +36,6 @@ export default function TopBar() {
   const moreRef = useRef<HTMLDivElement>(null);
   // Font size slider: local temp value, only applies on release
   const [fontTemp, setFontTemp] = useState(fontSizeScale);
-
-  // ── Affiliate red dot ────────────────────────────────────────────────
-  const [hasNewAffiliate, setHasNewAffiliate] = useState(() => hasUnseenAffiliate());
-  useEffect(() => {
-    const handler = () => setHasNewAffiliate(hasUnseenAffiliate());
-    window.addEventListener('settings:tabSeen', handler);
-    return () => window.removeEventListener('settings:tabSeen', handler);
-  }, []);
 
   // Update state
   const { status: updateStatus, updateInfo, platform, setShowPopup, openUpdatePopup } = useUpdateStore();
@@ -389,7 +379,7 @@ export default function TopBar() {
       style={{ WebkitAppRegion: 'drag' } as any}
     >
       <div className="flex items-center gap-2 px-3" style={{ WebkitAppRegion: 'no-drag', paddingLeft: isMac ? 72 : 12 } as any}>
-        <span className="text-blue-400 font-bold text-sm">Deplao</span>
+        <span className="text-blue-400 font-bold text-sm">AHV Connect</span>
         <span className="text-gray-400 text-xs">v{APP_VERSION}</span>
         {updateInfo && (updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'downloaded') && (
           <button onClick={openUpdatePopup}
@@ -607,26 +597,8 @@ export default function TopBar() {
           </div>
         )}
 
-        {/* GitHub Star button */}
-        <button
-          onClick={() => ipc.shell?.openExternal(SUPPORT_GITHUB_URL)}
-          className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-yellow-400 transition-colors relative group/gh"
-          title={"Star Deplao trên GitHub\nDự án mã nguồn mở - Ủng hộ team bằng cách ghé thăm và thả sao nhé!"}
-        >
-          <span className="relative">
-            {/* GitHub icon */}
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
-            </svg>
-            {/* Golden star overlay */}
-            <svg
-              width="10" height="10" viewBox="0 0 24 24" fill="#facc15"
-              className="absolute -top-1.5 -right-2 drop-shadow-sm"
-            >
-              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-            </svg>
-          </span>
-        </button>
+        {/* AHV Connect: đã gỡ nút dẫn sang kho GitHub của tác giả
+            thượng nguồn — bản nội bộ không quảng bá dự án bên ngoài. */}
 
 
 
@@ -676,9 +648,6 @@ export default function TopBar() {
             className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors relative"
             title="Thêm (cỡ chữ, hướng dẫn, báo lỗi)"
           >
-            {hasNewAffiliate && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse z-10" />
-            )}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="1.5"/>
               <circle cx="5" cy="12" r="1.5"/>
@@ -757,72 +726,8 @@ export default function TopBar() {
                 </div>
               </button>
 
-              {/* Kiếm tiền */}
-              <button
-                onClick={() => {
-                  setMoreOpen(false);
-                  markAffiliateSeen();
-                  setHasNewAffiliate(false);
-                  // Navigate to CRM → Nhóm → Quét thành viên
-                  window.dispatchEvent(new CustomEvent('nav:view', { detail: { view: 'crm' } }));
-                  useCRMStore.getState().setTab('groups');
-                  try { localStorage.setItem('crm_open_scan_tab', 'true'); } catch {}
-                  setTimeout(() => window.dispatchEvent(new CustomEvent('crm:openScanTab')), 150);
-                }}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-700 hover:text-amber-400 transition-colors text-left border-t border-gray-700/50 relative"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-                  <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-                </svg>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs font-medium">Kiếm tiền</p>
-                    {hasNewAffiliate && (
-                      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse flex-shrink-0" />
-                    )}
-                  </div>
-                  <p className="text-[10px] text-gray-400">Giới thiệu Deplao Premium - Nhận hoa hồng trọn đời</p>
-                </div>
-              </button>
 
-              {/* Hỗ trợ */}
-              <button
-                onClick={() => {
-                  setMoreOpen(false);
-                  ipc.shell?.openExternal('https://fb.com/deplaoapp');
-                }}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-700 hover:text-blue-400 transition-colors text-left"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-                  <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
-                </svg>
-                <div>
-                  <p className="text-xs font-medium">Hỗ trợ</p>
-                  <p className="text-[10px] text-gray-400">Liên hệ Facebook khi gặp vấn đề</p>
-                </div>
-              </button>
 
-              {/* Donate Coffee */}
-              <button
-                onClick={() => {
-                  setMoreOpen(false);
-                  window.dispatchEvent(new CustomEvent('nav:view', { detail: { view: 'settings' } }));
-                  setTimeout(() => window.dispatchEvent(new CustomEvent('nav:settings', { detail: { tab: 'introduction', subtab: 'donate' } })), 80);
-                }}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-700 hover:text-amber-400 transition-colors text-left border-t border-gray-700/50"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-                  <path d="M18 8h1a4 4 0 0 1 0 8h-1"/>
-                  <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/>
-                  <line x1="6" y1="1" x2="6" y2="4"/>
-                  <line x1="10" y1="1" x2="10" y2="4"/>
-                  <line x1="14" y1="1" x2="14" y2="4"/>
-                </svg>
-                <div>
-                  <p className="text-xs font-medium">Donate Coffee</p>
-                  <p className="text-[10px] text-gray-400">Các bạn thấy hữu ích có thể ủng hộ dự án nhé!</p>
-                </div>
-              </button>
             </div>
           )}
         </div>

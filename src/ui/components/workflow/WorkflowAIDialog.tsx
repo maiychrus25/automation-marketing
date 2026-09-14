@@ -41,7 +41,7 @@ function buildSystemPrompt(currentNodes: any[], currentEdges: any[], channel: st
   const currentWf = JSON.stringify({ nodes: currentNodes, edges: currentEdges }, null, 2);
   const channelName = getChannelLabel(channel as Channel);
 
-  return `Bạn là trợ lý AI chuyên xây dựng Workflow tự động cho phần mềm Deplao (quản lý ${channelName}).
+  return `Bạn là trợ lý AI chuyên xây dựng Workflow tự động cho phần mềm AHV Connect (quản lý ${channelName}).
 Nhiệm vụ: Dựa trên yêu cầu của người dùng, trả về JSON chứa danh sách nodes và edges cần THÊM vào workflow hiện tại.
 Kênh hiện tại: ${channelName} - CHỈ được dùng các node thuộc kênh ${channelName} từ danh mục bên dưới.
 

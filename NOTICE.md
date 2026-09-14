@@ -20,10 +20,30 @@ Bản quyền của tác giả gốc được giữ nguyên theo đúng điều 
 | 5 | **Đổi định danh ứng dụng** | `name` → `ahv-connect`, `appId` → `com.ahv.connect`, `productName` → `AHV Connect` |
 | 6 | **Thêm nhà cung cấp AI `ahvchat`** | Tuỳ biến của trung tâm: thêm lựa chọn provider tương thích OpenAI, nhập tên mô hình tự do |
 | 7 | **Sửa `tg.sendMessage` trong WorkflowEngineService** | Bản gốc đọc `segment.text` thay vì `segment.content`, khiến trả lời do AI soạn bị gửi thành tin rỗng qua Telegram |
+| 8 | **Thay toàn bộ bộ biểu tượng** (`resources/icons/`) | Logo cũ là nhận diện của sản phẩm thượng nguồn. Bộ mới sinh tại chỗ: khung bo tròn xanh `#1D4ED8`, bong bóng chat chứa vô-lăng |
+| 9 | **Đổi protocol deep link** `deplao://` → `ahvconnect://` | Hai nơi khai báo (`package.json` và `electron/main.ts`) phải khớp nhau; giữ scheme cũ thì bản nội bộ giành đăng ký với bản gốc trên cùng một máy |
+| 10 | **Gỡ trang "Donate & Ủng hộ"** kèm ảnh `src/assets/donate/qr.png` | Trang này chứa **mã QR ngân hàng, Telegram và Facebook cá nhân của tác giả gốc** — nhân sự trung tâm có thể chuyển tiền nhầm |
+| 11 | **Gỡ luồng affiliate** (`AffiliateIntroPopup`, nút "Kiếm tiền", chấm đỏ nhắc) | Chương trình hoa hồng của sản phẩm thượng nguồn, không áp dụng cho bản nội bộ |
+| 12 | **Gỡ/đổi hướng mọi liên kết ra ngoài trỏ về tác giả gốc** | GitHub issues, fanpage `fb.com/deplaoapp`, `t.me/babyvibe9`, nút sao GitHub. Thay bằng hướng dẫn báo lỗi trong ứng dụng |
+| 13 | **Rút gọn `UpdateNotification` thành component rỗng** | Hộp thoại chứa 6 liên kết tải thẳng từ kho phát hành của tác giả; bấm vào sẽ cài đè bản nội bộ |
+| 14 | **Đổi thông tin sản phẩm nhúng vào bản dựng** | `CompanyName`/`LegalCopyright` (Windows exe), maintainer gói `.deb`, tên bot mặc định trong workflow, nhãn nguồn đơn gửi sang POS (`deplaoapp` → `ahvconnect`) |
+| 15 | **Thay `README.md`, xoá `README.en.md`** | README gốc là trang quảng bá sản phẩm thượng nguồn (badge kho, link website, hướng dẫn tải bản phát hành của họ) |
 
 Hai thay đổi 6–7 do phía trung tâm thực hiện trước; cách tắt telemetry cũng
 lấy theo bản của trung tâm (trả về kết quả rỗng có thông báo, phủ đủ 7 hàm)
 thay vì ném lỗi.
+
+## Những chỗ CỐ Ý giữ nguyên tên "deplao"
+
+Không phải sót — đổi sẽ gây mất dữ liệu hoặc phá tương thích:
+
+| Chỗ giữ nguyên | Lý do |
+|---|---|
+| Tên tệp trên đĩa: `deplao-tool.db`, `deplao-config.json` | Bản cài đã có sẵn sẽ mất toàn bộ dữ liệu nếu đổi tên mà không viết bước di trú |
+| Khoá `localStorage`: `deplao_employee_login`, `deplao_employee_password`, `deplao_forum_topics_*` | Đổi khoá là đăng xuất toàn bộ nhân viên và mất cache |
+| Khoá nhận dạng tệp workflow xuất ra: `_deplaoWorkflow` | Đổi thì không nhập lại được các tệp workflow đã xuất trước đó |
+| Thư mục tạm: `deplao-clipboard`, `deplao-videometa`, `deplao-workflow-images` | Nội bộ, không hiển thị cho người dùng |
+| Chú thích mô tả dịch vụ đã tắt (`TrackingService`, `backendService`) | Ghi đúng những gì đã bị chặn — là tài liệu, không phải nhận diện thương hiệu |
 
 ## Lưu ý khi dùng
 

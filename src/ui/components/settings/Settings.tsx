@@ -372,7 +372,7 @@ export default function Settings() {
                         <button onClick={() => {
                           requestNotificationPermission().then(granted => {
                             if (!granted) { showNotification('Cần cấp quyền thông báo', 'warning'); return; }
-                            showDesktopNotification('Deplao', 'Đây là thông báo thử nghiệm 🎉');
+                            showDesktopNotification('AHV Connect', 'Đây là thông báo thử nghiệm 🎉');
                           });
                         }} className="flex-1 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors">
                           <MonitorIcon className="w-4 h-4 inline" /> Test popup
@@ -384,7 +384,7 @@ export default function Settings() {
                 <p className="text-xs text-gray-400 leading-relaxed">
                   * Thông báo không hiện với những hội thoại đã tắt thông báo.<br />
                   * <strong>Windows:</strong> Kiểm tra quyền trong Settings &gt; Notifications.<br />
-                  * <strong>macOS:</strong> Kiểm tra trong System Settings &gt; Notifications &gt; Deplao.<br />
+                  * <strong>macOS:</strong> Kiểm tra trong System Settings &gt; Notifications &gt; AHV Connect.<br />
                   * Khi tắt notification ở cấp hệ điều hành, âm thanh cũng sẽ bị tắt theo.
                 </p>
               </div>

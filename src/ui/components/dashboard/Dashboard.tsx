@@ -11,7 +11,14 @@ import ipc, { buildZaloAuth } from '@/lib/ipc';
 import PageLoading from '@/components/common/PageLoading';
 import { BugIcon, HomeIcon, RefreshIcon, SunIcon, TargetIcon, UserIcon, UsersIcon } from '@/components/common/icons';
 
-const SUPPORT_GITHUB_URL = 'https://github.com/babyvibe/deplao-builder';
+/** Mo muc "Huong dan bao loi" trong Cai dat (ban noi bo khong dung issue cong khai). */
+function openBugReportGuide() {
+  window.dispatchEvent(new CustomEvent('nav:view', { detail: { view: 'settings' } }));
+  setTimeout(
+    () => window.dispatchEvent(new CustomEvent('nav:settings', { detail: { tab: 'introduction', subtab: 'bugreport' } })),
+    80,
+  );
+}
 
 export default function Dashboard() {
   const { updateAccountStatus, reorderAccounts } = useAccountStore();
@@ -142,13 +149,11 @@ export default function Dashboard() {
         ><UserIcon className="w-4 h-4 inline" /> Đăng nhập dành cho nhân viên
         </button>
         <button
-          onClick={() => ipc.shell?.openExternal(SUPPORT_GITHUB_URL)}
+          onClick={openBugReportGuide}
           className="flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 transition-colors mt-2"
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
-          </svg>
-          Cần hỗ trợ, báo lỗi? Liên hệ Github
+          <BugIcon className="w-3.5 h-3.5" />
+          Cần hỗ trợ, báo lỗi? Xem hướng dẫn
         </button>
         {employeeLoginOpen && <EmployeeLoginModal onClose={() => setEmployeeLoginOpen(false)} />}
       </div>
@@ -294,18 +299,16 @@ export default function Dashboard() {
           {/* Nút hỗ trợ - always visible */}
           <div className="relative group">
             <button
-                onClick={() => ipc.shell?.openExternal(SUPPORT_GITHUB_URL)}
+                onClick={openBugReportGuide}
                 className="flex text-white items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 transition-colors"
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
-              </svg>
+              <BugIcon className="w-3.5 h-3.5" />
               Hỗ trợ, báo lỗi
             </button>
             <div className="absolute top-full right-0 mt-2 w-[300px] bg-gray-800 border border-gray-600/60 rounded-xl shadow-2xl p-3.5 z-50 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none">
               <p className="text-xs font-semibold text-gray-200 flex items-center gap-1.5"><BugIcon className="w-4 h-4 inline" /> Báo lỗi & Đóng góp</p>
               <p className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">
-                Gặp lỗi hoặc có góp ý? Hãy gửi trên GitHub - chúng tôi sẽ xử lý nhanh nhất có thể.
+                Gặp lỗi hoặc có góp ý? Gửi cho bộ phận CNTT của trung tâm kèm ảnh chụp màn hình và log.
               </p>
               <div className="border-t border-gray-700 pt-2 mt-2.5 space-y-1.5">
                 <p className="text-[10px] text-amber-400 font-medium mb-1"><SunIcon className="w-4 h-4 inline" /> Mẹo để được hỗ trợ nhanh:</p>
