@@ -95,17 +95,17 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
   const showExpanded = sidebarExpanded && view === 'chat';
 
   return (
-    <div className="flex flex-col w-16 bg-gray-900 border-r border-gray-700 h-full">
+    <div className="macos-sidebar flex flex-col w-16 border-r h-full">
       {/* ─── Toggle expand/collapse - chỉ hiện ở màn hình Chat ─── */}
       {view === 'chat' && (
         <div className="pt-2 pb-1 flex justify-center">
           <button
             onClick={toggleSidebarExpanded}
             title={showExpanded ? 'Ẩn danh sách tài khoản đầy đủ' : 'Hiện danh sách tài khoản đầy đủ'}
-            className={`font-semibold w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+            className={`macos-sidebar-control font-semibold w-8 h-8 rounded-[7px] flex items-center justify-center transition-colors ${
               showExpanded
-                ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
-                : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 hover:text-white'
+                ? 'macos-sidebar-control-active text-blue-400'
+                : 'text-gray-400 hover:text-white'
             }`}
           >
             {showExpanded ? (
@@ -377,7 +377,7 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
       )}
 
       {/* Nav bottom */}
-      <div className="border-t border-gray-700 py-2 flex flex-col items-center gap-1">
+      <div className="macos-sidebar-divider border-t py-2 flex flex-col items-center gap-1">
         <NavBtn icon="dashboard"  label="Dashboard"   active={view === 'dashboard'}  onClick={() => setView('dashboard')} />
         {hasPerm('chat') && (
         <NavBtn icon="chat"       label="Chat"         active={view === 'chat'}       onClick={() => setView('chat')} />
@@ -491,7 +491,7 @@ function NavBtn({ icon, label, active, onClick, dot }: { icon: string; label: st
 
   return (
     <button onClick={onClick} title={label}
-      className={`relative w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${active ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>
+      className={`macos-sidebar-control relative w-10 h-10 rounded-[7px] flex items-center justify-center transition-colors ${active ? 'macos-sidebar-control-active text-blue-400' : 'text-gray-400 hover:text-white'}`}>
       {icons[icon]}
       {dot && (
         <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full border border-gray-900 pointer-events-none" />
@@ -536,8 +536,8 @@ function NavFlyout({ icon, label, active, items, onGuide }: { icon: string; labe
       <button
         ref={btnRef}
         title={label}
-        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
-          active ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-white'
+        className={`macos-sidebar-control w-10 h-10 rounded-[7px] flex items-center justify-center transition-colors ${
+          active ? 'macos-sidebar-control-active text-blue-400' : 'text-gray-400 hover:text-white'
         }`}
       >
         <NavIcon name={icon} />
@@ -546,17 +546,17 @@ function NavFlyout({ icon, label, active, items, onGuide }: { icon: string; labe
       {/* Flyout submenu - appears to the right */}
       {open && (
         <div
-          className="absolute left-full -bottom-12 ml-1.5 z-[9999] min-w-[160px] bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1.5 animate-in fade-in slide-in-from-left-2 duration-150"
+          className="macos-layout-popover absolute left-full -bottom-12 ml-1.5 z-[9999] min-w-[160px] border rounded-[10px] shadow-lg py-1.5 animate-in fade-in slide-in-from-left-2 duration-150"
         >
           {/* Header */}
-          <div className="px-3 py-1.5 border-b border-gray-700/60 mb-1">
+          <div className="macos-layout-divider px-3 py-1.5 border-b mb-1">
             <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{label}</span>
           </div>
           {items.map((item) => (
             <button
               key={item.icon}
               onClick={() => { item.onClick(); setOpen(false); }}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
+              className={`macos-layout-row w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
                 item.active
                   ? 'bg-blue-600/20 text-blue-400'
                   : 'text-gray-300 hover:bg-gray-700 hover:text-white'
@@ -574,10 +574,10 @@ function NavFlyout({ icon, label, active, items, onGuide }: { icon: string; labe
           {/* Guide button */}
           {onGuide && (
             <>
-              <div className="border-t border-gray-700/60 my-1" />
+              <div className="macos-layout-divider border-t my-1" />
               <button
                 onClick={() => { onGuide(); setOpen(false); }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-gray-400 hover:bg-gray-700 hover:text-gray-200 transition-colors"
+                className="macos-layout-row w-full flex items-center gap-2.5 px-3 py-2 text-left text-gray-400 hover:text-gray-200 transition-colors"
               >
                 <span className="w-5 h-5 flex items-center justify-center flex-shrink-0 text-sm"><BookIcon className="w-4 h-4" /></span>
                 <span className="text-xs font-medium whitespace-nowrap">Hướng dẫn sử dụng</span>

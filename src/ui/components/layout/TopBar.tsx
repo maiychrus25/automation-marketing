@@ -375,12 +375,12 @@ export default function TopBar() {
         }
       `}</style>
     <div
-      className="flex items-center justify-between h-9 bg-gray-900 border-b border-gray-700 flex-shrink-0"
+      className="macos-topbar flex min-w-0 items-center justify-between h-11 border-b flex-shrink-0"
       style={{ WebkitAppRegion: 'drag' } as any}
     >
-      <div className="flex items-center gap-2 px-3" style={{ WebkitAppRegion: 'no-drag', paddingLeft: isMac ? 72 : 12 } as any}>
-        <span className="text-blue-400 font-bold text-sm">AHV Connect</span>
-        <span className="text-gray-400 text-xs">v{APP_VERSION}</span>
+      <div className="flex min-w-0 items-center gap-2 px-3" style={{ WebkitAppRegion: 'no-drag', paddingLeft: isMac ? 72 : 12 } as any}>
+        <span className="macos-topbar-title flex-shrink-0 text-[13px] font-semibold tracking-tight">AHV Connect</span>
+        <span className="flex-shrink-0 text-[11px] text-gray-400">v{APP_VERSION}</span>
         {updateInfo && (updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'downloaded') && (
           <button onClick={openUpdatePopup}
             className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
@@ -444,19 +444,19 @@ export default function TopBar() {
             {!bossConnected && (
               <button
                 onClick={() => setReconnectOpen(v => !v)}
-                className="employee-badge reconnect-btn relative flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-700/90 text-white text-[11px] font-semibold transition-all duration-300 hover:bg-green-700 hover:shadow-green-400/50 overflow-hidden border border-green-500/40"
+                className="employee-badge reconnect-btn relative flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-700/90 text-white text-[11px] font-semibold transition-all duration-300 hover:bg-green-700 overflow-hidden border border-green-500/40"
                 style={{ animation: 'reconnectShake 0.6s ease-in-out infinite' }}
               >
                 <span className="relative z-10 flex items-center gap-1.5 text-white-important">
-                  <span className="drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]"><PluginIcon className="w-4 h-4" /></span>
-                  <span className="drop-shadow-[0_0_6px_rgba(34,197,94,0.4)]">Kết nối lại</span>
+                  <span><PluginIcon className="w-4 h-4" /></span>
+                  <span>Kết nối lại</span>
                 </span>
               </button>
             )}
 
             {/* Reconnect popup */}
             {reconnectOpen && (
-              <div className="reconnect-popup absolute left-0 top-full mt-2 w-72 bg-gray-800 border border-gray-600 rounded-xl shadow-2xl z-[9999] p-4">
+              <div className="macos-layout-popover reconnect-popup absolute left-0 top-full mt-2 w-72 border rounded-[10px] shadow-lg z-[9999] p-4">
                 <p className="text-xs text-gray-400 font-medium mb-2"><PluginIcon className="w-4 h-4 inline" /> Kết nối lại với BOSS</p>
                 <div className="space-y-2">
                   <input
@@ -515,7 +515,7 @@ export default function TopBar() {
 
       {/* Window controls */}
       <div
-        className="flex items-center"
+        className="flex flex-shrink-0 items-center gap-1 pr-1.5"
         style={{ WebkitAppRegion: 'no-drag' } as any}
       >
         {/* Tải tin nhắn cũ (toàn phiên đăng nhập) - ẩn với nhân viên */}
@@ -523,7 +523,7 @@ export default function TopBar() {
           <button
             onClick={handleRequestOldMessages}
             disabled={loadingOldMsgs}
-            className={`w-9 h-9 flex items-center justify-center transition-colors ${loadingOldMsgs ? 'text-blue-400 bg-gray-700' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}
+            className={`macos-topbar-control w-8 h-8 rounded-[7px] flex items-center justify-center transition-colors ${loadingOldMsgs ? 'text-blue-400 bg-blue-500/15' : 'text-gray-400 hover:text-white'}`}
             title={(() => {
               const acc = useAccountStore.getState().accounts.find(a => a.zalo_id === activeAccountId);
               return isFacebook(acc?.channel)
@@ -576,7 +576,7 @@ export default function TopBar() {
           <div className="relative" ref={bellRef}>
             <button
               onClick={() => setBellOpen(v => !v)}
-              className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors relative"
+              className="macos-topbar-control w-8 h-8 rounded-[7px] flex items-center justify-center text-gray-400 hover:text-white transition-colors relative"
               title="Thông báo ERP"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -606,7 +606,7 @@ export default function TopBar() {
         {lockScreenEnabled && (
           <button
             onClick={() => window.dispatchEvent(new CustomEvent('lockScreen:lock'))}
-            className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-amber-400 transition-colors"
+            className="macos-topbar-control w-8 h-8 rounded-[7px] flex items-center justify-center text-gray-400 hover:text-amber-400 transition-colors"
             title="Khoá ứng dụng (Ctrl+Shift+L)"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -619,7 +619,7 @@ export default function TopBar() {
         {/* Theme toggle */}
         <button
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors"
+          className="macos-topbar-control w-8 h-8 rounded-[7px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
           title={theme === 'dark' ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'}
         >
           {theme === 'dark' ? (
@@ -645,7 +645,7 @@ export default function TopBar() {
         <div className="relative" ref={moreRef}>
           <button
             onClick={() => setMoreOpen(v => !v)}
-            className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors relative"
+            className="macos-topbar-control w-8 h-8 rounded-[7px] flex items-center justify-center text-gray-400 hover:text-white transition-colors relative"
             title="Thêm (cỡ chữ, hướng dẫn, báo lỗi)"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -656,9 +656,9 @@ export default function TopBar() {
           </button>
 
           {moreOpen && (
-            <div className="absolute right-0 top-full mt-1 w-64 bg-gray-800 border border-gray-600 rounded-xl shadow-2xl z-[9999] overflow-hidden">
+            <div className="macos-layout-popover absolute right-0 top-full mt-1 w-64 border rounded-[10px] shadow-lg z-[9999] overflow-hidden">
               {/* Font size slider */}
-              <div className="px-4 py-3 border-b border-gray-700">
+              <div className="macos-layout-divider px-4 py-3 border-b">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-gray-400 font-medium">Cỡ chữ</span>
                   <span className="text-xs text-gray-200 font-semibold min-w-[2.5rem] text-right">
@@ -694,7 +694,7 @@ export default function TopBar() {
                   window.dispatchEvent(new CustomEvent('nav:view', { detail: { view: 'settings' } }));
                   setTimeout(() => window.dispatchEvent(new CustomEvent('nav:settings', { detail: { tab: 'introduction', subtab: 'overview' } })), 80);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-700 hover:text-blue-400 transition-colors text-left"
+                className="macos-layout-row w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:text-blue-400 transition-colors text-left"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
                   <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
@@ -713,7 +713,7 @@ export default function TopBar() {
                   window.dispatchEvent(new CustomEvent('nav:view', { detail: { view: 'settings' } }));
                   setTimeout(() => window.dispatchEvent(new CustomEvent('nav:settings', { detail: { tab: 'introduction', subtab: 'bugreport' } })), 80);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-700 hover:text-red-400 transition-colors text-left border-t border-gray-700/50"
+                className="macos-layout-row macos-layout-divider w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:text-red-400 transition-colors text-left border-t"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
                   <path d="M8 2l1.88 1.88M14.12 3.88L16 2M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/>
@@ -736,7 +736,7 @@ export default function TopBar() {
           <>
             <button
               onClick={() => ipc.window?.minimize()}
-              className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors"
+              className="macos-topbar-control w-8 h-8 rounded-[7px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
               title="Thu nhỏ"
             >
               <svg width="10" height="1" viewBox="0 0 10 1" fill="currentColor">
@@ -748,7 +748,7 @@ export default function TopBar() {
                 ipc.window?.maximize();
                 setIsMaximized(!isMaximized);
               }}
-              className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors"
+              className="macos-topbar-control w-8 h-8 rounded-[7px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
               title={isMaximized ? 'Phục hồi' : 'Phóng to'}
             >
               {isMaximized ? (
@@ -764,7 +764,7 @@ export default function TopBar() {
             </button>
             <button
               onClick={() => ipc.window?.close()}
-              className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-red-600 hover:text-white transition-colors"
+              className="w-8 h-8 rounded-[7px] flex items-center justify-center text-gray-400 hover:bg-red-600 hover:text-white transition-colors"
               title="Đóng"
             >
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
