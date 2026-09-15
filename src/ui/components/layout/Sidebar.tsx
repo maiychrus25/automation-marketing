@@ -95,14 +95,14 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
   const showExpanded = sidebarExpanded && view === 'chat';
 
   return (
-    <div className="flex flex-col w-16 bg-gray-900 border-r border-gray-700 h-full">
+    <div className="mac-sidebar flex flex-col border-r h-full">
       {/* ─── Toggle expand/collapse - chỉ hiện ở màn hình Chat ─── */}
       {view === 'chat' && (
         <div className="pt-2 pb-1 flex justify-center">
           <button
             onClick={toggleSidebarExpanded}
             title={showExpanded ? 'Ẩn danh sách tài khoản đầy đủ' : 'Hiện danh sách tài khoản đầy đủ'}
-            className={`font-semibold w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+            className={`mac-focus-ring font-semibold w-11 h-11 rounded-xl flex items-center justify-center transition-colors ${
               showExpanded
                 ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
                 : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 hover:text-white'
@@ -134,7 +134,8 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
             <button
               onClick={() => setMergedInboxFilter(null)}
               title="Chọn tất cả tài khoản"
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all flex-shrink-0 ring-2 ${
+              aria-label="Chọn tất cả tài khoản"
+              className={`mac-focus-ring w-11 h-11 rounded-full flex items-center justify-center transition-all flex-shrink-0 ring-2 ${
                 mergedInboxFilterAccount === null
                   ? 'bg-blue-600 text-white ring-blue-400'
                   : 'bg-gray-700 text-gray-400 hover:bg-gray-600 ring-transparent'
@@ -176,7 +177,8 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
                 <button
                   onClick={() => setMergedInboxFilter(isSelected ? null : zaloId)}
                   title={`${account.full_name || zaloId}${isSelected ? ' - đang lọc' : ' - nhấn để lọc'}`}
-                  className={`w-10 h-10 rounded-full overflow-hidden ring-2 transition-all flex-shrink-0 ${
+                  aria-label={`Lọc theo ${account.full_name || zaloId}`}
+                  className={`mac-focus-ring w-11 h-11 rounded-full overflow-hidden ring-2 transition-all flex-shrink-0 ${
                     isSelected
                       ? 'ring-blue-500 scale-110'
                       : isAllMode
@@ -277,7 +279,8 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
                     setView('chat');
                   }}
                   title={tooltipLines}
-                  className={`relative w-10 h-10 rounded-full overflow-visible ring-2 transition-all flex-shrink-0 ${
+                  aria-label={`Mở tài khoản ${account.full_name || account.zalo_id}`}
+                  className={`mac-focus-ring relative w-11 h-11 rounded-full overflow-visible ring-2 transition-all flex-shrink-0 ${
                     activeAccountId === account.zalo_id
                       ? 'ring-blue-500'
                       : listenerDead
@@ -286,7 +289,7 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
                   }`}
                   style={{ cursor: 'pointer' }}
                 >
-                  <div className="w-10 h-10 rounded-full overflow-hidden">
+                  <div className="w-11 h-11 rounded-full overflow-hidden">
                     {account.avatar_url ? (
                       <img
                         src={toLocalMediaUrl(account.avatar_url)}
@@ -366,7 +369,8 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
           <button
             onClick={onAddAccount}
             title="Thêm tài khoản"
-            className="w-10 h-10 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center text-gray-400 hover:text-white transition-colors border-2 border-dashed border-gray-600"
+            aria-label="Thêm tài khoản"
+            className="mac-focus-ring w-11 h-11 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center text-gray-400 hover:text-white transition-colors border-2 border-dashed border-gray-600"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2Z" />
@@ -490,8 +494,8 @@ function NavBtn({ icon, label, active, onClick, dot }: { icon: string; label: st
   };
 
   return (
-    <button onClick={onClick} title={label}
-      className={`relative w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${active ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>
+    <button onClick={onClick} title={label} aria-label={label}
+      className={`mac-focus-ring relative w-11 h-11 rounded-xl flex items-center justify-center transition-colors ${active ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>
       {icons[icon]}
       {dot && (
         <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full border border-gray-900 pointer-events-none" />
@@ -536,7 +540,8 @@ function NavFlyout({ icon, label, active, items, onGuide }: { icon: string; labe
       <button
         ref={btnRef}
         title={label}
-        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+        aria-label={label}
+        className={`mac-focus-ring w-11 h-11 rounded-xl flex items-center justify-center transition-colors ${
           active ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-white'
         }`}
       >

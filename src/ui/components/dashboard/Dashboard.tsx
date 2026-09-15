@@ -10,6 +10,7 @@ import EmployeeLoginModal from './EmployeeLoginModal';
 import ipc, { buildZaloAuth } from '@/lib/ipc';
 import PageLoading from '@/components/common/PageLoading';
 import { BugIcon, HomeIcon, RefreshIcon, SunIcon, TargetIcon, UserIcon, UsersIcon } from '@/components/common/icons';
+import { filterDashboardAccounts, getDashboardSummary } from './dashboardSummary';
 
 /** Mo muc "Huong dan bao loi" trong Cai dat (ban noi bo khong dung issue cong khai). */
 function openBugReportGuide() {
@@ -91,17 +92,11 @@ export default function Dashboard() {
   };
 
   const q = search.trim().toLowerCase();
-  const filtered = q
-    ? accounts.filter((a) =>
-        (a.full_name || '').toLowerCase().includes(q) ||
-        a.zalo_id.includes(q) ||
-        (a.phone || '').replace(/\D/g, '').includes(q.replace(/\D/g, '')) ||
-        (a.phone || '').includes(q)
-      )
-    : accounts;
+  const filtered = filterDashboardAccounts(accounts, search);
+  const summary = getDashboardSummary(accounts, activeWs?.type, empMode === 'employee');
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="mac-dashboard flex-1 flex items-center justify-center">
         <PageLoading text="Đang tải dashboard..." />
       </div>
     );
@@ -109,7 +104,7 @@ export default function Dashboard() {
 
   if (accounts.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-4">
+      <div className="mac-dashboard flex-1 flex flex-col items-center justify-center text-gray-400 gap-4 px-4 text-center">
         <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="opacity-20">
           <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
           <circle cx="9" cy="7" r="4" />
@@ -161,13 +156,17 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
+    <div className="mac-dashboard flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-4 sm:p-6 lg:p-8">
+      <div className="mac-dashboard-inner">
       {/* Header + search */}
-      <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <h2 className="text-lg font-semibold text-white">Dashboard</h2>
-        <span className="text-xs text-gray-400 bg-gray-700/50 px-2 py-0.5 rounded-full">
-          {accounts.length} tài khoản
-        </span>
+      <div className="mac-dashboard-header mb-6">
+        <div className="min-w-0">
+          <p className="mac-dashboard-copy mb-2 text-xs font-semibold uppercase tracking-[0.12em]">Tổng quan vận hành</p>
+          <h2 className="mac-dashboard-title truncate">{activeWs?.name || 'Dashboard'}</h2>
+          <p className="mac-dashboard-copy mt-2 text-sm">
+            Theo dõi kết nối và mở nhanh các kênh đang phục vụ khách hàng.
+          </p>
+        </div>
         {isSimulating && (() => {
           const simEmp = useEmployeeStore.getState().getPreviewEmployee();
           return simEmp ? (
@@ -176,12 +175,12 @@ export default function Dashboard() {
           ) : null;
         })()}
 
-        <div className="ml-auto flex items-center gap-2 flex-wrap">
+        <div className="flex items-center justify-end gap-2 flex-wrap">
 
           {/* Thêm tài khoản - always visible */}
           <button
             onClick={() => useAppStore.getState().setAddAccountModalOpen(true)}
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white transition-colors"
+            className="mac-button-primary"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="8.5" cy="7" r="4"/>
@@ -189,6 +188,29 @@ export default function Dashboard() {
             </svg>
             Thêm tài khoản
           </button>
+        </div>
+      </div>
+
+      <section className="mac-summary-grid mb-6" aria-label="Tổng hợp tài khoản">
+        <div className="mac-summary-card">
+          <p className="mac-summary-label">Tổng tài khoản</p>
+          <p className="mac-summary-value">{summary.total}</p>
+        </div>
+        <div className="mac-summary-card">
+          <p className="mac-summary-label">Đang online</p>
+          <p className="mac-summary-value is-success">{summary.online}</p>
+        </div>
+        <div className="mac-summary-card">
+          <p className="mac-summary-label">Cần xử lý</p>
+          <p className={`mac-summary-value ${summary.attention ? 'is-warning' : ''}`}>{summary.attention}</p>
+        </div>
+        <div className="mac-summary-card">
+          <p className="mac-summary-label">Workspace</p>
+          <p className="mac-summary-value">{summary.workspaceLabel}</p>
+        </div>
+      </section>
+
+      <div className="mac-dashboard-toolbar mb-6">
 
           {/* Gộp tài khoản button - available for both boss and employee (uses visible/assigned accounts) */}
           {accounts.length > 1 && (
@@ -196,7 +218,7 @@ export default function Dashboard() {
               <div className="relative group">
                 <button
                     onClick={() => { exitMergedInbox(); }}
-                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white transition-colors"
+                    className="mac-button-secondary border-blue-500/40 text-blue-400"
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>
@@ -220,7 +242,7 @@ export default function Dashboard() {
               <div className="relative group">
                 <button
                     onClick={() => setMergedModalOpen(true)}
-                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600 transition-colors"
+                    className="mac-button-secondary"
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>
@@ -260,7 +282,7 @@ export default function Dashboard() {
                 window.dispatchEvent(new CustomEvent('nav:view', { detail: { view: 'settings' } }));
                 setTimeout(() => window.dispatchEvent(new CustomEvent('nav:settings', { detail: { tab: 'workspace' } })), 80);
               }}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+              className="mac-button-secondary"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <rect x="3" y="3" width="18" height="18" rx="3"/>
@@ -300,7 +322,7 @@ export default function Dashboard() {
           <div className="relative group">
             <button
                 onClick={openBugReportGuide}
-                className="flex text-white items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 transition-colors"
+                className="mac-button-secondary"
             >
               <BugIcon className="w-3.5 h-3.5" />
               Hỗ trợ, báo lỗi
@@ -334,11 +356,7 @@ export default function Dashboard() {
               <div className="absolute -top-1.5 right-4 w-3 h-3 bg-gray-800 border-l border-t border-gray-600/60 rotate-45" />
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* Search + drag hint row */}
-      <div className="flex items-center gap-2 mb-4">
+        {/* Search + drag hint */}
         {!q && (
           <p className="text-xs text-gray-400 flex items-center gap-1">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -350,7 +368,7 @@ export default function Dashboard() {
           </p>
         )}
         <div className="flex-1" />
-        <div className="relative w-64">
+        <div className="relative w-full sm:w-72">
           <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
             width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -360,11 +378,13 @@ export default function Dashboard() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Tên, SĐT, UID..."
-            className="bg-gray-700 text-gray-200 placeholder-gray-400 text-sm pl-8 pr-3 py-1.5 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500 w-full"
+            className="mac-search w-full pl-8 pr-9 text-sm outline-none"
+            aria-label="Tìm tài khoản"
           />
           {search && (
             <button onClick={() => setSearch('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200">
+              className="mac-focus-ring absolute right-0 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-lg text-gray-400 hover:text-gray-200"
+              aria-label="Xóa tìm kiếm">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
               </svg>
@@ -387,7 +407,7 @@ export default function Dashboard() {
           <p className="text-sm">Không tìm thấy tài khoản "{search}"</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="mac-account-grid">
           {filtered.map((acc, index) => {
             const isDragOver = !q && dragOverIndex === index;
             return (
@@ -413,6 +433,7 @@ export default function Dashboard() {
         </div>
       )}
       {mergedModalOpen && <MergedInboxModal onClose={() => setMergedModalOpen(false)} />}
+      </div>
     </div>
   );
 }
