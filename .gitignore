@@ -14,6 +14,7 @@ agents/
 tmp/
 docs/
 .vscode/
+/.worktrees/
 
 # AHV Connect
 dist/
