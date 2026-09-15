@@ -292,7 +292,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
 
   return (
     <>
-    <div className={`mac-account-card p-4 ${listenerDead ? 'is-attention' : ''}`}>
+    <div className={`bg-gray-800 rounded-xl p-4 border transition-colors ${listenerDead ? 'border-red-700/60' : 'border-gray-700 hover:border-gray-600'}`}>
       {/* Header */}
       <div className="flex items-center gap-3 mb-3">
         <div className="relative flex-shrink-0">
@@ -360,10 +360,8 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
         <div className="relative flex-shrink-0" ref={menuRef}>
           <button
             onClick={() => setMenuOpen(v => !v)}
-            className="mac-focus-ring w-11 h-11 flex items-center justify-center rounded-xl text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors"
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors"
             title="Tùy chọn"
-            aria-label={`Tùy chọn cho ${acc.full_name || acc.zalo_id}`}
-            aria-expanded={menuOpen}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
               <circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/>
@@ -472,7 +470,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
           {!listenerDead && (
             <button
               onClick={() => { setActiveAccount(acc.zalo_id); setView('chat'); }}
-              className="mac-focus-ring min-h-11 flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 rounded-lg transition-colors font-medium"
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-1.5 rounded-lg transition-colors font-medium"
             >
               Chat
             </button>
@@ -483,7 +481,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
             <button
               title="Ngắt kết nối sẽ dừng nghe tin nhắn và đánh dấu tài khoản offline."
               onClick={handleDisconnect}
-              className="mac-focus-ring min-h-11 flex-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs px-3 rounded-lg transition-colors font-medium"
+              className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs py-1.5 rounded-lg transition-colors font-medium"
             >
               Ngắt kết nối
             </button>
@@ -491,7 +489,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
             <button
               title="Kết nối lại để tiếp tục nhận tin nhắn."
               onClick={handleReconnect}
-              className="mac-focus-ring min-h-11 flex-1 bg-orange-700 text-white-important hover:bg-orange-600 text-xs px-3 rounded-lg transition-colors font-medium"
+              className="flex-1 bg-orange-700 text-white-important hover:bg-gray-600 text-gray-300 text-xs py-1.5 rounded-lg transition-colors font-medium"
             >
               Kết nối lại
             </button>
@@ -503,7 +501,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
           <div className="flex gap-2">
             <button
               onClick={handleReconnect}
-              className="mac-focus-ring min-h-11 flex-1 bg-orange-700 hover:bg-orange-600 text-white-important text-xs px-3 rounded-lg transition-colors font-medium flex items-center justify-center gap-1"
+              className="flex-1 bg-orange-700 hover:bg-orange-600 text-white-important text-xs py-1.5 rounded-lg transition-colors font-medium flex items-center justify-center gap-1"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="23 4 23 10 17 10" />
@@ -522,7 +520,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
                   setAddAccountModalOpen(true);
                 }
               }}
-              className="mac-focus-ring min-h-11 flex-1 bg-blue-800 hover:bg-blue-700 text-white text-xs px-3 rounded-lg transition-colors font-medium flex items-center justify-center gap-1"
+              className="flex-1 bg-blue-800 hover:bg-blue-700 text-white text-xs py-1.5 rounded-lg transition-colors font-medium flex items-center justify-center gap-1"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 {isFacebookAcc ? (

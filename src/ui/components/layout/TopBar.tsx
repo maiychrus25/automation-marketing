@@ -375,12 +375,12 @@ export default function TopBar() {
         }
       `}</style>
     <div
-      className="mac-titlebar flex items-center justify-between border-b flex-shrink-0"
+      className="flex items-center justify-between h-9 bg-gray-900 border-b border-gray-700 flex-shrink-0"
       style={{ WebkitAppRegion: 'drag' } as any}
     >
       <div className="flex items-center gap-2 px-3" style={{ WebkitAppRegion: 'no-drag', paddingLeft: isMac ? 72 : 12 } as any}>
-        <span className="text-blue-400 font-bold text-sm whitespace-nowrap">AHV Connect</span>
-        <span className="hidden text-gray-400 text-xs sm:inline">v{APP_VERSION}</span>
+        <span className="text-blue-400 font-bold text-sm">AHV Connect</span>
+        <span className="text-gray-400 text-xs">v{APP_VERSION}</span>
         {updateInfo && (updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'downloaded') && (
           <button onClick={openUpdatePopup}
             className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${

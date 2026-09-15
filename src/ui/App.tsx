@@ -1397,7 +1397,7 @@ export default function App() {
 
   if (initializing) {
     return (
-      <div className="app-shell h-screen flex flex-col">
+      <div className="h-screen flex flex-col bg-gray-900">
         <TopBar />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
@@ -1410,7 +1410,7 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell h-screen flex flex-col overflow-hidden">
+    <div className="h-screen flex flex-col bg-gray-900 overflow-hidden">
       <TopBar />
       <EmployeeConnectionBanner />
 
@@ -1424,7 +1424,7 @@ export default function App() {
         )}
 
         {/* Main content */}
-        <div className="mac-content-canvas flex flex-1 min-w-0 overflow-hidden">
+        <div className="flex flex-1 overflow-hidden">
           {view === 'chat' && (
             <>
               {/* Responsive: On small screens, show either list OR chat (Telegram-style) */}
