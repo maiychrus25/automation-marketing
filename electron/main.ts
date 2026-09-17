@@ -795,7 +795,10 @@ async function startupAllWorkspaces(): Promise<void> {
 
       // Read accounts from this workspace's DB (without switching active DB)
       const accounts = db.queryOtherDb<any[]>(dbPath, (otherDb) => {
-        const rows = otherDb.prepare("SELECT * FROM accounts WHERE is_active = 1 AND (channel = 'zalo' OR channel IS NULL)").all();
+        // listener_active=0 means the user explicitly disconnected this account last
+        // session (see ZaloLoginHelper.disconnectUser) - respect that, don't silently
+        // reconnect it just because the account itself still has valid credentials.
+        const rows = otherDb.prepare("SELECT * FROM accounts WHERE is_active = 1 AND listener_active = 1 AND (channel = 'zalo' OR channel IS NULL)").all();
         return rows;
       });
 

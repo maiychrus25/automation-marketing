@@ -1143,7 +1143,11 @@ export default function App() {
           if (!isEmployeeMode) {
             for (const acc of accountsRes.accounts) {
               if (isNonZalo(acc.channel)) continue; // Skip non-Zalo accounts
-              if (!acc.isConnected) {
+              // Every account looks "not connected" right after app launch (no live
+              // socket yet), so only auto-reconnect ones the user didn't explicitly
+              // disconnect last time (listenerActive=false persists that intent -
+              // see ZaloLoginHelper.disconnectUser).
+              if (!acc.isConnected && acc.listenerActive) {
                 const auth = buildZaloAuth(acc);
                 ipc.login?.connectAccount(auth).catch(() => {});
               }

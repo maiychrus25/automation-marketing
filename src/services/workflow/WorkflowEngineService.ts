@@ -1133,6 +1133,20 @@ class WorkflowEngineService {
         typeChat: msg.type === 'user' ? 'user' : undefined,
       };
     }
+    // ── Telegram group event trigger (member join/leave etc.) ───────────────
+    // Emitted by TelegramUserListener as { zaloId, groupId, eventType, data: { action },
+    // systemText, msgId, timestamp } - unlike Zalo, Telegram never captures the joining
+    // member's name as its own field, only baked into the pre-formatted systemText
+    // sentence (e.g. "Nguyễn Văn A đã được thêm vào nhóm") - so that's the only usable
+    // "who" content here, there is no $trigger.fromName equivalent for this trigger type.
+    if (triggerType === 'tg.trigger.groupEvent') {
+      return {
+        groupId: data.groupId || data.threadId || '',
+        eventType: data.eventType || data.data?.action || '',
+        systemText: data.systemText || '',
+        accountId: data.zaloId || data.accountId || '',
+      };
+    }
     // ── Telegram trigger flattening ─────────────────────────────────────────
     if (triggerType === 'tg.trigger.message' || triggerType.startsWith('tg.trigger.')) {
       const envelope = data.message || data;

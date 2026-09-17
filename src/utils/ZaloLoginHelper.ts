@@ -225,6 +225,9 @@ class ZaloLoginHelper {
     private static reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
     // Set lưu các account đã bị xóa chủ động - KHÔNG reconnect
     private static removedAccounts: Set<string> = new Set();
+    // Set lưu các account vừa bị ngắt kết nối thủ công (disconnectUser) - KHÔNG auto-reconnect
+    // cho lần "closed"/"disconnected" sắp tới do chính thao tác ngắt này gây ra.
+    private static manuallyDisconnectedAccounts: Set<string> = new Set();
     /** Callback được gọi khi QR login thành công */
     private static onQRSuccessCallback: ((zaloId: string, isNewAccount: boolean) => void) | null = null;
 
@@ -582,6 +585,13 @@ class ZaloLoginHelper {
     public async disconnectUser(zaloId: string): Promise<void> {
         // Cancel any pending reconnect so we don't re-connect after manual disconnect
         ZaloLoginHelper.cancelReconnect(zaloId);
+        // Mark so the "closed"/"disconnected" event this triggers (via listener.stop()
+        // below) doesn't schedule a brand-new auto-reconnect - see handleDisconnection().
+        ZaloLoginHelper.manuallyDisconnectedAccounts.add(zaloId);
+        // Persist intent to DB too: the in-memory guard above is wiped on app restart,
+        // and startupAllWorkspaces() reconnects any account it finds - so without this,
+        // a manual disconnect gets silently undone the next time the app launches.
+        DatabaseService.getInstance().setListenerActive(zaloId, false);
 
         const connection = ConnectionManager.getConnection(zaloId);
         if (!connection) {
@@ -1062,6 +1072,9 @@ class ZaloLoginHelper {
             ConnectionManager.setConnected(zaloId, true);
             DatabaseService.getInstance().setListenerActive(zaloId, true);
             EventBroadcaster.broadcastConnected(zaloId, { zaloId });
+            // A real reconnect happened - clear the manual-disconnect guard so a
+            // future unexpected drop auto-reconnects normally again.
+            ZaloLoginHelper.manuallyDisconnectedAccounts.delete(zaloId);
         });
 
         const handleDisconnection = (eventType: string, code: CloseReason, reason: string) => {
@@ -1096,6 +1109,15 @@ class ZaloLoginHelper {
             if (ZaloLoginHelper.removedAccounts.has(zaloId)) {
                 Logger.log(`[ZaloLoginHelper] ${zaloId} was removed - skipping reconnect`);
                 ZaloLoginHelper.removedAccounts.delete(zaloId);
+                return;
+            }
+
+            // Nếu vừa bị ngắt kết nối thủ công (disconnectUser) → không auto-reconnect.
+            // KHÔNG xoá cờ ở đây: "disconnected" và "closed" cùng bắn ra cho một lần
+            // ngắt duy nhất, nên cờ phải sống sót qua cả 2 sự kiện - chỉ xoá khi có
+            // kết nối thật lại (xem listener.on("connected")) hoặc lần ngắt kế tiếp.
+            if (ZaloLoginHelper.manuallyDisconnectedAccounts.has(zaloId)) {
+                Logger.log(`[ZaloLoginHelper] ${zaloId} was manually disconnected - skipping reconnect`);
                 return;
             }
 
