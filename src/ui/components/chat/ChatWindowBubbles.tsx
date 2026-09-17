@@ -1217,8 +1217,7 @@ export function MediaGroupBubble({
                 ))}
             </div>
             {telegramCaptionMessage && (
-                <div className="px-3 py-2 text-sm whitespace-pre-wrap break-words bg-gray-700 text-gray-200"
-                     style={{fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif'}}>
+                <div className="px-3 py-2 text-sm whitespace-pre-wrap break-words bg-gray-700 text-gray-200">
                     <TextWithMentions
                         text={String(telegramCaptionMessage.content || '').trim()}
                         channel={telegramCaptionMessage.channel}
@@ -2409,9 +2408,6 @@ export function TextWithMentions({
     // Telegram already sends Unicode (including a fallback glyph for custom
     // emoji entities). Zalo's text-code converter must not rewrite it.
     const converted = isTelegram(channel) ? text : convertZaloEmojis(text);
-    const emojiFontStyle: React.CSSProperties = isTelegram(channel)
-        ? { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif' }
-        : {};
 
     // Helper: wrap text segment with search highlight marks + URL detection
     const applyHighlight = (str: string, key: string | number, detectMentions = true): React.ReactNode => {
@@ -2470,7 +2466,7 @@ export function TextWithMentions({
         if (cursor < converted.length) {
             segments.push(applyHighlight(converted.slice(cursor), `native-text-${cursor}`, false));
         }
-        return <span className="whitespace-pre-wrap select-text break-words" style={{ overflowWrap: 'break-word', wordBreak: 'normal', ...emojiFontStyle }}>{segments}</span>;
+        return <span className="whitespace-pre-wrap select-text break-words" style={{ overflowWrap: 'break-word', wordBreak: 'normal' }}>{segments}</span>;
     }
 
     // Match @Name: greedy - capture everything after @ until a newline or double-space
@@ -2570,8 +2566,8 @@ export function TextWithMentions({
         }
     }
 
-    if (segments.length === 0) return <span className="whitespace-pre-wrap select-text break-words" style={{ overflowWrap: 'break-word', wordBreak: 'normal', ...emojiFontStyle }}>{converted}</span>;
-    return <span className="whitespace-pre-wrap select-text break-words" style={{ overflowWrap: 'break-word', wordBreak: 'normal', ...emojiFontStyle }}>{segments}</span>;
+    if (segments.length === 0) return <span className="whitespace-pre-wrap select-text break-words" style={{ overflowWrap: 'break-word', wordBreak: 'normal' }}>{converted}</span>;
+    return <span className="whitespace-pre-wrap select-text break-words" style={{ overflowWrap: 'break-word', wordBreak: 'normal' }}>{segments}</span>;
 }
 
 export function RtfBubble({
