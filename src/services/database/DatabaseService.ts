@@ -7,6 +7,7 @@ import type { Account, Message, Contact, CRMNote, CRMCampaign, CRMCampaignContac
 import type { TelegramPeer } from '../../models/telegram';
 import { CHANNEL } from '../../ui/lib/channelHelper';
 import { getTelegramMessagePreview } from '../telegram/TelegramMessagePreview';
+import type { BrowserFingerprint, BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
 
 // better-sqlite3: native SQLite - no WASM heap, memory-mapped I/O
 let db: BetterSqlite3.Database | null = null;
@@ -1105,6 +1106,29 @@ class DatabaseService {
                 created_at  INTEGER NOT NULL DEFAULT 0,
                 updated_at  INTEGER NOT NULL DEFAULT 0
             );
+        `);
+
+        // ─── Browser profiles ────────────────────────────────────────────────────
+        this.exec(`
+            CREATE TABLE IF NOT EXISTS browser_profile_groups (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL,
+                color       TEXT NOT NULL DEFAULT '',
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                created_at  INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS browser_profiles (
+                id               TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                group_id         INTEGER DEFAULT NULL,
+                proxy_id         INTEGER DEFAULT NULL,
+                fingerprint_json TEXT NOT NULL,
+                note             TEXT NOT NULL DEFAULT '',
+                last_opened_at   INTEGER DEFAULT NULL,
+                created_at       INTEGER NOT NULL DEFAULT 0,
+                updated_at       INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_browser_profiles_group ON browser_profiles(group_id);
         `);
 
     }
@@ -2957,6 +2981,7 @@ class DatabaseService {
     /** Xóa proxy và gỡ khỏi mọi tài khoản đang dùng */
     public deleteProxy(id: number): void {
         db!.prepare(`UPDATE accounts SET proxy_id = NULL WHERE proxy_id = ?`).run(id);
+        db!.prepare(`UPDATE browser_profiles SET proxy_id = NULL WHERE proxy_id = ?`).run(id);
         db!.prepare(`DELETE FROM proxies WHERE id = ?`).run(id);
     }
 
@@ -2989,6 +3014,102 @@ class DatabaseService {
              WHERE a.zalo_id = ?`,
             [zaloId]
         ) || null;
+    }
+
+    // ─── Browser profiles ─────────────────────────────────────────────────────
+
+    private mapBrowserProfileRow(row: any): BrowserProfile {
+        return {
+            id: row.id,
+            name: row.name,
+            group_id: row.group_id ?? null,
+            proxy_id: row.proxy_id ?? null,
+            fingerprint: JSON.parse(row.fingerprint_json) as BrowserFingerprint,
+            note: row.note || '',
+            last_opened_at: row.last_opened_at ?? null,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        };
+    }
+
+    public getBrowserProfiles(): BrowserProfile[] {
+        return this.query<any>('SELECT * FROM browser_profiles ORDER BY created_at DESC, name ASC')
+            .map((row) => this.mapBrowserProfileRow(row));
+    }
+
+    public getBrowserProfileById(id: string): BrowserProfile | null {
+        const row = this.queryOne<any>('SELECT * FROM browser_profiles WHERE id = ?', [id]);
+        return row ? this.mapBrowserProfileRow(row) : null;
+    }
+
+    public createBrowserProfile(profile: {
+        id: string; name: string; group_id: number | null; proxy_id: number | null; fingerprint: BrowserFingerprint; note: string;
+    }): BrowserProfile {
+        const now = Date.now();
+        db!.prepare(
+            `INSERT INTO browser_profiles (id, name, group_id, proxy_id, fingerprint_json, note, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(profile.id, profile.name, profile.group_id, profile.proxy_id, JSON.stringify(profile.fingerprint), profile.note, now, now);
+        return this.getBrowserProfileById(profile.id)!;
+    }
+
+    public updateBrowserProfile(id: string, fields: {
+        name?: string; group_id?: number | null; proxy_id?: number | null; fingerprint?: BrowserFingerprint; note?: string;
+    }): void {
+        const sets: string[] = [];
+        const vals: any[] = [];
+        if (fields.name !== undefined) { sets.push('name = ?'); vals.push(fields.name); }
+        if (fields.group_id !== undefined) { sets.push('group_id = ?'); vals.push(fields.group_id); }
+        if (fields.proxy_id !== undefined) { sets.push('proxy_id = ?'); vals.push(fields.proxy_id); }
+        if (fields.fingerprint !== undefined) { sets.push('fingerprint_json = ?'); vals.push(JSON.stringify(fields.fingerprint)); }
+        if (fields.note !== undefined) { sets.push('note = ?'); vals.push(fields.note); }
+        if (sets.length === 0) return;
+        sets.push('updated_at = ?'); vals.push(Date.now());
+        vals.push(id);
+        db!.prepare(`UPDATE browser_profiles SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    }
+
+    public deleteBrowserProfile(id: string): void {
+        db!.prepare('DELETE FROM browser_profiles WHERE id = ?').run(id);
+    }
+
+    /** Gắn/gỡ proxy cho nhiều profile, trả về số profile đã cập nhật */
+    public setBrowserProfilesProxy(ids: string[], proxyId: number | null): number {
+        const statement = db!.prepare('UPDATE browser_profiles SET proxy_id = ?, updated_at = ? WHERE id = ?');
+        const now = Date.now();
+        return this.transaction(() => ids.reduce((count, id) => count + statement.run(proxyId, now, id).changes, 0));
+    }
+
+    public touchBrowserProfileOpened(id: string): void {
+        this.run('UPDATE browser_profiles SET last_opened_at = ? WHERE id = ?', [Date.now(), id]);
+    }
+
+    public getBrowserProfileGroups(): BrowserProfileGroup[] {
+        return this.query<BrowserProfileGroup>('SELECT * FROM browser_profile_groups ORDER BY sort_order ASC, name ASC');
+    }
+
+    public getBrowserProfileGroupById(id: number): BrowserProfileGroup | null {
+        return this.queryOne<BrowserProfileGroup>('SELECT * FROM browser_profile_groups WHERE id = ?', [id]) || null;
+    }
+
+    /** Tạo nhóm mới (không có id) hoặc cập nhật nhóm có sẵn */
+    public saveBrowserProfileGroup(group: { id?: number; name: string; color?: string }): BrowserProfileGroup {
+        let id = group.id;
+        if (id) {
+            this.run('UPDATE browser_profile_groups SET name = ?, color = ? WHERE id = ?', [group.name, group.color || '', id]);
+        } else {
+            id = this.runInsert(
+                'INSERT INTO browser_profile_groups (name, color, sort_order, created_at) VALUES (?, ?, 0, ?)',
+                [group.name, group.color || '', Date.now()],
+            );
+        }
+        return this.getBrowserProfileGroupById(id)!;
+    }
+
+    /** Xóa nhóm; các profile trong nhóm trở về "không nhóm" */
+    public deleteBrowserProfileGroup(id: number): void {
+        db!.prepare('UPDATE browser_profiles SET group_id = NULL WHERE group_id = ?').run(id);
+        db!.prepare('DELETE FROM browser_profile_groups WHERE id = ?').run(id);
     }
 
     private decryptCookies(encrypted: string): string {
