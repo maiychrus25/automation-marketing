@@ -31,14 +31,16 @@ function GroupManager({ groups, onClose, onChanged }: { groups: BrowserProfileGr
   const showNotification = useAppStore((s) => s.showNotification);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
+  // Escape dismisses the confirm dialog first, not this modal.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !confirming) onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [onClose, confirming]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,12 +57,14 @@ function GroupManager({ groups, onClose, onChanged }: { groups: BrowserProfileGr
   };
 
   const handleDelete = async (group: BrowserProfileGroup) => {
+    setConfirming(true);
     const confirmed = await showConfirm({
       title: `Xóa nhóm "${group.name}"?`,
       message: 'Các profile trong nhóm sẽ không bị xóa, chỉ trở về "Không nhóm".',
       confirmText: 'Xóa nhóm',
       variant: 'danger',
     });
+    setConfirming(false);
     if (!confirmed) return;
     const res = await ipc.browserProfile?.deleteGroup(group.id);
     if (res?.success) onChanged();

@@ -2551,7 +2551,7 @@ git commit -m "feat(browser): expose browser profile IPC and wire lifecycle hook
 
 ## Task 7: Giao diện
 
-**Ghi chú sau review (Task 7):** modal tạo/sửa và Nhóm đóng bằng Escape và chỉ đóng khi nhấn chuột xuống đúng nền mờ; xóa nhóm đang lọc thì bộ lọc về "Tất cả"; chọn hàng loạt chỉ áp dụng cho dòng đang hiển thị và bị bỏ khi đổi tìm kiếm/bộ lọc; form khóa proxy khi profile đang mở; `load()` có `try/finally`, mở thành công thì làm mới "Mở gần nhất".
+**Ghi chú sau review (Task 7):** modal tạo/sửa và Nhóm đóng bằng Escape và chỉ đóng khi nhấn chuột xuống đúng nền mờ; xóa nhóm đang lọc thì bộ lọc về "Tất cả"; chọn hàng loạt chỉ áp dụng cho dòng đang hiển thị và bị bỏ khi đổi tìm kiếm/bộ lọc; Escape trên hộp xác nhận bên trong modal chỉ đóng hộp xác nhận; form khóa proxy khi profile đang mở; `load()` có `try/finally`, mở thành công thì làm mới "Mở gần nhất".
 
 **Files:**
 - Modify: `DESIGN.md`
@@ -2767,6 +2767,7 @@ export default function BrowserProfileForm({ profile, groups, proxies, running, 
   const [regenerate, setRegenerate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [confirming, setConfirming] = useState(false);
 
   const timezones = useMemo<string[]>(() => {
     try {
@@ -2777,21 +2778,24 @@ export default function BrowserProfileForm({ profile, groups, proxies, running, 
   }, []);
   const languageOptions = LANGUAGES.some((l) => l.value === language) ? LANGUAGES : [...LANGUAGES, { value: language, label: language }];
 
+  // Escape dismisses the confirm dialog first, not this modal.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !confirming) onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [onClose, confirming]);
 
   const handleRegenerate = async () => {
+    setConfirming(true);
     const confirmed = await showConfirm({
       title: 'Tạo lại fingerprint?',
       message: 'Các website sẽ thấy profile này như một thiết bị mới. Tài khoản đang đăng nhập có thể bị yêu cầu xác minh lại.',
       confirmText: 'Tạo lại',
       variant: 'warning',
     });
+    setConfirming(false);
     if (confirmed) setRegenerate(true);
   };
 
@@ -2963,14 +2967,16 @@ function GroupManager({ groups, onClose, onChanged }: { groups: BrowserProfileGr
   const showNotification = useAppStore((s) => s.showNotification);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
+  // Escape dismisses the confirm dialog first, not this modal.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !confirming) onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [onClose, confirming]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2987,12 +2993,14 @@ function GroupManager({ groups, onClose, onChanged }: { groups: BrowserProfileGr
   };
 
   const handleDelete = async (group: BrowserProfileGroup) => {
+    setConfirming(true);
     const confirmed = await showConfirm({
       title: `Xóa nhóm "${group.name}"?`,
       message: 'Các profile trong nhóm sẽ không bị xóa, chỉ trở về "Không nhóm".',
       confirmText: 'Xóa nhóm',
       variant: 'danger',
     });
+    setConfirming(false);
     if (!confirmed) return;
     const res = await ipc.browserProfile?.deleteGroup(group.id);
     if (res?.success) onChanged();

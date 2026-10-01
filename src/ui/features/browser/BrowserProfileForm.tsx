@@ -49,6 +49,7 @@ export default function BrowserProfileForm({ profile, groups, proxies, running, 
   const [regenerate, setRegenerate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [confirming, setConfirming] = useState(false);
 
   const timezones = useMemo<string[]>(() => {
     try {
@@ -59,21 +60,24 @@ export default function BrowserProfileForm({ profile, groups, proxies, running, 
   }, []);
   const languageOptions = LANGUAGES.some((l) => l.value === language) ? LANGUAGES : [...LANGUAGES, { value: language, label: language }];
 
+  // Escape dismisses the confirm dialog first, not this modal.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !confirming) onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [onClose, confirming]);
 
   const handleRegenerate = async () => {
+    setConfirming(true);
     const confirmed = await showConfirm({
       title: 'Tạo lại fingerprint?',
       message: 'Các website sẽ thấy profile này như một thiết bị mới. Tài khoản đang đăng nhập có thể bị yêu cầu xác minh lại.',
       confirmText: 'Tạo lại',
       variant: 'warning',
     });
+    setConfirming(false);
     if (confirmed) setRegenerate(true);
   };
 
