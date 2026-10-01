@@ -2,6 +2,8 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 import axios from 'axios';
 import { BROWSER_ENGINE, BrowserEngineConfig, BrowserEnginePackage } from '../../configs/browserEngine.config';
 
@@ -22,30 +24,62 @@ export interface EngineDeps {
 }
 
 const MARKER_FILE = 'installed.json';
+export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+const SOCKET_TIMEOUT_GRACE_MS = 5_000;
+const STDERR_TAIL_CHARS = 500;
 
-async function downloadFile(url: string, destination: string, onProgress?: (progress: EngineProgress) => void): Promise<void> {
-    const response = await axios.get(url, { responseType: 'stream', maxRedirects: 5 });
+export async function downloadFile(
+    url: string,
+    destination: string,
+    onProgress?: (progress: EngineProgress) => void,
+    idleTimeoutMs: number = DOWNLOAD_IDLE_TIMEOUT_MS,
+): Promise<void> {
+    // axios applies this as a socket idle timeout (connect/headers and body); the grace lets our idle timer report first.
+    const response = await axios.get(url, { responseType: 'stream', maxRedirects: 5, timeout: idleTimeoutMs + SOCKET_TIMEOUT_GRACE_MS });
     const total = Number(response.headers['content-length']) || 0;
+    const source: Readable = response.data;
+    const file = fs.createWriteStream(destination);
     let received = 0;
-    await new Promise<void>((resolve, reject) => {
-        const file = fs.createWriteStream(destination);
-        response.data.on('data', (chunk: Buffer) => {
-            received += chunk.length;
-            onProgress?.({ received, total });
-        });
-        response.data.once('error', reject);
-        file.once('error', reject);
-        file.once('finish', () => resolve());
-        response.data.pipe(file);
+    let timer: NodeJS.Timeout | undefined;
+    const armIdleTimer = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => source.destroy(new Error('Tải nhân trình duyệt bị ngắt: không nhận được dữ liệu')), idleTimeoutMs);
+    };
+    source.on('data', (chunk: Buffer) => {
+        received += chunk.length;
+        onProgress?.({ received, total });
+        armIdleTimer();
     });
+    armIdleTimer();
+    try {
+        // pipeline rejects on error or premature close, and destroys both streams.
+        await pipeline(source, file);
+    } finally {
+        clearTimeout(timer);
+        source.destroy();
+        file.destroy();
+        // Wait until the file handle is released so the caller can delete the archive on Windows.
+        if (!file.closed) await new Promise<void>((resolve) => file.once('close', () => resolve()));
+    }
+}
+
+/** Windows ships bsdtar in System32; a Git-for-Windows GNU tar earlier on PATH cannot read .zip. */
+function tarCommand(): string {
+    return process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
 }
 
 /** `tar` reads .tar.xz on Linux and .zip on Windows 10+ (bsdtar), so no archive dependency is needed. */
 function extractArchive(archive: string, directory: string): Promise<void> {
     return new Promise((resolve, reject) => {
-        const child = spawn('tar', ['-xf', archive, '-C', directory], { stdio: 'ignore' });
+        const child = spawn(tarCommand(), ['-xf', archive, '-C', directory], { stdio: ['ignore', 'ignore', 'pipe'] });
+        let stderr = '';
+        child.stderr?.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-STDERR_TAIL_CHARS); });
         child.once('error', reject);
-        child.once('exit', (code) => (code === 0 ? resolve() : reject(new Error(`Giải nén thất bại (tar exit ${code})`))));
+        child.once('close', (code) => {
+            if (code === 0) return resolve();
+            const detail = stderr.trim();
+            reject(new Error(`Giải nén thất bại (tar exit ${code})${detail ? `: ${detail}` : ''}`));
+        });
     });
 }
 

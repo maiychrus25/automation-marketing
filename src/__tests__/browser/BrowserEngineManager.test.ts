@@ -1,8 +1,10 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as http from 'http';
+import type { AddressInfo } from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { BrowserEngineManager, EngineDeps } from '../../services/browser/BrowserEngineManager';
+import { BrowserEngineManager, EngineDeps, downloadFile } from '../../services/browser/BrowserEngineManager';
 import type { BrowserEngineConfig } from '../../configs/browserEngine.config';
 
 const ARCHIVE_BYTES = Buffer.from('fake engine archive');
@@ -103,5 +105,62 @@ describe('BrowserEngineManager', () => {
         await expect(manager.install()).rejects.toThrow('network down');
         await manager.install();
         expect(manager.getExecutablePath()).not.toBeNull();
+    });
+});
+
+describe('downloadFile', () => {
+    let dir: string;
+    let server: http.Server;
+    let sockets: Set<import('net').Socket>;
+    beforeEach(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'download-test-'));
+        sockets = new Set();
+    });
+    afterEach(async () => {
+        sockets.forEach((socket) => socket.destroy());
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    async function serve(handler: http.RequestListener): Promise<string> {
+        server = http.createServer(handler);
+        server.on('connection', (socket) => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+        return `http://127.0.0.1:${(server.address() as AddressInfo).port}/engine`;
+    }
+
+    it('downloads a body and reports progress', async () => {
+        const body = Buffer.from('hello engine');
+        const url = await serve((_req, res) => { res.writeHead(200, { 'Content-Length': body.length }); res.end(body); });
+        const destination = path.join(dir, 'out');
+        const reports: Array<{ received: number; total: number }> = [];
+        await downloadFile(url, destination, (p) => reports.push(p), 5000);
+        expect(fs.readFileSync(destination)).toEqual(body);
+        expect(reports[reports.length - 1]).toEqual({ received: body.length, total: body.length });
+    });
+
+    it('rejects on an HTTP error status', async () => {
+        const url = await serve((_req, res) => { res.writeHead(404); res.end(); });
+        await expect(downloadFile(url, path.join(dir, 'out'), undefined, 5000)).rejects.toThrow();
+    });
+
+    it('rejects when the connection closes before Content-Length bytes arrive and releases the file', async () => {
+        const url = await serve((_req, res) => {
+            res.writeHead(200, { 'Content-Length': 1000 });
+            res.write('partial', () => res.destroy());
+        });
+        const destination = path.join(dir, 'out');
+        await expect(downloadFile(url, destination, undefined, 5000)).rejects.toThrow();
+        expect(() => fs.rmSync(destination, { force: true })).not.toThrow();
+    });
+
+    it('rejects after the idle timeout when the server stalls mid-body', async () => {
+        const url = await serve((_req, res) => {
+            res.writeHead(200, { 'Content-Length': 1000 });
+            res.write('first chunk');
+        });
+        const destination = path.join(dir, 'out');
+        await expect(downloadFile(url, destination, undefined, 200)).rejects.toThrow('không nhận được dữ liệu');
+        expect(() => fs.rmSync(destination, { force: true })).not.toThrow();
     });
 });
