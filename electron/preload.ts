@@ -830,6 +830,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'library:itemAdded',
       'library:itemUpdated',
       'library:itemDeleted',
+      // ─── Browser profile events ──────────────────────────────────
+      'browserProfile:statusChanged',
+      'browserProfile:engineProgress',
     ];
     if (validChannels.includes(channel)) {
       const subscription = (_event: any, ...args: any[]) => callback(...args);
@@ -852,5 +855,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setAccount:    (zaloId: string, proxyId: number | null) => ipcRenderer.invoke('proxy:setAccount', { zaloId, proxyId }),
     getForAccount: (zaloId: string)                => ipcRenderer.invoke('proxy:getForAccount', { zaloId }),
     test:          (proxy: any)                    => ipcRenderer.invoke('proxy:test', { proxy }),
+  },
+
+  // ─── Browser profiles ────────────────────────────────────────────────────
+  browserProfile: {
+    list:          ()                                  => ipcRenderer.invoke('browserProfile:list'),
+    create:        (params: any)                       => ipcRenderer.invoke('browserProfile:create', params),
+    update:        (id: string, params: any)           => ipcRenderer.invoke('browserProfile:update', { id, ...params }),
+    delete:        (ids: string[])                     => ipcRenderer.invoke('browserProfile:delete', { ids }),
+    setProxy:      (ids: string[], proxyId: number | null) => ipcRenderer.invoke('browserProfile:setProxy', { ids, proxyId }),
+    open:          (id: string)                        => ipcRenderer.invoke('browserProfile:open', { id }),
+    close:         (id: string)                        => ipcRenderer.invoke('browserProfile:close', { id }),
+    saveGroup:     (group: { id?: number; name: string; color?: string }) => ipcRenderer.invoke('browserProfile:saveGroup', group),
+    deleteGroup:   (id: number)                        => ipcRenderer.invoke('browserProfile:deleteGroup', { id }),
+    engineStatus:  ()                                  => ipcRenderer.invoke('browserProfile:engineStatus'),
+    installEngine: ()                                  => ipcRenderer.invoke('browserProfile:installEngine'),
   },
 });
