@@ -80,7 +80,7 @@ Năm tình huống spec không nêu thành yêu cầu riêng nhưng dễ gây l�
 | `src/__tests__/browser/fingerprint.test.ts` | 10 test |
 | `src/__tests__/browser/ProxyForwarder.test.ts` | 11 test |
 | `src/__tests__/browser/BrowserEngineManager.test.ts` | 11 test |
-| `src/__tests__/browser/BrowserProfileService.test.ts` | 18 test |
+| `src/__tests__/browser/BrowserProfileService.test.ts` | 19 test |
 
 ### Sửa
 
@@ -1887,7 +1887,7 @@ export class BrowserProfileService {
 - [ ] **Step 4: Chạy test, xác nhận qua**
 
 Run: `npx jest`
-Expected: PASS, `Test Suites: 4 passed, 4 total`, `Tests: 50 passed, 50 total`.
+Expected: PASS, `Test Suites: 4 passed, 4 total`, `Tests: 51 passed, 51 total`.
 
 - [ ] **Step 5: Commit**
 
@@ -2493,7 +2493,7 @@ Thay bằng:
 - [ ] **Step 5: Type-check và unit test**
 
 Run: `npx tsc -p tsconfig.electron.json --noEmit && npx jest`
-Expected: tsc không in gì; jest `Tests: 50 passed, 50 total`.
+Expected: tsc không in gì; jest `Tests: 51 passed, 51 total`.
 
 - [ ] **Step 6: Chạy app dev và kiểm chứng bằng console**
 
@@ -3586,7 +3586,7 @@ npm run build:electron
 npm run build:renderer
 ```
 
-Expected: hai lệnh tsc không in gì; jest `Test Suites: 4 passed, 4 total`, `Tests: 50 passed, 50 total`; hai lệnh build không lỗi. Dán output vào mô tả PR.
+Expected: hai lệnh tsc không in gì; jest `Test Suites: 4 passed, 4 total`, `Tests: 51 passed, 51 total`; hai lệnh build không lỗi. Dán output vào mô tả PR.
 
 - [ ] **Step 2: Vòng 1 trên Linux (`npm run dev`)**
 
