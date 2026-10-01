@@ -911,16 +911,22 @@ export class ProxyForwarder {
         const relay = (options: http.RequestOptions, transport: typeof http | typeof https) => {
             const upstream = transport.request(options, (upstreamResponse) => {
                 response.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+                upstreamResponse.on('error', () => response.destroy());
                 upstreamResponse.pipe(response);
             });
             upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () => upstream.destroy(new Error('Upstream proxy timed out')));
-            upstream.once('error', fail);
+            upstream.on('error', fail);
             request.pipe(upstream);
         };
 
         if (isSocks(this.proxy)) {
             const port = Number(target.port) || 80;
             openTunnel(this.proxy, target.hostname, port).then((socket) => {
+                if (!this.server) {
+                    socket.destroy();
+                    fail();
+                    return;
+                }
                 this.track(socket);
                 relay({
                     method: request.method,
@@ -946,6 +952,8 @@ export class ProxyForwarder {
     }
 }
 ```
+
+> Lưu ý (post-review hardening): `upstream.on('error')` thay cho `once` để lỗi thứ hai không bị unhandled; `upstreamResponse` lỗi giữa chừng sẽ destroy response phía trình duyệt; nhánh SOCKS kiểm tra `this.server` sau handshake để không rò socket khi `stop()` đã chạy.
 
 - [ ] **Step 5: Chạy test, xác nhận qua**
 
