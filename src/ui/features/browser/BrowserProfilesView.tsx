@@ -32,6 +32,14 @@ function GroupManager({ groups, onClose, onChanged }: { groups: BrowserProfileGr
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
@@ -60,9 +68,9 @@ function GroupManager({ groups, onClose, onChanged }: { groups: BrowserProfileGr
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div role="dialog" aria-modal="true" aria-label="Quản lý nhóm"
-        className="w-full max-w-sm max-h-full overflow-y-auto bg-gray-800 border border-gray-700 rounded-xl shadow-xl" onClick={(e) => e.stopPropagation()}>
+        className="w-full max-w-sm max-h-full overflow-y-auto bg-gray-800 border border-gray-700 rounded-xl shadow-xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
           <h2 className="text-sm font-semibold text-white">Quản lý nhóm</h2>
           <button type="button" onClick={onClose} aria-label="Đóng" className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700">
@@ -71,7 +79,7 @@ function GroupManager({ groups, onClose, onChanged }: { groups: BrowserProfileGr
         </div>
         <div className="p-4 space-y-3">
           <form onSubmit={handleAdd} className="flex gap-2">
-            <input className="input-field text-sm flex-1 min-w-0" placeholder="Tên nhóm mới" maxLength={100} aria-label="Tên nhóm mới"
+            <input className="input-field text-sm flex-1 min-w-0" placeholder="Tên nhóm mới" maxLength={100} aria-label="Tên nhóm mới" autoFocus
               value={name} onChange={(e) => setName(e.target.value)} disabled={saving} />
             <button type="submit" disabled={saving || !name.trim()} className="btn-primary text-sm px-3 py-1.5 text-white disabled:opacity-60">Thêm</button>
           </form>
@@ -118,25 +126,32 @@ export default function BrowserProfilesView() {
   const [showGroups, setShowGroups] = useState(false);
 
   const load = useCallback(async () => {
-    const [listRes, proxyRes, engineRes] = await Promise.all([
-      ipc.browserProfile?.list(),
-      ipc.proxy?.list(),
-      ipc.browserProfile?.engineStatus(),
-    ]);
-    if (!listRes?.success) {
-      setLoadError(listRes?.error || 'Không tải được danh sách profile');
+    try {
+      const [listRes, proxyRes, engineRes] = await Promise.all([
+        ipc.browserProfile?.list(),
+        ipc.proxy?.list(),
+        ipc.browserProfile?.engineStatus(),
+      ]);
+      if (!listRes?.success) {
+        setLoadError(listRes?.error || 'Không tải được danh sách profile');
+        return;
+      }
+      setLoadError('');
+      setProfiles(listRes.profiles || []);
+      const nextGroups: BrowserProfileGroup[] = listRes.groups || [];
+      setGroups(nextGroups);
+      // A deleted group must not stay selected as the filter.
+      setGroupFilter((prev) => (typeof prev === 'number' && !nextGroups.some((g) => g.id === prev) ? 'all' : prev));
+      setRunningIds(new Set(listRes.runningIds || []));
+      setProxies(proxyRes?.success ? proxyRes.proxies : []);
+      if (engineRes?.success) {
+        setEngine({ supported: !!engineRes.supported, installed: !!engineRes.installed, version: engineRes.version || '' });
+      }
+    } catch (err) {
+      setLoadError(err instanceof Error && err.message ? err.message : 'Không tải được danh sách profile');
+    } finally {
       setLoading(false);
-      return;
     }
-    setLoadError('');
-    setProfiles(listRes.profiles || []);
-    setGroups(listRes.groups || []);
-    setRunningIds(new Set(listRes.runningIds || []));
-    setProxies(proxyRes?.success ? proxyRes.proxies : []);
-    if (engineRes?.success) {
-      setEngine({ supported: !!engineRes.supported, installed: !!engineRes.installed, version: engineRes.version || '' });
-    }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -170,7 +185,7 @@ export default function BrowserProfilesView() {
   const currentPage = Math.min(page, pageCount - 1);
   const pageItems = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
   const allOnPageSelected = pageItems.length > 0 && pageItems.every((p) => selected.has(p.id));
-  const selectedIds = profiles.filter((p) => selected.has(p.id)).map((p) => p.id);
+  const selectedIds = filtered.filter((p) => selected.has(p.id)).map((p) => p.id);
 
   const setBusy = (id: string, busy: boolean) => {
     setBusyIds((prev) => {
@@ -203,6 +218,7 @@ export default function BrowserProfilesView() {
     const res = await ipc.browserProfile?.open(id);
     setBusy(id, false);
     if (!res?.success) showNotification(res?.error || 'Không mở được profile', 'error');
+    else load();
     return !!res?.success;
   };
 
@@ -249,7 +265,11 @@ export default function BrowserProfilesView() {
       skipped > 0 ? `Đã xóa ${res.deleted} profile. ${skipped} profile đang mở nên chưa xóa.` : `Đã xóa ${res.deleted} profile`,
       skipped > 0 ? 'warning' : 'success',
     );
-    setSelected(new Set());
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
     load();
   };
 
@@ -347,7 +367,7 @@ export default function BrowserProfilesView() {
         <div className="relative flex-1 min-w-[180px]">
           <SearchIcon className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           <input className="input-field text-sm w-full pl-8" placeholder="Tìm theo tên hoặc ghi chú" aria-label="Tìm profile"
-            value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} />
+            value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); setSelected(new Set()); }} />
         </div>
         <select className="input-field text-sm w-auto max-w-full" aria-label="Lọc theo nhóm"
           value={String(groupFilter)}
@@ -355,6 +375,7 @@ export default function BrowserProfilesView() {
             const value = e.target.value;
             setGroupFilter(value === 'all' || value === 'none' ? value : Number(value));
             setPage(0);
+            setSelected(new Set());
           }}>
           <option value="all">Tất cả nhóm</option>
           <option value="none">Không nhóm</option>
@@ -374,7 +395,7 @@ export default function BrowserProfilesView() {
             onChange={(e) => handleBulkProxy(e.target.value)}>
             <option value="">Gán proxy...</option>
             <option value="none">Không proxy</option>
-            {proxies.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {proxies.map((p) => <option key={p.id} value={p.id}>{p.name || `${p.host}:${p.port}`}</option>)}
           </select>
           <button type="button" onClick={() => deleteProfiles(selectedIds, `${selectedIds.length} profile`)} disabled={bulkBusy}
             className="px-3 py-1 rounded-lg text-xs border border-red-500/50 text-red-400 hover:bg-red-900/20 disabled:opacity-50">Xóa</button>

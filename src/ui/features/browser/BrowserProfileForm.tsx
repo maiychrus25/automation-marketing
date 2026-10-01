@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { showConfirm } from '@/components/common/ConfirmDialog';
@@ -59,6 +59,14 @@ export default function BrowserProfileForm({ profile, groups, proxies, running, 
   }, []);
   const languageOptions = LANGUAGES.some((l) => l.value === language) ? LANGUAGES : [...LANGUAGES, { value: language, label: language }];
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   const handleRegenerate = async () => {
     const confirmed = await showConfirm({
       title: 'Tạo lại fingerprint?',
@@ -104,13 +112,12 @@ export default function BrowserProfileForm({ profile, groups, proxies, running, 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div
         role="dialog"
         aria-modal="true"
         aria-label={profile ? 'Sửa profile' : 'Tạo profile'}
         className="w-full max-w-md max-h-full overflow-y-auto bg-gray-800 border border-gray-700 rounded-xl shadow-xl"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
           <h2 className="text-sm font-semibold text-white">{profile ? `Sửa "${profile.name}"` : 'Tạo profile mới'}</h2>
@@ -136,7 +143,7 @@ export default function BrowserProfileForm({ profile, groups, proxies, running, 
             </div>
             <div>
               <label htmlFor="bp-proxy" className="text-xs text-gray-400 mb-1 block">Proxy</label>
-              <select id="bp-proxy" className="input-field text-sm w-full" value={proxyId} onChange={(e) => setProxyId(e.target.value)} disabled={saving}>
+              <select id="bp-proxy" className="input-field text-sm w-full" value={proxyId} onChange={(e) => setProxyId(e.target.value)} disabled={saving || running}>
                 <option value="">Không proxy (dùng mạng của máy)</option>
                 {proxies.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.type.toUpperCase()} {p.host}:{p.port}</option>)}
               </select>
@@ -182,7 +189,7 @@ export default function BrowserProfileForm({ profile, groups, proxies, running, 
             </div>
           )}
           {profile && running && (
-            <p className="text-[11px] text-yellow-400">Profile đang mở: đóng trình duyệt để đổi ngôn ngữ, múi giờ hoặc fingerprint.</p>
+            <p className="text-[11px] text-yellow-400">Profile đang mở: đóng trình duyệt để đổi proxy, ngôn ngữ, múi giờ hoặc fingerprint.</p>
           )}
 
           {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
