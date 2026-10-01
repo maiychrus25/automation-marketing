@@ -3,6 +3,7 @@
 
 import { useAppStore } from '../store/appStore';
 import type { TelegramForumTopicContext } from '../../models/telegram';
+import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
 
 
 declare global {
@@ -644,6 +645,19 @@ declare global {
         getForAccount: (zaloId: string) => Promise<{ success: boolean; proxy?: any; error?: string }>;
         test:          (proxy: any) => Promise<{ success: boolean; ms?: number; status?: number; error?: string }>;
       };
+      browserProfile: {
+        list:          () => Promise<{ success: boolean; profiles?: BrowserProfile[]; groups?: BrowserProfileGroup[]; runningIds?: string[]; error?: string }>;
+        create:        (params: { name: string; groupId?: number | null; proxyId?: number | null; language?: string; timezone?: string; note?: string }) => Promise<{ success: boolean; profile?: BrowserProfile; error?: string }>;
+        update:        (id: string, params: { name?: string; groupId?: number | null; proxyId?: number | null; language?: string; timezone?: string; note?: string; regenerateFingerprint?: boolean }) => Promise<{ success: boolean; profile?: BrowserProfile; error?: string }>;
+        delete:        (ids: string[]) => Promise<{ success: boolean; deleted?: number; skippedRunning?: string[]; error?: string }>;
+        setProxy:      (ids: string[], proxyId: number | null) => Promise<{ success: boolean; updated?: number; error?: string }>;
+        open:          (id: string) => Promise<{ success: boolean; error?: string }>;
+        close:         (id: string) => Promise<{ success: boolean; error?: string }>;
+        saveGroup:     (group: { id?: number; name: string; color?: string }) => Promise<{ success: boolean; group?: BrowserProfileGroup; error?: string }>;
+        deleteGroup:   (id: number) => Promise<{ success: boolean; error?: string }>;
+        engineStatus:  () => Promise<{ success: boolean; supported?: boolean; installed?: boolean; version?: string; error?: string }>;
+        installEngine: () => Promise<{ success: boolean; supported?: boolean; installed?: boolean; version?: string; error?: string }>;
+      };
       erp: {
       projectList:         (params?: { archived?: boolean }) => Promise<{ success: boolean; projects: any[]; error?: string }>;
       projectCreate:       (params: any) => Promise<{ success: boolean; project?: any; error?: string }>;
@@ -800,6 +814,7 @@ export const ipc = {
   telegram: window.electronAPI?.telegram,
   telegramUser: window.electronAPI?.telegramUser,
   proxy: window.electronAPI?.proxy,
+  browserProfile: window.electronAPI?.browserProfile,
 
   erp,
   lockScreen: window.electronAPI?.lockScreen,

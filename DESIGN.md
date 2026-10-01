@@ -29,9 +29,10 @@ sizes:
 
 # AHV Connect — nhận diện
 
-Tài liệu này chỉ nói về **dấu hiệu nhận diện (logo)**. Giao diện bên trong ứng
-dụng được kế thừa nguyên trạng từ dự án nguồn (xem `NOTICE.md`) và chưa được
-thiết kế lại; đừng coi file này là hệ thiết kế của toàn bộ giao diện.
+Tài liệu này nói về **dấu hiệu nhận diện (logo)** và, ở cuối file, bộ token tối
+thiểu cho **màn hình Trình duyệt**. Giao diện các màn hình khác được kế thừa
+nguyên trạng từ dự án nguồn (xem `NOTICE.md`) và chưa được thiết kế lại; đừng
+coi file này là hệ thiết kế của toàn bộ giao diện.
 
 ## Dấu hiệu
 
@@ -82,3 +83,58 @@ thường thì báo lỗi thay vì âm thầm xuất ra hai file giống nhau.
 3. Soi lại ở cỡ 16 và 24px trước khi commit — mọi lỗi tỉ lệ đều lộ ra ở đó.
 
 **Không sửa tay file .png/.ico/.icns**: lần dựng sau sẽ ghi đè.
+
+## Giao diện màn hình Trình duyệt
+
+Phần này chỉ áp dụng cho `src/ui/features/browser/`. Nó ghi lại các token đang
+dùng thật trong ứng dụng để màn hình mới trông như một phần của app, không đặt
+ra hệ thiết kế mới.
+
+```yaml
+screen: browser-profiles
+color:
+  surface-page:    bg-gray-900      # nền màn hình
+  surface-raised:  bg-gray-800      # modal, thanh thao tác hàng loạt
+  border:          border-gray-700  # viền khối; border-gray-600 cho nút phụ và ô nhập
+  text-primary:    text-gray-200    # text-white cho tiêu đề
+  text-secondary:  text-gray-400
+  action-primary:  btn-primary      # bg-blue-600, hover bg-blue-700
+  status-running:  text-green-400
+  status-stopped:  text-gray-400
+  warning:         text-yellow-400  # "Không proxy", profile đang mở
+  danger:          text-red-400     # xóa, lỗi
+typography:
+  title:   text-base font-semibold
+  body:    text-sm
+  meta:    text-xs
+  hint:    text-[11px]
+spacing:
+  page-gutter: px-4
+  block-gap:   py-3
+  control-gap: gap-2
+radius:
+  control: rounded-lg
+  dialog:  rounded-xl
+layout:
+  page-size: 50                     # dòng mỗi trang
+  breakpoints:
+    md: hiện cột Nhóm và Proxy
+    lg: hiện cột Mở gần nhất
+```
+
+Lý do:
+
+- **Chỉ dùng class xám đã có ghi đè light theme.** Light theme của app hoạt động
+  bằng cách ghi đè các class `gray-*` trong `src/ui/index.css`. Dùng đúng các
+  class này thì dark và light tự nhất quán; không viết màu hex trong component.
+- **"Không proxy" dùng màu cảnh báo.** Profile không proxy lộ IP thật của máy;
+  người vận hành phải nhìn thấy ngay trong danh sách.
+- **Bảng thay vì thẻ.** Người dùng quản lý đến 1.000 profile và cần so sánh,
+  chọn nhiều, thao tác hàng loạt. Ở chiều rộng hẹp, các cột phụ ẩn đi thay vì
+  cuộn ngang cấp trang.
+- **Xác nhận trước thao tác mất dữ liệu.** Xóa profile và tạo lại fingerprint
+  đều qua `showConfirm`, nêu rõ hậu quả.
+- **Trạng thái đầy đủ.** Màn hình có trạng thái đang tải, lỗi kèm nút thử lại,
+  rỗng, không khớp bộ lọc, chưa cài nhân trình duyệt và hệ điều hành chưa hỗ trợ.
+- **Truy cập.** Mọi nút chỉ có icon đều có `aria-label`; ô nhập có `label` hoặc
+  `aria-label`; modal có `role="dialog"` và `aria-modal`; lỗi dùng `role="alert"`.

@@ -3331,7 +3331,7 @@ export default function BrowserProfilesView() {
                     <td className="py-2">
                       <input type="checkbox" aria-label={`Chọn ${profile.name}`} checked={selected.has(profile.id)} onChange={() => toggleOne(profile.id)} />
                     </td>
-                    <td className="py-2 pr-2 max-w-[220px]">
+                    <td className="py-2 pr-2 max-w-[100px] sm:max-w-[220px]">
                       <p className="text-gray-200 truncate" title={profile.name}>{profile.name}</p>
                       {profile.note && <p className="text-[11px] text-gray-400 truncate" title={profile.note}>{profile.note}</p>}
                     </td>
@@ -3463,23 +3463,15 @@ Thêm ngay bên dưới (`empMode` và `isSimulating` đã có sẵn trong compo
         )}
 ```
 
-(b) Trong hàm `NavIcon`, tìm:
+(b) `NavBtn` lấy icon từ object `icons` trong chính nó (không phải `NavIcon`). Trong object đó, tìm khóa `erp: (...)` ở cuối và thêm ngay bên dưới (trước `};`):
 
 ```tsx
-    case 'tools':
-      return (
-```
-
-Chèn ngay phía trên:
-
-```tsx
-    case 'browser':
-      return (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-        </svg>
-      );
+    browser: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+      </svg>
+    ),
 ```
 
 - [ ] **Step 8: Type-check và build renderer**

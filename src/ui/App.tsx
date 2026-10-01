@@ -20,6 +20,7 @@ import WorkflowPage from './components/workflow/WorkflowPage';
 import IntegrationPage from './components/integration/IntegrationPage';
 import AnalyticsPage from './components/analytics/AnalyticsPage';
 import ErpPage from './features/erp/ErpPage';
+import BrowserProfilesView from './features/browser/BrowserProfilesView';
 import AccountInitPanel from './components/common/AccountInitPanel';
 import AccountSwitcherOverlay from './components/common/AccountSwitcherOverlay';
 import { UpdateNotification } from './components/common/UpdateNotification';
@@ -1560,6 +1561,11 @@ export default function App() {
           {view === 'erp' && (
             <div className="flex-1 h-full overflow-hidden">
               <ErpPage />
+            </div>
+          )}
+          {view === 'browser' && (
+            <div className="flex-1 h-full overflow-hidden">
+              <BrowserProfilesView />
             </div>
           )}
           {view === 'dashboard' && (
