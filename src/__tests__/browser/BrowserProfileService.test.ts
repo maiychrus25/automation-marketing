@@ -10,7 +10,8 @@ import type { ProxyConfig } from '../../models/proxy';
 
 class FakeChild extends EventEmitter implements BrowserProcess {
     pid = 4242;
-    kill(): boolean { return true; }
+    signals: Array<NodeJS.Signals | number | undefined> = [];
+    kill(signal?: NodeJS.Signals | number): boolean { this.signals.push(signal); return true; }
 }
 
 function makeProfile(id: string, proxyId: number | null = null): BrowserProfile {
@@ -41,6 +42,7 @@ function makeHarness(options: {
     platform?: NodeJS.Platform;
     spawnFails?: boolean;
     forwarderFails?: boolean;
+    useDefaultTerminate?: boolean;
 } = {}): Harness {
     const profilesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profiles-test-'));
     const harness: Harness = {
@@ -75,7 +77,7 @@ function makeHarness(options: {
                 stop: async () => { record.stopped = true; },
             };
         },
-        terminate: (child, force) => { harness.terminated.push({ child, force }); },
+        terminate: options.useDefaultTerminate ? undefined : (child, force) => { harness.terminated.push({ child, force }); },
         onStatusChanged: (ids) => { harness.statuses.push(ids); },
     };
     harness.service = new BrowserProfileService(deps);
@@ -266,5 +268,15 @@ describe('BrowserProfileService', () => {
         h.children[0].emit('exit', 0);
         jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
         expect(h.terminated).toEqual([{ child: h.children[0], force: false }]);
+    });
+
+    it('the default terminator sends SIGINT for a graceful close (SIGTERM drops recent cookies) and SIGKILL to force', async () => {
+        const h = create({ useDefaultTerminate: true });
+        await h.service.open('a');
+        jest.useFakeTimers();
+        h.service.close('a');
+        expect((h.children[0] as FakeChild).signals).toEqual(['SIGINT']);
+        jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
+        expect((h.children[0] as FakeChild).signals).toEqual(['SIGINT', 'SIGKILL']);
     });
 });

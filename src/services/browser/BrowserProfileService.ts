@@ -60,7 +60,9 @@ function defaultTerminate(platform: NodeJS.Platform): (child: BrowserProcess, fo
             spawn('taskkill', args, { stdio: 'ignore' }).once('error', () => undefined);
             return;
         }
-        child.kill(force ? 'SIGKILL' : 'SIGTERM');
+        // Not SIGTERM: Chromium treats it as an OS session end and takes a fast shutdown that can drop
+        // recently written cookies. SIGINT (like SIGHUP) closes all browsers normally and flushes them.
+        child.kill(force ? 'SIGKILL' : 'SIGINT');
     };
 }
 

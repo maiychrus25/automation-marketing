@@ -43,7 +43,7 @@ Năm tình huống spec không nêu thành yêu cầu riêng nhưng dễ gây l�
 1. **Mật khẩu proxy có ký tự đặc biệt** (`@`, `:`, `/`, dấu cách): proxy vẫn phải xác thực đúng. Test: `ProxyForwarder.test.ts` dùng `USER = 'ahv user'`, `PASS = 'p@ss:word/1'` (Task 2).
 2. **Proxy chết hoặc đã bị xóa khi mở profile**: không được lộ IP thật. Test: "answers 502 ... when the upstream is down" kiểm tra máy đích không nhận request nào (Task 2); "refuses to open a profile whose proxy was deleted instead of going direct" (Task 4).
 3. **Bấm Mở hai lần liên tiếp**: chỉ được có một trình duyệt. Test: "rejects a second open of the same profile, even while the first is still starting" (Task 4).
-4. **Đóng profile làm mất phiên đăng nhập**: Chromium ghi cookie trễ; kill cứng sẽ mất cookie vừa đăng nhập. Test: "close() asks for a graceful exit first and force-kills only if the browser is still alive" (Task 4).
+4. **Đóng profile làm mất phiên đăng nhập**: Chromium ghi cookie trễ; kill cứng và cả `SIGTERM` (Chromium tắt nhanh, bỏ flush) đều làm mất cookie vừa đăng nhập, nên thoát êm trên Linux dùng `SIGINT` (đo: SIGTERM giữ cookie 1/4 lần, SIGINT 5/5). Test: "close() asks for a graceful exit first and force-kills only if the browser is still alive" (Task 4).
 5. **Tải nhân trình duyệt bị đứt giữa chừng** (đã xảy ra thật khi spike: file 10,6 MB thay vì 189 MB): không được coi là đã cài, và phải thử lại được. Test: "rejects a download whose SHA-256 does not match", "treats an extraction without the marker file as not installed", "can retry after a failed download" (Task 3).
 
 ---
@@ -125,6 +125,7 @@ Lý do:
   1. `taskkill /pid <pid> /T` (không có `/F`) có làm Chromium đóng êm và ghi cookie hay không.
   2. `tar -xf` (bsdtar có sẵn từ Windows 10 1803) có giải nén đúng file zip 189 MB hay không.
   3. Đường dẫn `ungoogled-chromium_148.0.7778.215-1.1_windows_x64/chrome.exe` sau khi giải nén. Đường dẫn này khớp với kết quả `Expand-Archive` trong spike, nhưng chưa thử với `tar`.
+- Đã đo trên Linux (engine thật): thoát êm bằng `SIGTERM` làm mất cookie ghi trong ~30 giây gần nhất (giữ 1/4 lần); `SIGINT` giữ 5/5, nên Linux dùng `SIGINT`. Windows vẫn cần đo riêng với `taskkill` không `/F`.
 - Hậu quả nếu sai: trình duyệt mồ côi chạy ngầm sau khi thoát app, mất phiên đăng nhập, hoặc thư mục profile bị khóa không mở lại được.
 
 Giảm thiểu đã có trong thiết kế: sau 5 giây không thoát thì kill cứng; trạng thái đang chạy không lưu DB nên không kẹt sau crash; `closeAllBrowserProfiles()` bọc trong `try/catch` ở `before-quit`.
@@ -1372,10 +1373,12 @@ git commit -m "feat(browser): add engine manager with checksum-verified install"
 Ghi chú thiết kế:
 - `open()` đặt chỗ trong map **trước** lệnh `await` đầu tiên, để lần gọi thứ hai cho cùng profile bị từ chối ngay cả khi lần đầu còn đang khởi động.
 - `open()` chờ sự kiện `spawn` của tiến trình con. Nếu file chạy không tồn tại, Node phát `error` bất đồng bộ; khi đó service dọn forwarder và ném lỗi.
-- `close()` yêu cầu thoát êm (`SIGTERM` trên Linux; `taskkill /pid <pid> /T` trên Windows), sau `FORCE_KILL_DELAY_MS` nếu vẫn còn chạy mới kill cứng. Trạng thái chỉ được xóa khi tiến trình phát `exit`.
+- `close()` yêu cầu thoát êm (`SIGINT` trên Linux; `taskkill /pid <pid> /T` trên Windows), sau `FORCE_KILL_DELAY_MS` nếu vẫn còn chạy mới kill cứng. Trạng thái chỉ được xóa khi tiến trình phát `exit`.
 - `closeAll()` dùng khi thoát app hoặc chuyển workspace: yêu cầu thoát êm rồi xóa trạng thái ngay, không chờ; từng trình duyệt vẫn bị kill cứng sau `FORCE_KILL_DELAY_MS` nếu chưa thoát.
 
 **Ghi chú sau review (Task 4):** `close()` khi profile còn đang khởi động trước đây bị bỏ qua âm thầm; nay đặt cờ `closeRequested` và `open()` đóng trình duyệt ngay sau khi spawn. `closeAll()` giữa lúc `open()` đang chờ forwarder/spawn nay hủy `open()` (ném `Đã hủy mở trình duyệt`, kill cứng trình duyệt vừa spawn, dừng forwarder, không ghi `last_opened_at` vào DB workspace mới). `closeAll()` có kill cứng dự phòng như `close()`; timer lưu trên entry nên gọi `close()` lặp lại không chồng timer. Lỗi `touchBrowserProfileOpened` chỉ ghi `console.warn`, không làm `open()` thất bại.
+
+**Phát hiện khi kiểm chứng Task 8 (Linux, engine thật):** thoát êm bằng `SIGTERM` làm mất cookie vừa ghi. Chromium coi `SIGTERM` là OS kết thúc phiên và tắt nhanh, bỏ qua việc flush cookie trong khoảng 30 giây gần nhất; đo thực tế: `SIGTERM` giữ được cookie mới 1/4 lần, `SIGINT` 5/5, `SIGHUP` 1/1, cả hai đều thoát sau khoảng 0,17 giây. Vì vậy `defaultTerminate` dùng `SIGINT` cho thoát êm trên Linux (kill cứng vẫn là `SIGKILL`, Windows giữ nguyên `taskkill`). Có test "the default terminator sends SIGINT ..." giữ hành vi này.
 
 - [ ] **Step 1: Viết test trước**
 
@@ -1394,7 +1397,8 @@ import type { ProxyConfig } from '../../models/proxy';
 
 class FakeChild extends EventEmitter implements BrowserProcess {
     pid = 4242;
-    kill(): boolean { return true; }
+    signals: Array<NodeJS.Signals | number | undefined> = [];
+    kill(signal?: NodeJS.Signals | number): boolean { this.signals.push(signal); return true; }
 }
 
 function makeProfile(id: string, proxyId: number | null = null): BrowserProfile {
@@ -1425,6 +1429,7 @@ function makeHarness(options: {
     platform?: NodeJS.Platform;
     spawnFails?: boolean;
     forwarderFails?: boolean;
+    useDefaultTerminate?: boolean;
 } = {}): Harness {
     const profilesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profiles-test-'));
     const harness: Harness = {
@@ -1459,7 +1464,7 @@ function makeHarness(options: {
                 stop: async () => { record.stopped = true; },
             };
         },
-        terminate: (child, force) => { harness.terminated.push({ child, force }); },
+        terminate: options.useDefaultTerminate ? undefined : (child, force) => { harness.terminated.push({ child, force }); },
         onStatusChanged: (ids) => { harness.statuses.push(ids); },
     };
     harness.service = new BrowserProfileService(deps);
@@ -1651,6 +1656,16 @@ describe('BrowserProfileService', () => {
         jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
         expect(h.terminated).toEqual([{ child: h.children[0], force: false }]);
     });
+
+    it('the default terminator sends SIGINT for a graceful close (SIGTERM drops recent cookies) and SIGKILL to force', async () => {
+        const h = create({ useDefaultTerminate: true });
+        await h.service.open('a');
+        jest.useFakeTimers();
+        h.service.close('a');
+        expect((h.children[0] as FakeChild).signals).toEqual(['SIGINT']);
+        jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
+        expect((h.children[0] as FakeChild).signals).toEqual(['SIGINT', 'SIGKILL']);
+    });
 });
 ```
 
@@ -1726,7 +1741,9 @@ function defaultTerminate(platform: NodeJS.Platform): (child: BrowserProcess, fo
             spawn('taskkill', args, { stdio: 'ignore' }).once('error', () => undefined);
             return;
         }
-        child.kill(force ? 'SIGKILL' : 'SIGTERM');
+        // Not SIGTERM: Chromium treats it as an OS session end and takes a fast shutdown that can drop
+        // recently written cookies. SIGINT (like SIGHUP) closes all browsers normally and flushes them.
+        child.kill(force ? 'SIGKILL' : 'SIGINT');
     };
 }
 
