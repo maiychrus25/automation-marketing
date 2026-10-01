@@ -161,7 +161,7 @@ export default function App() {
     showGroupBoard, setShowGroupBoard,
     showIntegrationQuickPanel, toggleIntegrationQuickPanel,
     showAIQuickPanel, toggleAIQuickPanel,
-    openQuickChat, quickChatOpen, theme, fontSizeScale,
+    openQuickChat, quickChatOpen, theme, themePreference, fontSizeScale,
     sidebarExpanded
   } = useAppStore();
   const { setAccounts, updateListenerActive, accounts } = useAccountStore();
@@ -178,6 +178,18 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  // ─── "Theo hệ thống": đổi theo khi hệ điều hành đổi sáng/tối ──────────────
+  useEffect(() => {
+    if (themePreference !== 'system') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = () => useAppStore.getState().syncSystemTheme(mq.matches);
+    // Đọc ngay một lần; nếu main chưa kịp đặt themeSource = 'system', sự kiện `change`
+    // sẽ tới ngay sau đó và sửa lại.
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [themePreference]);
 
   // ─── Sync font size scale to <html> element ──────────────────────────────
   useEffect(() => {

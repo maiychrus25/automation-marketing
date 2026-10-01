@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import { useAccountStore } from './accountStore';
 import { useEmployeeStore } from './employeeStore';
 import DataAccessor from '@/lib/data/DataAccessor';
+import { type AppTheme, type ThemePreference, THEME_STORAGE_KEY, parseThemePreference, resolveTheme, systemPrefersDark } from '../lib/theme';
 
 type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser';
-export type AppTheme = 'dark' | 'light';
+export type { AppTheme, ThemePreference };
 
 export interface GroupMember {
   userId: string;
@@ -127,6 +128,10 @@ interface AppStore {
 
   theme: AppTheme;
   setTheme: (theme: AppTheme) => void;
+  themePreference: ThemePreference;
+  setThemePreference: (pref: ThemePreference) => void;
+  /** Gọi khi hệ điều hành đổi sáng/tối; chỉ có tác dụng khi đang "Theo hệ thống". */
+  syncSystemTheme: (prefersDark: boolean) => void;
   fontSizeScale: number;
   setFontSizeScale: (scale: number) => void;
 
@@ -261,13 +266,14 @@ const loadFontSizeScale = (): number => {
 };
 
 // ─── theme persists in localStorage ─────────────────────────────────────────
-const loadTheme = (): AppTheme => {
+const loadThemePreference = (): ThemePreference => {
   try {
-    const stored = localStorage.getItem('app_theme');
-    if (stored === 'light' || stored === 'dark') return stored;
-  } catch {}
-  return 'light';
+    return parseThemePreference(localStorage.getItem(THEME_STORAGE_KEY));
+  } catch {
+    return 'system';
+  }
 };
+const initialThemePreference = loadThemePreference();
 
 // ─── notifSettings persists in localStorage (not account-specific) ──────────
 const loadNotifSettings = (): NotifSettings => {
@@ -379,7 +385,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   mutedThreads: {},
   notifSettings: loadNotifSettings(),
   notifSettingsOverrides: {},
-  theme: loadTheme(),
+  theme: resolveTheme(initialThemePreference, systemPrefersDark()),
+  themePreference: initialThemePreference,
   fontSizeScale: loadFontSizeScale(),
   groupInfoCache: {},
   othersConversations: {},
@@ -683,8 +690,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   setTheme: (theme) => {
-    try { localStorage.setItem('app_theme', theme); } catch {}
-    set({ theme });
+    try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch {}
+    set({ theme, themePreference: theme });
+  },
+
+  setThemePreference: (pref) => {
+    try { localStorage.setItem(THEME_STORAGE_KEY, pref); } catch {}
+    set({ themePreference: pref, theme: resolveTheme(pref, systemPrefersDark()) });
+  },
+
+  syncSystemTheme: (prefersDark) => {
+    if (get().themePreference !== 'system') return;
+    set({ theme: prefersDark ? 'dark' : 'light' });
   },
 
   setFontSizeScale: (scale) => {
