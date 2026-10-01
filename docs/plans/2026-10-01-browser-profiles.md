@@ -2279,15 +2279,17 @@ export function registerBrowserProfileIpc(): void {
 
     handle('browserProfile:update', (params) => {
         const current = requireProfile(params.id);
+        const changesFingerprint = params.regenerateFingerprint || params.language !== undefined || params.timezone !== undefined;
+        if ((params.proxyId !== undefined || changesFingerprint) && getProfileService().isRunning(current.id)) {
+            throw new Error('Hãy đóng profile trước khi đổi proxy hoặc fingerprint');
+        }
         const fields: Parameters<DatabaseService['updateBrowserProfile']>[1] = {};
         if (params.name !== undefined) fields.name = requireName(params.name);
         if (params.groupId !== undefined) fields.group_id = optionalGroupId(params.groupId);
         if (params.proxyId !== undefined) fields.proxy_id = optionalProxyId(params.proxyId);
         if (params.note !== undefined) fields.note = optionalNote(params.note);
 
-        const changesFingerprint = params.regenerateFingerprint || params.language !== undefined || params.timezone !== undefined;
         if (changesFingerprint) {
-            if (getProfileService().isRunning(current.id)) throw new Error('Hãy đóng profile trước khi đổi fingerprint');
             const language = params.language !== undefined ? requireLanguage(params.language) : current.fingerprint.language;
             const timezone = params.timezone !== undefined ? requireTimezone(params.timezone) : current.fingerprint.timezone;
             fields.fingerprint = params.regenerateFingerprint
@@ -2310,7 +2312,11 @@ export function registerBrowserProfileIpc(): void {
                 continue;
             }
             db().deleteBrowserProfile(profile.id);
-            fs.rmSync(service.getProfileDir(profile.id), { recursive: true, force: true });
+            try {
+                fs.rmSync(service.getProfileDir(profile.id), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+            } catch (err: any) {
+                Logger.warn(`[browserProfileIpc] Could not remove profile dir of ${profile.id}: ${err.message}`);
+            }
             deleted++;
         }
         return { deleted, skippedRunning };
@@ -2412,10 +2418,10 @@ import { closeAllBrowserProfiles } from './browserProfileIpc';
 
 ```ts
 // Browser profile data belongs to the workspace being left: close before its DB goes away
-closeAllBrowserProfiles();
+try { closeAllBrowserProfiles(); } catch {}
 ```
 
-Kiểm tra: `grep -c "closeAllBrowserProfiles();" electron/ipc/workspaceIpc.ts` → `2`.
+Kiểm tra: `grep -c "try { closeAllBrowserProfiles(); } catch {}" electron/ipc/workspaceIpc.ts` → `2`.
 
 - [ ] **Step 4: Công khai API trong `electron/preload.ts`**
 
@@ -2538,6 +2544,8 @@ Expected: không có dòng `Assertion failed` nào trong Console.
 git add electron/ipc/browserProfileIpc.ts electron/main.ts electron/ipc/workspaceIpc.ts electron/preload.ts
 git commit -m "feat(browser): expose browser profile IPC and wire lifecycle hooks"
 ```
+
+> Ghi chú sau review: chặn đổi proxy khi profile đang mở (cùng fingerprint), xóa thư mục profile có retry và không làm hỏng cả lô khi bị khóa file, bọc `closeAllBrowserProfiles()` trong `try/catch` ở `workspaceIpc.ts`.
 
 ---
 

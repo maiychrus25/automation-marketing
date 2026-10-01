@@ -160,7 +160,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                     AppModeManager.getInstance().clearOverride();
                     const newDbPath = wm().resolveDbPath(newActiveWs.dbPath || 'deplao-tool.db');
                     // Browser profile data belongs to the workspace being left: close before its DB goes away
-                    closeAllBrowserProfiles();
+                    try { closeAllBrowserProfiles(); } catch {}
                     await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
                     FileStorageService.resetBaseDir();
 
@@ -199,7 +199,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                 // Switch DatabaseService to the new workspace's DB
                 const newDbPath = wm().resolveDbPath(result.workspace.dbPath || 'deplao-tool.db');
                 // Browser profile data belongs to the workspace being left: close before its DB goes away
-                closeAllBrowserProfiles();
+                try { closeAllBrowserProfiles(); } catch {}
                 await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
 
                 // Reset FileStorageService cache so media resolves to the new workspace's folder
