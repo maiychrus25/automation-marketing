@@ -42,8 +42,13 @@ export interface BrowserProfileServiceDeps {
 }
 
 interface RunningEntry {
+    /** Set only once the browser has actually spawned. */
     child: BrowserProcess | null;
     forwarder: ForwarderLike | null;
+    /** close() was called while the browser was still starting; open() closes it right after the spawn. */
+    closeRequested: boolean;
+    exited: boolean;
+    forceKillTimer: NodeJS.Timeout | null;
 }
 
 function defaultTerminate(platform: NodeJS.Platform): (child: BrowserProcess, force: boolean) => void {
@@ -104,13 +109,14 @@ export class BrowserProfileService {
         }
 
         // Reserve the slot before the first await so a second open() of the same profile is rejected.
-        const entry: RunningEntry = { child: null, forwarder: null };
+        const entry: RunningEntry = { child: null, forwarder: null, closeRequested: false, exited: false, forceKillTimer: null };
         this.running.set(id, entry);
         try {
             let proxyPort: number | null = null;
             if (proxy) {
                 entry.forwarder = this.createForwarder(proxy);
                 proxyPort = await entry.forwarder.start();
+                this.assertNotCancelled(id, entry);
             }
             const userDataDir = this.getProfileDir(id);
             fs.mkdirSync(userDataDir, { recursive: true });
@@ -118,38 +124,66 @@ export class BrowserProfileService {
                 executable,
                 buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort }),
             );
-            entry.child = child;
             await new Promise<void>((resolve, reject) => {
                 child.once('spawn', () => resolve());
                 child.once('error', reject);
             });
-            child.once('exit', () => this.release(id, entry));
+            this.assertNotCancelled(id, entry, child);
+            entry.child = child;
+            child.once('exit', () => {
+                entry.exited = true;
+                if (entry.forceKillTimer) clearTimeout(entry.forceKillTimer);
+                this.release(id, entry);
+            });
             child.on('error', () => undefined);
         } catch (error: any) {
             this.release(id, entry);
             throw new Error(`Không mở được trình duyệt: ${error?.message || error}`);
         }
-        this.deps.store.touchBrowserProfileOpened(id);
+        try {
+            this.deps.store.touchBrowserProfileOpened(id);
+        } catch (error: any) {
+            // The browser is already running; failing to record the open time must not fail open().
+            console.warn(`Không ghi được thời điểm mở profile ${id}:`, error?.message || error);
+        }
         this.notify();
+        if (entry.closeRequested) this.close(id);
+    }
+
+    /** Called after each await in open(): closeAll() may have released the entry meanwhile. */
+    private assertNotCancelled(id: string, entry: RunningEntry, spawned?: BrowserProcess): void {
+        if (this.running.get(id) === entry) return;
+        if (spawned) this.terminate(spawned, true);
+        // release() may have stopped the forwarder before its start() finished; stop() is idempotent.
+        entry.forwarder?.stop().catch(() => undefined);
+        throw new Error('Đã hủy mở trình duyệt');
     }
 
     /** Asks the browser to exit gracefully, then force-kills it if it is still alive after FORCE_KILL_DELAY_MS. */
     public close(id: string): void {
         const entry = this.running.get(id);
-        if (!entry || !entry.child) return;
-        const child = entry.child;
-        this.terminate(child, false);
-        const timer = setTimeout(() => {
-            if (this.running.get(id) === entry) this.terminate(child, true);
-        }, FORCE_KILL_DELAY_MS);
-        timer.unref?.();
+        if (!entry) return;
+        if (!entry.child) {
+            entry.closeRequested = true;
+            return;
+        }
+        this.terminateWithFallback(entry, entry.child);
     }
 
-    /** Used on app quit and workspace switch: graceful exit for every browser, state cleared immediately. */
+    private terminateWithFallback(entry: RunningEntry, child: BrowserProcess): void {
+        this.terminate(child, false);
+        if (entry.forceKillTimer) clearTimeout(entry.forceKillTimer);
+        entry.forceKillTimer = setTimeout(() => {
+            if (!entry.exited) this.terminate(child, true);
+        }, FORCE_KILL_DELAY_MS);
+        entry.forceKillTimer.unref?.();
+    }
+
+    /** Used on app quit and workspace switch: graceful exit (then force-kill if still alive) for every browser, state cleared immediately. */
     public closeAll(): void {
         const entries = Array.from(this.running.entries());
         for (const [id, entry] of entries) {
-            if (entry.child) this.terminate(entry.child, false);
+            if (entry.child) this.terminateWithFallback(entry, entry.child);
             this.release(id, entry);
         }
     }

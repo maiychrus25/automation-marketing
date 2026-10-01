@@ -209,4 +209,62 @@ describe('BrowserProfileService', () => {
         expect(h.service.getRunningIds()).toEqual([]);
         expect(h.forwarders[0].stopped).toBe(true);
     });
+
+    it('closeAll() while open() waits for the forwarder: open() is cancelled, nothing is spawned or recorded', async () => {
+        const h = create({ profiles: [makeProfile('a', 5)] });
+        const opening = h.service.open('a');
+        h.service.closeAll();
+        await expect(opening).rejects.toThrow('Đã hủy mở trình duyệt');
+        expect(h.spawned).toHaveLength(0);
+        expect(h.forwarders[0].stopped).toBe(true);
+        expect(h.service.isRunning('a')).toBe(false);
+        expect(h.touched).toEqual([]);
+        expect(h.statuses.every((ids) => ids.length === 0)).toBe(true);
+    });
+
+    it('closeAll() while the browser is spawning: the browser is force-terminated and open() is cancelled', async () => {
+        const h = create({ profiles: [makeProfile('a', 5)] });
+        const opening = h.service.open('a');
+        await new Promise((resolve) => setImmediate(resolve)); // forwarder started, spawn event still pending
+        expect(h.spawned).toHaveLength(1);
+        h.service.closeAll();
+        await expect(opening).rejects.toThrow('Đã hủy mở trình duyệt');
+        expect(h.terminated).toEqual([{ child: h.children[0], force: true }]);
+        expect(h.forwarders[0].stopped).toBe(true);
+        expect(h.service.isRunning('a')).toBe(false);
+        expect(h.touched).toEqual([]);
+    });
+
+    it('close() while the browser is starting closes it as soon as it has spawned, then force-kills if it lingers', async () => {
+        const h = create();
+        jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+        const opening = h.service.open('a');
+        h.service.close('a');
+        expect(h.terminated).toEqual([]);
+        await opening;
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }]);
+        jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }, { child: h.children[0], force: true }]);
+    });
+
+    it('closeAll() force-kills a browser that ignores the graceful exit', async () => {
+        const h = create();
+        await h.service.open('a');
+        jest.useFakeTimers();
+        h.service.closeAll();
+        expect(h.service.isRunning('a')).toBe(false);
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }]);
+        jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }, { child: h.children[0], force: true }]);
+    });
+
+    it('closeAll() does not force-kill a browser that exited promptly', async () => {
+        const h = create();
+        await h.service.open('a');
+        jest.useFakeTimers();
+        h.service.closeAll();
+        h.children[0].emit('exit', 0);
+        jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }]);
+    });
 });

@@ -60,7 +60,7 @@ Năm tình huống spec không nêu thành yêu cầu riêng nhưng dễ gây l�
 - Renderer điều hướng bằng `view` trong `src/ui/store/appStore.ts`; `src/ui/App.tsx` render theo `view`; `src/ui/components/layout/Sidebar.tsx` chứa các nút điều hướng.
 - Giao diện có dark và light. Light theme hoạt động bằng cách ghi đè các class Tailwind màu xám trong `src/ui/index.css` (`html[data-theme="light"] .bg-gray-900 { ... }`). Vì vậy dùng đúng các class xám đã có ghi đè thì light theme tự đúng.
 - `better-sqlite3` trong `node_modules` được build cho Electron, **không nạp được dưới Node thường**. Do đó không viết được unit test jest cho `DatabaseService`; phần DB được kiểm chứng bằng type-check và kịch bản chạy trong app dev (Task 6).
-- Toàn bộ code trong kế hoạch này đã được biên dịch thử và 41 unit test đã chạy qua trên một bản sao của repo (Linux). Một phép thử thật với nhân trình duyệt trên Linux đã xác nhận: trình duyệt → forwarder → proxy có mật khẩu hoạt động, và đóng êm mất khoảng 0,1 giây. **Chưa có gì được chạy thử trên Windows** (xem mục 4).
+- Toàn bộ code trong kế hoạch này đã được biên dịch thử và 50 unit test đã chạy qua trên một bản sao của repo (Linux). Một phép thử thật với nhân trình duyệt trên Linux đã xác nhận: trình duyệt → forwarder → proxy có mật khẩu hoạt động, và đóng êm mất khoảng 0,1 giây. **Chưa có gì được chạy thử trên Windows** (xem mục 4).
 
 ## 2. Danh sách file
 
@@ -80,7 +80,7 @@ Năm tình huống spec không nêu thành yêu cầu riêng nhưng dễ gây l�
 | `src/__tests__/browser/fingerprint.test.ts` | 10 test |
 | `src/__tests__/browser/ProxyForwarder.test.ts` | 11 test |
 | `src/__tests__/browser/BrowserEngineManager.test.ts` | 11 test |
-| `src/__tests__/browser/BrowserProfileService.test.ts` | 13 test |
+| `src/__tests__/browser/BrowserProfileService.test.ts` | 18 test |
 
 ### Sửa
 
@@ -1373,7 +1373,9 @@ Ghi chú thiết kế:
 - `open()` đặt chỗ trong map **trước** lệnh `await` đầu tiên, để lần gọi thứ hai cho cùng profile bị từ chối ngay cả khi lần đầu còn đang khởi động.
 - `open()` chờ sự kiện `spawn` của tiến trình con. Nếu file chạy không tồn tại, Node phát `error` bất đồng bộ; khi đó service dọn forwarder và ném lỗi.
 - `close()` yêu cầu thoát êm (`SIGTERM` trên Linux; `taskkill /pid <pid> /T` trên Windows), sau `FORCE_KILL_DELAY_MS` nếu vẫn còn chạy mới kill cứng. Trạng thái chỉ được xóa khi tiến trình phát `exit`.
-- `closeAll()` dùng khi thoát app hoặc chuyển workspace: yêu cầu thoát êm rồi xóa trạng thái ngay, không chờ.
+- `closeAll()` dùng khi thoát app hoặc chuyển workspace: yêu cầu thoát êm rồi xóa trạng thái ngay, không chờ; từng trình duyệt vẫn bị kill cứng sau `FORCE_KILL_DELAY_MS` nếu chưa thoát.
+
+**Ghi chú sau review (Task 4):** `close()` khi profile còn đang khởi động trước đây bị bỏ qua âm thầm; nay đặt cờ `closeRequested` và `open()` đóng trình duyệt ngay sau khi spawn. `closeAll()` giữa lúc `open()` đang chờ forwarder/spawn nay hủy `open()` (ném `Đã hủy mở trình duyệt`, kill cứng trình duyệt vừa spawn, dừng forwarder, không ghi `last_opened_at` vào DB workspace mới). `closeAll()` có kill cứng dự phòng như `close()`; timer lưu trên entry nên gọi `close()` lặp lại không chồng timer. Lỗi `touchBrowserProfileOpened` chỉ ghi `console.warn`, không làm `open()` thất bại.
 
 - [ ] **Step 1: Viết test trước**
 
@@ -1591,6 +1593,64 @@ describe('BrowserProfileService', () => {
         expect(h.service.getRunningIds()).toEqual([]);
         expect(h.forwarders[0].stopped).toBe(true);
     });
+
+    it('closeAll() while open() waits for the forwarder: open() is cancelled, nothing is spawned or recorded', async () => {
+        const h = create({ profiles: [makeProfile('a', 5)] });
+        const opening = h.service.open('a');
+        h.service.closeAll();
+        await expect(opening).rejects.toThrow('Đã hủy mở trình duyệt');
+        expect(h.spawned).toHaveLength(0);
+        expect(h.forwarders[0].stopped).toBe(true);
+        expect(h.service.isRunning('a')).toBe(false);
+        expect(h.touched).toEqual([]);
+        expect(h.statuses.every((ids) => ids.length === 0)).toBe(true);
+    });
+
+    it('closeAll() while the browser is spawning: the browser is force-terminated and open() is cancelled', async () => {
+        const h = create({ profiles: [makeProfile('a', 5)] });
+        const opening = h.service.open('a');
+        await new Promise((resolve) => setImmediate(resolve)); // forwarder started, spawn event still pending
+        expect(h.spawned).toHaveLength(1);
+        h.service.closeAll();
+        await expect(opening).rejects.toThrow('Đã hủy mở trình duyệt');
+        expect(h.terminated).toEqual([{ child: h.children[0], force: true }]);
+        expect(h.forwarders[0].stopped).toBe(true);
+        expect(h.service.isRunning('a')).toBe(false);
+        expect(h.touched).toEqual([]);
+    });
+
+    it('close() while the browser is starting closes it as soon as it has spawned, then force-kills if it lingers', async () => {
+        const h = create();
+        jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+        const opening = h.service.open('a');
+        h.service.close('a');
+        expect(h.terminated).toEqual([]);
+        await opening;
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }]);
+        jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }, { child: h.children[0], force: true }]);
+    });
+
+    it('closeAll() force-kills a browser that ignores the graceful exit', async () => {
+        const h = create();
+        await h.service.open('a');
+        jest.useFakeTimers();
+        h.service.closeAll();
+        expect(h.service.isRunning('a')).toBe(false);
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }]);
+        jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }, { child: h.children[0], force: true }]);
+    });
+
+    it('closeAll() does not force-kill a browser that exited promptly', async () => {
+        const h = create();
+        await h.service.open('a');
+        jest.useFakeTimers();
+        h.service.closeAll();
+        h.children[0].emit('exit', 0);
+        jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
+        expect(h.terminated).toEqual([{ child: h.children[0], force: false }]);
+    });
 });
 ```
 
@@ -1648,8 +1708,13 @@ export interface BrowserProfileServiceDeps {
 }
 
 interface RunningEntry {
+    /** Set only once the browser has actually spawned. */
     child: BrowserProcess | null;
     forwarder: ForwarderLike | null;
+    /** close() was called while the browser was still starting; open() closes it right after the spawn. */
+    closeRequested: boolean;
+    exited: boolean;
+    forceKillTimer: NodeJS.Timeout | null;
 }
 
 function defaultTerminate(platform: NodeJS.Platform): (child: BrowserProcess, force: boolean) => void {
@@ -1710,13 +1775,14 @@ export class BrowserProfileService {
         }
 
         // Reserve the slot before the first await so a second open() of the same profile is rejected.
-        const entry: RunningEntry = { child: null, forwarder: null };
+        const entry: RunningEntry = { child: null, forwarder: null, closeRequested: false, exited: false, forceKillTimer: null };
         this.running.set(id, entry);
         try {
             let proxyPort: number | null = null;
             if (proxy) {
                 entry.forwarder = this.createForwarder(proxy);
                 proxyPort = await entry.forwarder.start();
+                this.assertNotCancelled(id, entry);
             }
             const userDataDir = this.getProfileDir(id);
             fs.mkdirSync(userDataDir, { recursive: true });
@@ -1724,38 +1790,66 @@ export class BrowserProfileService {
                 executable,
                 buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort }),
             );
-            entry.child = child;
             await new Promise<void>((resolve, reject) => {
                 child.once('spawn', () => resolve());
                 child.once('error', reject);
             });
-            child.once('exit', () => this.release(id, entry));
+            this.assertNotCancelled(id, entry, child);
+            entry.child = child;
+            child.once('exit', () => {
+                entry.exited = true;
+                if (entry.forceKillTimer) clearTimeout(entry.forceKillTimer);
+                this.release(id, entry);
+            });
             child.on('error', () => undefined);
         } catch (error: any) {
             this.release(id, entry);
             throw new Error(`Không mở được trình duyệt: ${error?.message || error}`);
         }
-        this.deps.store.touchBrowserProfileOpened(id);
+        try {
+            this.deps.store.touchBrowserProfileOpened(id);
+        } catch (error: any) {
+            // The browser is already running; failing to record the open time must not fail open().
+            console.warn(`Không ghi được thời điểm mở profile ${id}:`, error?.message || error);
+        }
         this.notify();
+        if (entry.closeRequested) this.close(id);
+    }
+
+    /** Called after each await in open(): closeAll() may have released the entry meanwhile. */
+    private assertNotCancelled(id: string, entry: RunningEntry, spawned?: BrowserProcess): void {
+        if (this.running.get(id) === entry) return;
+        if (spawned) this.terminate(spawned, true);
+        // release() may have stopped the forwarder before its start() finished; stop() is idempotent.
+        entry.forwarder?.stop().catch(() => undefined);
+        throw new Error('Đã hủy mở trình duyệt');
     }
 
     /** Asks the browser to exit gracefully, then force-kills it if it is still alive after FORCE_KILL_DELAY_MS. */
     public close(id: string): void {
         const entry = this.running.get(id);
-        if (!entry || !entry.child) return;
-        const child = entry.child;
-        this.terminate(child, false);
-        const timer = setTimeout(() => {
-            if (this.running.get(id) === entry) this.terminate(child, true);
-        }, FORCE_KILL_DELAY_MS);
-        timer.unref?.();
+        if (!entry) return;
+        if (!entry.child) {
+            entry.closeRequested = true;
+            return;
+        }
+        this.terminateWithFallback(entry, entry.child);
     }
 
-    /** Used on app quit and workspace switch: graceful exit for every browser, state cleared immediately. */
+    private terminateWithFallback(entry: RunningEntry, child: BrowserProcess): void {
+        this.terminate(child, false);
+        if (entry.forceKillTimer) clearTimeout(entry.forceKillTimer);
+        entry.forceKillTimer = setTimeout(() => {
+            if (!entry.exited) this.terminate(child, true);
+        }, FORCE_KILL_DELAY_MS);
+        entry.forceKillTimer.unref?.();
+    }
+
+    /** Used on app quit and workspace switch: graceful exit (then force-kill if still alive) for every browser, state cleared immediately. */
     public closeAll(): void {
         const entries = Array.from(this.running.entries());
         for (const [id, entry] of entries) {
-            if (entry.child) this.terminate(entry.child, false);
+            if (entry.child) this.terminateWithFallback(entry, entry.child);
             this.release(id, entry);
         }
     }
@@ -1776,7 +1870,7 @@ export class BrowserProfileService {
 - [ ] **Step 4: Chạy test, xác nhận qua**
 
 Run: `npx jest`
-Expected: PASS, `Test Suites: 4 passed, 4 total`, `Tests: 41 passed, 41 total`.
+Expected: PASS, `Test Suites: 4 passed, 4 total`, `Tests: 50 passed, 50 total`.
 
 - [ ] **Step 5: Commit**
 
@@ -2376,7 +2470,7 @@ Thay bằng:
 - [ ] **Step 5: Type-check và unit test**
 
 Run: `npx tsc -p tsconfig.electron.json --noEmit && npx jest`
-Expected: tsc không in gì; jest `Tests: 41 passed, 41 total`.
+Expected: tsc không in gì; jest `Tests: 50 passed, 50 total`.
 
 - [ ] **Step 6: Chạy app dev và kiểm chứng bằng console**
 
@@ -3437,7 +3531,7 @@ npm run build:electron
 npm run build:renderer
 ```
 
-Expected: hai lệnh tsc không in gì; jest `Test Suites: 4 passed, 4 total`, `Tests: 41 passed, 41 total`; hai lệnh build không lỗi. Dán output vào mô tả PR.
+Expected: hai lệnh tsc không in gì; jest `Test Suites: 4 passed, 4 total`, `Tests: 50 passed, 50 total`; hai lệnh build không lỗi. Dán output vào mô tả PR.
 
 - [ ] **Step 2: Vòng 1 trên Linux (`npm run dev`)**
 
@@ -3530,5 +3624,6 @@ Không `git push` và không build production khi chưa được chủ sản ph�
 - 30 profile cần hơn 8,5 GB RAM; MVP chỉ chặn theo số lượng.
 - Thư mục dữ liệu profile không mã hóa.
 - Độ phân giải màn hình không được giả lập.
+- Kill cứng dự phòng của `closeAll()` dựa trên timer 5 giây; khi thoát app, tiến trình có thể kết thúc trước khi timer chạy nên trình duyệt treo vẫn có thể còn sót lại.
 - Nếu AHV Connect crash khi profile đang mở, trình duyệt con có thể còn chạy; mở lại profile đó sẽ không thành công cho đến khi cửa sổ cũ được đóng.
 - Tiêu chí "nuôi tài khoản thật không bị khóa" trong intent phải do đội vận hành kiểm chứng bằng tài khoản thật; kế hoạch này không kiểm chứng được.
