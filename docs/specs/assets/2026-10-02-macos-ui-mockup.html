@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="light" data-platform="mac" data-material="on">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AHV Connect Mockup</title>
+<!--
+  Mockup khung AHV Connect theo bộ North (docs/specs/assets/2026-10-02-north-reference.html).
+  Token và kích thước lấy từ docs/specs/2026-10-02-macos-ui.md mục 4 và 7.
+  Thanh "Duyệt mockup" phía trên không thuộc app: chỉ để chuyển nền tảng và vật liệu khi duyệt.
+-->
+<style>
+/* ============ TOKENS (spec mục 4) ============ */
+:root {
+  color-scheme: light;
+  --bg: #f2f2f7;
+  --bg-secondary: #e9e9ee;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --control: #ebebf0;
+  --control-hover: #e0e0e5;
+  --hover: rgba(0,0,0,.045);
+  --selected: rgba(0,122,255,.12);
+  --sidebar-material: rgba(242,242,247,.82);
+  --sidebar-solid: #ececf1;
+  --toolbar: rgba(250,250,252,.72);
+  --overlay: rgba(0,0,0,.25);
+
+  --text-primary: #1d1d1f;
+  --text-secondary: #545458;
+  --text-tertiary: #636366;
+  --text-disabled: #aeaeb2;
+
+  --accent: #007aff;
+  --accent-text: #0062c4;
+  --accent-fill: #0071e3;
+  --accent-fill-hover: #0068d6;
+  --accent-fill-pressed: #0062c4;
+
+  --green: #34c759;
+  --orange: #ff9f0a;
+  --red: #ff3b30;
+  --red-text: #d70015;
+
+  --border: rgba(0,0,0,.075);
+  --border-strong: rgba(0,0,0,.12);
+
+  --shadow-card: 0 1px 2px rgba(0,0,0,.03), 0 5px 20px rgba(0,0,0,.045);
+  --shadow-popover: 0 20px 60px rgba(0,0,0,.18);
+  --shadow-window: 0 30px 90px rgba(0,0,0,.14), 0 8px 25px rgba(0,0,0,.06);
+
+  --radius-sm: 7px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Noto Sans", Ubuntu, sans-serif;
+
+  --sidebar-width: 240px;
+  --rail-width: 64px;
+  --toolbar-height: 52px;
+  --wallpaper: radial-gradient(circle at 20% 15%, #9ec5ff 0, transparent 45%), radial-gradient(circle at 85% 80%, #f7b2d9 0, transparent 45%), linear-gradient(135deg, #c9d8f5, #efe1f0);
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #151516;
+  --bg-secondary: #1c1c1e;
+  --surface: #1f1f21;
+  --surface-raised: #2c2c2e;
+  --control: #2c2c2e;
+  --control-hover: #3a3a3c;
+  --hover: rgba(255,255,255,.055);
+  --selected: rgba(10,132,255,.20);
+  --sidebar-material: rgba(29,29,31,.88);
+  --sidebar-solid: #1d1d1f;
+  --toolbar: rgba(30,30,32,.78);
+  --overlay: rgba(0,0,0,.5);
+
+  --text-primary: #f5f5f7;
+  --text-secondary: #c0c0c5;
+  --text-tertiary: #a5a5aa;
+  --text-disabled: #636366;
+
+  --accent: #0a84ff;
+  --accent-text: #5aabff;
+  --accent-fill: #0071e3;
+  --accent-fill-hover: #0077ed;
+  --accent-fill-pressed: #0068d6;
+
+  --green: #30d158;
+  --orange: #ff9f0a;
+  --red: #ff453a;
+  --red-text: #ff6961;
+
+  --border: rgba(255,255,255,.085);
+  --border-strong: rgba(255,255,255,.14);
+
+  --shadow-card: 0 1px 2px rgba(0,0,0,.20), 0 5px 20px rgba(0,0,0,.25);
+  --shadow-popover: 0 20px 60px rgba(0,0,0,.60);
+  --shadow-window: 0 30px 90px rgba(0,0,0,.60), 0 8px 30px rgba(0,0,0,.40);
+  --wallpaper: radial-gradient(circle at 20% 15%, #1d3d73 0, transparent 45%), radial-gradient(circle at 85% 80%, #5a2350 0, transparent 45%), linear-gradient(135deg, #10172a, #23142a);
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ============ RESET ============ */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: #d9d9de;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { border: 0; background: none; padding: 0; cursor: pointer; }
+:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; border-radius: 8px; }
+svg { flex: 0 0 auto; }
+
+/* ============ REVIEW BAR (không thuộc app) ============ */
+.review {
+  flex: 0 0 auto;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  padding: 8px 16px;
+  background: #111; color: #eee; font-size: 12px;
+}
+.review b { color: #fff; }
+.review .seg { display: inline-flex; background: #2a2a2a; border-radius: 7px; padding: 2px; }
+.review .seg button { padding: 3px 10px; border-radius: 5px; color: #ccc; }
+.review .seg button[aria-pressed="true"] { background: #4a4a4a; color: #fff; }
+.review .note { color: #aaa; }
+
+/* ============ DESKTOP + WINDOW ============ */
+.desktop {
+  flex: 1; min-height: 0;
+  display: flex; justify-content: center;
+  padding: 18px;
+  background: var(--wallpaper);
+}
+.window {
+  width: min(1440px, 100%); height: 100%;
+  display: flex; overflow: hidden; position: relative;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: var(--shadow-window);
+}
+html[data-platform="win"] .window { border-radius: 8px; }
+html[data-material="off"] .window { background: var(--bg); }
+
+/* ============ SIDEBAR (spec 7.2) ============ */
+.sidebar {
+  width: var(--sidebar-width); flex: 0 0 var(--sidebar-width);
+  display: flex; flex-direction: column;
+  padding: 0 11px 11px;
+  background: var(--sidebar-solid);
+  border-right: 1px solid var(--border);
+  transition: width .2s ease, flex-basis .2s ease;
+  min-width: 0;
+}
+html[data-material="on"] .sidebar {
+  background: var(--sidebar-material);
+  backdrop-filter: blur(30px) saturate(150%);
+  -webkit-backdrop-filter: blur(30px) saturate(150%);
+}
+.side-head {
+  height: var(--toolbar-height); flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 4px;
+}
+.traffic { display: none; gap: 8px; padding-left: 9px; }
+.traffic span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.18); }
+.traffic .r { background: #ff5f57; } .traffic .y { background: #febc2e; } .traffic .g { background: #28c840; }
+html[data-platform="mac"] .traffic { display: flex; }
+.brand { display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 8px; margin-bottom: 6px; }
+.brand svg { width: 28px; height: 28px; border-radius: 8px; box-shadow: 0 3px 8px rgba(30,64,175,.22); }
+.brand-name { font-weight: 650; white-space: nowrap; }
+.brand-ver { margin-left: auto; color: var(--text-tertiary); font-size: 10px; }
+.update-pill { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--text-primary); white-space: nowrap; }
+
+.group-title {
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 9px 6px;
+  color: var(--text-tertiary);
+  font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em;
+}
+.group-title .add { margin-left: auto; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; color: var(--text-secondary); }
+.group-title .add:hover { background: var(--hover); color: var(--text-primary); }
+
+.accounts { overflow-y: auto; max-height: 45%; min-height: 80px; flex: 0 1 auto; padding-bottom: 4px; }
+.acc {
+  width: 100%; height: 36px;
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 9px; border-radius: 8px;
+  color: var(--text-primary); text-align: left; position: relative;
+}
+.acc:hover { background: var(--hover); }
+.acc.active { background: var(--selected); }
+.avatar {
+  position: relative; width: 24px; height: 24px; flex: 0 0 24px;
+  border-radius: 50%; display: grid; place-items: center;
+  color: #fff; font-size: 10px; font-weight: 650;
+}
+.avatar .ch {
+  position: absolute; left: -3px; bottom: -3px;
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--sidebar-solid);
+  display: grid; place-items: center; font-size: 6px; font-weight: 800; color: #fff;
+}
+html[data-material="on"] .avatar .ch { border-color: var(--bg); }
+.avatar .off {
+  position: absolute; right: -3px; bottom: -3px; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--red); border: 2px solid var(--sidebar-solid); color: #fff; font-size: 7px; line-height: 7px; text-align: center; font-weight: 800;
+}
+.acc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-name.dim { color: var(--text-secondary); }
+.count {
+  margin-left: auto; min-width: 18px; height: 16px; padding: 0 5px;
+  border-radius: 99px; background: var(--red); color: #fff;
+  font-size: 10px; font-weight: 650; line-height: 16px; text-align: center;
+}
+.nav { display: flex; flex-direction: column; gap: 1px; flex: 0 1 auto; min-height: 120px; overflow-y: auto; }
+.nav-item {
+  width: 100%; height: 33px;
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 9px; border-radius: 8px;
+  color: var(--text-secondary); text-align: left; position: relative;
+  transition: background .14s, color .14s;
+}
+.nav-item:hover { background: var(--hover); color: var(--text-primary); }
+.nav-item.active { background: var(--selected); color: var(--accent-text); }
+.nav-item svg { width: 17px; height: 17px; }
+.nav-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); margin-left: auto; }
+.chev { margin-left: auto; color: var(--text-tertiary); transition: transform .15s; }
+.nav-item[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.subnav { display: none; flex-direction: column; gap: 1px; }
+.subnav.open { display: flex; }
+.subnav .nav-item { padding-left: 35px; }
+.side-bottom { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
+
+/* Rail (thu gọn) */
+html[data-collapsed="true"] .sidebar { width: var(--rail-width); flex-basis: var(--rail-width); padding: 0 8px 8px; }
+html[data-collapsed="true"][data-platform="mac"] .sidebar { width: 76px; flex-basis: 76px; }
+html[data-collapsed="true"] .brand-name,
+html[data-collapsed="true"] .brand-ver,
+html[data-collapsed="true"] .update-pill,
+html[data-collapsed="true"] .group-title span,
+html[data-collapsed="true"] .group-title .add,
+html[data-collapsed="true"] .acc-name,
+html[data-collapsed="true"] .nav-label,
+html[data-collapsed="true"] .chev,
+html[data-collapsed="true"] .acc .count { display: none; }
+html[data-collapsed="true"] .group-title { padding: 8px 0 4px; justify-content: center; border-top: 1px solid var(--border); }
+html[data-collapsed="true"] .group-title:first-of-type { border-top: 0; }
+html[data-collapsed="true"] .brand { justify-content: center; padding: 0; }
+html[data-collapsed="true"][data-platform="mac"] .brand { display: none; }
+html[data-collapsed="true"] .acc, html[data-collapsed="true"] .nav-item { justify-content: center; padding: 0; }
+html[data-collapsed="true"] .acc { height: 44px; }
+html[data-collapsed="true"] .avatar { width: 32px; height: 32px; flex-basis: 32px; font-size: 12px; }
+html[data-collapsed="true"] .nav-item { height: 40px; }
+html[data-collapsed="true"] .nav-item .dot { position: absolute; top: 8px; right: 10px; }
+html[data-collapsed="true"] .subnav .nav-item { padding-left: 0; }
+html[data-collapsed="true"] .acc .rail-count {
+  display: block; position: absolute; top: 3px; right: 6px;
+}
+.rail-count { display: none; }
+
+/* ============ MAIN + TOOLBAR (spec 7.3) ============ */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.toolbar {
+  height: var(--toolbar-height); flex: 0 0 auto;
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 15px;
+  background: var(--toolbar);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  min-width: 0;
+}
+html[data-platform="win"] .toolbar { padding-right: 0; }
+.tb-btn {
+  width: 32px; height: 32px; flex: 0 0 32px;
+  display: grid; place-items: center;
+  border-radius: 8px; color: var(--text-secondary);
+  position: relative;
+  transition: background .14s, color .14s, transform .1s;
+}
+.tb-btn:hover { background: var(--hover); color: var(--text-primary); }
+.tb-btn:active { transform: scale(.94); }
+.tb-btn[aria-expanded="true"] { background: var(--hover); color: var(--text-primary); }
+.tb-btn .badge {
+  position: absolute; top: 3px; right: 2px; min-width: 15px; height: 15px; padding: 0 4px;
+  border-radius: 99px; background: var(--red); color: #fff; font-size: 9px; font-weight: 700; line-height: 15px;
+  border: 2px solid var(--bg);
+}
+.tb-title { margin-left: 6px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 40px; }
+.tb-sep { width: 1px; height: 18px; margin: 0 8px; background: var(--border-strong); flex: 0 0 1px; }
+.tb-mid { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 10px; border-radius: 99px;
+  background: var(--control); color: var(--text-secondary); font-size: 12px; white-space: nowrap;
+}
+.chip:hover { background: var(--control-hover); color: var(--text-primary); }
+.chip .live { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+.tb-right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.caption { display: none; height: var(--toolbar-height); margin-left: 8px; }
+html[data-platform="win"] .caption { display: flex; }
+.caption button { width: 46px; height: 100%; display: grid; place-items: center; color: var(--text-primary); }
+.caption button:hover { background: var(--hover); }
+.caption button.close:hover { background: #c42b1c; color: #fff; }
+
+.content { flex: 1; min-height: 0; overflow: auto; }
+.view { display: none; height: 100%; }
+.view.active { display: block; }
+
+/* ============ TỔNG QUAN ============ */
+.page { padding: 28px 32px 48px; max-width: 1180px; margin: 0 auto; }
+.page-title { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -.03em; }
+.page-sub { margin: 6px 0 24px; color: var(--text-secondary); font-size: 13px; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 28px; }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
+}
+.stat { padding: 14px 16px; }
+.stat-label { color: var(--text-secondary); font-size: 12px; }
+.stat-value { margin-top: 6px; font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+.stat-foot { margin-top: 4px; color: var(--text-tertiary); font-size: 11px; }
+.stat-foot.warn { color: var(--red-text); }
+.section-title { display: flex; align-items: center; margin: 0 0 10px; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+.section-title .link { margin-left: auto; font-size: 13px; font-weight: 400; color: var(--accent-text); }
+.acc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 28px; }
+.acc-card { padding: 14px; display: flex; gap: 12px; align-items: center; }
+.acc-card .avatar { width: 40px; height: 40px; flex-basis: 40px; font-size: 14px; }
+.acc-card .avatar .ch { width: 16px; height: 16px; font-size: 8px; border-color: var(--surface); }
+.acc-meta { min-width: 0; flex: 1; }
+.acc-meta .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-meta .s { color: var(--text-secondary); font-size: 12px; margin-top: 2px; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; }
+.acc-meta .s .st { overflow: hidden; text-overflow: ellipsis; }
+a { color: var(--accent-text); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+.status-dot.bad { background: var(--red); }
+.list { overflow: hidden; }
+.row {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 44px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.row:last-child { border-bottom: 0; }
+.row:hover { background: var(--hover); }
+.row .t { flex: 1; min-width: 0; }
+.row .t div:last-child { color: var(--text-secondary); font-size: 12px; margin-top: 1px; }
+.row time { color: var(--text-tertiary); font-size: 11px; white-space: nowrap; }
+
+/* ============ CHAT ============ */
+.chat { display: flex; height: 100%; }
+.conv-pane { width: 310px; flex: 0 0 310px; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg); }
+.conv-head { padding: 16px 14px 10px; border-bottom: 1px solid var(--border); }
+.conv-head .h { display: flex; align-items: center; justify-content: space-between; }
+.conv-head .h b { font-size: 21px; font-weight: 700; letter-spacing: -.025em; }
+.compose { width: 29px; height: 29px; border-radius: 8px; display: grid; place-items: center; color: #fff; background: var(--accent-fill); box-shadow: 0 3px 8px rgba(0,113,227,.22); }
+.compose:hover { background: var(--accent-fill-hover); }
+.search { height: 30px; margin-top: 10px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border-radius: 8px; background: var(--control); color: var(--text-tertiary); }
+.search input { border: 0; outline: 0; background: transparent; width: 100%; color: var(--text-primary); }
+.search input::placeholder { color: var(--text-tertiary); }
+.filters { display: flex; gap: 3px; margin-top: 10px; }
+.filter { padding: 4px 8px; border-radius: 6px; color: var(--text-secondary); font-size: 12px; }
+.filter:hover { background: var(--hover); }
+.filter.active { background: var(--hover); color: var(--text-primary); font-weight: 600; }
+.convs { flex: 1; overflow-y: auto; padding: 6px; }
+.conv { position: relative; display: flex; gap: 10px; padding: 9px 10px; border-radius: 9px; cursor: pointer; }
+.conv:hover { background: var(--hover); }
+.conv.active { background: var(--selected); }
+.conv.active::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2px; border-radius: 2px; background: var(--accent); }
+.conv .avatar { width: 38px; height: 38px; flex-basis: 38px; font-size: 13px; }
+.conv .c { flex: 1; min-width: 0; }
+.conv .r1 { display: flex; gap: 8px; }
+.conv .r1 b { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv .r1 time { color: var(--text-tertiary); font-size: 11px; }
+.conv .r2 { display: flex; gap: 8px; margin-top: 3px; color: var(--text-secondary); font-size: 12px; }
+.conv .r2 span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv .count { margin-left: 0; }
+.thread { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface); }
+.thread-head { height: 56px; flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--border); }
+.thread-head .avatar { width: 32px; height: 32px; flex-basis: 32px; }
+.thread-head .who b { display: block; font-weight: 600; }
+.thread-head .who span { color: var(--text-secondary); font-size: 12px; }
+.thread-head .tb-right { margin-left: auto; }
+.msgs { flex: 1; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 6px; }
+.day { align-self: center; color: var(--text-tertiary); font-size: 11px; margin: 6px 0; }
+.bubble { max-width: 62%; padding: 8px 12px; border-radius: 16px; line-height: 1.4; }
+.bubble.in { align-self: flex-start; background: var(--control); border-bottom-left-radius: 5px; }
+.bubble.out { align-self: flex-end; background: var(--accent-fill); color: #fff; border-bottom-right-radius: 5px; }
+.bubble time { display: block; margin-top: 3px; font-size: 10px; opacity: .75; }
+.composer { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--border); }
+.composer textarea { flex: 1; resize: none; height: 36px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--surface); outline: 0; }
+.composer textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+
+/* ============ COMPONENTS (spec 8) ============ */
+.comp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.comp { padding: 16px; }
+.comp h3 { margin: 0 0 12px; font-size: 13px; font-weight: 650; }
+.comp .line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.btn-primary, .btn-secondary, .btn-danger {
+  height: 30px; padding: 0 12px; border-radius: 8px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: background .14s, transform .1s;
+}
+.btn-primary { background: var(--accent-fill); color: #fff; }
+.btn-primary:hover { background: var(--accent-fill-hover); }
+.btn-primary:active { background: var(--accent-fill-pressed); transform: scale(.98); }
+.btn-secondary { background: var(--control); color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--border); }
+.btn-secondary:hover { background: var(--control-hover); }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-primary:disabled, .btn-secondary:disabled { opacity: .45; cursor: default; }
+.input-field {
+  height: 30px; width: 100%; padding: 0 10px;
+  border: 0; border-radius: 8px; background: var(--control); color: var(--text-primary); outline: 0;
+}
+.input-field::placeholder { color: var(--text-tertiary); }
+.input-field:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+select.input-field { appearance: auto; }
+label.check { display: inline-flex; align-items: center; gap: 7px; }
+input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color: var(--accent); }
+.switch { position: relative; width: 38px; height: 22px; border-radius: 99px; background: var(--control-hover); transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .15s; }
+.switch[aria-checked="true"] { background: var(--green); }
+.switch[aria-checked="true"]::after { transform: translateX(16px); }
+.segmented { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--control); }
+.segmented button { height: 24px; padding: 0 12px; border-radius: 6px; color: var(--text-secondary); font-size: 12px; }
+.segmented button[aria-pressed="true"] { background: var(--surface); color: var(--text-primary); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+html[data-theme="dark"] .segmented button[aria-pressed="true"] { background: #48484a; }
+.pill { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+.pill.ok { background: color-mix(in srgb, var(--green) 18%, transparent); }
+.pill.warn { background: color-mix(in srgb, var(--orange) 20%, transparent); }
+.pill.err { background: color-mix(in srgb, var(--red) 16%, transparent); }
+.pill.info { background: var(--selected); color: var(--accent-text); }
+.muted { color: var(--text-secondary); }
+.tert { color: var(--text-tertiary); font-size: 12px; }
+
+/* ============ POPOVER / MENU (spec 8 .mac-popover) ============ */
+.mac-popover {
+  position: fixed; z-index: 100;
+  min-width: 240px; padding: 8px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 13px;
+  box-shadow: var(--shadow-popover);
+  display: none;
+}
+.mac-popover.show { display: block; animation: pop .14s ease-out; }
+@keyframes pop { from { opacity: 0; transform: translateY(-5px) scale(.98); } to { opacity: 1; transform: none; } }
+.pop-title { padding: 6px 9px 7px; color: var(--text-tertiary); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+.mac-menu-item {
+  width: 100%; min-height: 32px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 9px; border-radius: 8px; text-align: left;
+}
+.mac-menu-item:hover { background: var(--hover); }
+.mac-menu-item .ico { width: 18px; text-align: center; color: var(--text-secondary); }
+.mac-menu-item .desc { margin-left: auto; color: var(--text-tertiary); font-size: 11px; }
+.mac-menu-item .tick { width: 14px; color: var(--accent); visibility: hidden; }
+.mac-menu-item[aria-checked="true"] .tick { visibility: visible; }
+.menu-sep { height: 1px; margin: 6px 4px; background: var(--border); }
+.range-row { padding: 6px 9px 10px; }
+.range-row .lbl { display: flex; justify-content: space-between; color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; }
+.range-row input { width: 100%; }
+
+/* ============ DIALOG + TOAST ============ */
+.overlay { position: fixed; inset: 0; z-index: 150; display: none; place-items: center; background: var(--overlay); }
+.overlay.show { display: grid; animation: fade .15s ease-out; }
+@keyframes fade { from { opacity: 0; } }
+.alert {
+  width: min(380px, calc(100% - 32px)); padding: 20px;
+  background: var(--surface-raised); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-popover);
+  animation: pop .16s ease-out;
+}
+.alert .ic { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); margin-bottom: 12px; }
+.alert b { display: block; font-size: 13px; font-weight: 700; }
+.alert p { margin: 6px 0 18px; color: var(--text-secondary); line-height: 1.45; }
+.alert .acts { display: flex; justify-content: flex-end; gap: 8px; }
+.toast {
+  position: fixed; left: 50%; bottom: 25px; z-index: 200;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 15px; border: 1px solid var(--border-strong); border-radius: 9px;
+  background: var(--surface-raised); box-shadow: var(--shadow-popover);
+  transform: translate(-50%, 20px); opacity: 0; pointer-events: none; transition: .2s;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast .s { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+
+/* ============ SCROLLBAR (spec 5.7) ============ */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(128,128,128,.22); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,.35); }
+
+/* ============ HẸP (spec 7.5) ============ */
+@media (max-width: 1000px) {
+  .desktop { padding: 0; }
+  .window { border-radius: 0; border: 0; }
+}
+@media (max-width: 900px) {
+  .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .conv-pane { width: 260px; flex-basis: 260px; }
+  .tb-mid .chip.opt { display: none; }
+}
+@media (max-width: 767px) {
+  .tb-title { display: none; }
+  .page { padding: 20px 16px 40px; }
+  .chat .thread { display: none; }
+  .conv-pane { width: 100%; flex: 1; border-right: 0; }
+  .bubble { max-width: 80%; }
+}
+</style>
+</head>
+<body>
+
+<div class="review" role="region" aria-label="Thanh duyệt mockup">
+  <b>Duyệt mockup</b>
+  <span>Nền tảng
+    <span class="seg" id="segPlatform">
+      <button data-v="mac" aria-pressed="true">macOS</button>
+      <button data-v="win" aria-pressed="false">Windows</button>
+    </span>
+  </span>
+  <span>Vật liệu trong suốt
+    <span class="seg" id="segMaterial">
+      <button data-v="on" aria-pressed="true">Có (macOS, Win 11)</button>
+      <button data-v="off" aria-pressed="false">Không (Win 10, Linux)</button>
+    </span>
+  </span>
+  <span class="note">Đổi Sáng/Tối/Hệ thống bằng nút ◐ trên toolbar của app. Thu nhỏ cửa sổ trình duyệt để xem dạng hẹp.</span>
+</div>
+
+<div class="desktop">
+  <div class="window">
+
+    <!-- ================= SIDEBAR ================= -->
+    <aside class="sidebar" aria-label="Thanh bên">
+      <div class="side-head" data-drag>
+        <div class="traffic" aria-hidden="true"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+      </div>
+
+      <div class="brand">
+        <svg viewBox="0 0 100 100" aria-hidden="true">
+          <defs><linearGradient id="ahvBg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1E40AF"/><stop offset="1" stop-color="#3B82F6"/></linearGradient></defs>
+          <rect width="100" height="100" rx="22" fill="url(#ahvBg)"/>
+          <g fill="#fff"><path d="M46 17 H54 L85 84 H70 L50 32 L30 84 H15 Z"/><path d="M26 72 H74 V79 H26 Z"/><path d="M47.2 69 H52.8 L52.3 57 H47.7 Z"/><path d="M48.3 52 H51.7 L51.2 44 H48.8 Z"/></g>
+        </svg>
+        <span class="brand-name">AHV Connect</span>
+        <span class="brand-ver">26.8.5</span>
+      </div>
+
+      <div class="group-title"><span>Tài khoản</span>
+        <button class="add" title="Thêm tài khoản" aria-label="Thêm tài khoản">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+      <div class="accounts">
+        <button class="acc active" title="Zalo · Lan Tư vấn">
+          <span class="avatar" style="background:#0068ff">LT<span class="ch" style="background:#0068ff">Z</span></span>
+          <span class="acc-name">Lan Tư vấn</span><span class="count">3</span><span class="count rail-count">3</span>
+        </button>
+        <button class="acc" title="Facebook · Fanpage AHV">
+          <span class="avatar" style="background:#1877f2">FA<span class="ch" style="background:#1877f2">f</span></span>
+          <span class="acc-name">Fanpage AHV</span><span class="count">12</span><span class="count rail-count">12</span>
+        </button>
+        <button class="acc" title="Telegram · CSKH Học viên">
+          <span class="avatar" style="background:#0088cc">CS<span class="ch" style="background:#0088cc">t</span></span>
+          <span class="acc-name">CSKH Học viên</span>
+        </button>
+        <button class="acc" title="Zalo · Tuấn Tuyển sinh (mất kết nối)">
+          <span class="avatar" style="background:#8e8e93">TT<span class="ch" style="background:#0068ff">Z</span><span class="off">×</span></span>
+          <span class="acc-name dim">Tuấn Tuyển sinh</span>
+        </button>
+      </div>
+
+      <div class="group-title"><span>Điều hướng</span></div>
+      <nav class="nav" id="nav">
+        <button class="nav-item active" data-view="overview" data-title="Tổng quan" title="Tổng quan">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <span class="nav-label">Tổng quan</span>
+        </button>
+        <button class="nav-item" data-view="chat" data-title="Chat" title="Chat">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span class="nav-label">Chat</span>
+        </button>
+        <button class="nav-item" data-view="placeholder" data-title="CRM" title="CRM">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M7 14v3M12 10v7M17 7v10"/></svg>
+          <span class="nav-label">CRM</span><span class="dot" aria-label="Có yêu cầu mới"></span>
+        </button>
+        <button class="nav-item" id="toolsToggle" aria-expanded="false" title="Công cụ">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+          <span class="nav-label">Công cụ</span>
+          <svg class="chev" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <div class="subnav" id="toolsSub">
+          <button class="nav-item" data-view="placeholder" data-title="Workflow" title="Workflow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M5 8v4a7 7 0 0 0 7 7M19 8v4a7 7 0 0 1-7 7"/></svg>
+            <span class="nav-label">Workflow</span>
+          </button>
+          <button class="nav-item" data-view="placeholder" data-title="Tích hợp" title="Tích hợp">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            <span class="nav-label">Tích hợp</span>
+          </button>
+        </div>
+        <button class="nav-item" data-view="placeholder" data-title="Báo cáo" title="Báo cáo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 21H4.6c-.56 0-.84 0-1.054-.109a1 1 0 0 1-.437-.437C3 20.24 3 19.96 3 19.4V3"/><path d="M7 14l4-4 4 4 6-6"/></svg>
+          <span class="nav-label">Báo cáo</span>
+        </button>
+        <button class="nav-item" data-view="placeholder" data-title="Quản lý công việc" title="Quản lý công việc">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          <span class="nav-label">Quản lý công việc</span>
+        </button>
+        <button class="nav-item" data-view="placeholder" data-title="Trình duyệt" title="Trình duyệt">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span class="nav-label">Trình duyệt</span>
+        </button>
+        <button class="nav-item" data-view="components" data-title="Thành phần giao diện" title="Thành phần giao diện (chỉ có trong mockup)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5"/></svg>
+          <span class="nav-label">Thành phần (mockup)</span>
+        </button>
+      </nav>
+
+      <div class="side-bottom">
+        <button class="nav-item" data-view="placeholder" data-title="Cài đặt" title="Cài đặt">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span class="nav-label">Cài đặt</span><span class="dot" aria-label="Có thông tin mới"></span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- ================= MAIN ================= -->
+    <main class="main">
+      <header class="toolbar" data-drag>
+        <button class="tb-btn" id="collapseBtn" title="Thu gọn thanh bên" aria-label="Thu gọn thanh bên">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+        </button>
+        <span class="tb-title" id="tbTitle">Tổng quan</span>
+        <span class="tb-sep"></span>
+        <div class="tb-mid">
+          <button class="chip" title="Chuyển workspace">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/></svg>
+            Cơ sở Hà Đông
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <span class="chip opt"><span class="live"></span>Đã đồng bộ · 42 ms</span>
+          <span class="chip opt" style="background:color-mix(in srgb,var(--green) 18%,transparent);color:var(--text-primary)">Bản cập nhật sẵn sàng</span>
+        </div>
+        <div class="tb-right">
+          <button class="tb-btn" title="Tải tin nhắn cũ" aria-label="Tải tin nhắn cũ">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+          </button>
+          <button class="tb-btn" id="bellBtn" title="Thông báo công việc" aria-label="Thông báo công việc" aria-expanded="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+            <span class="badge">4</span>
+          </button>
+          <button class="tb-btn" title="Khóa màn hình" aria-label="Khóa màn hình">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          </button>
+          <button class="tb-btn" id="themeBtn" title="Giao diện" aria-label="Giao diện" aria-expanded="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg>
+          </button>
+          <button class="tb-btn" id="moreBtn" title="Thêm" aria-label="Thêm" aria-expanded="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+          </button>
+        </div>
+        <div class="caption" aria-label="Điều khiển cửa sổ Windows">
+          <button title="Thu nhỏ"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor"/></svg></button>
+          <button title="Phóng to"><svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor"/></svg></button>
+          <button class="close" title="Đóng"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor"/></svg></button>
+        </div>
+      </header>
+
+      <div class="content">
+
+        <!-- ===== TỔNG QUAN ===== -->
+        <section class="view active" id="view-overview">
+          <div class="page">
+            <h1 class="page-title">Tổng quan</h1>
+            <p class="page-sub">Thứ Năm, 2 tháng 10 · Cơ sở Hà Đông</p>
+
+            <div class="stats">
+              <div class="card stat"><div class="stat-label">Tài khoản</div><div class="stat-value">4</div><div class="stat-foot">Zalo, Facebook, Telegram</div></div>
+              <div class="card stat"><div class="stat-label">Đang trực tuyến</div><div class="stat-value">3</div><div class="stat-foot">Cập nhật 1 phút trước</div></div>
+              <div class="card stat"><div class="stat-label">Cần chú ý</div><div class="stat-value">1</div><div class="stat-foot warn">Tuấn Tuyển sinh mất kết nối</div></div>
+              <div class="card stat"><div class="stat-label">Tin chưa đọc</div><div class="stat-value">15</div><div class="stat-foot">Trên 2 tài khoản</div></div>
+            </div>
+
+            <h2 class="section-title">Tài khoản <a class="link" href="#">Quản lý</a></h2>
+            <div class="acc-grid">
+              <div class="card acc-card"><span class="avatar" style="background:#0068ff">LT<span class="ch" style="background:#0068ff">Z</span></span>
+                <div class="acc-meta"><div class="n">Lan Tư vấn</div><div class="s"><span class="status-dot"></span><span class="st">Trực tuyến · 0912 xxx 381</span></div></div>
+                <button class="btn-secondary">Mở chat</button></div>
+              <div class="card acc-card"><span class="avatar" style="background:#1877f2">FA<span class="ch" style="background:#1877f2">f</span></span>
+                <div class="acc-meta"><div class="n">Fanpage AHV</div><div class="s"><span class="status-dot"></span><span class="st">Trực tuyến · Messenger</span></div></div>
+                <button class="btn-secondary">Mở chat</button></div>
+              <div class="card acc-card"><span class="avatar" style="background:#0088cc">CS<span class="ch" style="background:#0088cc">t</span></span>
+                <div class="acc-meta"><div class="n">CSKH Học viên</div><div class="s"><span class="status-dot"></span><span class="st">Trực tuyến · @ahv_cskh</span></div></div>
+                <button class="btn-secondary">Mở chat</button></div>
+              <div class="card acc-card"><span class="avatar" style="background:#8e8e93">TT<span class="ch" style="background:#0068ff">Z</span></span>
+                <div class="acc-meta"><div class="n">Tuấn Tuyển sinh</div><div class="s"><span class="status-dot bad"></span><span class="st">Mất kết nối 12 phút</span></div></div>
+                <button class="btn-primary">Kết nối lại</button></div>
+            </div>
+
+            <h2 class="section-title">Hoạt động gần đây</h2>
+            <div class="card list">
+              <div class="row"><span class="pill info">Workflow</span><div class="t"><div>Gửi lịch học thử cho 18 học viên mới</div><div>Workflow "Chào học viên mới" · Lan Tư vấn</div></div><time>09:42</time></div>
+              <div class="row"><span class="pill ok">CRM</span><div class="t"><div>Thêm 6 liên hệ từ nhóm "Ôn thi B2 tháng 10"</div><div>Quét nhóm · Fanpage AHV</div></div><time>08:15</time></div>
+              <div class="row"><span class="pill warn">Công việc</span><div class="t"><div>Gọi lại học viên hỏi học phí hạng C</div><div>Giao cho Minh · hạn hôm nay</div></div><time>Hôm qua</time></div>
+              <div class="row"><span class="pill err">Cảnh báo</span><div class="t"><div>Tài khoản Tuấn Tuyển sinh mất kết nối</div><div>Cần đăng nhập lại bằng mã QR</div></div><time>Hôm qua</time></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== CHAT ===== -->
+        <section class="view" id="view-chat">
+          <div class="chat">
+            <aside class="conv-pane">
+              <div class="conv-head">
+                <div class="h"><b>Tin nhắn</b>
+                  <button class="compose" title="Tin nhắn mới" aria-label="Tin nhắn mới"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+                </div>
+                <label class="search"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input placeholder="Tìm hội thoại"></label>
+                <div class="filters" id="filters">
+                  <button class="filter active">Tất cả</button><button class="filter">Chưa đọc</button><button class="filter">Nhóm</button><button class="filter">Nhãn</button>
+                </div>
+              </div>
+              <div class="convs" id="convs">
+                <div class="conv active"><span class="avatar" style="background:#ff9f0a">NH</span><div class="c"><div class="r1"><b>Nguyễn Hà</b><time>09:42</time></div><div class="r2"><span>Dạ em muốn hỏi lịch thi sát hạch B2 tháng sau ạ</span><span class="count">2</span></div></div></div>
+                <div class="conv"><span class="avatar" style="background:#af52de">B2</span><div class="c"><div class="r1"><b>Ôn thi B2 · Khóa 10</b><time>09:10</time></div><div class="r2"><span>Thầy Dũng: Mai 7h tập trung sân Thanh Xuân</span><span class="count">1</span></div></div></div>
+                <div class="conv"><span class="avatar" style="background:#34c759">TM</span><div class="c"><div class="r1"><b>Trần Minh</b><time>Hôm qua</time></div><div class="r2"><span>Em đã chuyển khoản đợt 2 rồi ạ</span></div></div></div>
+                <div class="conv"><span class="avatar" style="background:#5856d6">PL</span><div class="c"><div class="r1"><b>Phạm Linh</b><time>Thứ Ba</time></div><div class="r2"><span>Bạn: Trung tâm gửi chị bảng học phí hạng C nhé</span></div></div></div>
+                <div class="conv"><span class="avatar" style="background:#ff2d55">LA</span><div class="c"><div class="r1"><b>Lê Anh Tuấn với tên rất dài để thử cắt chữ</b><time>Thứ Hai</time></div><div class="r2"><span>Cảm ơn trung tâm nhiều ạ</span></div></div></div>
+              </div>
+            </aside>
+            <section class="thread">
+              <div class="thread-head">
+                <span class="avatar" style="background:#ff9f0a">NH</span>
+                <div class="who"><b>Nguyễn Hà</b><span>Lan Tư vấn · Zalo</span></div>
+                <div class="tb-right">
+                  <button class="tb-btn" title="Gọi" aria-label="Gọi"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg></button>
+                  <button class="tb-btn" title="Thông tin" aria-label="Thông tin"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg></button>
+                </div>
+              </div>
+              <div class="msgs">
+                <div class="day">Hôm nay</div>
+                <div class="bubble in">Chào trung tâm, em đang học lý thuyết B2 khóa 10<time>09:38</time></div>
+                <div class="bubble in">Dạ em muốn hỏi lịch thi sát hạch B2 tháng sau ạ<time>09:42</time></div>
+                <div class="bubble out">Chào Hà, khóa 10 dự kiến thi sát hạch ngày 18/11. Trung tâm sẽ gửi lịch chi tiết trong tuần này nhé.<time>09:44</time></div>
+              </div>
+              <div class="composer">
+                <textarea placeholder="Nhập tin nhắn…"></textarea>
+                <button class="btn-primary" style="height:36px;border-radius:18px;padding:0 16px">Gửi</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ===== THÀNH PHẦN ===== -->
+        <section class="view" id="view-components">
+          <div class="page">
+            <h1 class="page-title">Thành phần giao diện</h1>
+            <p class="page-sub">Các component dùng chung theo spec mục 8. Màn này chỉ có trong mockup.</p>
+            <div class="comp-grid">
+              <div class="card comp"><h3>Nút</h3>
+                <div class="line"><button class="btn-primary">Lưu thay đổi</button><button class="btn-secondary">Hủy</button><button class="btn-danger" id="openAlert">Xóa tài khoản</button></div>
+                <div class="line"><button class="btn-primary" disabled>Đang lưu…</button><button class="btn-secondary" disabled>Không khả dụng</button></div>
+              </div>
+              <div class="card comp"><h3>Ô nhập</h3>
+                <div class="line"><input class="input-field" placeholder="Tên học viên"></div>
+                <div class="line"><select class="input-field"><option>Hạng B2</option><option>Hạng C</option><option>Hạng A1</option></select></div>
+                <div class="tert">Chữ phụ cấp 3 (tertiary) đạt 4,5:1 trên mọi nền.</div>
+              </div>
+              <div class="card comp"><h3>Lựa chọn</h3>
+                <div class="line"><label class="check"><input type="checkbox" checked> Gửi nhắc lịch</label><label class="check"><input type="checkbox"> Gắn nhãn VIP</label></div>
+                <div class="line"><label class="check"><input type="radio" name="r" checked> Zalo</label><label class="check"><input type="radio" name="r"> Facebook</label></div>
+                <div class="line"><button class="switch" role="switch" aria-checked="true" aria-label="Tự động trả lời" id="sw"></button><span>Tự động trả lời</span></div>
+              </div>
+              <div class="card comp"><h3>Segmented, nhãn trạng thái</h3>
+                <div class="line"><div class="segmented" id="seg"><button aria-pressed="true">Ngày</button><button aria-pressed="false">Tuần</button><button aria-pressed="false">Tháng</button></div></div>
+                <div class="line"><span class="pill ok">Trực tuyến</span><span class="pill warn">Chờ duyệt</span><span class="pill err">Lỗi</span><span class="pill info">Mới</span></div>
+              </div>
+              <div class="card comp"><h3>Toast, hộp thoại</h3>
+                <div class="line"><button class="btn-secondary" id="openToast">Hiện toast</button><button class="btn-secondary" id="openAlert2">Hiện hộp thoại xác nhận</button></div>
+                <div class="muted">Popover: bấm chuông, ◐ hoặc ⋯ trên toolbar.</div>
+              </div>
+              <div class="card comp"><h3>Chữ</h3>
+                <div style="font-size:21px;font-weight:700;letter-spacing:-.025em">Tiêu đề danh sách 21</div>
+                <div style="margin-top:6px;font-weight:600">Nội dung đậm 13</div>
+                <div>Nội dung thường 13 · <span class="muted">phụ (secondary)</span> · <span class="tert">cấp 3 (tertiary)</span></div>
+                <div style="margin-top:6px"><a href="#">Liên kết màu nhấn</a></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== PLACEHOLDER ===== -->
+        <section class="view" id="view-placeholder">
+          <div class="page">
+            <h1 class="page-title" id="phTitle">CRM</h1>
+            <p class="page-sub">Màn này không vẽ lại trong mockup. Trong MVP, nội dung đổi theo token (spec mục 5); bố cục làm lại ở đợt 2.</p>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ===== POPOVERS ===== -->
+<div class="mac-popover" id="themePop" role="menu" aria-label="Giao diện">
+  <div class="pop-title">Giao diện</div>
+  <button class="mac-menu-item" role="menuitemradio" data-theme-opt="light"><span class="tick">✓</span><span class="ico">☀</span>Sáng<span class="desc">Luôn sáng</span></button>
+  <button class="mac-menu-item" role="menuitemradio" data-theme-opt="dark"><span class="tick">✓</span><span class="ico">◐</span>Tối<span class="desc">Luôn tối</span></button>
+  <button class="mac-menu-item" role="menuitemradio" data-theme-opt="system"><span class="tick">✓</span><span class="ico">⌘</span>Theo hệ thống<span class="desc">Tự động</span></button>
+</div>
+<div class="mac-popover" id="morePop" role="menu" aria-label="Thêm">
+  <div class="range-row"><div class="lbl"><span>Cỡ chữ</span><span id="fsVal">13 px</span></div><input type="range" min="11" max="16" value="13" id="fs" aria-label="Cỡ chữ"></div>
+  <div class="menu-sep"></div>
+  <button class="mac-menu-item" role="menuitem"><span class="ico">?</span>Hướng dẫn sử dụng</button>
+  <button class="mac-menu-item" role="menuitem"><span class="ico">!</span>Báo lỗi</button>
+</div>
+<div class="mac-popover" id="bellPop" role="menu" aria-label="Thông báo công việc" style="width:320px">
+  <div class="pop-title">Thông báo công việc</div>
+  <button class="mac-menu-item" style="min-height:48px"><span class="pill warn">Hạn</span><span>Gọi lại học viên hỏi học phí hạng C</span></button>
+  <button class="mac-menu-item" style="min-height:48px"><span class="pill info">Mới</span><span>Minh giao: chuẩn bị hồ sơ khóa 11</span></button>
+  <button class="mac-menu-item" style="min-height:48px"><span class="pill ok">Xong</span><span>Đã gửi lịch thi B2 cho khóa 10</span></button>
+</div>
+
+<div class="overlay" id="alert" role="dialog" aria-modal="true" aria-labelledby="alertTitle">
+  <div class="alert">
+    <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></div>
+    <b id="alertTitle">Xóa tài khoản "Tuấn Tuyển sinh"?</b>
+    <p>Lịch sử chat trên máy này sẽ bị xóa. Tài khoản Zalo không bị ảnh hưởng.</p>
+    <div class="acts"><button class="btn-secondary" id="alertCancel">Hủy</button><button class="btn-danger" id="alertOk">Xóa</button></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"><span class="s"></span><span id="toastText">Đã lưu</span></div>
+
+<script>
+const root = document.documentElement;
+const mq = matchMedia('(prefers-color-scheme: dark)');
+let themePref = 'system';
+try { themePref = localStorage.getItem('ahv-mockup-theme') || 'system'; } catch (e) {}
+
+function applyTheme() {
+  const resolved = themePref === 'system' ? (mq.matches ? 'dark' : 'light') : themePref;
+  root.dataset.theme = resolved;
+  document.querySelectorAll('[data-theme-opt]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.themeOpt === themePref)));
+}
+mq.addEventListener('change', () => { if (themePref === 'system') applyTheme(); });
+applyTheme();
+
+/* Review bar */
+function bindSeg(id, attr) {
+  const seg = document.getElementById(id);
+  seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    seg.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', 'false'));
+    b.setAttribute('aria-pressed', 'true');
+    root.dataset[attr] = b.dataset.v;
+  }));
+}
+bindSeg('segPlatform', 'platform');
+bindSeg('segMaterial', 'material');
+
+/* Sidebar collapse */
+let collapsed = false;
+document.getElementById('collapseBtn').addEventListener('click', () => {
+  collapsed = !collapsed;
+  root.dataset.collapsed = String(collapsed);
+});
+
+/* Navigation */
+const title = document.getElementById('tbTitle');
+document.querySelectorAll('.nav-item[data-view]').forEach(item => item.addEventListener('click', () => {
+  document.querySelectorAll('.nav-item').forEach(x => x.classList.remove('active'));
+  item.classList.add('active');
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + item.dataset.view).classList.add('active');
+  title.textContent = item.dataset.title;
+  if (item.dataset.view === 'placeholder') document.getElementById('phTitle').textContent = item.dataset.title;
+}));
+const toolsToggle = document.getElementById('toolsToggle');
+toolsToggle.addEventListener('click', () => {
+  const open = toolsToggle.getAttribute('aria-expanded') !== 'true';
+  toolsToggle.setAttribute('aria-expanded', String(open));
+  document.getElementById('toolsSub').classList.toggle('open', open);
+});
+document.querySelectorAll('.acc').forEach(a => a.addEventListener('click', () => {
+  document.querySelectorAll('.acc').forEach(x => x.classList.remove('active'));
+  a.classList.add('active');
+}));
+document.querySelectorAll('.conv').forEach(c => c.addEventListener('click', () => {
+  document.querySelectorAll('.conv').forEach(x => x.classList.remove('active'));
+  c.classList.add('active');
+}));
+document.querySelectorAll('#filters .filter').forEach(f => f.addEventListener('click', () => {
+  document.querySelectorAll('#filters .filter').forEach(x => x.classList.remove('active'));
+  f.classList.add('active');
+}));
+document.querySelectorAll('#seg button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#seg button').forEach(x => x.setAttribute('aria-pressed', 'false'));
+  b.setAttribute('aria-pressed', 'true');
+}));
+const sw = document.getElementById('sw');
+sw.addEventListener('click', () => sw.setAttribute('aria-checked', String(sw.getAttribute('aria-checked') !== 'true')));
+
+/* Popovers */
+const pops = [['themeBtn', 'themePop'], ['moreBtn', 'morePop'], ['bellBtn', 'bellPop']];
+function closePops() {
+  pops.forEach(([b, p]) => { document.getElementById(p).classList.remove('show'); document.getElementById(b).setAttribute('aria-expanded', 'false'); });
+}
+pops.forEach(([btnId, popId]) => {
+  const btn = document.getElementById(btnId), pop = document.getElementById(popId);
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const willOpen = !pop.classList.contains('show');
+    closePops();
+    if (!willOpen) return;
+    const r = btn.getBoundingClientRect();
+    pop.classList.add('show');
+    const w = pop.offsetWidth;
+    pop.style.top = (r.bottom + 6) + 'px';
+    pop.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+  });
+  pop.addEventListener('click', e => e.stopPropagation());
+});
+document.addEventListener('click', closePops);
+document.querySelectorAll('[data-theme-opt]').forEach(b => b.addEventListener('click', () => {
+  themePref = b.dataset.themeOpt;
+  try { localStorage.setItem('ahv-mockup-theme', themePref); } catch (e) {}
+  applyTheme();
+  closePops();
+  showToast(themePref === 'light' ? 'Giao diện: Sáng' : themePref === 'dark' ? 'Giao diện: Tối' : 'Giao diện: Theo hệ thống');
+}));
+const fs = document.getElementById('fs');
+fs.addEventListener('input', () => { document.getElementById('fsVal').textContent = fs.value + ' px'; document.body.style.fontSize = fs.value + 'px'; });
+
+/* Toast + alert */
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  document.getElementById('toastText').textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1600);
+}
+document.getElementById('openToast').addEventListener('click', () => showToast('Đã lưu cài đặt tự động trả lời'));
+const alertEl = document.getElementById('alert');
+const openAlert = () => { alertEl.classList.add('show'); document.getElementById('alertCancel').focus(); };
+const closeAlert = () => alertEl.classList.remove('show');
+document.getElementById('openAlert').addEventListener('click', openAlert);
+document.getElementById('openAlert2').addEventListener('click', openAlert);
+document.getElementById('alertCancel').addEventListener('click', closeAlert);
+document.getElementById('alertOk').addEventListener('click', () => { closeAlert(); showToast('Đã xóa tài khoản'); });
+alertEl.addEventListener('mousedown', e => { if (e.target === alertEl) closeAlert(); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (alertEl.classList.contains('show')) closeAlert(); else closePops();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,2153 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>North — Desktop Design System</title>
+
+<style>
+/* =========================================================
+   DESIGN TOKENS
+========================================================= */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f2f2f7;
+  --bg-secondary: #e9e9ee;
+
+  --sidebar: rgba(242,242,247,.82);
+  --toolbar: rgba(250,250,252,.72);
+
+  --surface: rgba(255,255,255,.78);
+  --surface-solid: #ffffff;
+  --surface-hover: rgba(0,0,0,.045);
+  --surface-active: rgba(0,122,255,.08);
+  --surface-selected: rgba(0,122,255,.12);
+
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #98989d;
+
+  --border: rgba(0,0,0,.075);
+  --border-strong: rgba(0,0,0,.12);
+
+  --accent: #007aff;
+  --accent-hover: #006ee6;
+
+  --green: #34c759;
+  --orange: #ff9f0a;
+  --red: #ff3b30;
+  --purple: #af52de;
+
+  --input-bg: rgba(0,0,0,.045);
+
+  --shadow-window:
+    0 30px 90px rgba(0,0,0,.14),
+    0 8px 25px rgba(0,0,0,.06);
+
+  --shadow-card:
+    0 1px 2px rgba(0,0,0,.03),
+    0 5px 20px rgba(0,0,0,.045);
+
+  --shadow-popover:
+    0 20px 60px rgba(0,0,0,.18);
+
+  --radius-sm: 7px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+
+  --font:
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Display",
+    "Segoe UI",
+    Inter,
+    sans-serif;
+
+  --mono:
+    "SFMono-Regular",
+    Consolas,
+    monospace;
+
+  --sidebar-width: 240px;
+  --list-width: 310px;
+  --toolbar-height: 58px;
+}
+
+
+/* =========================================================
+   DARK MODE
+========================================================= */
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #151516;
+  --bg-secondary: #1c1c1e;
+
+  --sidebar: rgba(29,29,31,.88);
+  --toolbar: rgba(30,30,32,.78);
+
+  --surface: rgba(44,44,46,.84);
+  --surface-solid: #2c2c2e;
+
+  --surface-hover: rgba(255,255,255,.055);
+  --surface-active: rgba(10,132,255,.14);
+  --surface-selected: rgba(10,132,255,.20);
+
+  --text-primary: #f5f5f7;
+  --text-secondary: #aeaeb2;
+  --text-tertiary: #8e8e93;
+
+  --border: rgba(255,255,255,.085);
+  --border-strong: rgba(255,255,255,.14);
+
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+
+  --input-bg: rgba(255,255,255,.055);
+
+  --shadow-window:
+    0 30px 90px rgba(0,0,0,.60),
+    0 8px 30px rgba(0,0,0,.40);
+
+  --shadow-card:
+    0 1px 2px rgba(0,0,0,.20),
+    0 5px 20px rgba(0,0,0,.25);
+
+  --shadow-popover:
+    0 20px 60px rgba(0,0,0,.60);
+}
+
+
+/* =========================================================
+   RESET
+========================================================= */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+
+  font-family: var(--font);
+  font-size: 13px;
+
+  color: var(--text-primary);
+
+  background:
+    radial-gradient(
+      circle at 15% 0%,
+      rgba(0,122,255,.07),
+      transparent 30%
+    ),
+    var(--bg);
+
+  -webkit-font-smoothing: antialiased;
+
+  transition:
+    background .25s ease,
+    color .25s ease;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  background: none;
+  color: inherit;
+}
+
+
+/* =========================================================
+   DESKTOP WINDOW
+========================================================= */
+
+.desktop {
+  width: 100%;
+  height: 100%;
+
+  padding: 18px;
+
+  display: flex;
+  justify-content: center;
+}
+
+.window {
+  width: min(1450px, 100%);
+  height: 100%;
+
+  display: flex;
+  overflow: hidden;
+
+  border:
+    1px solid var(--border-strong);
+
+  border-radius: 16px;
+
+  background: var(--surface);
+
+  box-shadow: var(--shadow-window);
+
+  backdrop-filter:
+    blur(35px)
+    saturate(140%);
+
+  -webkit-backdrop-filter:
+    blur(35px)
+    saturate(140%);
+}
+
+
+/* =========================================================
+   SIDEBAR
+========================================================= */
+
+.sidebar {
+  width: var(--sidebar-width);
+  flex: 0 0 var(--sidebar-width);
+
+  display: flex;
+  flex-direction: column;
+
+  padding: 11px;
+
+  background: var(--sidebar);
+
+  border-right:
+    1px solid var(--border);
+
+  backdrop-filter: blur(30px);
+}
+
+.traffic {
+  height: 30px;
+
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  padding-left: 7px;
+}
+
+.traffic span {
+  width: 12px;
+  height: 12px;
+
+  border-radius: 50%;
+}
+
+.red {
+  background: #ff5f57;
+}
+
+.yellow {
+  background: #febc2e;
+}
+
+.green {
+  background: #28c840;
+}
+
+
+.brand {
+  height: 43px;
+
+  display: flex;
+  align-items: center;
+  gap: 9px;
+
+  padding: 0 8px;
+}
+
+.brand-icon {
+  width: 28px;
+  height: 28px;
+
+  display: grid;
+  place-items: center;
+
+  border-radius: 8px;
+
+  color: white;
+
+  background:
+    linear-gradient(
+      145deg,
+      #3198ff,
+      #006de4
+    );
+
+  font-weight: 700;
+
+  box-shadow:
+    inset 0 1px rgba(255,255,255,.3),
+    0 3px 8px rgba(0,122,255,.2);
+}
+
+.brand-name {
+  font-weight: 650;
+}
+
+.brand-version {
+  margin-left: auto;
+
+  color: var(--text-tertiary);
+
+  font-size: 10px;
+}
+
+
+.search {
+  height: 32px;
+
+  display: flex;
+  align-items: center;
+  gap: 7px;
+
+  margin: 2px 2px 18px;
+  padding: 0 9px;
+
+  border-radius: 8px;
+
+  background: var(--input-bg);
+
+  color: var(--text-secondary);
+}
+
+.search input {
+  width: 100%;
+
+  border: 0;
+  outline: 0;
+
+  background: transparent;
+
+  color: var(--text-primary);
+}
+
+.search input::placeholder {
+  color: var(--text-tertiary);
+}
+
+
+.nav-group {
+  margin-bottom: 18px;
+}
+
+.nav-title {
+  padding: 0 9px 6px;
+
+  color: var(--text-tertiary);
+
+  font-size: 10px;
+  font-weight: 650;
+
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.nav-item {
+  width: 100%;
+  height: 33px;
+
+  display: flex;
+  align-items: center;
+  gap: 9px;
+
+  padding: 0 9px;
+
+  border-radius: 8px;
+
+  color: var(--text-secondary);
+
+  cursor: pointer;
+
+  transition:
+    background .14s,
+    color .14s;
+}
+
+.nav-item:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.nav-item.active {
+  color: var(--accent);
+  background: var(--surface-selected);
+}
+
+.nav-icon {
+  width: 17px;
+
+  text-align: center;
+
+  font-size: 14px;
+}
+
+.nav-count {
+  margin-left: auto;
+
+  color: var(--text-tertiary);
+
+  font-size: 10px;
+}
+
+.nav-item.active .nav-count {
+  color: var(--accent);
+}
+
+.sidebar-bottom {
+  margin-top: auto;
+
+  padding-top: 9px;
+
+  border-top:
+    1px solid var(--border);
+}
+
+
+/* =========================================================
+   MAIN
+========================================================= */
+
+.main {
+  min-width: 0;
+  flex: 1;
+
+  display: flex;
+  flex-direction: column;
+}
+
+
+/* =========================================================
+   TOOLBAR
+========================================================= */
+
+.toolbar {
+  height: var(--toolbar-height);
+  flex: 0 0 var(--toolbar-height);
+
+  display: flex;
+  align-items: center;
+
+  padding: 0 15px;
+
+  border-bottom:
+    1px solid var(--border);
+
+  background: var(--toolbar);
+
+  backdrop-filter: blur(30px);
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.toolbar-right {
+  margin-left: auto;
+}
+
+.toolbar-button {
+  width: 32px;
+  height: 32px;
+
+  display: grid;
+  place-items: center;
+
+  border-radius: 8px;
+
+  color: var(--text-secondary);
+
+  cursor: pointer;
+
+  transition:
+    background .14s,
+    color .14s,
+    transform .1s;
+}
+
+.toolbar-button:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.toolbar-button:active {
+  transform: scale(.94);
+}
+
+.toolbar-title {
+  margin-left: 8px;
+
+  font-weight: 600;
+}
+
+.separator {
+  width: 1px;
+  height: 18px;
+
+  margin: 0 6px;
+
+  background: var(--border-strong);
+}
+
+
+/* =========================================================
+   BODY
+========================================================= */
+
+.body {
+  min-height: 0;
+  flex: 1;
+
+  display: flex;
+}
+
+
+/* =========================================================
+   NOTE LIST
+========================================================= */
+
+.list-pane {
+  width: var(--list-width);
+  flex: 0 0 var(--list-width);
+
+  display: flex;
+  flex-direction: column;
+
+  border-right:
+    1px solid var(--border);
+
+  background:
+    rgba(255,255,255,.08);
+}
+
+.list-header {
+  padding: 18px 15px 10px;
+
+  border-bottom:
+    1px solid var(--border);
+}
+
+.list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.list-title {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -.025em;
+}
+
+.compose {
+  width: 29px;
+  height: 29px;
+
+  display: grid;
+  place-items: center;
+
+  border-radius: 8px;
+
+  color: white;
+
+  background: var(--accent);
+
+  cursor: pointer;
+
+  box-shadow:
+    0 3px 8px rgba(0,122,255,.2);
+}
+
+.compose:hover {
+  background: var(--accent-hover);
+}
+
+
+.filters {
+  display: flex;
+  gap: 3px;
+
+  margin-top: 12px;
+}
+
+.filter {
+  padding: 4px 8px;
+
+  border-radius: 6px;
+
+  color: var(--text-secondary);
+
+  font-size: 11px;
+
+  cursor: pointer;
+}
+
+.filter:hover {
+  background: var(--surface-hover);
+}
+
+.filter.active {
+  color: var(--text-primary);
+
+  background: var(--surface-hover);
+
+  font-weight: 600;
+}
+
+
+.notes {
+  min-height: 0;
+  flex: 1;
+
+  overflow-y: auto;
+
+  padding: 6px;
+}
+
+.note {
+  position: relative;
+
+  min-height: 75px;
+
+  display: flex;
+  gap: 9px;
+
+  padding: 11px 10px;
+
+  border-radius: 9px;
+
+  cursor: pointer;
+
+  transition: background .13s;
+}
+
+.note:hover {
+  background: var(--surface-hover);
+}
+
+.note.active {
+  background: var(--surface-selected);
+}
+
+.note.active::before {
+  content: "";
+
+  position: absolute;
+
+  left: 0;
+  top: 13px;
+  bottom: 13px;
+
+  width: 2px;
+
+  border-radius: 2px;
+
+  background: var(--accent);
+}
+
+.note-dot {
+  width: 7px;
+  height: 7px;
+
+  flex: 0 0 7px;
+
+  margin-top: 5px;
+
+  border-radius: 50%;
+
+  background: var(--accent);
+}
+
+.note:not(.unread) .note-dot {
+  visibility: hidden;
+}
+
+.note-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.note-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.note-title {
+  overflow: hidden;
+
+  font-size: 12px;
+  font-weight: 600;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.note-time {
+  flex: 0 0 auto;
+
+  color: var(--text-tertiary);
+
+  font-size: 10px;
+}
+
+.note-preview {
+  overflow: hidden;
+
+  margin-top: 4px;
+
+  color: var(--text-secondary);
+
+  font-size: 11px;
+  line-height: 1.45;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+
+/* =========================================================
+   DETAIL
+========================================================= */
+
+.detail {
+  min-width: 0;
+  flex: 1;
+
+  display: flex;
+  flex-direction: column;
+
+  background: var(--surface);
+}
+
+.detail-toolbar {
+  height: 50px;
+  flex: 0 0 50px;
+
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+
+  gap: 4px;
+
+  padding: 0 16px;
+
+  border-bottom:
+    1px solid var(--border);
+}
+
+.detail-content {
+  min-height: 0;
+  flex: 1;
+
+  overflow-y: auto;
+
+  padding: 40px 55px 70px;
+}
+
+.article {
+  width: min(790px, 100%);
+  margin: auto;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  margin-bottom: 10px;
+
+  color: var(--text-tertiary);
+
+  font-size: 11px;
+}
+
+.meta-dot {
+  width: 4px;
+  height: 4px;
+
+  border-radius: 50%;
+
+  background: var(--text-tertiary);
+}
+
+.article h1 {
+  margin: 0;
+
+  font-size: 31px;
+  line-height: 1.16;
+
+  letter-spacing: -.035em;
+}
+
+.lead {
+  margin: 14px 0 26px;
+
+  color: var(--text-secondary);
+
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+
+/* =========================================================
+   HERO
+========================================================= */
+
+.hero {
+  height: 225px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  overflow: hidden;
+
+  margin-bottom: 30px;
+
+  border:
+    1px solid var(--border);
+
+  border-radius: 14px;
+
+  background:
+    radial-gradient(
+      circle at 25% 25%,
+      rgba(0,122,255,.24),
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at 75% 70%,
+      rgba(175,82,222,.20),
+      transparent 34%
+    ),
+    linear-gradient(
+      135deg,
+      rgba(0,122,255,.08),
+      rgba(175,82,222,.07)
+    );
+}
+
+.hero-ui {
+  width: 78%;
+  height: 72%;
+
+  display: grid;
+  grid-template-columns: .7fr 1.5fr;
+  gap: 8px;
+}
+
+.hero-sidebar {
+  border-radius: 9px;
+
+  background: rgba(255,255,255,.5);
+
+  border:
+    1px solid rgba(255,255,255,.5);
+}
+
+.hero-main {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  gap: 8px;
+}
+
+.hero-card {
+  border-radius: 9px;
+
+  background: rgba(255,255,255,.44);
+
+  border:
+    1px solid rgba(255,255,255,.5);
+}
+
+[data-theme="dark"] .hero-sidebar,
+[data-theme="dark"] .hero-card {
+  background: rgba(255,255,255,.08);
+
+  border-color:
+    rgba(255,255,255,.08);
+}
+
+
+/* =========================================================
+   ARTICLE
+========================================================= */
+
+.article h2 {
+  margin: 30px 0 9px;
+
+  font-size: 18px;
+  letter-spacing: -.015em;
+}
+
+.article p {
+  margin: 0 0 15px;
+
+  color: var(--text-secondary);
+
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.callout {
+  display: flex;
+  gap: 11px;
+
+  padding: 15px;
+
+  margin: 24px 0;
+
+  border:
+    1px solid rgba(0,122,255,.13);
+
+  border-radius: 10px;
+
+  background:
+    var(--surface-active);
+}
+
+.callout-icon {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.callout strong {
+  color: var(--text-primary);
+}
+
+.callout-text {
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.code {
+  padding: 15px;
+
+  overflow-x: auto;
+
+  border:
+    1px solid var(--border);
+
+  border-radius: 9px;
+
+  background: var(--surface-hover);
+
+  color: var(--text-secondary);
+
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+
+/* =========================================================
+   APPEARANCE POPOVER
+========================================================= */
+
+.popover {
+  position: fixed;
+
+  top: 67px;
+  right: 27px;
+
+  width: 260px;
+
+  padding: 8px;
+
+  display: none;
+
+  border:
+    1px solid var(--border-strong);
+
+  border-radius: 13px;
+
+  background: var(--surface-solid);
+
+  box-shadow: var(--shadow-popover);
+
+  z-index: 100;
+}
+
+.popover.show {
+  display: block;
+
+  animation:
+    pop .14s ease-out;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(-5px) scale(.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pop-title {
+  padding: 8px 9px 7px;
+
+  color: var(--text-tertiary);
+
+  font-size: 10px;
+  font-weight: 650;
+
+  text-transform: uppercase;
+}
+
+.theme-option {
+  height: 39px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 0 9px;
+
+  border-radius: 8px;
+
+  cursor: pointer;
+}
+
+.theme-option:hover {
+  background: var(--surface-hover);
+}
+
+.theme-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.theme-icon {
+  width: 20px;
+
+  text-align: center;
+
+  color: var(--text-secondary);
+}
+
+.theme-description {
+  color: var(--text-tertiary);
+
+  font-size: 10px;
+}
+
+
+/* =========================================================
+   TOAST
+========================================================= */
+
+.toast {
+  position: fixed;
+
+  left: 50%;
+  bottom: 25px;
+
+  padding: 10px 15px;
+
+  border:
+    1px solid var(--border-strong);
+
+  border-radius: 9px;
+
+  background: var(--surface-solid);
+
+  box-shadow: var(--shadow-popover);
+
+  transform:
+    translate(-50%, 20px);
+
+  opacity: 0;
+
+  pointer-events: none;
+
+  transition: .2s;
+
+  z-index: 200;
+}
+
+.toast.show {
+  opacity: 1;
+
+  transform:
+    translate(-50%, 0);
+}
+
+
+/* =========================================================
+   SCROLLBAR
+========================================================= */
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(128,128,128,.22);
+
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128,128,128,.35);
+}
+
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media(max-width:1000px) {
+
+  .desktop {
+    padding: 0;
+  }
+
+  .window {
+    border: 0;
+    border-radius: 0;
+  }
+
+  .sidebar {
+    width: 205px;
+    flex-basis: 205px;
+  }
+
+  .list-pane {
+    width: 275px;
+    flex-basis: 275px;
+  }
+
+  .detail-content {
+    padding: 32px;
+  }
+}
+
+@media(max-width:760px) {
+
+  .sidebar {
+    width: 64px;
+    flex-basis: 64px;
+
+    padding: 8px;
+  }
+
+  .brand {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .brand-name,
+  .brand-version,
+  .search input,
+  .nav-title,
+  .nav-item span:not(.nav-icon),
+  .nav-count {
+    display: none;
+  }
+
+  .search {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .nav-item {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .list-pane {
+    width: 260px;
+    flex-basis: 260px;
+  }
+
+  .detail-content {
+    padding: 25px 22px 50px;
+  }
+}
+
+@media(max-width:560px) {
+
+  .list-pane {
+    display: none;
+  }
+
+  .article h1 {
+    font-size: 25px;
+  }
+}
+</style>
+</head>
+
+
+<body>
+
+<div class="desktop">
+
+  <div class="window">
+
+    <!-- =====================================================
+         SIDEBAR
+    ====================================================== -->
+
+    <aside class="sidebar">
+
+      <div class="traffic">
+        <span class="red"></span>
+        <span class="yellow"></span>
+        <span class="green"></span>
+      </div>
+
+
+      <div class="brand">
+
+        <div class="brand-icon">
+          N
+        </div>
+
+        <span class="brand-name">
+          North
+        </span>
+
+        <span class="brand-version">
+          PRO
+        </span>
+
+      </div>
+
+
+      <label class="search">
+
+        <span>⌕</span>
+
+        <input
+          type="search"
+          placeholder="Search"
+        >
+
+      </label>
+
+
+      <!-- Library -->
+
+      <div class="nav-group">
+
+        <div class="nav-title">
+          Library
+        </div>
+
+        <button class="nav-item active">
+
+          <span class="nav-icon">
+            ⌂
+          </span>
+
+          <span>
+            Overview
+          </span>
+
+        </button>
+
+
+        <button class="nav-item">
+
+          <span class="nav-icon">
+            ◷
+          </span>
+
+          <span>
+            Recent
+          </span>
+
+          <span class="nav-count">
+            8
+          </span>
+
+        </button>
+
+
+        <button class="nav-item">
+
+          <span class="nav-icon">
+            ★
+          </span>
+
+          <span>
+            Favorites
+          </span>
+
+        </button>
+
+      </div>
+
+
+      <!-- Workspace -->
+
+      <div class="nav-group">
+
+        <div class="nav-title">
+          Workspace
+        </div>
+
+
+        <button class="nav-item">
+
+          <span class="nav-icon">
+            □
+          </span>
+
+          <span>
+            Projects
+          </span>
+
+          <span class="nav-count">
+            12
+          </span>
+
+        </button>
+
+
+        <button class="nav-item">
+
+          <span class="nav-icon">
+            ▤
+          </span>
+
+          <span>
+            Documents
+          </span>
+
+        </button>
+
+
+        <button class="nav-item">
+
+          <span class="nav-icon">
+            ↓
+          </span>
+
+          <span>
+            Downloads
+          </span>
+
+        </button>
+
+
+        <button class="nav-item">
+
+          <span class="nav-icon">
+            ⌘
+          </span>
+
+          <span>
+            Archive
+          </span>
+
+        </button>
+
+      </div>
+
+
+      <!-- System -->
+
+      <div class="nav-group">
+
+        <div class="nav-title">
+          System
+        </div>
+
+
+        <button class="nav-item">
+
+          <span class="nav-icon">
+            ⚙
+          </span>
+
+          <span>
+            Preferences
+          </span>
+
+        </button>
+
+
+        <button class="nav-item">
+
+          <span class="nav-icon">
+            ◐
+          </span>
+
+          <span>
+            Appearance
+          </span>
+
+        </button>
+
+      </div>
+
+
+      <div class="sidebar-bottom">
+
+        <button class="nav-item">
+
+          <span class="nav-icon">
+            ?
+          </span>
+
+          <span>
+            Help & Support
+          </span>
+
+        </button>
+
+      </div>
+
+    </aside>
+
+
+    <!-- =====================================================
+         MAIN
+    ====================================================== -->
+
+    <main class="main">
+
+
+      <!-- Toolbar -->
+
+      <header class="toolbar">
+
+        <div class="toolbar-left">
+
+          <button
+            class="toolbar-button"
+            data-toast="Back"
+          >
+            ‹
+          </button>
+
+
+          <button
+            class="toolbar-button"
+            data-toast="Forward"
+          >
+            ›
+          </button>
+
+
+          <div class="separator"></div>
+
+
+          <span class="toolbar-title">
+            Overview
+          </span>
+
+        </div>
+
+
+        <div class="toolbar-right">
+
+          <button
+            class="toolbar-button"
+            data-toast="Search"
+          >
+            ⌕
+          </button>
+
+
+          <button
+            class="toolbar-button"
+            data-toast="New document"
+          >
+            ＋
+          </button>
+
+
+          <!-- THEME -->
+
+          <button
+            class="toolbar-button"
+            id="themeButton"
+            title="Appearance"
+          >
+            ◐
+          </button>
+
+
+          <button
+            class="toolbar-button"
+            data-toast="More"
+          >
+            ⋯
+          </button>
+
+        </div>
+
+      </header>
+
+
+      <!-- =====================================================
+           THREE COLUMNS
+      ====================================================== -->
+
+      <div class="body">
+
+
+        <!-- ===================================================
+             NOTES LIST
+        ==================================================== -->
+
+        <aside class="list-pane">
+
+          <div class="list-header">
+
+            <div class="list-heading">
+
+              <div class="list-title">
+                Notes
+              </div>
+
+
+              <button
+                class="compose"
+                data-toast="New note"
+              >
+                ＋
+              </button>
+
+            </div>
+
+
+            <div class="filters">
+
+              <button class="filter active">
+                All
+              </button>
+
+              <button class="filter">
+                Recent
+              </button>
+
+              <button class="filter">
+                Shared
+              </button>
+
+            </div>
+
+          </div>
+
+
+          <div class="notes">
+
+
+            <article class="note active unread">
+
+              <span class="note-dot"></span>
+
+              <div class="note-content">
+
+                <div class="note-row">
+
+                  <span class="note-title">
+                    Design system
+                  </span>
+
+                  <span class="note-time">
+                    09:42
+                  </span>
+
+                </div>
+
+                <div class="note-preview">
+                  Colors, typography, spacing and components...
+                </div>
+
+              </div>
+
+            </article>
+
+
+            <article class="note unread">
+
+              <span class="note-dot"></span>
+
+              <div class="note-content">
+
+                <div class="note-row">
+
+                  <span class="note-title">
+                    Product roadmap
+                  </span>
+
+                  <span class="note-time">
+                    Yesterday
+                  </span>
+
+                </div>
+
+                <div class="note-preview">
+                  Version 1.0, 1.1 and future platform support...
+                </div>
+
+              </div>
+
+            </article>
+
+
+            <article class="note">
+
+              <span class="note-dot"></span>
+
+              <div class="note-content">
+
+                <div class="note-row">
+
+                  <span class="note-title">
+                    Window architecture
+                  </span>
+
+                  <span class="note-time">
+                    Tue
+                  </span>
+
+                </div>
+
+                <div class="note-preview">
+                  Windows and Linux platform behavior...
+                </div>
+
+              </div>
+
+            </article>
+
+
+            <article class="note">
+
+              <span class="note-dot"></span>
+
+              <div class="note-content">
+
+                <div class="note-row">
+
+                  <span class="note-title">
+                    Icon system
+                  </span>
+
+                  <span class="note-time">
+                    Mon
+                  </span>
+
+                </div>
+
+                <div class="note-preview">
+                  SVG icons for MVP. Symbol system later...
+                </div>
+
+              </div>
+
+            </article>
+
+
+            <article class="note">
+
+              <span class="note-dot"></span>
+
+              <div class="note-content">
+
+                <div class="note-row">
+
+                  <span class="note-title">
+                    Tailwind token mapping
+                  </span>
+
+                  <span class="note-time">
+                    Sun
+                  </span>
+
+                </div>
+
+                <div class="note-preview">
+                  Semantic color tokens and gray scale mapping...
+                </div>
+
+              </div>
+
+            </article>
+
+
+            <article class="note">
+
+              <span class="note-dot"></span>
+
+              <div class="note-content">
+
+                <div class="note-row">
+
+                  <span class="note-title">
+                    Release checklist
+                  </span>
+
+                  <span class="note-time">
+                    Fri
+                  </span>
+
+                </div>
+
+                <div class="note-preview">
+                  Final QA before the first public release...
+                </div>
+
+              </div>
+
+            </article>
+
+          </div>
+
+        </aside>
+
+
+        <!-- ===================================================
+             DETAIL
+        ==================================================== -->
+
+        <section class="detail">
+
+
+          <div class="detail-toolbar">
+
+            <button
+              class="toolbar-button"
+              data-toast="Favorite"
+            >
+              ☆
+            </button>
+
+
+            <button
+              class="toolbar-button"
+              data-toast="Share"
+            >
+              ↑
+            </button>
+
+
+            <button
+              class="toolbar-button"
+              data-toast="More actions"
+            >
+              ⋯
+            </button>
+
+          </div>
+
+
+          <div class="detail-content">
+
+            <article class="article">
+
+              <div class="meta">
+
+                <span>
+                  Design
+                </span>
+
+                <span class="meta-dot"></span>
+
+                <span>
+                  Updated today at 09:42
+                </span>
+
+              </div>
+
+
+              <h1>
+                Design system
+              </h1>
+
+
+              <p class="lead">
+                Một hệ thống giao diện desktop lấy cảm hứng từ
+                macOS, nhưng được thiết kế để hoạt động tự nhiên
+                trên cả Windows và Linux.
+              </p>
+
+
+              <div class="hero">
+
+                <div class="hero-ui">
+
+                  <div class="hero-sidebar"></div>
+
+                  <div class="hero-main">
+
+                    <div class="hero-card"></div>
+
+                    <div class="hero-card"></div>
+
+                  </div>
+
+                </div>
+
+              </div>
+
+
+              <h2>
+                Visual language
+              </h2>
+
+
+              <p>
+                Giao diện ưu tiên hierarchy rõ ràng, typography
+                sạch và khoảng trắng rộng. Sidebar, toolbar và
+                content surface tạo thành một hệ thống phân cấp
+                nhẹ thay vì dùng shadow mạnh.
+              </p>
+
+
+              <p>
+                Light mode sử dụng nền xám rất nhạt thay cho
+                trắng tuyệt đối. Dark mode sử dụng nhiều cấp
+                surface thay vì đơn giản đảo trắng thành đen.
+              </p>
+
+
+              <div class="callout">
+
+                <div class="callout-icon">
+                  ✦
+                </div>
+
+                <div class="callout-text">
+
+                  <strong>
+                    Design principle.
+                  </strong>
+
+                  Component không sử dụng màu hex trực tiếp.
+                  Mọi màu đều đi qua semantic token để Light
+                  và Dark có thể thay đổi độc lập.
+
+                </div>
+
+              </div>
+
+
+              <h2>
+                Token architecture
+              </h2>
+
+
+              <p>
+                UI được chia thành primitive tokens và semantic
+                tokens. Điều này giúp thay đổi toàn bộ visual
+                direction mà không cần sửa từng component.
+              </p>
+
+
+              <div class="code">
+--color-bg
+--color-surface
+--color-surface-hover
+--color-surface-selected
+
+--color-text-primary
+--color-text-secondary
+--color-text-tertiary
+
+--color-border
+--color-divider
+
+--color-accent
+--color-success
+--color-warning
+--color-danger
+              </div>
+
+
+              <h2>
+                Platform behavior
+              </h2>
+
+
+              <p>
+                Visual language có thể dùng chung, trong khi
+                window chrome và system integration thích nghi
+                theo từng OS. Windows giữ hành vi native của
+                Windows; Linux tôn trọng window manager.
+              </p>
+
+            </article>
+
+          </div>
+
+        </section>
+
+      </div>
+
+    </main>
+
+  </div>
+
+</div>
+
+
+<!-- =========================================================
+     THEME POPOVER
+========================================================= -->
+
+<div
+  class="popover"
+  id="themePopover"
+>
+
+  <div class="pop-title">
+    Appearance
+  </div>
+
+
+  <div
+    class="theme-option"
+    data-theme="light"
+  >
+
+    <div class="theme-left">
+
+      <span class="theme-icon">
+        ☀
+      </span>
+
+      <span>
+        Light
+      </span>
+
+    </div>
+
+    <span class="theme-description">
+      Bright
+    </span>
+
+  </div>
+
+
+  <div
+    class="theme-option"
+    data-theme="dark"
+  >
+
+    <div class="theme-left">
+
+      <span class="theme-icon">
+        ◐
+      </span>
+
+      <span>
+        Dark
+      </span>
+
+    </div>
+
+    <span class="theme-description">
+      Dimmed
+    </span>
+
+  </div>
+
+
+  <div
+    class="theme-option"
+    data-theme="system"
+  >
+
+    <div class="theme-left">
+
+      <span class="theme-icon">
+        ⌘
+      </span>
+
+      <span>
+        System
+      </span>
+
+    </div>
+
+    <span class="theme-description">
+      Automatic
+    </span>
+
+  </div>
+
+</div>
+
+
+<div
+  class="toast"
+  id="toast"
+></div>
+
+<script>
+const root = document.documentElement;
+const themeButton = document.getElementById("themeButton");
+const themePopover = document.getElementById("themePopover");
+const toast = document.getElementById("toast");
+
+let toastTimer;
+
+function applyTheme(theme) {
+  let actualTheme = theme;
+
+  if (theme === "system") {
+    actualTheme = window.matchMedia(
+      "(prefers-color-scheme: dark)"
+    ).matches
+      ? "dark"
+      : "light";
+  }
+
+  root.setAttribute("data-theme", actualTheme);
+  localStorage.setItem("north-theme", theme);
+}
+
+function getSavedTheme() {
+  return localStorage.getItem("north-theme") || "system";
+}
+
+applyTheme(getSavedTheme());
+
+/* Theme button */
+themeButton.addEventListener("click", (e) => {
+  e.stopPropagation();
+  themePopover.classList.toggle("show");
+});
+
+/* Theme options
+   CHỈ lấy option trong popover,
+   không lấy html[data-theme]
+*/
+themePopover
+  .querySelectorAll(".theme-option")
+  .forEach((option) => {
+    option.addEventListener("click", () => {
+      const theme = option.dataset.theme;
+
+      applyTheme(theme);
+      themePopover.classList.remove("show");
+
+      showToast(
+        theme === "light"
+          ? "☀ Light Mode"
+          : theme === "dark"
+          ? "◐ Dark Mode"
+          : "⌘ System Mode"
+      );
+    });
+  });
+
+/* Close popover */
+document.addEventListener("click", (e) => {
+  if (
+    !themePopover.contains(e.target) &&
+    !themeButton.contains(e.target)
+  ) {
+    themePopover.classList.remove("show");
+  }
+});
+
+/* Toast */
+function showToast(message) {
+  clearTimeout(toastTimer);
+
+  toast.textContent = message;
+  toast.classList.add("show");
+
+  toastTimer = setTimeout(() => {
+    toast.classList.remove("show");
+  }, 1300);
+}
+
+/* Sidebar */
+document.querySelectorAll(".nav-item").forEach((item) => {
+  item.addEventListener("click", () => {
+    document
+      .querySelectorAll(".nav-item")
+      .forEach((x) => x.classList.remove("active"));
+
+    item.classList.add("active");
+  });
+});
+
+/* Notes */
+document.querySelectorAll(".note").forEach((note) => {
+  note.addEventListener("click", () => {
+    document
+      .querySelectorAll(".note")
+      .forEach((x) => x.classList.remove("active"));
+
+    note.classList.add("active");
+  });
+});
+
+/* Filters */
+document.querySelectorAll(".filter").forEach((filter) => {
+  filter.addEventListener("click", () => {
+    document
+      .querySelectorAll(".filter")
+      .forEach((x) => x.classList.remove("active"));
+
+    filter.classList.add("active");
+  });
+});
+
+/* Other buttons */
+document.querySelectorAll("[data-toast]").forEach((button) => {
+  button.addEventListener("click", () => {
+    showToast(button.dataset.toast);
+  });
+});
+
+/* System appearance changes */
+window
+  .matchMedia("(prefers-color-scheme: dark)")
+  .addEventListener("change", () => {
+    if (getSavedTheme() === "system") {
+      applyTheme("system");
+    }
+  });
+
+/* ESC */
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    themePopover.classList.remove("show");
+  }
+});
+</script>
+
+
+</body>
+</html>
