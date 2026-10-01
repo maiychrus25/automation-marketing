@@ -12,7 +12,10 @@ agents/
 *.log
 .DS_Store
 tmp/
-docs/
+docs/*
+!docs/intent/
+!docs/specs/
+!docs/plans/
 .vscode/
 /.worktrees/
 
