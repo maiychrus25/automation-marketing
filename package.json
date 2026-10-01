@@ -52,6 +52,7 @@
     "sharp": "^0.35.3",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
+    "socks": "^2.8.9",
     "socks-proxy-agent": "^10.0.0",
     "telegram": "^2.26.22",
     "tough-cookie": "^5.0.0",
