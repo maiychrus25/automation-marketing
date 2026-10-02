@@ -278,6 +278,64 @@ html[data-theme="dark"] {
   .app-sidebar-bottom { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); flex: 0 0 auto; }
 
   .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+
+  .app-toolbar {
+    height: var(--toolbar-height); flex: 0 0 auto;
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 15px; min-width: 0;
+    background: var(--toolbar);
+    border-bottom: 1px solid var(--border);
+  }
+  /* Window Controls Overlay (Windows/Linux): chừa chỗ cho nút cửa sổ gốc ở mép phải. */
+  .app-toolbar.has-native-controls {
+    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px);
+  }
+  /* Không đặt overflow: hidden ở đây: dropdown WorkspaceSwitcher và popup kết nối lại nằm trong vùng này. */
+  .app-toolbar-left { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  .app-toolbar-left > :not(.app-toolbar-title) { flex-shrink: 0; }
+  .app-toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+  .app-toolbar-title { margin-left: 6px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
+  .app-toolbar-sep { width: 1px; height: 18px; margin: 0 8px; flex: 0 0 1px; background: var(--border-strong); }
+  .app-toolbar-btn {
+    position: relative; width: 32px; height: 32px; flex: 0 0 32px;
+    display: grid; place-items: center; border-radius: 8px;
+    color: var(--text-secondary);
+    transition: background 0.14s, color 0.14s, transform 0.1s;
+  }
+  .app-toolbar-btn:hover,
+  .app-toolbar-btn[aria-expanded="true"] { background: var(--hover); color: var(--text-primary); }
+  .app-toolbar-btn:active { transform: scale(0.94); }
+  .app-toolbar-btn:disabled { opacity: 0.5; }
+  .app-toolbar-badge {
+    position: absolute; top: 2px; right: 1px; min-width: 15px; height: 15px; padding: 0 4px;
+    border-radius: 99px; background: var(--red); color: #fff;
+    font-size: 9px; font-weight: 700; line-height: 15px; text-align: center;
+  }
+  /* Nút cửa sổ tự vẽ (chỉ khi không có overlay gốc). */
+  .app-window-btn { width: 46px; height: var(--toolbar-height); display: grid; place-items: center; color: var(--text-primary); }
+  .app-window-btn:hover { background: var(--hover); }
+  .app-window-btn.is-close:hover { background: #c42b1c; color: #fff; }
+
+  .mac-popover {
+    min-width: 240px; padding: 8px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: 13px;
+    box-shadow: var(--shadow-popover);
+    color: var(--text-primary);
+    animation: macPopIn 0.14s ease-out;
+    white-space: normal;
+    -webkit-app-region: no-drag;
+  }
+  .mac-popover-title { padding: 6px 9px 7px; font-size: 10px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-tertiary); }
+  .mac-menu-item {
+    width: 100%; min-height: 32px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 9px; border-radius: 8px; text-align: left;
+    color: var(--text-primary);
+  }
+  .mac-menu-item:hover { background: var(--hover); }
+  .mac-menu-sep { height: 1px; margin: 6px 4px; background: var(--border); }
   .btn-primary {
     @apply bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
   }
@@ -512,6 +570,11 @@ html[data-theme="light"] input[type="datetime-local"] {
     opacity: 1;
     transform: scale(1) translateY(0);
   }
+}
+
+@keyframes macPopIn {
+  from { opacity: 0; transform: translateY(-5px) scale(0.98); }
+  to { opacity: 1; transform: none; }
 }
 
 /* Nháy đỏ 3 lần khi có tin nhắn mới */

@@ -1414,7 +1414,7 @@ export default function App() {
   if (initializing) {
     return (
       <div className="h-screen flex flex-col bg-gray-900">
-        <TopBar />
+        <TopBar variant="startup" />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <Spinner size={10} className="mx-auto mb-3" />
