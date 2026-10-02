@@ -44,7 +44,7 @@ Các chế độ vận hành được mã hóa gồm:
 - `boss`: máy chủ nội bộ giữ kết nối tài khoản và relay cho nhân viên.
 - `employee`: workspace từ xa kết nối máy boss, không tự giữ kết nối Zalo trực tiếp.
 
-Một cài đặt hỗ trợ tối đa 5 workspace loại `local` hoặc `remote`. Workspace mặc định trỏ tới `ahv-connect-tool.db`; workspace bổ sung có database và thư mục media riêng. Nguồn: `src/utils/AppModeManager.ts`, `src/utils/WorkspaceManager.ts`.
+Một cài đặt hỗ trợ tối đa 5 workspace loại `local` hoặc `remote`. Workspace mặc định trỏ tới `deplao-tool.db`; workspace bổ sung có database và thư mục media riêng. Nguồn: `src/utils/AppModeManager.ts`, `src/utils/WorkspaceManager.ts`.
 
 ### 1.1 Mục tiêu nghiệp vụ
 
@@ -296,7 +296,7 @@ SQLite được bật WAL trong `DatabaseService`. Thay vì liệt kê mọi c�
 - Database và media nằm trong Electron `userData`; thư mục là `MaiHub`. Lần đầu chạy 26.9.0, thư mục `MaiHub` cũ được đổi tên thành `MaiHub` (`src/services/app/legacyDataMigration.ts`); trên Linux/macOS dữ liệu mã hóa bằng `safeStorage` không giải mã được sau khi đổi tên app nên phải đăng nhập lại.
 - Dữ liệu cũ không tự chuyển sang thư mục MaiHub. Có hướng dẫn copy khi app đã tắt trong `NOTICE.md`; **Cần xác nhận vận hành** trên từng OS trước khi di trú thật.
 - Chưa có backup tự động được mô tả trong mã/tài liệu hiện hành; vận hành phải sao lưu database, config và media trước nâng cấp.
-- Tên tệp `ahv-connect-tool.db` và một số khóa `ahv-connect_*` được giữ để tương thích.
+- Tên tệp `deplao-tool.db` và một số khóa `deplao_*` được giữ để tương thích.
 
 ## 6. Sản phẩm BA 1 — Sơ đồ BPMN mức nghiệp vụ
 
@@ -981,7 +981,7 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
 
 ### 20.3 Vận hành
 
-- Sao lưu `ahv-connect-tool.db`, config workspace/app và media khi app đã tắt.
+- Sao lưu `deplao-tool.db`, config workspace/app và media khi app đã tắt.
 - Giám sát dung lượng DB/media/log; định kỳ kiểm tra `PRAGMA integrity_check` trong quy trình bảo trì đã phê duyệt.
 - Chỉ dùng tài khoản công việc riêng cho Zalo/Facebook do rủi ro chính sách nền tảng.
 - Không public Cloudflare/ngrok/local tunnel khi chưa có xác thực webhook, firewall và giám sát.
