@@ -26,6 +26,11 @@ const BRIDGE_DIR = path.resolve(__dirname, '..', 'src', 'bridge-e2ee');
 const META_DIR = path.join(BRIDGE_DIR, 'meta');
 const BUILD_DIR = path.join(BRIDGE_DIR, 'build');
 const META_REPO = 'https://github.com/mautrix/meta.git';
+// Ghim commit của mautrix/meta để build lặp lại được: HEAD của họ đổi API thường xuyên
+// (ví dụ 09/2026 cần bản beeper/req mới hơn bản ghim trong go.mod) và làm build hỏng.
+// Khi nâng commit này, chạy `go mod tidy` và cập nhật dòng `replace github.com/imroc/req/v3`
+// trong src/bridge-e2ee/go.mod cho khớp với `replace` trong meta/go.mod.
+const META_COMMIT = 'e012f9f83ee0abd332b6160f57ecd07014c2d445';
 const BINARY_NAME = process.platform === 'win32'
   ? 'fbchat-bridge-e2ee.exe'
   : 'fbchat-bridge-e2ee';
@@ -57,17 +62,29 @@ function main() {
     process.exit(1);
   }
 
-  // ── 1. Clone / update mautrix/meta if missing ─────────────────────────
+  // ── 1. Fetch mautrix/meta at the pinned commit ────────────────────────
   const metaGoMod = path.join(META_DIR, 'go.mod');
-  if (!fs.existsSync(metaGoMod)) {
-    console.log('[build-bridge] 📥 meta/ not found - cloning mautrix/meta...');
+  let metaHead = '';
+  if (fs.existsSync(metaGoMod)) {
+    try {
+      metaHead = execSync('git rev-parse HEAD', { cwd: META_DIR }).toString().trim();
+    } catch {
+      metaHead = '';
+    }
+  }
+  if (metaHead === META_COMMIT) {
+    console.log(`[build-bridge] ✅ meta/ already at ${META_COMMIT.slice(0, 7)}`);
+  } else {
+    console.log(`[build-bridge] 📥 fetching mautrix/meta @ ${META_COMMIT.slice(0, 7)}...`);
     if (fs.existsSync(META_DIR)) {
       fs.rmSync(META_DIR, { recursive: true, force: true });
     }
-    run(`git clone --depth=1 ${META_REPO} ./meta`, { cwd: BRIDGE_DIR });
-    console.log('[build-bridge] ✅ meta/ cloned');
-  } else {
-    console.log('[build-bridge] ✅ meta/ already exists');
+    fs.mkdirSync(META_DIR, { recursive: true });
+    run('git init -q', { cwd: META_DIR });
+    run(`git remote add origin ${META_REPO}`, { cwd: META_DIR });
+    run(`git fetch -q --depth=1 origin ${META_COMMIT}`, { cwd: META_DIR });
+    run('git checkout -q FETCH_HEAD', { cwd: META_DIR });
+    console.log('[build-bridge] ✅ meta/ ready');
   }
 
   // ── 2. Ensure build/ directory ────────────────────────────────────────
