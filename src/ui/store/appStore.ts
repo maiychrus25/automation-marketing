@@ -238,9 +238,10 @@ interface AppStore {
   hasAnyCRMRequestUnseen: () => boolean;
 
   // ── Account switcher (Ctrl+Tab) ──────────────────────────────────────────
-  // ── Sidebar expanded ────────────────────────────────────────────
-  sidebarExpanded: boolean;
-  toggleSidebarExpanded: () => void;
+  // ── Sidebar collapsed ───────────────────────────────────────────
+  /** Sidebar thu về thanh icon; lưu localStorage['sidebar_collapsed']. */
+  sidebarCollapsed: boolean;
+  toggleSidebarCollapsed: () => void;
 
   accountSwitcherOpen: boolean;
   accountSwitcherIndex: number;
@@ -274,6 +275,10 @@ const loadThemePreference = (): ThemePreference => {
   } catch {
     return 'system';
   }
+};
+const SIDEBAR_COLLAPSED_KEY = 'sidebar_collapsed';
+const loadSidebarCollapsed = (): boolean => {
+  try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true'; } catch { return false; }
 };
 const initialThemePreference = loadThemePreference();
 
@@ -404,11 +409,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   integrationPanelTarget: null,
   analyticsInitialTab: null as string | null,
   crmRequestUnseenByAccount: loadCRMRequestUnseen(),
-  sidebarExpanded: false,
+  sidebarCollapsed: loadSidebarCollapsed(),
   accountSwitcherOpen: false,
   accountSwitcherIndex: 0,
 
-  toggleSidebarExpanded: () => set((s) => ({ sidebarExpanded: !s.sidebarExpanded })),
+  toggleSidebarCollapsed: () => set((s) => {
+    const next = !s.sidebarCollapsed;
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next)); } catch {}
+    return { sidebarCollapsed: next };
+  }),
 
   openQuickChat: (opts) => set({
     quickChatOpen: true,

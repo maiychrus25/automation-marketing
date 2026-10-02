@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
 import TopBar from './components/layout/TopBar';
 import Sidebar from './components/layout/Sidebar';
-import AccountPanel from './components/layout/AccountPanel';
 import Dashboard from './components/dashboard/Dashboard';
 import ConversationList from './components/chat/ConversationList';
 import ChatHeader from './components/chat/ChatHeader';
@@ -162,7 +161,6 @@ export default function App() {
     showIntegrationQuickPanel, toggleIntegrationQuickPanel,
     showAIQuickPanel, toggleAIQuickPanel,
     openQuickChat, quickChatOpen, theme, themePreference, fontSizeScale,
-    sidebarExpanded
   } = useAppStore();
   const { setAccounts, updateListenerActive, accounts } = useAccountStore();
   const { setContacts } = useChatStore();
@@ -1428,18 +1426,13 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-900 overflow-hidden">
-      <TopBar />
-      <EmployeeConnectionBanner />
+    <div className="h-screen flex overflow-hidden">
+      {/* Left sidebar: full height (spec mục 7.1) */}
+      <Sidebar onAddAccount={() => setAddAccountModalOpen(true)} />
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar: account list + nav */}
-        <Sidebar onAddAccount={() => setAddAccountModalOpen(true)} />
-
-        {/* Account panel (sidebar expanded) - chỉ hiện ở chat view */}
-        {view === 'chat' && sidebarExpanded && (
-          <AccountPanel onAddAccount={() => setAddAccountModalOpen(true)} />
-        )}
+      <div className="app-main">
+        <TopBar />
+        <EmployeeConnectionBanner />
 
         {/* Main content */}
         <div className="flex flex-1 overflow-hidden">
