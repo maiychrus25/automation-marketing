@@ -1,25 +1,23 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { useAccountStore } from '@/store/accountStore';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useAppStore } from '@/store/appStore';
-import { useChatStore } from '@/store/chatStore';
 import { useEmployeeStore } from '@/store/employeeStore';
-import ChannelBadge, { ZaloIcon, FacebookIcon, TelegramIcon } from '../common/ChannelBadge';
-import { isZalo, isFacebook, isTelegram } from '@/lib/channelHelper';
-import { useVisibleAccounts } from '@/hooks/useVisibleAccounts';
+import SidebarAccounts from './SidebarAccounts';
+import useIsMobile from '@/hooks/useIsMobile';
+import { useUpdateStore } from '@/store/updateStore';
 import { hasUnseenSettingsTabs } from '@/utils/settingsSeenTabs';
 import { useErpPermissions } from '@/hooks/erp/useErpContext';
-import { toLocalMediaUrl } from '@/lib/localMedia';
 import { BellIcon, BookIcon, BotIcon, BrainIcon, CampaignIcon, ChartIcon, ChatIcon, CheckIcon, CloudIcon, CreditCardIcon, DiamondIcon, DollarIcon, EditIcon, FileTextIcon, FolderIcon, GlobeIcon, HelpCircleIcon, LightningIcon, LinkIcon, LightbulbIcon, MailIcon, MessageCircleIcon, PackageIcon, RefreshIcon, SaveIcon, SearchIcon, SettingsIcon, ShoppingCartIcon, SmartphoneIcon, StoreIcon, SunIcon, TagIcon, TrendingUpIcon, TruckIcon, UserIcon, UsersIcon, WaveIcon } from '@/components/common/icons';
-import { CHANNEL } from '@/lib/channelHelper';
 
 
 interface SidebarProps {
   onAddAccount: () => void;
 }
 
+const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?';
+/** Cửa sổ hẹp hơn mức này thì sidebar luôn ở dạng thanh icon (spec mục 7.2). */
+const FORCE_RAIL_BELOW = 1000;
+
 export default function Sidebar({ onAddAccount }: SidebarProps) {
-  const { activeAccountId, setActiveAccount, reorderAccounts } = useAccountStore();
-  const visibleAccounts = useVisibleAccounts();
   const previewEmployeeId = useEmployeeStore(s => s.previewEmployeeId);
   const empMode = useEmployeeStore(s => s.mode);
   // Subscribe so Sidebar re-renders when permissions / employees list changes
@@ -46,16 +44,14 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
   // ERP-specific permission check (role-based, independent from Zalo ACL).
   const { can: canErp } = useErpPermissions();
   const canErpAccess = canErp('erp.access');
-  // Use visible (filtered) accounts for rendering
-  const accounts = visibleAccounts;
-  const { view, setView, mergedInboxMode, mergedInboxAccounts, mergedInboxFilterAccount, setMergedInboxFilter, exitMergedInbox, sidebarExpanded, toggleSidebarExpanded } = useAppStore();
+  const { view, setView, sidebarCollapsed, windowAppearance } = useAppStore();
   const crmRequestUnseenByAccount = useAppStore(s => s.crmRequestUnseenByAccount);
-  const { contacts, activeThreadId, activeThreadType, saveAccountThread } = useChatStore();
-  const { othersConversations: allOthers } = useAppStore();
+  const forceRail = useIsMobile(FORCE_RAIL_BELOW);
+  const collapsed = sidebarCollapsed || forceRail;
+  const isMac = windowAppearance.platform === 'darwin';
 
-  const dragIndexRef = useRef<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [showToolsGuide, setShowToolsGuide] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(view === 'workflow' || view === 'integration');
   const hasNewCRMRequests = Object.values(crmRequestUnseenByAccount || {}).some(Boolean);
 
   // Red dot cho CRM → Nhóm → Quét thành viên (chưa xem)
@@ -71,522 +67,175 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
     return () => window.removeEventListener('settings:tabSeen', handler);
   }, []);
 
-  const handleDragStart = (e: React.DragEvent, index: number) => {
-    dragIndexRef.current = index;
-    e.dataTransfer.effectAllowed = 'move';
-  };
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    setDragOverIndex(index);
-  };
-  const handleDrop = (e: React.DragEvent, toIndex: number) => {
-    e.preventDefault();
-    const from = dragIndexRef.current;
-    if (from !== null && from !== toIndex) reorderAccounts(from, toIndex);
-    dragIndexRef.current = null;
-    setDragOverIndex(null);
-  };
-  const handleDragEnd = () => {
-    dragIndexRef.current = null;
-    setDragOverIndex(null);
-  };
-
-  const showExpanded = sidebarExpanded && view === 'chat';
+  const toolItems = [
+    ...(hasPerm('workflow') ? [{ icon: 'workflow', label: 'Workflow (n8n)', view: 'workflow' as const }] : []),
+    ...(hasPerm('integration') ? [{ icon: 'integration', label: 'Tích hợp', view: 'integration' as const }] : []),
+  ];
 
   return (
-    <div className="flex flex-col w-16 bg-gray-900 border-r border-gray-700 h-full">
-      {/* ─── Toggle expand/collapse - chỉ hiện ở màn hình Chat ─── */}
-      {view === 'chat' && (
-        <div className="pt-2 pb-1 flex justify-center">
-          <button
-            onClick={toggleSidebarExpanded}
-            title={showExpanded ? 'Ẩn danh sách tài khoản đầy đủ' : 'Hiện danh sách tài khoản đầy đủ'}
-            className={`font-semibold w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
-              showExpanded
-                ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
-                : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 hover:text-white'
-            }`}
-          >
-            {showExpanded ? (
-              /* X - đóng */
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            ) : (
-              /* Hamburger - mở rộng */
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="4" y1="6" x2="20" y2="6" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="18" x2="20" y2="18" />
-              </svg>
-            )}
-          </button>
-        </div>
-      )}
+    <aside className={`app-sidebar ${collapsed ? 'is-collapsed' : ''}`} aria-label="Thanh bên">
+      {/* Hàng đầu: vùng kéo cửa sổ; trên macOS chứa traffic light */}
+      <div className="app-sidebar-head app-drag" />
 
-      {/* ─── Danh sách tài khoản ─── */}
-      {showExpanded ? (
-        /* ── Expanded: ẩn avatar thu gọn, nav đẩy lên ── */
-        <div className="" />
-      ) : mergedInboxMode ? (
-        <div className="flex-1 overflow-y-auto py-2 flex flex-col items-center gap-2">
-          {/* "Tất cả" - bỏ lọc, với nút thoát ở góc trên-phải */}
-          <div className="relative flex-shrink-0">
-            <button
-              onClick={() => setMergedInboxFilter(null)}
-              title="Chọn tất cả tài khoản"
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all flex-shrink-0 ring-2 ${
-                mergedInboxFilterAccount === null
-                  ? 'bg-blue-600 text-white ring-blue-400'
-                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600 ring-transparent'
-              }`}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                <circle cx="9" cy="7" r="4"/>
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-              </svg>
-            </button>
-            {/* Exit button - góc trên phải */}
-            <button
-              onClick={exitMergedInbox}
-              title="Thoát chế độ Gộp tài khoản"
-              className="absolute -top-2 -right-3 w-5 h-5 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 hover:bg-gray-600 hover:text-gray-200 transition-colors z-10"
-            >
-              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
-          </div>
+      <SidebarBrand collapsed={collapsed} macRail={collapsed && isMac} />
 
-          {/* Account filter avatars */}
-          {mergedInboxAccounts.map(zaloId => {
-            const account = accounts.find(a => a.zalo_id === zaloId);
-            if (!account) return null;
-            const accountContacts = contacts[zaloId] || [];
-            const acctOthers = allOthers[zaloId] || new Set();
-            const unreadConvCount = accountContacts.reduce((s, c) => {
-              if (acctOthers.has(c.contact_id)) return s;
-              return s + (c.unread_count > 0 ? 1 : 0);
-            }, 0);
-            const isSelected = mergedInboxFilterAccount === zaloId;
-            const isAllMode = mergedInboxFilterAccount === null;
-            return (
-              <div key={zaloId} className="relative flex-shrink-0">
-                <button
-                  onClick={() => setMergedInboxFilter(isSelected ? null : zaloId)}
-                  title={`${account.full_name || zaloId}${isSelected ? ' - đang lọc' : ' - nhấn để lọc'}`}
-                  className={`w-10 h-10 rounded-full overflow-hidden ring-2 transition-all flex-shrink-0 ${
-                    isSelected
-                      ? 'ring-blue-500 scale-110'
-                      : isAllMode
-                        ? 'ring-transparent opacity-90 hover:ring-gray-500'
-                        : 'ring-transparent opacity-40 hover:opacity-80 hover:ring-gray-500'
-                  }`}
-                >
-                  {account.avatar_url ? (
-                    <img src={toLocalMediaUrl(account.avatar_url)} alt={account.full_name} className="w-full h-full object-cover"
-                      onError={(e) => {
-                        const img = e.target as HTMLImageElement;
-                        img.style.display = 'none';
-                        // Retry avatar, nếu fail → xóa avatar_url để fallback sang channel icon
-                        import('@/lib/avatarRetry').then(({ handleAvatarError }) =>
-                          handleAvatarError({ ownerId: zaloId, contactId: zaloId, channel: account.channel || CHANNEL.ZALO })
-                        ).then(newUrl => {
-                          if (newUrl) {
-                            useAccountStore.getState().updateAccount(zaloId, { avatar_url: newUrl });
-                            img.src = newUrl;
-                            img.style.display = '';
-                          } else {
-                            useAccountStore.getState().updateAccount(zaloId, { avatar_url: '' });
-                          }
-                        }).catch(() => {
-                          useAccountStore.getState().updateAccount(zaloId, { avatar_url: '' });
-                        });
-                      }} />
-                  ) : (
-                    <div className={`w-full h-full flex items-center justify-center text-white font-bold text-sm ${isFacebook(account.channel) ? 'bg-blue-800' : isTelegram(account.channel) ? 'bg-blue-500' : 'bg-blue-600'}`}>
-                      {isFacebook(account.channel) ? (
-                        <FacebookIcon size={16} />
-                      ) : isTelegram(account.channel) ? (
-                        <TelegramIcon size={16} />
-                      ) : (
-                        <ZaloIcon size={16} />
-                      )}
-                    </div>
-                  )}
-                </button>
-                {unreadConvCount > 0 && (
-                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none z-10 shadow-md pointer-events-none">
-                    {unreadConvCount > 99 ? '99+' : unreadConvCount}
-                  </span>
-                )}
-                {/* Channel badge */}
-                <div className="absolute -top-2 -left-0.5 z-10 pointer-events-none">
-                  <ChannelBadge channel={(account.channel as any) || CHANNEL.ZALO} size="sm" />
-                </div>
-                {/* Disconnected indicator (merged inbox) */}
-                {!account.isConnected && (
-                  <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-gray-800 rounded-full border-2 border-gray-900 flex items-center justify-center z-10 pointer-events-none" title="Chưa kết nối">
-                    <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="text-red-400">
-                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                  </span>
-                )}
-              </div>
-            );
-          })}
+      <SidebarAccounts collapsed={collapsed} onAddAccount={onAddAccount} />
 
-        </div>
-      ) : (
-        /* ── Collapsed / non-chat: danh sách avatar thu gọn ── */
-        <div className="flex-1 overflow-y-auto py-2 flex flex-col items-center gap-2">
-          {accounts.map((account, index) => {
-            const accountContacts = contacts[account.zalo_id] || [];
-            const acctOthers = allOthers[account.zalo_id] || new Set();
-            const unreadConvCount = accountContacts.reduce((s, c) => {
-              if (acctOthers.has(c.contact_id)) return s;
-              return s + (c.unread_count > 0 ? 1 : 0);
-            }, 0);
-            const listenerDead = account.isConnected && account.listenerActive === false;
-            const isDragOver = dragOverIndex === index;
-
-            const tooltipLines = [
-              account.full_name || account.zalo_id,
-              account.is_business ? '💼 Tài khoản Zalo Business' : null,
-              listenerDead ? '⚠ Listener chết' : null,
-            ].filter(Boolean).join('\n');
-
-            return (
-              <div
-                key={account.zalo_id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, index)}
-                onDragOver={(e) => handleDragOver(e, index)}
-                onDrop={(e) => handleDrop(e, index)}
-                onDragEnd={handleDragEnd}
-                className={`relative flex-shrink-0 transition-all ${isDragOver ? 'scale-110 opacity-70' : ''}`}
-                style={{ cursor: 'grab' }}
-              >
-                <button
-                  onClick={() => {
-                    if (activeAccountId && activeThreadId) {
-                      saveAccountThread(activeAccountId, activeThreadId, activeThreadType);
-                    }
-                    setActiveAccount(account.zalo_id);
-                    setView('chat');
-                  }}
-                  title={tooltipLines}
-                  className={`relative w-10 h-10 rounded-full overflow-visible ring-2 transition-all flex-shrink-0 ${
-                    activeAccountId === account.zalo_id
-                      ? 'ring-blue-500'
-                      : listenerDead
-                        ? 'ring-red-600'
-                          : 'ring-transparent hover:ring-gray-500'
-                  }`}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <div className="w-10 h-10 rounded-full overflow-hidden">
-                    {account.avatar_url ? (
-                      <img
-                        src={toLocalMediaUrl(account.avatar_url)}
-                        alt={account.full_name}
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          const img = e.target as HTMLImageElement;
-                          img.style.display = 'none';
-                          import('@/lib/avatarRetry').then(({ handleAvatarError }) =>
-                            handleAvatarError({ ownerId: account.zalo_id, contactId: account.zalo_id, channel: account.channel || CHANNEL.ZALO })
-                          ).then(newUrl => {
-                            if (newUrl) {
-                              useAccountStore.getState().updateAccount(account.zalo_id, { avatar_url: newUrl });
-                              img.src = newUrl;
-                              img.style.display = '';
-                            } else {
-                              useAccountStore.getState().updateAccount(account.zalo_id, { avatar_url: '' });
-                            }
-                          }).catch(() => {
-                            useAccountStore.getState().updateAccount(account.zalo_id, { avatar_url: '' });
-                          });
-                        }}
-                      />
-                    ) : (
-                      <div className={`w-full h-full flex items-center justify-center text-white font-bold text-sm ${isFacebook(account.channel) ? 'bg-blue-800' : isTelegram(account.channel) ? 'bg-blue-500' : 'bg-blue-600'}`}>
-                        {isFacebook(account.channel) ? (
-                          <FacebookIcon size={16} />
-                        ) : isTelegram(account.channel) ? (
-                          <TelegramIcon size={16} />
-                        ) : (
-                          <ZaloIcon size={16} />
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* ── Top-right: listener dead / unread badge ── */}
-                  {listenerDead ? (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-gray-900 flex items-center justify-center z-10">
-                      <span className="text-white text-[8px] font-bold leading-none">!</span>
-                    </span>
-                  ) : unreadConvCount > 0 ? (
-                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none z-10 shadow-md">
-                      {unreadConvCount > 99 ? '99+' : unreadConvCount}
-                    </span>
-                  ) : null}
-
-                  {/* ── Bottom-left: Zalo Business badge ── */}
-                  {account.is_business ? (
-                    <span
-                      className="absolute -bottom-1 -left-1 bg-amber-500 text-white text-[7px] font-bold rounded-full border border-gray-900 z-10 leading-none flex items-center justify-center"
-                      style={{ minWidth: '0.875rem', height: '0.875rem', padding: '0 0.125rem' }}
-                      title="Zalo Business"
-                    ><FolderIcon className="w-4 h-4 inline" /> </span>
-                  ) : null}
-
-                  {/* ── Channel badge (Zalo/Facebook) ── */}
-                  <div className="absolute -top-2 -left-0.5 z-10">
-                    <ChannelBadge channel={(account.channel as any) || CHANNEL.ZALO} size="sm" />
-                  </div>
-
-                  {/* ── Disconnected indicator (bottom-right) ── */}
-                  {!account.isConnected && !listenerDead ? (
-                    <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-gray-800 rounded-full border-2 border-gray-900 flex items-center justify-center z-10" title="Chưa kết nối">
-                      <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="text-red-400">
-                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                      </svg>
-                    </span>
-                  ) : null}
-                </button>
-              </div>
-            );
-          })}
-
-          {/* Add Account Button - hidden in employee mode and during employee simulation */}
-          {empMode !== 'employee' && !isSimulating && (
-          <button
-            onClick={onAddAccount}
-            title="Thêm tài khoản"
-            className="w-10 h-10 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center text-gray-400 hover:text-white transition-colors border-2 border-dashed border-gray-600"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2Z" />
-            </svg>
-          </button>
-          )}
-        </div>
-      )}
-
-      {/* Nav bottom */}
-      <div className="border-t border-gray-700 py-2 flex flex-col items-center gap-1">
-        <NavBtn icon="dashboard"  label="Dashboard"   active={view === 'dashboard'}  onClick={() => setView('dashboard')} />
+      <div className="app-group-title">{!collapsed && <span>Điều hướng</span>}</div>
+      <nav className="app-nav">
+        <NavItem icon="dashboard" label="Tổng quan" collapsed={collapsed} active={view === 'dashboard'} onClick={() => setView('dashboard')} />
         {hasPerm('chat') && (
-        <NavBtn icon="chat"       label="Chat"         active={view === 'chat'}       onClick={() => setView('chat')} />
+          <NavItem icon="chat" label="Chat" collapsed={collapsed} active={view === 'chat'} onClick={() => setView('chat')} />
         )}
         {hasPerm('crm') && (
-        <NavBtn icon="crm"        label="CRM"          active={view === 'crm'}        onClick={() => setView('crm')} dot={hasNewCRMRequests || hasScanNewDot} />
+          <NavItem icon="crm" label="CRM" collapsed={collapsed} active={view === 'crm'} onClick={() => setView('crm')} dot={hasNewCRMRequests || hasScanNewDot} />
         )}
-        {(hasPerm('workflow') || hasPerm('integration')) && (
-        <NavFlyout
-          icon="tools"
-          label="Công cụ"
-          active={view === 'workflow' || view === 'integration'}
-          items={[
-            ...(hasPerm('workflow') ? [{ icon: 'workflow' as const, label: 'Workflow (n8n)', active: view === 'workflow', onClick: () => setView('workflow') }] : []),
-            ...(hasPerm('integration') ? [{ icon: 'integration' as const, label: 'Tích hợp', active: view === 'integration', onClick: () => setView('integration') }] : []),
-          ]}
-          onGuide={() => setShowToolsGuide(true)}
-        />
+        {toolItems.length > 0 && (
+          <>
+            <NavItem
+              icon="tools"
+              label="Công cụ"
+              collapsed={collapsed}
+              active={!toolsOpen && (view === 'workflow' || view === 'integration')}
+              expanded={toolsOpen}
+              onClick={() => setToolsOpen(v => !v)}
+            />
+            {toolsOpen && (
+              <>
+                {toolItems.map(item => (
+                  <NavItem key={item.view} icon={item.icon} label={item.label} collapsed={collapsed} sub active={view === item.view} onClick={() => setView(item.view)} />
+                ))}
+                <NavItem icon="book" label="Hướng dẫn sử dụng" collapsed={collapsed} sub active={false} onClick={() => setShowToolsGuide(true)} />
+              </>
+            )}
+          </>
         )}
         {hasPerm('analytics') && (
-        <NavBtn icon="analytics"  label="Báo cáo"      active={view === 'analytics'}  onClick={() => setView('analytics')} />
+          <NavItem icon="analytics" label="Báo cáo" collapsed={collapsed} active={view === 'analytics'} onClick={() => setView('analytics')} />
         )}
         {/* ERP - gated by module permission AND ERP RBAC (`erp.access`).
             Inside ERP, fine-grained writes enforced via `useErpPermissions().can(...)` +
             IPC middleware `withErpAuth`. */}
         {hasPerm('erp') && canErpAccess && (
-        <NavBtn icon="erp"        label="Quản lý công việc"   active={view === 'erp'}        onClick={() => setView('erp')} />
+          <NavItem icon="erp" label="Quản lý công việc" collapsed={collapsed} active={view === 'erp'} onClick={() => setView('erp')} />
         )}
-        <NavBtn icon="settings"   label="Cài đặt"      active={view === 'settings'}   onClick={() => setView('settings')} dot={hasNewSettings} />
+        {/* Browser profiles - Boss/Standalone only; hidden while previewing an employee */}
+        {empMode !== 'employee' && !isSimulating && (
+          <NavItem icon="browser" label="Trình duyệt" collapsed={collapsed} active={view === 'browser'} onClick={() => setView('browser')} />
+        )}
+      </nav>
+
+      <div className="app-sidebar-bottom">
+        <NavItem icon="settings" label="Cài đặt" collapsed={collapsed} active={view === 'settings'} onClick={() => setView('settings')} dot={hasNewSettings} />
       </div>
 
       {/* Tools Guide Modal */}
       {showToolsGuide && <ToolsGuideModal onClose={() => setShowToolsGuide(false)} />}
+    </aside>
+  );
+}
+
+/** Logo, tên app, phiên bản và nhãn cập nhật (chuyển từ TopBar). */
+function SidebarBrand({ collapsed, macRail }: { collapsed: boolean; macRail: boolean }) {
+  const { status: updateStatus, updateInfo, openUpdatePopup } = useUpdateStore();
+  const hasUpdate = !!updateInfo && (updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'downloaded');
+  const updateTitle = !updateInfo ? '' : updateStatus === 'downloaded'
+    ? `Đã tải xong v${updateInfo.version} — nhấn để cài đặt`
+    : updateStatus === 'downloading'
+      ? `Đang tải v${updateInfo.version}...`
+      : `Có bản mới v${updateInfo.version} - nhấn để cập nhật`;
+  // Giữ màu theo trạng thái như nhãn cũ ở TopBar.
+  const pillClass = updateStatus === 'downloaded'
+    ? 'bg-green-500/15 border border-green-500/30 text-green-500 hover:bg-green-500/25'
+    : updateStatus === 'downloading'
+      ? 'bg-blue-500/15 border border-blue-500/30 text-blue-400 hover:bg-blue-500/25'
+      : 'bg-orange-500/15 border border-orange-500/30 text-orange-600 hover:bg-orange-500/25';
+  const dotClass = updateStatus === 'downloaded' ? 'bg-green-500' : updateStatus === 'downloading' ? 'bg-blue-500' : 'bg-orange-500';
+
+  // macOS thu gọn: hàng đầu đã có traffic light, chỉ hiện chấm cập nhật (nếu có).
+  if (macRail) {
+    return hasUpdate ? (
+      <div className="flex justify-center pb-1 flex-shrink-0">
+        <button type="button" onClick={openUpdatePopup} title={updateTitle} aria-label={updateTitle} className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
+      </div>
+    ) : null;
+  }
+
+  return (
+    <div className="app-brand">
+      <span className="relative flex-shrink-0">
+        <AppMark />
+        {collapsed && hasUpdate && (
+          <button type="button" onClick={openUpdatePopup} title={updateTitle} aria-label={updateTitle}
+            className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-gray-900 ${dotClass}`} />
+        )}
+      </span>
+      {!collapsed && (
+        <>
+          <span className="app-brand-name">AHV Connect</span>
+          {hasUpdate ? (
+            <button type="button" onClick={openUpdatePopup} title={updateTitle}
+              className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap transition-colors ${pillClass}`}>
+              {updateStatus === 'downloaded' ? `Sẵn sàng v${updateInfo!.version}` : `New v${updateInfo!.version}`}
+            </button>
+          ) : (
+            <span className="app-brand-version">v{APP_VERSION}</span>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-function NavBtn({ icon, label, active, onClick, dot }: { icon: string; label: string; active: boolean; onClick: () => void; dot?: boolean }) {
-  const icons: Record<string, React.ReactNode> = {
-    dashboard: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
-        <rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
-      </svg>
-    ),
-    chat: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
-    friends: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-      </svg>
-    ),
-    crm: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-           stroke="currentColor" strokeWidth="1.8"
-           strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="3" width="18" height="18" rx="3"/>
-        <path d="M7 14v3"/>
-        <path d="M12 10v7"/>
-        <path d="M17 7v10"/>
-      </svg>
-    ),
-    workflow: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-           stroke="currentColor" strokeWidth="1.8"
-           strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/>
-        <circle cx="12" cy="18" r="2"/>
-        <path d="M7 6h10M5 8v4a7 7 0 0 0 7 7M19 8v4a7 7 0 0 1-7 7"/>
-      </svg>
-    ),
-    integration: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-           stroke="currentColor" strokeWidth="1.8"
-           strokeLinecap="round" strokeLinejoin="round">
-        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-      </svg>
-    ),
-    tools: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-           stroke="currentColor" strokeWidth="1.8"
-           strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
-        <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
-        <line x1="12" y1="12" x2="12" y2="12.01"/>
-      </svg>
-    ),
-    analytics: (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 21H4.6c-.56 0-.84 0-1.054-.109a1 1 0 0 1-.437-.437C3 20.24 3 19.96 3 19.4V3"/>
-          <path d="M7 14l4-4 4 4 6-6"/>
-        </svg>
-    ),
-    settings: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="12" cy="12" r="3" />
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-      </svg>
-    ),
-    erp: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-      </svg>
-    ),
-  };
-
+/** Dấu hiệu AHV (bản rút gọn của resources/icons/icon.svg, giữ nguyên hình). */
+function AppMark() {
   return (
-    <button onClick={onClick} title={label}
-      className={`relative w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${active ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>
-      {icons[icon]}
-      {dot && (
-        <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full border border-gray-900 pointer-events-none" />
-      )}
-    </button>
+    <svg viewBox="0 0 100 100" className="app-brand-mark" aria-hidden="true">
+      <defs>
+        <linearGradient id="ahvMarkBg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#1E40AF" />
+          <stop offset="1" stopColor="#3B82F6" />
+        </linearGradient>
+      </defs>
+      <rect width="100" height="100" rx="22" ry="22" fill="url(#ahvMarkBg)" />
+      <g fill="#FFFFFF">
+        <path d="M46 17 H54 L85 84 H70 L50 32 L30 84 H15 Z" />
+        <path d="M26 72 H74 V79 H26 Z" />
+        <path d="M47.2 69 H52.8 L52.3 57 H47.7 Z" />
+        <path d="M48.3 52 H51.7 L51.2 44 H48.8 Z" />
+      </g>
+    </svg>
   );
 }
 
-// ─── Flyout menu (hover to expand submenu to the right) ───────────────────────
-
-interface FlyoutItem {
+function NavItem({ icon, label, active, onClick, dot, collapsed, expanded, sub }: {
   icon: string;
   label: string;
   active: boolean;
   onClick: () => void;
-}
-
-function NavFlyout({ icon, label, active, items, onGuide }: { icon: string; label: string; active: boolean; items: FlyoutItem[]; onGuide?: () => void }) {
-  const [open, setOpen] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  const handleEnter = useCallback(() => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    setOpen(true);
-  }, []);
-
-  const handleLeave = useCallback(() => {
-    timeoutRef.current = setTimeout(() => setOpen(false), 200);
-  }, []);
-
-  // Reuse the same icon lookup as NavBtn
-  const btnRef = useRef<HTMLButtonElement>(null);
-
+  dot?: boolean;
+  collapsed: boolean;
+  /** Có giá trị khi mục mở/đóng được một nhóm con. */
+  expanded?: boolean;
+  sub?: boolean;
+}) {
   return (
-    <div
-      ref={containerRef}
-      className="relative"
-      onMouseEnter={handleEnter}
-      onMouseLeave={handleLeave}
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-current={active ? 'page' : undefined}
+      aria-expanded={expanded}
+      className={`app-nav-item ${active ? 'is-active' : ''} ${sub && !collapsed ? 'is-sub' : ''}`}
     >
-      <button
-        ref={btnRef}
-        title={label}
-        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
-          active ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-white'
-        }`}
-      >
-        <NavIcon name={icon} />
-      </button>
-
-      {/* Flyout submenu - appears to the right */}
-      {open && (
-        <div
-          className="absolute left-full -bottom-12 ml-1.5 z-[9999] min-w-[160px] bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1.5 animate-in fade-in slide-in-from-left-2 duration-150"
-        >
-          {/* Header */}
-          <div className="px-3 py-1.5 border-b border-gray-700/60 mb-1">
-            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{label}</span>
-          </div>
-          {items.map((item) => (
-            <button
-              key={item.icon}
-              onClick={() => { item.onClick(); setOpen(false); }}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
-                item.active
-                  ? 'bg-blue-600/20 text-blue-400'
-                  : 'text-gray-300 hover:bg-gray-700 hover:text-white'
-              }`}
-            >
-              <span className="w-5 h-5 flex items-center justify-center flex-shrink-0">
-                <NavIcon name={item.icon} />
-              </span>
-              <span className="text-xs font-medium whitespace-nowrap">{item.label}</span>
-              {item.active && (
-                <span className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" />
-              )}
-            </button>
-          ))}
-          {/* Guide button */}
-          {onGuide && (
-            <>
-              <div className="border-t border-gray-700/60 my-1" />
-              <button
-                onClick={() => { onGuide(); setOpen(false); }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-gray-400 hover:bg-gray-700 hover:text-gray-200 transition-colors"
-              >
-                <span className="w-5 h-5 flex items-center justify-center flex-shrink-0 text-sm"><BookIcon className="w-4 h-4" /></span>
-                <span className="text-xs font-medium whitespace-nowrap">Hướng dẫn sử dụng</span>
-              </button>
-            </>
-          )}
-        </div>
+      {icon === 'book' ? <BookIcon className="w-4 h-4" /> : <NavIcon name={icon} />}
+      {!collapsed && <span className="app-nav-label">{label}</span>}
+      {!collapsed && expanded !== undefined && (
+        <svg className="app-nav-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M9 6l6 6-6 6" /></svg>
       )}
-    </div>
+      {dot && <span className="app-nav-dot" aria-hidden="true" />}
+    </button>
   );
 }
 
@@ -668,6 +317,13 @@ function NavIcon({ name }: { name: string }) {
       return (
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+      );
+    case 'browser':
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
         </svg>
       );
     case 'settings':

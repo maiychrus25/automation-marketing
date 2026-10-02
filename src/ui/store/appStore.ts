@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import { useAccountStore } from './accountStore';
 import { useEmployeeStore } from './employeeStore';
 import DataAccessor from '@/lib/data/DataAccessor';
+import { type AppTheme, type ThemePreference, THEME_STORAGE_KEY, parseThemePreference, resolveTheme, systemPrefersDark } from '../lib/theme';
 
-type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp';
-export type AppTheme = 'dark' | 'light';
+type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser';
+export type { AppTheme, ThemePreference };
 
 export interface GroupMember {
   userId: string;
@@ -127,6 +128,12 @@ interface AppStore {
 
   theme: AppTheme;
   setTheme: (theme: AppTheme) => void;
+  themePreference: ThemePreference;
+  setThemePreference: (pref: ThemePreference) => void;
+  /** Gọi khi hệ điều hành đổi sáng/tối; chỉ có tác dụng khi đang "Theo hệ thống". */
+  syncSystemTheme: (prefersDark: boolean) => void;
+  /** Do main quyết định (electron/windowAppearance.ts); gán một lần trong main.tsx. */
+  windowAppearance: { platform: string; material: 'vibrancy' | 'mica' | 'none'; nativeControls: boolean };
   fontSizeScale: number;
   setFontSizeScale: (scale: number) => void;
 
@@ -231,9 +238,10 @@ interface AppStore {
   hasAnyCRMRequestUnseen: () => boolean;
 
   // ── Account switcher (Ctrl+Tab) ──────────────────────────────────────────
-  // ── Sidebar expanded ────────────────────────────────────────────
-  sidebarExpanded: boolean;
-  toggleSidebarExpanded: () => void;
+  // ── Sidebar collapsed ───────────────────────────────────────────
+  /** Sidebar thu về thanh icon; lưu localStorage['sidebar_collapsed']. */
+  sidebarCollapsed: boolean;
+  toggleSidebarCollapsed: () => void;
 
   accountSwitcherOpen: boolean;
   accountSwitcherIndex: number;
@@ -261,13 +269,18 @@ const loadFontSizeScale = (): number => {
 };
 
 // ─── theme persists in localStorage ─────────────────────────────────────────
-const loadTheme = (): AppTheme => {
+const loadThemePreference = (): ThemePreference => {
   try {
-    const stored = localStorage.getItem('app_theme');
-    if (stored === 'light' || stored === 'dark') return stored;
-  } catch {}
-  return 'light';
+    return parseThemePreference(localStorage.getItem(THEME_STORAGE_KEY));
+  } catch {
+    return 'system';
+  }
 };
+const SIDEBAR_COLLAPSED_KEY = 'sidebar_collapsed';
+const loadSidebarCollapsed = (): boolean => {
+  try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true'; } catch { return false; }
+};
+const initialThemePreference = loadThemePreference();
 
 // ─── notifSettings persists in localStorage (not account-specific) ──────────
 const loadNotifSettings = (): NotifSettings => {
@@ -379,7 +392,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
   mutedThreads: {},
   notifSettings: loadNotifSettings(),
   notifSettingsOverrides: {},
-  theme: loadTheme(),
+  theme: resolveTheme(initialThemePreference, systemPrefersDark()),
+  themePreference: initialThemePreference,
+  windowAppearance: {
+    platform: (window as any).electronAPI?.platform || 'win32',
+    material: 'none',
+    nativeControls: ((window as any).electronAPI?.platform || 'win32') !== 'darwin',
+  },
   fontSizeScale: loadFontSizeScale(),
   groupInfoCache: {},
   othersConversations: {},
@@ -390,11 +409,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   integrationPanelTarget: null,
   analyticsInitialTab: null as string | null,
   crmRequestUnseenByAccount: loadCRMRequestUnseen(),
-  sidebarExpanded: false,
+  sidebarCollapsed: loadSidebarCollapsed(),
   accountSwitcherOpen: false,
   accountSwitcherIndex: 0,
 
-  toggleSidebarExpanded: () => set((s) => ({ sidebarExpanded: !s.sidebarExpanded })),
+  toggleSidebarCollapsed: () => set((s) => {
+    const next = !s.sidebarCollapsed;
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next)); } catch {}
+    return { sidebarCollapsed: next };
+  }),
 
   openQuickChat: (opts) => set({
     quickChatOpen: true,
@@ -683,8 +706,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   setTheme: (theme) => {
-    try { localStorage.setItem('app_theme', theme); } catch {}
-    set({ theme });
+    try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch {}
+    set({ theme, themePreference: theme });
+  },
+
+  setThemePreference: (pref) => {
+    try { localStorage.setItem(THEME_STORAGE_KEY, pref); } catch {}
+    set({ themePreference: pref, theme: resolveTheme(pref, systemPrefersDark()) });
+  },
+
+  syncSystemTheme: (prefersDark) => {
+    if (get().themePreference !== 'system') return;
+    set({ theme: prefersDark ? 'dark' : 'light' });
   },
 
   setFontSizeScale: (scale) => {

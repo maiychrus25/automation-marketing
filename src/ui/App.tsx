@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
 import TopBar from './components/layout/TopBar';
 import Sidebar from './components/layout/Sidebar';
-import AccountPanel from './components/layout/AccountPanel';
 import Dashboard from './components/dashboard/Dashboard';
 import ConversationList from './components/chat/ConversationList';
 import ChatHeader from './components/chat/ChatHeader';
@@ -20,6 +19,7 @@ import WorkflowPage from './components/workflow/WorkflowPage';
 import IntegrationPage from './components/integration/IntegrationPage';
 import AnalyticsPage from './components/analytics/AnalyticsPage';
 import ErpPage from './features/erp/ErpPage';
+import BrowserProfilesView from './features/browser/BrowserProfilesView';
 import AccountInitPanel from './components/common/AccountInitPanel';
 import AccountSwitcherOverlay from './components/common/AccountSwitcherOverlay';
 import { UpdateNotification } from './components/common/UpdateNotification';
@@ -160,8 +160,7 @@ export default function App() {
     showGroupBoard, setShowGroupBoard,
     showIntegrationQuickPanel, toggleIntegrationQuickPanel,
     showAIQuickPanel, toggleAIQuickPanel,
-    openQuickChat, quickChatOpen, theme, fontSizeScale,
-    sidebarExpanded
+    openQuickChat, quickChatOpen, theme, themePreference, fontSizeScale,
   } = useAppStore();
   const { setAccounts, updateListenerActive, accounts } = useAccountStore();
   const { setContacts } = useChatStore();
@@ -173,10 +172,23 @@ export default function App() {
   const isMobile = useIsMobile();
   const { mobileShowChat, setMobileShowChat } = useAppStore();
 
-  // ─── Sync theme to <html> element ────────────────────────────────────────
+  // ─── Sync theme to <html> element và tới cửa sổ (nền, nút cửa sổ, vật liệu) ──
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-  }, [theme]);
+    ipc.window?.setAppearance?.({ preference: themePreference, theme });
+  }, [theme, themePreference]);
+
+  // ─── "Theo hệ thống": đổi theo khi hệ điều hành đổi sáng/tối ──────────────
+  useEffect(() => {
+    if (themePreference !== 'system') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = () => useAppStore.getState().syncSystemTheme(mq.matches);
+    // Đọc ngay một lần; nếu main chưa kịp đặt themeSource = 'system', sự kiện `change`
+    // sẽ tới ngay sau đó và sửa lại.
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [themePreference]);
 
   // ─── Sync font size scale to <html> element ──────────────────────────────
   useEffect(() => {
@@ -1402,7 +1414,7 @@ export default function App() {
   if (initializing) {
     return (
       <div className="h-screen flex flex-col bg-gray-900">
-        <TopBar />
+        <TopBar variant="startup" />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <Spinner size={10} className="mx-auto mb-3" />
@@ -1414,18 +1426,13 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-900 overflow-hidden">
-      <TopBar />
-      <EmployeeConnectionBanner />
+    <div className="h-screen flex overflow-hidden">
+      {/* Left sidebar: full height (spec mục 7.1) */}
+      <Sidebar onAddAccount={() => setAddAccountModalOpen(true)} />
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar: account list + nav */}
-        <Sidebar onAddAccount={() => setAddAccountModalOpen(true)} />
-
-        {/* Account panel (sidebar expanded) - chỉ hiện ở chat view */}
-        {view === 'chat' && sidebarExpanded && (
-          <AccountPanel onAddAccount={() => setAddAccountModalOpen(true)} />
-        )}
+      <div className="app-main">
+        <TopBar />
+        <EmployeeConnectionBanner />
 
         {/* Main content */}
         <div className="flex flex-1 overflow-hidden">
@@ -1562,6 +1569,11 @@ export default function App() {
               <ErpPage />
             </div>
           )}
+          {view === 'browser' && (
+            <div className="flex-1 h-full overflow-hidden">
+              <BrowserProfilesView />
+            </div>
+          )}
           {view === 'dashboard' && (
             <Dashboard />
           )}
@@ -1577,21 +1589,7 @@ export default function App() {
       {notification && (
         <div
           onClick={hideNotification}
-          className={`fixed top-6 right-6 z-50 max-w-sm w-[calc(100vw-3rem)] cursor-pointer
-            flex items-start gap-3 pl-4 pr-3 py-3.5 rounded-2xl shadow-2xl transition-all
-            ${theme === 'light'
-              ? 'bg-white border border-gray-200 shadow-gray-300/50'
-              : 'bg-gray-900 border border-gray-700/70 shadow-black/60'
-            }`}
-          style={{
-            borderLeftWidth: '0.25rem',
-            borderLeftStyle: 'solid',
-            borderLeftColor:
-              notification.type === 'success' ? '#22c55e'
-              : notification.type === 'error'   ? '#ef4444'
-              : notification.type === 'warning' ? '#f59e0b'
-              : '#3b82f6',
-          }}
+          className="mac-toast fixed left-1/2 bottom-6 -translate-x-1/2 z-50 max-w-sm w-[calc(100vw-3rem)] cursor-pointer flex items-start gap-3 pl-4 pr-3 py-3"
         >
           {/* Icon badge */}
           <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold mt-0.5

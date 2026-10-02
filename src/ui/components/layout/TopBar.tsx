@@ -9,6 +9,7 @@ import { useEmployeeStore } from '@/store/employeeStore';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 import { useCRMStore } from '@/store/crmStore';
 import { useChatStore } from '@/store/chatStore';
+import AppearanceMenu from './AppearanceMenu';
 import WorkspaceSwitcher from '@/components/common/WorkspaceSwitcher';
 import { useErpNotificationStore } from '@/store/erp/erpNotificationStore';
 import { useErpEmployeeStore } from '@/store/erp/erpEmployeeStore';
@@ -24,9 +25,23 @@ const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSI
 /** Map scale factor to px value for display */
 const scaleToPx = (s: number) => Math.round(16 * s);
 
-export default function TopBar() {
+/** Tiêu đề toolbar theo màn hiện tại. */
+const VIEW_TITLES: Record<string, string> = {
+  dashboard: 'Tổng quan',
+  chat: 'Chat',
+  friends: 'Bạn bè',
+  crm: 'CRM',
+  workflow: 'Workflow',
+  integration: 'Tích hợp',
+  analytics: 'Báo cáo',
+  erp: 'Quản lý công việc',
+  browser: 'Trình duyệt',
+  settings: 'Cài đặt',
+};
+
+export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'startup' }) {
   const [isMaximized, setIsMaximized] = useState(false);
-  const { theme, setTheme, showNotification, fontSizeScale, setFontSizeScale } = useAppStore();
+  const { showNotification, fontSizeScale, setFontSizeScale, view, toggleSidebarCollapsed, sidebarCollapsed, windowAppearance } = useAppStore();
   const { activeAccountId } = useAccountStore();
   const [loadingOldMsgs, setLoadingOldMsgs] = useState(false);
   const [lockScreenEnabled, setLockScreenEnabled] = useState(false);
@@ -358,6 +373,48 @@ export default function TopBar() {
     }
   }, [activeAccountId, loadingOldMsgs, showNotification]);
 
+  const nativeControls = windowAppearance.nativeControls;
+  const toolbarClass = `app-toolbar app-drag ${nativeControls ? 'has-native-controls' : ''}`;
+
+  // Nút cửa sổ tự vẽ: chỉ khi không phải macOS và không có overlay gốc.
+  const maximizeLabel = isMaximized ? 'Phục hồi' : 'Phóng to';
+  const trafficGlyph = { width: 8, height: 8, viewBox: '0 0 8 8', fill: 'none', stroke: 'rgba(0,0,0,0.55)', strokeWidth: 1.2, strokeLinecap: 'round' as const };
+  const windowButtons = !isMac && !nativeControls ? (
+    windowAppearance.platform === 'linux' ? (
+    <div className="app-traffic app-no-drag" role="group" aria-label="Điều khiển cửa sổ">
+      <button type="button" className="app-traffic-btn is-minimize" onClick={() => ipc.window?.minimize()} title="Thu nhỏ" aria-label="Thu nhỏ">
+        <svg {...trafficGlyph}><path d="M1 4h6" /></svg>
+      </button>
+      <button type="button" className="app-traffic-btn is-maximize" onClick={() => { ipc.window?.maximize(); setIsMaximized(!isMaximized); }} title={maximizeLabel} aria-label={maximizeLabel}>
+        <svg {...trafficGlyph}><path d="M1 4h6M4 1v6" /></svg>
+      </button>
+      <button type="button" className="app-traffic-btn is-close" onClick={() => ipc.window?.close()} title="Đóng" aria-label="Đóng">
+        <svg {...trafficGlyph}><path d="M1.5 1.5l5 5M6.5 1.5l-5 5" /></svg>
+      </button>
+    </div>
+    ) : (
+    <div className="flex items-stretch -mr-[15px] ml-2">
+      <button type="button" onClick={() => ipc.window?.minimize()} className="app-window-btn" title="Thu nhỏ" aria-label="Thu nhỏ">
+        <svg width="10" height="1" viewBox="0 0 10 1" fill="currentColor"><rect width="10" height="1" /></svg>
+      </button>
+      <button type="button" onClick={() => { ipc.window?.maximize(); setIsMaximized(!isMaximized); }} className="app-window-btn" title={isMaximized ? 'Phục hồi' : 'Phóng to'} aria-label={isMaximized ? 'Phục hồi' : 'Phóng to'}>
+        {isMaximized ? (
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1"><rect x="2" y="0" width="8" height="8" /><rect x="0" y="2" width="8" height="8" fill="none" /></svg>
+        ) : (
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1"><rect x="0" y="0" width="10" height="10" /></svg>
+        )}
+      </button>
+      <button type="button" onClick={() => ipc.window?.close()} className="app-window-btn is-close" title="Đóng" aria-label="Đóng">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2"><line x1="0" y1="0" x2="10" y2="10" /><line x1="10" y1="0" x2="0" y2="10" /></svg>
+      </button>
+    </div>
+    )
+  ) : null;
+
+  if (variant === 'startup') {
+    return <header className={toolbarClass}><div className="flex-1" />{windowButtons}</header>;
+  }
+
   return (
     <>
       <style>{`
@@ -374,31 +431,14 @@ export default function TopBar() {
           90%      { transform: translate(-0.5px, -1.2px) rotate(-0.3deg); }
         }
       `}</style>
-    <div
-      className="flex items-center justify-between h-9 bg-gray-900 border-b border-gray-700 flex-shrink-0"
-      style={{ WebkitAppRegion: 'drag' } as any}
-    >
-      <div className="flex items-center gap-2 px-3" style={{ WebkitAppRegion: 'no-drag', paddingLeft: isMac ? 72 : 12 } as any}>
-        <span className="text-blue-400 font-bold text-sm">AHV Connect</span>
-        <span className="text-gray-400 text-xs">v{APP_VERSION}</span>
-        {updateInfo && (updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'downloaded') && (
-          <button onClick={openUpdatePopup}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
-              updateStatus === 'downloaded'
-                ? 'bg-green-500/15 border border-green-500/30 text-green-500 hover:bg-green-500/25'
-                : updateStatus === 'downloading'
-                ? 'bg-blue-500/15 border border-blue-500/30 text-blue-400 hover:bg-blue-500/25'
-                : 'bg-orange-500/15 border border-orange-500/30 text-orange-600 hover:bg-orange-500/25'
-            }`}
-            title={updateStatus === 'downloaded'
-              ? `Đã tải xong v${updateInfo.version} — nhấn để cài đặt`
-              : updateStatus === 'downloading'
-              ? `Đang tải v${updateInfo.version}...`
-              : `Có bản mới v${updateInfo.version} - nhấn để cập nhật`}>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2v13M5 12l7 7 7-7"/><line x1="3" y1="22" x2="21" y2="22"/></svg>
-            {updateStatus === 'downloaded' ? `Sẵn sàng v${updateInfo.version}` : `New v${updateInfo.version}`}
-          </button>
-        )}
+    <header className={toolbarClass}>
+      <div className="app-toolbar-left">
+        <button type="button" className="app-toolbar-btn" onClick={toggleSidebarCollapsed}
+          title={sidebarCollapsed ? 'Mở rộng thanh bên' : 'Thu gọn thanh bên'} aria-label={sidebarCollapsed ? 'Mở rộng thanh bên' : 'Thu gọn thanh bên'}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
+        </button>
+        <span className="app-toolbar-title">{VIEW_TITLES[view] || 'AHV Connect'}</span>
+        <span className="app-toolbar-sep" />
 
         {/* Workspace switcher - only shows when multiple workspaces exist */}
         <WorkspaceSwitcher />
@@ -456,7 +496,7 @@ export default function TopBar() {
 
             {/* Reconnect popup */}
             {reconnectOpen && (
-              <div className="reconnect-popup absolute left-0 top-full mt-2 w-72 bg-gray-800 border border-gray-600 rounded-xl shadow-2xl z-[9999] p-4">
+              <div className="reconnect-popup mac-popover absolute left-0 top-full mt-2 w-72 z-[9999] p-4">
                 <p className="text-xs text-gray-400 font-medium mb-2"><PluginIcon className="w-4 h-4 inline" /> Kết nối lại với BOSS</p>
                 <div className="space-y-2">
                   <input
@@ -513,17 +553,14 @@ export default function TopBar() {
         )}
       </div>
 
-      {/* Window controls */}
-      <div
-        className="flex items-center"
-        style={{ WebkitAppRegion: 'no-drag' } as any}
-      >
+      {/* Toolbar actions */}
+      <div className="app-toolbar-right">
         {/* Tải tin nhắn cũ (toàn phiên đăng nhập) - ẩn với nhân viên */}
         {activeAccountId && empMode !== 'employee' && (
           <button
             onClick={handleRequestOldMessages}
             disabled={loadingOldMsgs}
-            className={`w-9 h-9 flex items-center justify-center transition-colors ${loadingOldMsgs ? 'text-blue-400 bg-gray-700' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}
+            className={`app-toolbar-btn ${loadingOldMsgs ? 'text-blue-400' : ''}`}
             title={(() => {
               const acc = useAccountStore.getState().accounts.find(a => a.zalo_id === activeAccountId);
               return isFacebook(acc?.channel)
@@ -576,7 +613,8 @@ export default function TopBar() {
           <div className="relative" ref={bellRef}>
             <button
               onClick={() => setBellOpen(v => !v)}
-              className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors relative"
+              className="app-toolbar-btn"
+              aria-expanded={bellOpen}
               title="Thông báo ERP"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -584,13 +622,13 @@ export default function TopBar() {
                 <path d="M13.73 21a2 2 0 0 1-3.46 0" />
               </svg>
               {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-[14px] h-3.5 px-1 bg-red-500 text-white text-[9px] rounded-full flex items-center justify-center">
+                <span className="app-toolbar-badge">
                   {unreadCount > 99 ? '99+' : unreadCount}
                 </span>
               )}
             </button>
             {bellOpen && (
-              <div className="absolute right-0 top-full mt-1 z-[9999]">
+              <div className="absolute right-0 top-full mt-1 z-[9999] app-no-drag">
                 <NotificationCenter onClose={() => setBellOpen(false)} />
               </div>
             )}
@@ -606,7 +644,7 @@ export default function TopBar() {
         {lockScreenEnabled && (
           <button
             onClick={() => window.dispatchEvent(new CustomEvent('lockScreen:lock'))}
-            className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-amber-400 transition-colors"
+            className="app-toolbar-btn"
             title="Khoá ứng dụng (Ctrl+Shift+L)"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -616,36 +654,14 @@ export default function TopBar() {
           </button>
         )}
 
-        {/* Theme toggle */}
-        <button
-          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors"
-          title={theme === 'dark' ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'}
-        >
-          {theme === 'dark' ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="5"/>
-              <line x1="12" y1="1" x2="12" y2="3"/>
-              <line x1="12" y1="21" x2="12" y2="23"/>
-              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-              <line x1="1" y1="12" x2="3" y2="12"/>
-              <line x1="21" y1="12" x2="23" y2="12"/>
-              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-            </svg>
-          ) : (
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-            </svg>
-          )}
-        </button>
+        <AppearanceMenu />
 
         {/* ── More dropdown (guide + bug report + font size) ── */}
         <div className="relative" ref={moreRef}>
           <button
             onClick={() => setMoreOpen(v => !v)}
-            className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors relative"
+            className="app-toolbar-btn"
+            aria-expanded={moreOpen}
             title="Thêm (cỡ chữ, hướng dẫn, báo lỗi)"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -656,7 +672,7 @@ export default function TopBar() {
           </button>
 
           {moreOpen && (
-            <div className="absolute right-0 top-full mt-1 w-64 bg-gray-800 border border-gray-600 rounded-xl shadow-2xl z-[9999] overflow-hidden">
+            <div className="mac-popover absolute right-0 top-full mt-1.5 w-64 z-[9999] overflow-hidden">
               {/* Font size slider */}
               <div className="px-4 py-3 border-b border-gray-700">
                 <div className="flex items-center justify-between mb-2">
@@ -731,51 +747,10 @@ export default function TopBar() {
             </div>
           )}
         </div>
-
-        {!isMac && (
-          <>
-            <button
-              onClick={() => ipc.window?.minimize()}
-              className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors"
-              title="Thu nhỏ"
-            >
-              <svg width="10" height="1" viewBox="0 0 10 1" fill="currentColor">
-                <rect width="10" height="1" />
-              </svg>
-            </button>
-            <button
-              onClick={() => {
-                ipc.window?.maximize();
-                setIsMaximized(!isMaximized);
-              }}
-              className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-gray-700 hover:text-white transition-colors"
-              title={isMaximized ? 'Phục hồi' : 'Phóng to'}
-            >
-              {isMaximized ? (
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
-                  <rect x="2" y="0" width="8" height="8" />
-                  <rect x="0" y="2" width="8" height="8" fill="none" />
-                </svg>
-              ) : (
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
-                  <rect x="0" y="0" width="10" height="10" />
-                </svg>
-              )}
-            </button>
-            <button
-              onClick={() => ipc.window?.close()}
-              className="w-9 h-9 flex items-center justify-center text-gray-400 hover:bg-red-600 hover:text-white transition-colors"
-              title="Đóng"
-            >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
-                <line x1="0" y1="0" x2="10" y2="10" />
-                <line x1="10" y1="0" x2="0" y2="10" />
-              </svg>
-            </button>
-          </>
-        )}
       </div>
-    </div>
+
+      {windowButtons}
+    </header>
     </>
   );
 }
