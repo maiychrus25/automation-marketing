@@ -1,8 +1,10 @@
 # Build bản cài AHV Connect cho Linux, Windows và macOS.
 #
 # Chạy: tab Actions → "Build" → Run workflow (chọn nhánh), hoặc đẩy tag `v*`.
-# Kết quả: mục Artifacts của lần chạy (giữ 14 ngày). Không phát hành công khai
-# (bản nội bộ, package.json build.publish = []).
+# Kết quả: mục Artifacts của lần chạy (giữ 14 ngày).
+# Phát hành: tick "Tạo Release" khi Run workflow (tag lấy từ version trong package.json),
+# hoặc đẩy tag `v*` → job "Phát hành" tạo GitHub Release kèm toàn bộ bản cài.
+# Repo private nên Release chỉ người trong repo thấy.
 #
 # Mỗi hệ điều hành build trên runner của chính nó, nên các thành phần native
 # (better-sqlite3, ffmpeg-static, @ngrok/ngrok, cloudflared, cầu nối Go E2EE)
@@ -11,6 +13,11 @@ name: Build
 
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Tạo Release (tag v<version trong package.json>) sau khi build xong'
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*'
@@ -138,3 +145,44 @@ jobs:
             dist-electron-build/*.zip
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Phát hành
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xác định tag phát hành
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Tải các bản cài vừa build
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ahv-connect-*
+          path: release-files
+          merge-multiple: true
+
+      - name: Liệt kê bản cài
+        run: ls -la release-files
+
+      - name: Tạo GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: AHV Connect ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: release-files/*

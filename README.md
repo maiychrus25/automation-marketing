@@ -72,6 +72,15 @@ Trước khi đóng gói, workflow chạy type-check và unit test.
 - Hoặc đẩy một tag bắt đầu bằng `v`, ví dụ `git tag v26.8.5 && git push origin v26.8.5`.
 - Tải bản cài ở mục **Artifacts** của lần chạy (giữ 14 ngày).
 
+**Phát hành (Release):** sau khi build xong cả bốn bản, job "Phát hành" tạo một
+GitHub Release kèm toàn bộ bản cài, khi:
+
+- Run workflow có tick **Tạo Release**: tag là `v` + `version` trong
+  [package.json](./package.json) (tăng `version` trước khi phát hành bản mới); hoặc
+- đẩy tag `v*`: tag đó là tên Release.
+
+Repo private nên Release chỉ người có quyền vào repo thấy.
+
 Bản macOS chưa ký bằng chứng chỉ Apple (chỉ ký ad-hoc). Lần mở đầu, macOS sẽ
 chặn: chuột phải vào app → **Open**, hoặc chạy
 `xattr -cr "/Applications/AHV Connect.app"`.
