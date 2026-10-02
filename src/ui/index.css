@@ -238,6 +238,7 @@ html[data-theme="dark"] {
   .app-group-action:hover { background: var(--hover); color: var(--text-primary); }
 
   .app-accounts { flex: 0 1 auto; min-height: 80px; max-height: 45%; overflow-y: auto; padding-bottom: 4px; }
+  .app-accounts:empty { display: none; }
   .app-account {
     position: relative; width: 100%; height: 36px;
     display: flex; align-items: center; gap: 9px;
@@ -268,6 +269,7 @@ html[data-theme="dark"] {
   .app-nav-item.is-active { background: var(--selected); color: var(--accent-text); }
   .app-nav-item.is-sub { padding-left: 35px; }
   .app-sidebar.is-collapsed .app-nav-item { height: 40px; justify-content: center; padding: 0; }
+  .app-nav-item svg:not(.app-nav-chevron) { width: 17px; height: 17px; flex: 0 0 17px; }
   .app-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .app-nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); margin-left: auto; }
   .app-sidebar.is-collapsed .app-nav-dot { position: absolute; top: 8px; right: 10px; }

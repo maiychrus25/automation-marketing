@@ -98,7 +98,8 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Ô lọc ẩn khi thu gọn, nên bỏ lọc để danh sách không bị lọc ngầm.
-  const query = collapsed ? '' : filter.trim().toLowerCase();
+  const filterVisible = !collapsed && accounts.length >= FILTER_THRESHOLD;
+  const query = filterVisible ? filter.trim().toLowerCase() : '';
   const shown = query
     ? accounts.filter((a) => (a.full_name || '').toLowerCase().includes(query) || (a.phone || '').includes(query))
     : accounts;
@@ -146,6 +147,7 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
             type="button"
             className={`app-account ${mergedInboxFilterAccount === null ? 'is-active' : ''}`}
             onClick={() => setMergedInboxFilter(null)}
+            aria-label="Tất cả tài khoản"
             title="Chọn tất cả tài khoản"
           >
             <span className="w-6 h-6 rounded-full bg-gray-700 flex items-center justify-center flex-shrink-0">
@@ -164,6 +166,7 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
                 type="button"
                 className={`app-account ${isSelected ? 'is-active' : ''}`}
                 onClick={() => setMergedInboxFilter(isSelected ? null : zaloId)}
+                aria-label={account.full_name || zaloId}
                 title={`${account.full_name || zaloId}${isSelected ? ' - đang lọc' : ' - nhấn để lọc'}`}
               >
                 <AccountAvatar account={account} size={collapsed ? 32 : 24} />
@@ -189,7 +192,7 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
           </button>
         )}
       </div>
-      {!collapsed && accounts.length >= FILTER_THRESHOLD && (
+      {filterVisible && (
         <div className="px-1 pb-1.5 flex-shrink-0">
           <input
             value={filter}
@@ -225,6 +228,8 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
                 type="button"
                 className={`app-account ${isActive ? 'is-active' : ''} ${dragOverIndex === index ? 'is-drag-over' : ''} ${listenerDead ? 'ring-1 ring-inset ring-red-500/60' : ''}`}
                 onClick={() => openAccount(account)}
+                aria-label={account.full_name || account.zalo_id}
+                aria-current={isActive ? 'true' : undefined}
                 title={accountTooltip(account, listenerDead)}
                 style={{ cursor: canDrag ? 'grab' : 'pointer' }}
               >
