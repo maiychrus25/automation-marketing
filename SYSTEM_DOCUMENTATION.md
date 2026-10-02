@@ -1,4 +1,4 @@
-# Tài liệu tổng thể hệ thống AHV Connect
+# Tài liệu tổng thể hệ thống MaiHub
 
 > Tài liệu mô tả hệ thống theo mã nguồn tại repository này, không phải cam kết về môi trường production. Những nội dung chỉ suy ra từ mã nhưng chưa được chạy kiểm chứng được gắn nhãn **Cần xác nhận vận hành**.
 
@@ -6,18 +6,18 @@
 
 | Thuộc tính | Giá trị |
 |---|---|
-| Tên hệ thống | AHV Connect |
+| Tên hệ thống | MaiHub (trước 26.9.0: MaiHub) |
 | Phiên bản ứng dụng được khảo sát | `26.8.5` |
 | Phiên bản tài liệu | `1.0` |
 | Ngày lập | 2026-09-18 |
 | Trạng thái | Baseline theo mã nguồn nhánh hiện tại |
-| Chủ sở hữu nghiệp vụ | Trung tâm Đào tạo Lái xe AHV |
+| Chủ sở hữu | Maiychrus (dự án cá nhân) |
 | Độc giả | Ban vận hành, BA/PM, đội CNTT, phát triển, kiểm thử, hỗ trợ người dùng |
 | Nguồn sự thật | Mã nguồn, cấu hình build và tài liệu nội bộ trong repository |
 
 ### 0.1 Phạm vi
 
-Tài liệu bao phủ ứng dụng desktop AHV Connect: kiến trúc Electron/React, IPC, các dịch vụ nghiệp vụ, SQLite, bridge Go cho Facebook E2EE, các module Chat, CRM, ERP, Workflow, AI, Integrations và Workspace; đồng thời mô tả chức năng, phân quyền, giao diện chính, dữ liệu, tích hợp, bảo mật, vận hành và bộ 15 sản phẩm BA.
+Tài liệu bao phủ ứng dụng desktop MaiHub: kiến trúc Electron/React, IPC, các dịch vụ nghiệp vụ, SQLite, bridge Go cho Facebook E2EE, các module Chat, CRM, ERP, Workflow, AI, Integrations và Workspace; đồng thời mô tả chức năng, phân quyền, giao diện chính, dữ liệu, tích hợp, bảo mật, vận hành và bộ 15 sản phẩm BA.
 
 Ngoài phạm vi:
 
@@ -36,7 +36,7 @@ Ngoài phạm vi:
 
 ## 1. Tổng quan hệ thống
 
-AHV Connect là ứng dụng desktop nội bộ, hợp nhất vận hành nhiều tài khoản Zalo, Facebook và Telegram với CRM, ERP, workflow tự động, trợ lý AI và tích hợp nghiệp vụ. Renderer chạy React; Electron main process nắm quyền hệ điều hành, kết nối kênh, IPC và dữ liệu; SQLite lưu dữ liệu cục bộ trong thư mục `userData` của ứng dụng.
+MaiHub là ứng dụng desktop nội bộ, hợp nhất vận hành nhiều tài khoản Zalo, Facebook và Telegram với CRM, ERP, workflow tự động, trợ lý AI và tích hợp nghiệp vụ. Renderer chạy React; Electron main process nắm quyền hệ điều hành, kết nối kênh, IPC và dữ liệu; SQLite lưu dữ liệu cục bộ trong thư mục `userData` của ứng dụng.
 
 Các chế độ vận hành được mã hóa gồm:
 
@@ -130,7 +130,7 @@ sequenceDiagram
     participant UI as React renderer
     participant EXT as Kênh/remote workspace
 
-    OS->>Main: Khởi chạy AHV Connect
+    OS->>Main: Khởi chạy MaiHub
     Main->>Main: Giữ single-instance lock
     Main->>WM: Khởi tạo cấu hình workspace
     WM->>DB: Chọn database của workspace active
@@ -293,8 +293,8 @@ SQLite được bật WAL trong `DatabaseService`. Thay vì liệt kê mọi c�
 
 ### 5.1 Dữ liệu và vòng đời
 
-- Database và media nằm trong Electron `userData`; tên app làm thư mục hiện là AHV Connect.
-- Dữ liệu cũ không tự chuyển sang thư mục AHV Connect. Có hướng dẫn copy khi app đã tắt trong `NOTICE.md`; **Cần xác nhận vận hành** trên từng OS trước khi di trú thật.
+- Database và media nằm trong Electron `userData`; thư mục là `MaiHub`. Lần đầu chạy 26.9.0, thư mục `MaiHub` cũ được đổi tên thành `MaiHub` (`src/services/app/legacyDataMigration.ts`); trên Linux/macOS dữ liệu mã hóa bằng `safeStorage` không giải mã được sau khi đổi tên app nên phải đăng nhập lại.
+- Dữ liệu cũ không tự chuyển sang thư mục MaiHub. Có hướng dẫn copy khi app đã tắt trong `NOTICE.md`; **Cần xác nhận vận hành** trên từng OS trước khi di trú thật.
 - Chưa có backup tự động được mô tả trong mã/tài liệu hiện hành; vận hành phải sao lưu database, config và media trước nâng cấp.
 - Tên tệp `ahv-connect-tool.db` và một số khóa `ahv-connect_*` được giữ để tương thích.
 
@@ -317,7 +317,7 @@ flowchart TB
       Y[Chuyển phản hồi]
     end
 
-    subgraph L3[AHV Connect]
+    subgraph L3[MaiHub]
       D[Nhận và chuẩn hóa tin nhắn]
       E[Lưu message và contact]
       F{Có workflow phù hợp?}
@@ -361,7 +361,7 @@ flowchart LR
       N[Xem kết quả]
     end
 
-    subgraph SYS[AHV Connect]
+    subgraph SYS[MaiHub]
       F[Đặt contact ở pending]
       G{Đến giờ và chưa vượt giới hạn?}
       H[Chuyển contact sang sending]
@@ -701,7 +701,7 @@ Nguồn: `src/ui/components/settings/EmployeeSettings.tsx`, `src/models/employee
 ## 13. Sản phẩm BA 8 — Sitemap
 
 ```text
-AHV Connect
+MaiHub
 ├── Dashboard
 ├── Chat
 │   ├── Account / hội thoại
@@ -890,7 +890,7 @@ Business rule: role và override được kiểm tra phía main; status thuộc 
 
 ### Scenario A — Nhân viên xử lý học viên mới
 
-Lan mở AHV Connect, chọn workspace công ty và tài khoản được phân công. Một học viên gửi câu hỏi qua Zalo; Lan thấy hội thoại mới, đọc lịch sử, dùng mẫu trả lời rồi chỉnh lại cho phù hợp. Lan gắn nhãn “Học viên tiềm năng”, thêm ghi chú và tạo task gọi lại. Học viên nhận được phản hồi, quản lý thấy task và lịch sử xử lý.
+Lan mở MaiHub, chọn workspace công ty và tài khoản được phân công. Một học viên gửi câu hỏi qua Zalo; Lan thấy hội thoại mới, đọc lịch sử, dùng mẫu trả lời rồi chỉnh lại cho phù hợp. Lan gắn nhãn “Học viên tiềm năng”, thêm ghi chú và tạo task gọi lại. Học viên nhận được phản hồi, quản lý thấy task và lịch sử xử lý.
 
 ### Scenario B — Quản lý chạy chiến dịch nhắc lịch
 
@@ -1020,7 +1020,7 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
 
 ### 21.1 Nguồn gốc và giấy phép
 
-- AHV Connect là bản nội bộ; mã nguồn cấp repository mang giấy phép MIT và phải giữ thông báo bản quyền/giấy phép khi phân phối. Nguồn: `LICENSE`, `NOTICE.md`.
+- MaiHub là bản nội bộ; mã nguồn cấp repository mang giấy phép MIT và phải giữ thông báo bản quyền/giấy phép khi phân phối. Nguồn: `LICENSE`, `NOTICE.md`.
 - `src/bridge-e2ee/bridge/` chứa mã có nguồn từ `meta-messenger.js`, được ghi nhận theo AGPL-3.0; `main.go` và Python wrapper được tài liệu bridge mô tả là mã gốc. Nguồn: `src/bridge-e2ee/README.md`.
 - Trước khi phân phối artifact ra ngoài phạm vi nội bộ, cần rà soát nghĩa vụ giấy phép của bridge và toàn bộ dependency đi kèm; tài liệu này không thay thế tư vấn pháp lý.
 
@@ -1066,7 +1066,7 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
 | TD-11 | Một số method E2EE có trong bridge nhưng chưa wire qua entrypoint | Capability Facebook không đầy đủ | Chỉ wire khi có use case và test E2EE |
 | TD-12 | Đã xử lý 02/10/2026: có `npm test` (jest); ts-jest chỉ chuyển mã, type-check do `tsc --noEmit` | Lỗi kiểu trong file test chỉ bị bắt bởi `tsc`, không bởi jest | Luôn chạy cả `tsc --noEmit` và `npm test` trước khi merge |
 | TD-13 | Chưa có SLA/performance baseline | Không thể kết luận tải tối đa | Benchmark theo dataset/workspace thực |
-| TD-14 | Di trú dữ liệu → AHV Connect là thủ công | Rủi ro thao tác sai | Runbook, backup và dry-run trên từng OS |
+| TD-14 | Di trú dữ liệu → MaiHub là thủ công | Rủi ro thao tác sai | Runbook, backup và dry-run trên từng OS |
 | TD-15 | UI campaign có preset delay 5–15 giây nhưng queue ép tối thiểu 30 giây | Người vận hành hiểu sai nhịp gửi thực tế | Đồng bộ validation/preset với `MIN_DELAY_MS` hoặc hiển thị rõ delay hiệu lực |
 
 ## 24. Traceability
