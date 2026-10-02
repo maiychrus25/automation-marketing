@@ -1,4 +1,4 @@
-# Build bản cài AHV Connect cho Linux, Windows và macOS.
+# Build bản cài MaiHub cho Linux, Windows và macOS.
 #
 # Chạy: tab Actions → "Build" → Run workflow (chọn nhánh), hoặc đẩy tag `v*`.
 # Kết quả: mục Artifacts của lần chạy (giữ 14 ngày).
@@ -136,7 +136,7 @@ jobs:
       - name: Tải lên bản cài
         uses: actions/upload-artifact@v4
         with:
-          name: ahv-connect-${{ matrix.name }}
+          name: maihub-${{ matrix.name }}
           path: |
             dist-electron-build/*.AppImage
             dist-electron-build/*.deb
@@ -170,7 +170,7 @@ jobs:
       - name: Tải các bản cài vừa build
         uses: actions/download-artifact@v4
         with:
-          pattern: ahv-connect-*
+          pattern: maihub-*
           path: release-files
           merge-multiple: true
 
@@ -181,7 +181,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: AHV Connect ${{ steps.version.outputs.tag }}
+          name: MaiHub ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           fail_on_unmatched_files: true

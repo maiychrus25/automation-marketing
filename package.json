@@ -1,6 +1,6 @@
 {
-  "name": "ahv-connect",
-  "version": "26.8.6",
+  "name": "maihub",
+  "version": "26.9.0",
   "description": "Phần mềm desktop quản lý Zalo, Facebook & Telegram cá nhân Đa tài khoản tích hợp CRM, ERP, POS, Workflow và AI Assistant giúp đội nhóm bán hàng, chăm sóc khách hàng và marketing trên Zalo vận hành tập trung trong một ứng dụng duy nhất.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -16,8 +16,8 @@
     "rebuild:native": "node scripts/rebuild-native.js",
     "production": "npm run build:bridge-e2ee && tsc -p tsconfig.electron.prod.json && node scripts/strip-console.js && npm run build:renderer && npm run rebuild:native && electron-builder --publish never"
   },
-  "author": "Trung tam Dao tao Lai xe AHV <it@ahvdtlx.com>",
-  "homepage": "https://cms-dev.ahvdtlx.com",
+  "author": "MaiHub",
+  "homepage": "https://github.com/maiychrus25/automation-marketing",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.7.8",
@@ -99,8 +99,8 @@
     "zustand": "^5.0.12"
   },
   "build": {
-    "appId": "com.ahv.connect",
-    "productName": "AHV Connect",
+    "appId": "com.maihub.app",
+    "productName": "MaiHub",
     "forceCodeSigning": false,
     "npmRebuild": false,
     "publish": [],
@@ -159,9 +159,9 @@
       "signAndEditExecutable": false
     },
     "protocols": {
-      "name": "AHV Connect Deep Link",
+      "name": "MaiHub Deep Link",
       "schemes": [
-        "ahvconnect"
+        "maihub"
       ]
     },
     "nsis": {
@@ -195,7 +195,7 @@
       "gatekeeperAssess": false
     },
     "dmg": {
-      "title": "AHV Connect"
+      "title": "MaiHub"
     },
     "linux": {
       "target": [
@@ -206,7 +206,7 @@
       "category": "Network"
     },
     "deb": {
-      "maintainer": "Trung tam Dao tao Lai xe AHV <it@ahvdtlx.com>"
+      "maintainer": "MaiHub <maiychrus25@users.noreply.github.com>"
     }
   }
 }
