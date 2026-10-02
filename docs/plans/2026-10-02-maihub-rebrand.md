@@ -32,9 +32,9 @@
 
 **Files:** Modify `package.json`, `package-lock.json` (2 dòng version + name), `electron/main.ts`, `electron/ipc/lockScreenIpc.ts`, `scripts/patch-electron-icon.js`, `scripts/after-pack.js`, `scripts/build-icons.mjs`, `.github/workflows/build.yml`, `index.html`, `.gitignore`.
 
-- [ ] Thay theo bảng mục 1 của spec. Trong `main.ts`: `app.setName('MaiHub')`, AUMID `com.maihub.app`, scheme `maihub` (6 chỗ), chuỗi khay/thông báo/menu, chú thích.
-- [ ] `package.json`: `name` `maihub`, `version` `26.9.0`, `description` bỏ "cá nhân"? (giữ), `author` `MaiHub`, `homepage` kho GitHub, `build.appId`, `productName`, `protocols.name` `MaiHub Deep Link`, `schemes` `maihub`, `dmg.title`, `deb.maintainer`.
-- [ ] `tsc -p tsconfig.electron.json --noEmit` sạch. Commit `chore(brand): rename app identifiers to MaiHub`.
+- [x] Thay theo bảng mục 1 của spec. Trong `main.ts`: `app.setName('MaiHub')`, AUMID `com.maihub.app`, scheme `maihub` (6 chỗ), chuỗi khay/thông báo/menu, chú thích.
+- [x] `package.json`: `name` `maihub`, `version` `26.9.0`, `description` bỏ "cá nhân"? (giữ), `author` `MaiHub`, `homepage` kho GitHub, `build.appId`, `productName`, `protocols.name` `MaiHub Deep Link`, `schemes` `maihub`, `dmg.title`, `deb.maintainer`.
+- [x] `tsc -p tsconfig.electron.json --noEmit` sạch. Commit `chore(brand): rename app identifiers to MaiHub`.
 
 ## Task 2: Chuyển dữ liệu cũ
 
@@ -42,36 +42,44 @@
 
 **Interfaces:** `planLegacyMigration({ legacyDir, newDir, exists, isLegacyRunning }): 'skip' | 'migrate' | 'blocked'`; `migrateLegacyUserData({ legacyDir, newDir, fs, platform }): { status: 'skipped'|'migrated'|'blocked'|'failed', error? }`.
 
-- [ ] Test trước: skip khi newDir tồn tại; skip khi legacyDir không tồn tại; blocked khi legacy đang chạy (SingletonLock trỏ tới pid sống); migrated khi rename thành công và xóa `SingletonLock/SingletonCookie/SingletonSocket`; failed khi rename ném lỗi (thư mục cũ còn nguyên).
-- [ ] Implement. Trong `main.ts`, ngay sau `app.setName`: gọi `migrateLegacyUserData` với `legacyDir = path.join(app.getPath('appData'), 'AHV Connect')`, `newDir = app.getPath('userData')`. `blocked`/`failed` → `dialog.showErrorBox` ("Hãy thoát AHV Connect rồi mở lại MaiHub" / lỗi), `app.exit(1)`.
-- [ ] jest + tsc sạch. Commit `feat(brand): migrate AHV Connect user data into MaiHub on first launch`.
+- [x] Test trước: skip khi newDir tồn tại; skip khi legacyDir không tồn tại; blocked khi legacy đang chạy (SingletonLock trỏ tới pid sống); migrated khi rename thành công và xóa `SingletonLock/SingletonCookie/SingletonSocket`; failed khi rename ném lỗi (thư mục cũ còn nguyên).
+- [x] Implement. Trong `main.ts`, ngay sau `app.setName`: gọi `migrateLegacyUserData` với `legacyDir = path.join(app.getPath('appData'), 'AHV Connect')`, `newDir = app.getPath('userData')`. `blocked`/`failed` → `dialog.showErrorBox` ("Hãy thoát AHV Connect rồi mở lại MaiHub" / lỗi), `app.exit(1)`.
+- [x] jest + tsc sạch. Commit `feat(brand): migrate AHV Connect user data into MaiHub on first launch`.
 
 ## Task 3: Logo
 
 **Files:** Modify `resources/icons/icon.svg`, dựng lại `resources/icons/*` qua `node scripts/build-icons.mjs`; `src/ui/components/layout/Sidebar.tsx` (dấu hiệu rút gọn); `DESIGN.md` (phần logo).
 
-- [ ] Vẽ hoa mai năm cánh (cánh tròn bán kính ~22, tâm cách gốc 24, chấm tâm bán kính 9 màu nền), giữ `.unread-badge` ẩn. Dựng icon; mở PNG 16/24/32 soi mắt.
-- [ ] Commit `feat(brand): MaiHub plum-blossom logo`.
+- [x] Vẽ hoa mai năm cánh (cánh tròn bán kính ~22, tâm cách gốc 24, chấm tâm bán kính 9 màu nền), giữ `.unread-badge` ẩn. Dựng icon; mở PNG 16/24/32 soi mắt.
+- [x] Commit `feat(brand): MaiHub plum-blossom logo`.
 
 ## Task 4: Chữ trong giao diện và mã nguồn renderer
 
 **Files:** `src/ui/components/{auth/EmployeeLoginScreen,auth/LockScreen,layout/Sidebar,layout/TopBar,settings/Settings,settings/TunnelSettings,settings/LogViewer,settings/IntroductionSettings,workflow/*,integration/platformOrderAdapters,common/UpdateNotification}.tsx|ts`, `src/ui/features/erp/hrm/HrmPage.tsx`, `src/services/workflow/WorkflowEngineService.ts`, `src/ui/components/settings/ChangelogSettings.tsx` (mục 26.9.0).
 
-- [ ] Thay "AHV Connect" → "MaiHub"; bỏ "Trung tâm Đào tạo Lái xe AHV"; `IntroductionSettings` viết lại đoạn giới thiệu (dự án cá nhân, mã nguồn mở, nguồn gốc xem NOTICE). Nguồn đơn hàng `maihub`/`MAIHUB-`; bộ lọc `order_sources: ['maihub', 'ahvconnect']`.
-- [ ] Thêm mục nhật ký 26.9.0. `tsc -p tsconfig.json --noEmit` sạch. Commit `feat(brand): MaiHub strings in the interface`.
+- [x] Thay "AHV Connect" → "MaiHub"; bỏ "Trung tâm Đào tạo Lái xe AHV"; `IntroductionSettings` viết lại đoạn giới thiệu (dự án cá nhân, mã nguồn mở, nguồn gốc xem NOTICE). Nguồn đơn hàng `maihub`/`MAIHUB-`; bộ lọc `order_sources: ['maihub', 'ahvconnect']`.
+- [x] Thêm mục nhật ký 26.9.0. `tsc -p tsconfig.json --noEmit` sạch. Commit `feat(brand): MaiHub strings in the interface`.
 
 ## Task 5: Tài liệu
 
 **Files:** `README.md`, `NOTICE.md` (thêm dòng), `DESIGN.md` (brand/owner, logo), `SYSTEM_DOCUMENTATION.md` (tên và nhà phát hành, mục chuyển dữ liệu).
 
-- [ ] README: tên, mô tả, cài song song và gỡ bản cũ, đăng nhập lại trên Linux/macOS. Commit `docs(brand): MaiHub documentation`.
+- [x] README: tên, mô tả, cài song song và gỡ bản cũ, đăng nhập lại trên Linux/macOS. Commit `docs(brand): MaiHub documentation`.
 
 ## Task 6: Kiểm chứng
 
-- [ ] Ba lệnh kiểm chứng sạch. `grep -rIn -i "ahv"` ngoài danh sách giữ nguyên = 0 kết quả.
-- [ ] Bản cách ly: tạo `<cfg>/AHV Connect` bằng cách chạy bản cũ (hoặc copy dữ liệu nhỏ), chạy bản mới → `<cfg>/MaiHub` có DB, thư mục cũ không còn, app mở được, Sidebar hiện MaiHub và logo mới; chụp light/dark, 1440 và 400 px.
-- [ ] CI build-only trên nhánh. Ghi kết quả vào mục dưới.
+- [x] Ba lệnh kiểm chứng sạch. `grep -rIn -i "ahv"` ngoài danh sách giữ nguyên = 0 kết quả.
+- [x] Bản cách ly: tạo `<cfg>/AHV Connect` bằng cách chạy bản cũ (hoặc copy dữ liệu nhỏ), chạy bản mới → `<cfg>/MaiHub` có DB, thư mục cũ không còn, app mở được, Sidebar hiện MaiHub và logo mới; chụp light/dark, 1440 và 400 px.
+- [x] CI build-only trên nhánh. Ghi kết quả vào mục dưới.
 
-## Kết quả kiểm chứng
+## Kết quả kiểm chứng (02/10/2026, Linux)
 
-(điền khi làm)
+- `tsc` hai cấu hình sạch; `npx jest` 8 suites, 184 test qua; build main + renderer qua.
+- Quét mã nguồn: "AHV" chỉ còn ở danh sách giữ nguyên, trong code chuyển dữ liệu, ghi chú nâng cấp của README/NOTICE/nhật ký phiên bản.
+- Bản cách ly (`XDG_CONFIG_HOME` tạm, bản sao DB thật 16 MB, thư mục browser-profiles, media, SingletonLock trỏ pid chết): lần mở đầu in `[main] Đã chuyển dữ liệu AHV Connect → MaiHub`; thư mục `AHV Connect` biến mất, `MaiHub` có đủ DB, browser-profiles, media, workspaces.json; lần mở thứ hai không chuyển lại. Trong app: 4 tài khoản, 12 workflow, 1 profile trình duyệt; tài khoản hiện "Reconnect"/"Cập nhật Cookie" (khóa mã hóa đổi theo tên app, đúng như spec).
+- Giao diện: tiêu đề cửa sổ MaiHub, logo hoa mai ở sidebar, v26.9.0; không còn chữ "AHV" ở Tổng quan, Cài đặt, Giới thiệu; light/dark, 1440 và 400 px không tràn ngang.
+- Logo: soi 16/24/32/48/64/128 px, hoa và chấm đỏ đọc được ở 16 px.
+
+**Phát hiện và sửa trong lúc kiểm chứng:** `app.getPath('userData')` ngay sau `app.setName()` vẫn trả thư mục mặc định (`Electron`) nên bước chuyển dữ liệu bị bỏ qua. Sửa: `app.setPath('userData', <appData>/MaiHub)` tường minh trước khi chuyển. Lưu ý cho người kiểm thử: chạy app với `--remote-debugging-port` làm Chromium tạo thư mục userData trước khi mã JS chạy, nên bước chuyển dữ liệu sẽ bị bỏ qua; kiểm chuyển dữ liệu bằng lần chạy không có cờ đó.
+
+**Chưa làm:** Windows (rename khi file bị khóa) và macOS (Keychain) chưa thử; chỉ có unit test cho nhánh lỗi.

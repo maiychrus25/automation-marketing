@@ -148,6 +148,9 @@ app.commandLine.appendSwitch('accept-lang', 'vi-VN,vi;q=0.9');
 
 // Đặt tên app (hiện trên taskbar, tray, macOS dock)
 app.setName('MaiHub');
+// setName không cập nhật lại userData ngay (Electron vẫn trả thư mục mặc định "Electron"
+// trong dev); đặt tường minh để thư mục dữ liệu luôn là <appData>/MaiHub.
+app.setPath('userData', path.join(app.getPath('appData'), 'MaiHub'));
 
 // ─── Lần đầu chạy MaiHub: chuyển thư mục dữ liệu của AHV Connect sang ─────────
 // Phải chạy trước requestSingleInstanceLock() vì lock nằm trong userData.
