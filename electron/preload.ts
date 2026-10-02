@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     close: () => ipcRenderer.send('window:close'),
     quit: () => ipcRenderer.send('window:quit'),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    getAppearanceInfo: () => ipcRenderer.invoke('window:getAppearanceInfo'),
+    setAppearance: (payload: { preference: 'light' | 'dark' | 'system'; theme: 'light' | 'dark' }) =>
+      ipcRenderer.send('window:setAppearance', payload),
   },
 
   // ─── Shell ───────────────────────────────────────────────────────

@@ -174,10 +174,11 @@ export default function App() {
   const isMobile = useIsMobile();
   const { mobileShowChat, setMobileShowChat } = useAppStore();
 
-  // ─── Sync theme to <html> element ────────────────────────────────────────
+  // ─── Sync theme to <html> element và tới cửa sổ (nền, nút cửa sổ, vật liệu) ──
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-  }, [theme]);
+    ipc.window?.setAppearance?.({ preference: themePreference, theme });
+  }, [theme, themePreference]);
 
   // ─── "Theo hệ thống": đổi theo khi hệ điều hành đổi sáng/tối ──────────────
   useEffect(() => {

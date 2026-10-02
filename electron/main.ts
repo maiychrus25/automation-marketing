@@ -1,4 +1,6 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, protocol, net, Notification, safeStorage } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, protocol, net, Notification, safeStorage, nativeTheme } from 'electron';
+import * as os from 'os';
+import { resolveWindowAppearance, windowChromeOptions, titleBarOverlayFor, solidBackgroundFor, type WindowTheme } from './windowAppearance';
 import * as path from 'path';
 import * as fs from 'fs';
 import { autoUpdater } from 'electron-updater';
@@ -202,6 +204,8 @@ let tray: Tray | null = null;
 
 function createWindow() {
   const isMac = process.platform === 'darwin';
+  const appearance = resolveWindowAppearance(process.platform, os.release());
+  const initialTheme: WindowTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -209,12 +213,8 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: 'AHV Connect',
-    // Windows: frameless → custom title bar
-    // macOS: hiddenInset → ẩn title bar, giữ traffic light buttons
-    frame: isMac,
-    titleBarStyle: isMac ? 'hiddenInset' : 'default',
-    trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
-    backgroundColor: '#1a1a2e',
+    // Khung, nút cửa sổ và vật liệu theo hệ điều hành (electron/windowAppearance.ts)
+    ...windowChromeOptions(process.platform, appearance, initialTheme),
     icon: cachedNormalIcon && !cachedNormalIcon.isEmpty()
       ? cachedNormalIcon
       : (process.platform === 'win32'
@@ -478,6 +478,25 @@ function registerWindowControls() {
   });
 
   ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
+
+  // Giao diện cửa sổ: renderer hỏi vật liệu/kiểu nút, và báo theme mỗi khi đổi.
+  ipcMain.handle('window:getAppearanceInfo', () => ({
+    platform: process.platform,
+    ...resolveWindowAppearance(process.platform, os.release()),
+  }));
+  ipcMain.on('window:setAppearance', (_event, payload: { preference?: string; theme?: string }) => {
+    const theme = payload?.theme === 'dark' ? 'dark' : payload?.theme === 'light' ? 'light' : null;
+    const preference = payload?.preference;
+    if (!mainWindow || !theme) return;
+    // Gửi preference (không phải theme đã phân giải): "system" phải giữ themeSource = system
+    // để prefers-color-scheme trong renderer còn đổi theo hệ điều hành.
+    if (preference === 'light' || preference === 'dark' || preference === 'system') {
+      nativeTheme.themeSource = preference;
+    }
+    const current = resolveWindowAppearance(process.platform, os.release());
+    if (current.material === 'none') mainWindow.setBackgroundColor(solidBackgroundFor(theme));
+    if (current.nativeControls && process.platform !== 'darwin') mainWindow.setTitleBarOverlay(titleBarOverlayFor(theme));
+  });
 
   // ─── Nhật ký (Logger) → renderer ─────────────────────────────────
   // Hook console toàn cục để cả console.* thẳng (không qua Logger) cũng vào buffer

@@ -132,6 +132,8 @@ interface AppStore {
   setThemePreference: (pref: ThemePreference) => void;
   /** Gọi khi hệ điều hành đổi sáng/tối; chỉ có tác dụng khi đang "Theo hệ thống". */
   syncSystemTheme: (prefersDark: boolean) => void;
+  /** Do main quyết định (electron/windowAppearance.ts); gán một lần trong main.tsx. */
+  windowAppearance: { platform: string; material: 'vibrancy' | 'mica' | 'none'; nativeControls: boolean };
   fontSizeScale: number;
   setFontSizeScale: (scale: number) => void;
 
@@ -387,6 +389,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   notifSettingsOverrides: {},
   theme: resolveTheme(initialThemePreference, systemPrefersDark()),
   themePreference: initialThemePreference,
+  windowAppearance: {
+    platform: (window as any).electronAPI?.platform || 'win32',
+    material: 'none',
+    nativeControls: ((window as any).electronAPI?.platform || 'win32') !== 'darwin',
+  },
   fontSizeScale: loadFontSizeScale(),
   groupInfoCache: {},
   othersConversations: {},

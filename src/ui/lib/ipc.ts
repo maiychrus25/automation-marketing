@@ -15,6 +15,8 @@ declare global {
         close: () => void;
         quit: () => void;
         isMaximized: () => Promise<boolean>;
+        getAppearanceInfo: () => Promise<{ platform: string; material: 'vibrancy' | 'mica' | 'none'; nativeControls: boolean }>;
+        setAppearance: (payload: { preference: 'light' | 'dark' | 'system'; theme: 'light' | 'dark' }) => void;
       };
       shell: {
         openExternal: (url: string) => void;
