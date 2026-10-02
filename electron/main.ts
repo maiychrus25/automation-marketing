@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, protocol, net, Notification, safeStorage, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, protocol, net, Notification, safeStorage, nativeTheme, dialog } from 'electron';
 import * as os from 'os';
 import { resolveWindowAppearance, windowChromeOptions, titleBarOverlayFor, solidBackgroundFor, type WindowTheme } from './windowAppearance';
 import * as path from 'path';
@@ -40,6 +40,7 @@ import CRMQueueService from '../src/services/crm/CRMQueueService';
 import FileStorageService from '../src/services/file/FileStorageService';
 import { SHOW_DEV_TOOLS, IS_DEV_BUILD } from '../src/configs/BuildConfig';
 import Logger from '../src/utils/Logger';
+import { migrateLegacyUserData } from '../src/services/app/legacyDataMigration';
 
 // CHANNEL constant — same as src/ui/lib/channelHelper.ts (electron build excludes src/ui/)
 const CHANNEL = { ZALO: 'zalo', FACEBOOK: 'facebook', TELEGRAM_BOT: 'telegram_bot', TELEGRAM_USER: 'telegram_user' } as const;
@@ -147,6 +148,24 @@ app.commandLine.appendSwitch('accept-lang', 'vi-VN,vi;q=0.9');
 
 // Đặt tên app (hiện trên taskbar, tray, macOS dock)
 app.setName('MaiHub');
+
+// ─── Lần đầu chạy MaiHub: chuyển thư mục dữ liệu của AHV Connect sang ─────────
+// Phải chạy trước requestSingleInstanceLock() vì lock nằm trong userData.
+{
+  const migration = migrateLegacyUserData({
+    legacyDir: path.join(app.getPath('appData'), 'AHV Connect'),
+    newDir: app.getPath('userData'),
+  });
+  if (migration.status === 'blocked' || migration.status === 'failed') {
+    const detail = migration.status === 'failed'
+      ? `Không chuyển được dữ liệu từ AHV Connect: ${migration.error}\nHãy thoát AHV Connect (nếu đang chạy) rồi mở lại MaiHub.`
+      : 'AHV Connect đang chạy. Hãy thoát AHV Connect rồi mở lại MaiHub để chuyển dữ liệu.';
+    dialog.showErrorBox('Chưa chuyển được dữ liệu', detail);
+    app.exit(1);
+  } else if (migration.status === 'migrated') {
+    console.log('[main] Đã chuyển dữ liệu AHV Connect → MaiHub');
+  }
+}
 
 // Windows: đặt AppUserModelId để taskbar/notification hiển thị đúng icon & tên
 // Dev: AUMID unique mỗi lần chạy → Windows tạo icon cache mới → hiện đúng icon
