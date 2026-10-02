@@ -18,6 +18,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # tsc kiểm kiểu renderer cần khoảng 2,4 GB heap (2.300 file, gồm cả kiểu của googleapis);
+  # trần mặc định của Node trên runner khoảng 2 GB nên bị "heap out of memory".
+  # 4 GB vừa với runner ít RAM nhất (macOS Apple Silicon, 7 GB).
+  NODE_OPTIONS: --max-old-space-size=4096
+
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
