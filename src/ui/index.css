@@ -316,6 +316,16 @@ html[data-theme="dark"] {
   .app-window-btn { width: 46px; height: var(--toolbar-height); display: grid; place-items: center; color: var(--text-primary); }
   .app-window-btn:hover { background: var(--hover); }
   .app-window-btn.is-close:hover { background: #c42b1c; color: #fff; }
+  /* Traffic light tự vẽ trên Linux (bên phải toolbar, theo theme macOS của máy).
+     Màu đèn là hằng số của nền tảng (như #c42b1c ở trên), không thuộc token theme. */
+  .app-traffic { display: flex; align-items: center; gap: 8px; margin-left: 12px; flex: 0 0 auto; }
+  .app-traffic-btn { width: 12px; height: 12px; border-radius: 50%; display: grid; place-items: center; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.2); }
+  .app-traffic-btn.is-minimize { background: #febc2e; }
+  .app-traffic-btn.is-maximize { background: #28c840; }
+  .app-traffic-btn.is-close { background: #ff5f57; }
+  .app-traffic-btn svg { opacity: 0; transition: opacity 0.12s; }
+  .app-traffic:hover .app-traffic-btn svg { opacity: 1; }
+  .app-traffic-btn:active { filter: brightness(0.85); }
 
   .mac-popover {
     min-width: 240px; padding: 8px;

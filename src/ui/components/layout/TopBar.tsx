@@ -377,7 +377,22 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
   const toolbarClass = `app-toolbar app-drag ${nativeControls ? 'has-native-controls' : ''}`;
 
   // Nút cửa sổ tự vẽ: chỉ khi không phải macOS và không có overlay gốc.
+  const maximizeLabel = isMaximized ? 'Phục hồi' : 'Phóng to';
+  const trafficGlyph = { width: 8, height: 8, viewBox: '0 0 8 8', fill: 'none', stroke: 'rgba(0,0,0,0.55)', strokeWidth: 1.2, strokeLinecap: 'round' as const };
   const windowButtons = !isMac && !nativeControls ? (
+    windowAppearance.platform === 'linux' ? (
+    <div className="app-traffic app-no-drag" role="group" aria-label="Điều khiển cửa sổ">
+      <button type="button" className="app-traffic-btn is-minimize" onClick={() => ipc.window?.minimize()} title="Thu nhỏ" aria-label="Thu nhỏ">
+        <svg {...trafficGlyph}><path d="M1 4h6" /></svg>
+      </button>
+      <button type="button" className="app-traffic-btn is-maximize" onClick={() => { ipc.window?.maximize(); setIsMaximized(!isMaximized); }} title={maximizeLabel} aria-label={maximizeLabel}>
+        <svg {...trafficGlyph}><path d="M1 4h6M4 1v6" /></svg>
+      </button>
+      <button type="button" className="app-traffic-btn is-close" onClick={() => ipc.window?.close()} title="Đóng" aria-label="Đóng">
+        <svg {...trafficGlyph}><path d="M1.5 1.5l5 5M6.5 1.5l-5 5" /></svg>
+      </button>
+    </div>
+    ) : (
     <div className="flex items-stretch -mr-[15px] ml-2">
       <button type="button" onClick={() => ipc.window?.minimize()} className="app-window-btn" title="Thu nhỏ" aria-label="Thu nhỏ">
         <svg width="10" height="1" viewBox="0 0 10 1" fill="currentColor"><rect width="10" height="1" /></svg>
@@ -393,6 +408,7 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2"><line x1="0" y1="0" x2="10" y2="10" /><line x1="10" y1="0" x2="0" y2="10" /></svg>
       </button>
     </div>
+    )
   ) : null;
 
   if (variant === 'startup') {

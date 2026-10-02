@@ -16,8 +16,8 @@ describe('resolveWindowAppearance', () => {
     expect(resolveWindowAppearance('win32', 'garbage').material).toBe('none');
   });
 
-  it('uses native controls and a solid background on Linux', () => {
-    expect(resolveWindowAppearance('linux', '6.8.0')).toEqual({ material: 'none', nativeControls: true });
+  it('draws its own traffic lights on Linux', () => {
+    expect(resolveWindowAppearance('linux', '6.8.0')).toEqual({ material: 'none', nativeControls: false });
   });
 });
 
@@ -38,6 +38,11 @@ describe('windowChromeOptions', () => {
     const opts = windowChromeOptions('linux', { material: 'none', nativeControls: true }, 'dark');
     expect(opts.backgroundColor).toBe(solidBackgroundFor('dark'));
     expect(opts.backgroundMaterial).toBeUndefined();
+  });
+
+  it('makes the Linux window frameless with a solid background', () => {
+    const opts = windowChromeOptions('linux', resolveWindowAppearance('linux', '6.8.0'), 'dark');
+    expect(opts).toEqual({ frame: false, backgroundColor: solidBackgroundFor('dark') });
   });
 
   it('falls back to a frameless window when native controls are off', () => {

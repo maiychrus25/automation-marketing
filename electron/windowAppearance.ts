@@ -6,7 +6,7 @@ export type WindowTheme = 'light' | 'dark';
 
 export interface WindowAppearance {
   material: WindowMaterial;
-  /** true: nút cửa sổ gốc qua titleBarOverlay; false trên Windows/Linux: nút tự vẽ trong toolbar. */
+  /** true: nút cửa sổ gốc qua titleBarOverlay (Windows); false: macOS dùng traffic light thật, Linux tự vẽ traffic light bên phải toolbar. */
   nativeControls: boolean;
 }
 
@@ -20,6 +20,8 @@ const WINDOWS_MICA_MIN_BUILD = 22621;
  * Quyết định vật liệu và kiểu nút cửa sổ theo hệ điều hành.
  * Phương án dự phòng (docs/plans/2026-10-02-macos-ui.md Task 3): nếu overlay hoặc mica
  * hỏng trên máy thật, đổi giá trị trả về ở đây; không cần sửa chỗ khác.
+ * Linux: overlay gốc vẽ nút kiểu Windows, không theo theme KDE của máy → cửa sổ không khung,
+ * TopBar tự vẽ traffic light (chủ sản phẩm chọn, 02/10/2026).
  */
 export function resolveWindowAppearance(platform: NodeJS.Platform, osRelease: string): WindowAppearance {
   if (platform === 'darwin') return { material: 'vibrancy', nativeControls: false };
@@ -27,7 +29,7 @@ export function resolveWindowAppearance(platform: NodeJS.Platform, osRelease: st
     const build = Number(osRelease.split('.')[2]) || 0;
     return { material: build >= WINDOWS_MICA_MIN_BUILD ? 'mica' : 'none', nativeControls: true };
   }
-  return { material: 'none', nativeControls: true };
+  return { material: 'none', nativeControls: false };
 }
 
 export function solidBackgroundFor(theme: WindowTheme): string {

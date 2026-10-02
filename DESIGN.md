@@ -263,11 +263,13 @@ cần kênh màu đặc cho biến thể độ mờ. `text-white` ở light đư
 
 | | macOS | Windows 11 | Windows 10 | Linux |
 |---|---|---|---|---|
-| Nút cửa sổ | Traffic light thật, căn giữa hàng đầu sidebar (`trafficLightPosition` 20,20) | Nút gốc qua `titleBarOverlay`, cao 52 px, màu theo theme | như Windows 11 | `titleBarOverlay` |
+| Nút cửa sổ | Traffic light thật, căn giữa hàng đầu sidebar (`trafficLightPosition` 20,20) | Nút gốc qua `titleBarOverlay`, cao 52 px, màu theo theme | như Windows 11 | Traffic light tự vẽ bên phải toolbar (vàng thu nhỏ, xanh phóng to, đỏ đóng), cửa sổ không khung |
 | Vật liệu | vibrancy `sidebar` | mica (build ≥ 22621) | nền đặc | nền đặc |
 
-Nút cửa sổ do hệ điều hành vẽ; chỉ khi không có nút gốc toolbar mới vẽ
-`.app-window-btn` (46 × 52 px). Đổi theme thì main cập nhật màu overlay và nền
+Nút cửa sổ do hệ điều hành vẽ trên macOS và Windows. Linux: overlay gốc vẽ nút
+kiểu Windows, không theo theme KDE, nên toolbar vẽ `.app-traffic` (ba chấm 12 px,
+cách nhau 8 px, ký hiệu hiện khi rê chuột vào nhóm; màu đèn là hằng số nền tảng).
+`.app-window-btn` (46 × 52 px) chỉ còn là nhánh dự phòng khi Windows tắt nút gốc. Đổi theme thì main cập nhật màu overlay và nền
 cửa sổ (`window:setAppearance`). Toolbar chừa chỗ cho nút gốc ở mép phải
 (`.app-toolbar.has-native-controls`).
 
