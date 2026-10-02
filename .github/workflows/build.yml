@@ -1,0 +1,130 @@
+# Build bản cài AHV Connect cho Linux, Windows và macOS.
+#
+# Chạy: tab Actions → "Build" → Run workflow (chọn nhánh), hoặc đẩy tag `v*`.
+# Kết quả: mục Artifacts của lần chạy (giữ 14 ngày). Không phát hành công khai
+# (bản nội bộ, package.json build.publish = []).
+#
+# Mỗi hệ điều hành build trên runner của chính nó, nên các thành phần native
+# (better-sqlite3, ffmpeg-static, @ngrok/ngrok, cloudflared, cầu nối Go E2EE)
+# luôn đúng nền tảng và kiến trúc. Không build chéo.
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Kiểm tra (tsc + jest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Cài dependency
+        run: npm ci
+
+      - name: Type-check main process
+        run: npx tsc -p tsconfig.electron.json --noEmit
+
+      - name: Type-check renderer
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Unit test
+        run: npx jest --runInBand
+
+  package:
+    name: Đóng gói ${{ matrix.name }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-latest
+            builder_args: --linux AppImage deb --x64
+          - name: windows-x64
+            runner: windows-latest
+            builder_args: --win nsis --x64
+          - name: macos-arm64
+            runner: macos-latest
+            builder_args: --mac dmg zip --arm64
+          - name: macos-x64
+            runner: macos-15-intel
+            builder_args: --mac dmg zip --x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/bridge-e2ee/go.mod
+          cache-dependency-path: src/bridge-e2ee/go.sum
+
+      - name: Cài dependency
+        run: npm ci
+
+      # Thư mục build/ của cầu nối đang chứa sẵn một bản .exe cũ (và file backup .exe~)
+      # trong repo; xóa để gói chỉ mang đúng binary vừa build cho nền tảng này.
+      - name: Dọn binary cầu nối E2EE cũ
+        shell: bash
+        run: rm -f src/bridge-e2ee/build/*
+
+      - name: Build cầu nối E2EE (Go)
+        run: npm run build:bridge-e2ee
+
+      - name: Build main process
+        run: npx tsc -p tsconfig.electron.prod.json
+
+      - name: Gỡ console.* khỏi main process
+        run: node scripts/strip-console.js
+
+      - name: Build renderer
+        run: npm run build:renderer
+
+      - name: Build better-sqlite3 cho Electron
+        run: npm run rebuild:native
+
+      # macOS: chưa có chứng chỉ Apple → ký ad-hoc (`identity=-`) để app chạy được trên
+      # Apple Silicon; Gatekeeper vẫn cảnh báo lần mở đầu (xem README).
+      - name: Đóng gói (electron-builder)
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          extra=""
+          if [ "${{ runner.os }}" = "macOS" ]; then extra="-c.mac.identity=-"; fi
+          npx electron-builder ${{ matrix.builder_args }} --publish never $extra
+
+      - name: Tải lên bản cài
+        uses: actions/upload-artifact@v4
+        with:
+          name: ahv-connect-${{ matrix.name }}
+          path: |
+            dist-electron-build/*.AppImage
+            dist-electron-build/*.deb
+            dist-electron-build/*.exe
+            dist-electron-build/*.dmg
+            dist-electron-build/*.zip
+          if-no-files-found: error
+          retention-days: 14

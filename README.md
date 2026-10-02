@@ -61,14 +61,33 @@ npm run dev          # Vite dev server + Electron
 
 ## Đóng gói
 
+### Qua GitHub Actions (khuyến nghị)
+
+Workflow [`.github/workflows/build.yml`](./.github/workflows/build.yml) build đủ
+bốn bản trên runner của chính từng hệ điều hành: Linux x64 (AppImage, deb),
+Windows x64 (bộ cài NSIS), macOS Apple Silicon và macOS Intel (dmg, zip).
+Trước khi đóng gói, workflow chạy type-check và unit test.
+
+- Chạy tay: tab **Actions** → **Build** → **Run workflow**, chọn nhánh.
+- Hoặc đẩy một tag bắt đầu bằng `v`, ví dụ `git tag v26.8.5 && git push origin v26.8.5`.
+- Tải bản cài ở mục **Artifacts** của lần chạy (giữ 14 ngày).
+
+Bản macOS chưa ký bằng chứng chỉ Apple (chỉ ký ad-hoc). Lần mở đầu, macOS sẽ
+chặn: chuột phải vào app → **Open**, hoặc chạy
+`xattr -cr "/Applications/AHV Connect.app"`.
+
+### Trên máy
+
 ```bash
-npm run build        # typecheck (electron + renderer) rồi build Vite
-npm run dist         # đóng gói electron-builder theo cấu hình trong package.json
+npm run production   # build cầu nối Go E2EE, main, renderer, native module rồi đóng gói cho hệ điều hành đang chạy
 ```
 
-Artifact ra ở `release/`. Cấu hình đóng gói (appId `com.ahv.connect`,
-productName `AHV Connect`, protocol `ahvconnect://`) nằm ở khối `build` trong
-[package.json](./package.json).
+Cần Go ≥ 1.26 cho cầu nối E2EE. Bản cài ra ở `dist-electron-build/`. Không build
+chéo hệ điều hành: các thành phần native (better-sqlite3, ffmpeg, ngrok,
+cloudflared, cầu nối E2EE) phải đúng nền tảng.
+
+Cấu hình đóng gói (appId `com.ahv.connect`, productName `AHV Connect`, protocol
+`ahvconnect://`) nằm ở khối `build` trong [package.json](./package.json).
 
 ## Dữ liệu
 
