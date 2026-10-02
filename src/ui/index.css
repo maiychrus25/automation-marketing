@@ -296,6 +296,7 @@ html[data-theme="dark"] {
   .app-toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
   .app-toolbar-title { margin-left: 6px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
   .app-toolbar-sep { width: 1px; height: 18px; margin: 0 8px; flex: 0 0 1px; background: var(--border-strong); }
+  .app-toolbar-sep:last-child { display: none; }
   .app-toolbar-btn {
     position: relative; width: 32px; height: 32px; flex: 0 0 32px;
     display: grid; place-items: center; border-radius: 8px;
@@ -337,13 +338,28 @@ html[data-theme="dark"] {
   .mac-menu-item:hover { background: var(--hover); }
   .mac-menu-sep { height: 1px; margin: 6px 4px; background: var(--border); }
   .btn-primary {
-    @apply bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-blue-600 hover:bg-blue-700 active:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-[3px] focus-visible:ring-blue-500/35;
   }
   .btn-secondary {
-    @apply bg-gray-700 hover:bg-gray-600 text-gray-200 px-4 py-2 rounded-lg font-medium transition-colors duration-150;
+    @apply bg-gray-700 hover:bg-gray-600 text-gray-100 border border-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors duration-150 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-blue-500/35;
   }
   .input-field {
-    @apply w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500;
+    @apply w-full bg-gray-700 border border-transparent rounded-lg px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/35;
+  }
+  .mac-overlay { background: var(--overlay); }
+  .mac-alert {
+    background: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-popover);
+    color: var(--text-primary);
+  }
+  .mac-toast {
+    background: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: 9px;
+    box-shadow: var(--shadow-popover);
+    color: var(--text-primary);
   }
 
   .task-editor-select {

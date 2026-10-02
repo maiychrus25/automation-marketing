@@ -1589,21 +1589,7 @@ export default function App() {
       {notification && (
         <div
           onClick={hideNotification}
-          className={`fixed top-6 right-6 z-50 max-w-sm w-[calc(100vw-3rem)] cursor-pointer
-            flex items-start gap-3 pl-4 pr-3 py-3.5 rounded-2xl shadow-2xl transition-all
-            ${theme === 'light'
-              ? 'bg-white border border-gray-200 shadow-gray-300/50'
-              : 'bg-gray-900 border border-gray-700/70 shadow-black/60'
-            }`}
-          style={{
-            borderLeftWidth: '0.25rem',
-            borderLeftStyle: 'solid',
-            borderLeftColor:
-              notification.type === 'success' ? '#22c55e'
-              : notification.type === 'error'   ? '#ef4444'
-              : notification.type === 'warning' ? '#f59e0b'
-              : '#3b82f6',
-          }}
+          className="mac-toast fixed left-1/2 bottom-6 -translate-x-1/2 z-50 max-w-sm w-[calc(100vw-3rem)] cursor-pointer flex items-start gap-3 pl-4 pr-3 py-3"
         >
           {/* Icon badge */}
           <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold mt-0.5
