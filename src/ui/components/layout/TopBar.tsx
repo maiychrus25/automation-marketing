@@ -437,7 +437,7 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
           title={sidebarCollapsed ? 'Mở rộng thanh bên' : 'Thu gọn thanh bên'} aria-label={sidebarCollapsed ? 'Mở rộng thanh bên' : 'Thu gọn thanh bên'}>
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
         </button>
-        <span className="app-toolbar-title">{VIEW_TITLES[view] || 'AHV Connect'}</span>
+        <span className="app-toolbar-title">{VIEW_TITLES[view] || 'MaiHub'}</span>
         <span className="app-toolbar-sep" />
 
         {/* Workspace switcher - only shows when multiple workspaces exist */}
@@ -635,7 +635,7 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
           </div>
         )}
 
-        {/* AHV Connect: đã gỡ nút dẫn sang kho GitHub của tác giả
+        {/* MaiHub: đã gỡ nút dẫn sang kho GitHub của tác giả
             thượng nguồn — bản nội bộ không quảng bá dự án bên ngoài. */}
 
 

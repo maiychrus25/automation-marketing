@@ -192,7 +192,7 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
             <div className="w-full max-w-md bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl overflow-hidden">
                 {/* Header */}
                 <div className="px-6 pt-6 pb-4 text-center">
-                    <h1 className="text-xl font-bold text-white mb-1">AHV Connect</h1>
+                    <h1 className="text-xl font-bold text-white mb-1">MaiHub</h1>
                     <p className="text-sm text-gray-400">Chọn chế độ đăng nhập</p>
                 </div>
 
@@ -292,7 +292,7 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
 
                 {/* Footer */}
                 <div className="px-6 py-3 border-t border-gray-700/50 text-center">
-                    <p className="text-[10px] text-gray-400">AHV Connect — Trung tâm Đào tạo Lái xe AHV</p>
+                    <p className="text-[10px] text-gray-400">MaiHub</p>
                 </div>
             </div>
         </div>

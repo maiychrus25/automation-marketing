@@ -15,6 +15,36 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.9.0',
+    date: '10/2026',
+    type: 'major',
+    highlights: [
+      '🌸 Đổi tên thành MaiHub — thương hiệu, logo hoa mai và thư mục dữ liệu mới',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Tên ứng dụng MaiHub, logo hoa mai năm cánh, bộ cài MaiHub-Setup',
+          'Liên kết mở app đổi thành maihub://',
+          'Tự chuyển dữ liệu từ thư mục AHV Connect sang MaiHub khi mở lần đầu',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Bỏ thông tin công ty khỏi bộ cài, mục Giới thiệu và tài liệu; nguồn gốc dự án giữ trong NOTICE.md',
+        ],
+      },
+      {
+        category: 'security',
+        items: [
+          'Trên Linux và macOS, khóa mã hóa gắn với tên ứng dụng nên sau khi chuyển dữ liệu cần đăng nhập lại tài khoản và nhập lại khóa API một lần',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.8.6',
     date: '10/2026',
     type: 'minor',
