@@ -44,11 +44,15 @@ jobs:
       - name: Cài dependency
         run: npm ci
 
+      - name: In giới hạn heap của Node
+        run: node -e "console.log('heap limit MB:', Math.round(require('v8').getHeapStatistics().heap_size_limit / 1048576))"
+
+      # Gọi tsc qua node với cờ heap tường minh, không phụ thuộc NODE_OPTIONS.
       - name: Type-check main process
-        run: npx tsc -p tsconfig.electron.json --noEmit
+        run: node --max-old-space-size=4096 node_modules/typescript/bin/tsc -p tsconfig.electron.json --noEmit
 
       - name: Type-check renderer
-        run: npx tsc -p tsconfig.json --noEmit
+        run: node --max-old-space-size=4096 node_modules/typescript/bin/tsc -p tsconfig.json --noEmit
 
       - name: Unit test
         run: npx jest --runInBand
