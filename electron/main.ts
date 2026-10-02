@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, protocol, net, Notification, safeStorage, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, protocol, net, Notification, safeStorage, nativeTheme, dialog } from 'electron';
 import * as os from 'os';
 import { resolveWindowAppearance, windowChromeOptions, titleBarOverlayFor, solidBackgroundFor, type WindowTheme } from './windowAppearance';
 import * as path from 'path';
@@ -40,6 +40,7 @@ import CRMQueueService from '../src/services/crm/CRMQueueService';
 import FileStorageService from '../src/services/file/FileStorageService';
 import { SHOW_DEV_TOOLS, IS_DEV_BUILD } from '../src/configs/BuildConfig';
 import Logger from '../src/utils/Logger';
+import { migrateLegacyUserData } from '../src/services/app/legacyDataMigration';
 
 // CHANNEL constant — same as src/ui/lib/channelHelper.ts (electron build excludes src/ui/)
 const CHANNEL = { ZALO: 'zalo', FACEBOOK: 'facebook', TELEGRAM_BOT: 'telegram_bot', TELEGRAM_USER: 'telegram_user' } as const;
@@ -146,20 +147,41 @@ app.commandLine.appendSwitch('lang', 'vi-VN');
 app.commandLine.appendSwitch('accept-lang', 'vi-VN,vi;q=0.9');
 
 // Đặt tên app (hiện trên taskbar, tray, macOS dock)
-app.setName('AHV Connect');
+app.setName('MaiHub');
+// setName không cập nhật lại userData ngay (Electron vẫn trả thư mục mặc định "Electron"
+// trong dev); đặt tường minh để thư mục dữ liệu luôn là <appData>/MaiHub.
+app.setPath('userData', path.join(app.getPath('appData'), 'MaiHub'));
+
+// ─── Lần đầu chạy MaiHub: chuyển thư mục dữ liệu của AHV Connect sang ─────────
+// Phải chạy trước requestSingleInstanceLock() vì lock nằm trong userData.
+{
+  const migration = migrateLegacyUserData({
+    legacyDir: path.join(app.getPath('appData'), 'AHV Connect'),
+    newDir: app.getPath('userData'),
+  });
+  if (migration.status === 'blocked' || migration.status === 'failed') {
+    const detail = migration.status === 'failed'
+      ? `Không chuyển được dữ liệu từ AHV Connect: ${migration.error}\nHãy thoát AHV Connect (nếu đang chạy) rồi mở lại MaiHub.`
+      : 'AHV Connect đang chạy. Hãy thoát AHV Connect rồi mở lại MaiHub để chuyển dữ liệu.';
+    dialog.showErrorBox('Chưa chuyển được dữ liệu', detail);
+    app.exit(1);
+  } else if (migration.status === 'migrated') {
+    console.log('[main] Đã chuyển dữ liệu AHV Connect → MaiHub');
+  }
+}
 
 // Windows: đặt AppUserModelId để taskbar/notification hiển thị đúng icon & tên
 // Dev: AUMID unique mỗi lần chạy → Windows tạo icon cache mới → hiện đúng icon
 // Production: AUMID cố định (khớp appId electron-builder, exe đã embed icon qua afterPack)
 if (process.platform === 'win32') {
-  app.setAppUserModelId(isDev ? `com.ahv.connect.dev.${Date.now()}` : 'com.ahv.connect');
+  app.setAppUserModelId(isDev ? `com.maihub.app.dev.${Date.now()}` : 'com.maihub.app');
 }
 
 // ─── Register custom protocol BEFORE app ready (required by Electron) ─────────
 // local-media://abs-path  →  serve file from absolute path on disk
 // Usage in renderer: local-media:///D:/path/to/file.jpg
 //
-// ahvconnect://openChat?accountId=xxx&threadId=yyy&threadType=0&channel=zalo
+// maihub://openChat?accountId=xxx&threadId=yyy&threadType=0&channel=zalo
 //   → deep link: mở app + active đúng hội thoại
 protocol.registerSchemesAsPrivileged([
   {
@@ -173,7 +195,7 @@ protocol.registerSchemesAsPrivileged([
     },
   },
   {
-    scheme: 'ahvconnect',
+    scheme: 'maihub',
     privileges: {
       secure: true,
       bypassCSP: true,
@@ -212,7 +234,7 @@ function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: 'AHV Connect',
+    title: 'MaiHub',
     // Khung, nút cửa sổ và vật liệu theo hệ điều hành (electron/windowAppearance.ts)
     ...windowChromeOptions(process.platform, appearance, initialTheme),
     icon: cachedNormalIcon && !cachedNormalIcon.isEmpty()
@@ -372,7 +394,7 @@ function createWindow() {
     }
 
     // Parse deep link URL từ command line (Windows protocol handler)
-    const deepLinkUrl = argv.find((arg: string) => arg.startsWith('ahvconnect://'));
+    const deepLinkUrl = argv.find((arg: string) => arg.startsWith('maihub://'));
     if (deepLinkUrl) {
       handleDeepLink(deepLinkUrl);
     }
@@ -380,7 +402,7 @@ function createWindow() {
 
   // macOS: open-url event khi click deep link
   app.on('open-url', (_event, url) => {
-    if (url.startsWith('ahvconnect://')) {
+    if (url.startsWith('maihub://')) {
       handleDeepLink(url);
     }
   });
@@ -405,7 +427,7 @@ function createTray() {
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Mở AHV Connect',
+      label: 'Mở MaiHub',
       click: () => { mainWindow?.show(); mainWindow?.focus(); },
     },
     { type: 'separator' },
@@ -422,7 +444,7 @@ function createTray() {
     },
   ]);
 
-  tray.setToolTip('AHV Connect');
+  tray.setToolTip('MaiHub');
   tray.setContextMenu(contextMenu);
 
   // Double-click tray → mở app
@@ -442,7 +464,7 @@ function createTray() {
 function showTrayNotification() {
   if (!Notification.isSupported()) return;
   const notif = new Notification({
-    title: 'AHV Connect đang chạy ngầm',
+    title: 'MaiHub đang chạy ngầm',
     body: 'Ứng dụng vẫn đang hoạt động và nhận tin nhắn bình thường. Nhấn vào biểu tượng tray để mở lại.',
     silent: false,
   });
@@ -580,7 +602,7 @@ function registerWindowControls() {
             tray?.setImage(cachedDotIcon);
           }
         }
-        tray?.setToolTip(`AHV Connect - ${count} tin chưa đọc`);
+        tray?.setToolTip(`MaiHub - ${count} tin chưa đọc`);
       } else {
         if (currentIconIsDot) {
           currentIconIsDot = false;
@@ -589,7 +611,7 @@ function registerWindowControls() {
             tray?.setImage(cachedNormalIcon);
           }
         }
-        tray?.setToolTip('AHV Connect');
+        tray?.setToolTip('MaiHub');
       }
     } else {
       try { app.setBadgeCount(count > 0 ? count : 0); } catch {}
@@ -636,10 +658,10 @@ function registerWindowControls() {
 }
 
 /**
- * Xử lý deep link URL từ custom protocol ahvconnect://
+ * Xử lý deep link URL từ custom protocol maihub://
  *
  * Định dạng:
- *   ahvconnect://openChat?accountId=xxx&threadId=yyy&threadType=0&channel=zalo
+ *   maihub://openChat?accountId=xxx&threadId=yyy&threadType=0&channel=zalo
  *
  * Hỗ trợ thêm action mới bằng cách mở rộng switch(action) bên dưới.
  */
@@ -1072,15 +1094,15 @@ app.whenReady().then(async () => {
 
   loadIcons();
 
-  // ── Register ahvconnect:// as default protocol client ─────────────────────
-  // Cho phép OS mở app khi click link ahvconnect:// trong trình duyệt
+  // ── Register maihub:// as default protocol client ─────────────────────
+  // Cho phép OS mở app khi click link maihub:// trong trình duyệt
   //
   // ⚠️ Production: app đã đóng gói → setAsDefaultProtocolClient hoạt động đúng.
   // ⚠️ Development: KHÔNG gọi setAsDefaultProtocolClient - dùng manual reg script
   //    (xem hướng dẫn trong agents/references/deep-link-feature.md)
   if (app.isPackaged) {
-    if (!app.isDefaultProtocolClient('ahvconnect')) {
-      app.setAsDefaultProtocolClient('ahvconnect');
+    if (!app.isDefaultProtocolClient('maihub')) {
+      app.setAsDefaultProtocolClient('maihub');
     }
   }
 
@@ -1089,10 +1111,10 @@ app.whenReady().then(async () => {
   registerWindowControls();
 
   // ── Handle deep link từ initial launch (first instance) ──────────
-  // Khi click ahvconnect:// link lần đầu:
+  // Khi click maihub:// link lần đầu:
   //   - Production đúng: URL nằm ở process.argv[1] hoặc sau dấu `--`
   //   - Dev / sai config: Electron nhận URL ở argv[1] thay vì main script path
-  const initialDeepLink = process.argv.find((arg) => arg.startsWith('ahvconnect://'));
+  const initialDeepLink = process.argv.find((arg) => arg.startsWith('maihub://'));
   if (initialDeepLink) {
     setTimeout(() => handleDeepLink(initialDeepLink), 3000);
   }
@@ -1171,7 +1193,7 @@ app.whenReady().then(async () => {
     });
   }, 3000);
 
-  // AHV Connect: KHÔNG khởi động TrackingService.
+  // MaiHub: KHÔNG khởi động TrackingService.
   //
   // Bản gốc gửi pageId (zalo_id/facebook_id/telegram id của tài khoản đang
   // đăng nhập) và machineId lên máy chủ của tác giả thượng nguồn để phục vụ
@@ -1209,12 +1231,12 @@ app.whenReady().then(async () => {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
 
-    // ── AHV Connect: TẮT KIỂM TRA CẬP NHẬT ────────────────────────────────
+    // ── MaiHub: TẮT KIỂM TRA CẬP NHẬT ────────────────────────────────
     // Bản gốc lấy bản mới từ kho phát hành của tác giả thượng nguồn; để nguyên
     // thì bản nội bộ sẽ bị bản của họ ghi đè. Bản dựng nội bộ được phát theo
     // kênh riêng của trung tâm. Khi nào trung tâm tự phát hành thì cấu hình
     // `build.publish` trỏ về kho nội bộ rồi mở lại khối này.
-    console.log('[AutoUpdate] Đã tắt trong bản AHV Connect — phát hành theo kênh nội bộ');
+    console.log('[AutoUpdate] Đã tắt trong MaiHub — phát hành qua GitHub Releases');
 
     autoUpdater.on('update-available', (info) => {
       mainWindow?.webContents.send('update:available', {

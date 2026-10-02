@@ -1,7 +1,7 @@
-# Ghi nhận nguồn gốc — AHV Connect
+# Ghi nhận nguồn gốc — MaiHub
 
-**AHV Connect** là bản phái sinh nội bộ của Trung tâm Đào tạo Lái xe AHV, xây
-dựng trên mã nguồn mở:
+**MaiHub** (tên trước 26.9.0: AHV Connect, bản phái sinh nội bộ của Trung tâm Đào
+tạo Lái xe AHV; từ 26.9.0 là dự án cá nhân của Maiychrus) xây dựng trên mã nguồn mở:
 
 - **Deplao** — https://github.com/babyvibe/deplao-builder
 - Tác giả: babyvibe

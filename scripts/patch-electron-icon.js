@@ -3,7 +3,7 @@
 /**
  * patch-electron-icon.js
  *
- * Patches the Electron dev binary with AHV Connect's icon and version metadata.
+ * Patches the Electron dev binary with MaiHub's icon and version metadata.
  * Run once after `npm install` or any time the electron package is updated.
  *
  * Only applicable on Windows - on macOS/Linux the app bundle handles icons.
@@ -45,15 +45,15 @@ async function main() {
     await rcedit(electronExePath, {
       icon: iconPath,
       'version-string': {
-        ProductName:     pkg.build?.productName || 'AHV Connect',
-        FileDescription: pkg.build?.productName || 'AHV Connect',
-        CompanyName:     'Trung tam Dao tao Lai xe AHV',
+        ProductName:     pkg.build?.productName || 'MaiHub',
+        FileDescription: pkg.build?.productName || 'MaiHub',
+        CompanyName:     'MaiHub',
       },
       'file-version':    pkg.version,
       'product-version': pkg.version,
     });
 
-    console.log('[patch-icon] ✅ electron.exe patched with AHV Connect icon');
+    console.log('[patch-icon] ✅ electron.exe patched with MaiHub icon');
   } catch (err) {
     console.error('[patch-icon] ❌ rcedit failed:', err.message);
     console.error('             Try running as Administrator if permission denied.');

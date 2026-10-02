@@ -219,7 +219,7 @@ function buildIcns(pngBySize) {
 // ─── Chạy ───────────────────────────────────────────────────────────────────
 
 const chrome = findChrome();
-const workDir = mkdtempSync(path.join(tmpdir(), 'ahv-icons-'));
+const workDir = mkdtempSync(path.join(tmpdir(), 'maihub-icons-'));
 mkdirSync(ICONS_DIR, { recursive: true });
 
 try {

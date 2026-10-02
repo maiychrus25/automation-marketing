@@ -1310,7 +1310,7 @@ const CONFIG_SCHEMA: Record<string, Field[]> = {
     },
     {
       key: 'username', label: 'Tên hiển thị của bot', type: 'text',
-      placeholder: 'AHV Connect Bot',
+      placeholder: 'MaiHub Bot',
       desc: 'Tên sẽ hiển thị khi gửi tin vào kênh Discord.',
       advanced: true,
     },

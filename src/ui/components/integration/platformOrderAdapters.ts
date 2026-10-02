@@ -148,8 +148,8 @@ function toHaravan(data: GenericOrderData) {
         title: 'Phí vận chuyển',
         price: data.shippingFee,
       }] : [],
-      tags: 'ahvconnect',
-      source_name: 'ahvconnect',
+      tags: 'maihub',
+      source_name: 'maihub',
     },
   };
 }
@@ -196,7 +196,7 @@ function toSapo(data: GenericOrderData) {
       },
       total_discount: data.discount,
       note: data.note || undefined,
-      source_name: 'ahvconnect',
+      source_name: 'maihub',
       // Sapo payment: payment_status pending|paid
       payment_status: data.paymentMethod === 'cod' ? 'pending' : 'paid',
       fulfillment_status: null, // chưa giao
@@ -237,8 +237,8 @@ function toNhanh(data: GenericOrderData) {
     },
     // channel.appOrderId = unique order ID on our side (Nhanh deduplicates by appId + appOrderId)
     channel: {
-      appOrderId: `AHVCONNECT-${Date.now()}`,
-      sourceName: 'ahvconnect',
+      appOrderId: `MAIHUB-${Date.now()}`,
+      sourceName: 'maihub',
     },
     shippingAddress: {
       name: data.customer.name || 'Khách vãng lai',
@@ -329,7 +329,7 @@ function toPancake(data: GenericOrderData) {
     cash: data.paymentMethod === 'cash' ? totalMoney : 0,
     account: (data.paymentMethod === 'bank_transfer' || data.paymentMethod === 'card') ? totalMoney : 0,
     note: data.note || undefined,
-    order_sources: ['ahvconnect'],
+    order_sources: ['maihub', 'ahvconnect'] // 'ahvconnect': đơn tạo trước khi đổi tên,
   };
 }
 

@@ -19,7 +19,7 @@ docs/*
 .vscode/
 /.worktrees/
 
-# AHV Connect
+# MaiHub
 dist/
 dist-electron/
 

@@ -172,7 +172,7 @@ function SidebarBrand({ collapsed, macRail }: { collapsed: boolean; macRail: boo
       </span>
       {!collapsed && (
         <>
-          <span className="app-brand-name">AHV Connect</span>
+          <span className="app-brand-name">MaiHub</span>
           {hasUpdate ? (
             <button type="button" onClick={openUpdatePopup} title={updateTitle}
               className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap transition-colors ${pillClass}`}>
@@ -187,23 +187,25 @@ function SidebarBrand({ collapsed, macRail }: { collapsed: boolean; macRail: boo
   );
 }
 
-/** Dấu hiệu AHV (bản rút gọn của resources/icons/icon.svg, giữ nguyên hình). */
+/** Dấu hiệu MaiHub (bản rút gọn của resources/icons/icon.svg, giữ nguyên hình). */
 function AppMark() {
   return (
     <svg viewBox="0 0 100 100" className="app-brand-mark" aria-hidden="true">
       <defs>
-        <linearGradient id="ahvMarkBg" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id="maihubMarkBg" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="#1E40AF" />
           <stop offset="1" stopColor="#3B82F6" />
         </linearGradient>
       </defs>
-      <rect width="100" height="100" rx="22" ry="22" fill="url(#ahvMarkBg)" />
+      <rect width="100" height="100" rx="22" ry="22" fill="url(#maihubMarkBg)" />
       <g fill="#FFFFFF">
-        <path d="M46 17 H54 L85 84 H70 L50 32 L30 84 H15 Z" />
-        <path d="M26 72 H74 V79 H26 Z" />
-        <path d="M47.2 69 H52.8 L52.3 57 H47.7 Z" />
-        <path d="M48.3 52 H51.7 L51.2 44 H48.8 Z" />
+        <circle cx="50.00" cy="27.00" r="18.5" />
+        <circle cx="71.87" cy="42.89" r="18.5" />
+        <circle cx="63.52" cy="68.61" r="18.5" />
+        <circle cx="36.48" cy="68.61" r="18.5" />
+        <circle cx="28.13" cy="42.89" r="18.5" />
       </g>
+      <circle cx="50" cy="50" r="8" fill="#1E40AF" />
     </svg>
   );
 }
@@ -363,8 +365,8 @@ const TOOLS_GUIDE = [
         icon: <TagIcon className="w-4 h-4 inline" />,
         title: 'Hệ thống nhãn kép',
         items: [
-          'Nhãn Zalo (Zalo Label): đồng bộ 2 chiều với app Zalo trên điện thoại - gán từ AHV Connect, thấy trên Zalo và ngược lại',
-          'Nhãn Local: nhãn riêng của AHV Connect, tùy biến màu sắc + emoji, không giới hạn số lượng',
+          'Nhãn Zalo (Zalo Label): đồng bộ 2 chiều với app Zalo trên điện thoại - gán từ MaiHub, thấy trên Zalo và ngược lại',
+          'Nhãn Local: nhãn riêng của MaiHub, tùy biến màu sắc + emoji, không giới hạn số lượng',
           'Dùng nhãn làm điều kiện lọc trong chiến dịch (chỉ gửi cho khách có nhãn "VIP")',
           'Dùng nhãn làm Trigger trong Workflow: khi gắn nhãn → tự động chạy luồng xử lý',
         ],
@@ -463,7 +465,7 @@ const TOOLS_GUIDE = [
     icon: <LinkIcon className="w-4 h-4" />, title: 'Tích hợp - Kết nối bên thứ 3',
     color: 'border-green-500/40 bg-green-900/30',
     badgeColor: 'bg-gray-800 text-gray-300',
-    purpose: 'Kết nối AHV Connect với hệ sinh thái bán hàng, thanh toán, vận chuyển Việt Nam. Tra cứu dữ liệu ngay trong khung chat, nhận webhook tự động, kết hợp Workflow để xử lý end-to-end.',
+    purpose: 'Kết nối MaiHub với hệ sinh thái bán hàng, thanh toán, vận chuyển Việt Nam. Tra cứu dữ liệu ngay trong khung chat, nhận webhook tự động, kết hợp Workflow để xử lý end-to-end.',
     sections: [
       {
         icon: <ShoppingCartIcon className="w-4 h-4 inline" />,
@@ -499,7 +501,7 @@ const TOOLS_GUIDE = [
         title: 'Tunnel - Mở kết nối ra internet',
         items: [
           'Bật thủ công khi cần: tạo URL công khai (https://xxx.loca.lt) trỏ về app',
-          'Cho phép bên ngoài (Casso, SePay, n8n cloud...) gửi webhook về AHV Connect',
+          'Cho phép bên ngoài (Casso, SePay, n8n cloud...) gửi webhook về MaiHub',
           'Không bật = webhook chỉ hoạt động trên localhost (cùng máy)',
           'Tắt bất cứ lúc nào - không ảnh hưởng các tính năng khác',
         ],
@@ -532,7 +534,7 @@ const COMBO_SCENARIOS = [
       { icon: <MessageCircleIcon className="w-3 h-3" />, text: 'Gửi tin Zalo' },
       { icon: <TagIcon className="w-3 h-3" />, text: 'Gắn nhãn "Đã TT"' },
     ],
-    desc: 'Khách chuyển khoản → AHV Connect nhận webhook từ ngân hàng → Workflow tự động gửi tin xác nhận + gắn nhãn CRM.',
+    desc: 'Khách chuyển khoản → MaiHub nhận webhook từ ngân hàng → Workflow tự động gửi tin xác nhận + gắn nhãn CRM.',
   },
   {
     icon: <BotIcon className="w-4 h-4" />,

@@ -100,7 +100,7 @@ export default function TunnelSettings() {
         'Bật nút "Tích hợp & Thanh toán" bên trên để tạo tunnel Internet',
         'Vào module Tích hợp, thêm kết nối Casso hoặc SePay',
         'Sao chép URL webhook hiển thị ở trên, dán vào ứng dụng Casso/SePay',
-        'Khi có người chuyển khoản, AHV Connect nhận webhook → trigger workflow "Khi nhận thanh toán"',
+        'Khi có người chuyển khoản, MaiHub nhận webhook → trigger workflow "Khi nhận thanh toán"',
       ],
       showPortConfig: true,
       getStatus: () => ipc.tunnel?.status() ?? Promise.resolve({}),
@@ -191,11 +191,11 @@ export default function TunnelSettings() {
           cho phép bên thứ 3 (ngân hàng, website, POS...) gửi dữ liệu đến.
         </p>
         <p className="text-xs dark:text-gray-400 leading-relaxed">
-          AHV Connect dùng <strong className="text-blue-600 dark:text-blue-300">Cloudflare Quick Tunnel</strong> (miễn phí, không cần tài khoản)
+          MaiHub dùng <strong className="text-blue-600 dark:text-blue-300">Cloudflare Quick Tunnel</strong> (miễn phí, không cần tài khoản)
           để tạo các URL này. Mỗi nhóm webhook có một URL riêng.
         </p>
         <div className="border rounded-lg px-3 py-2 space-y-1.5">
-          <p className="text-xs font-medium "><SunIcon className="w-4 h-4 inline" /> Nếu bạn chỉ dùng AHV Connect trong mạng LAN (cùng WiFi) thì <strong>không cần bật tunnel</strong>.
+          <p className="text-xs font-medium "><SunIcon className="w-4 h-4 inline" /> Nếu bạn chỉ dùng MaiHub trong mạng LAN (cùng WiFi) thì <strong>không cần bật tunnel</strong>.
             Chỉ bật khi cần nhận dữ liệu từ Internet.
           </p>
           <p className="text-[11px] leading-relaxed">

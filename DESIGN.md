@@ -1,7 +1,7 @@
 ---
 brand:
-  name: AHV Connect
-  owner: Trung tâm Đào tạo Lái xe AHV
+  name: MaiHub
+  owner: Maiychrus
 color:
   logo:
     brand-900: "#1E40AF"   # điểm bắt đầu dải màu nền (góc trên trái)
@@ -156,13 +156,12 @@ accessibility:
 geometry:
   canvas: 100            # viewBox 100x100, mọi số đo dưới đây theo đơn vị này
   corner-radius: 22
-  mark-apex-y: 17
-  mark-base-y: 84
-  mark-width: [15, 85]   # mép ngoài trái/phải ở đáy
-  road-vanishing-point: [50, 32]
-  road-base: [30, 70]    # mép trong trái/phải ở đáy
-  crossbar-y: [72, 79]
-  crossbar-x: [26, 74]
+  petal-count: 5
+  petal-radius: 18.5
+  petal-center-distance: 23   # từ tâm hoa (50,50), cánh đầu hướng lên
+  pistil-radius: 8            # màu nền brand-900
+  badge-center: [80, 20]
+  badge-radius: [15, 12.5]    # vòng nền, chấm đỏ
 source:
   file: resources/icons/icon.svg
   build: node scripts/build-icons.mjs
@@ -172,10 +171,10 @@ sizes:
   icns: [16, 32, 128, 256, 512, 1024]
 ---
 
-# AHV Connect — nhận diện và hệ thiết kế
+# MaiHub — nhận diện và hệ thiết kế
 
 Tài liệu này là nguồn sự thật cho **nhận diện (logo) và toàn bộ giao diện** của
-AHV Connect. Token ở đầu file khớp từng giá trị với `src/ui/index.css`
+MaiHub. Token ở đầu file khớp từng giá trị với `src/ui/index.css`
 (`:root` cho light, `html[data-theme="dark"]` cho dark). Khi sửa token, sửa cả
 hai nơi và để test tương phản chạy lại.
 
@@ -310,33 +309,24 @@ Những quyết định còn hiệu lực:
 
 ## Dấu hiệu
 
-Một con đường nhìn theo phối cảnh. Hai mép đường chụm về điểm tụ, tạo thành
-chữ **A** của AHV. Vạch kẻ ngang đường đồng thời là vạch ngang của chữ A. Hai
-vạch tim đường thu nhỏ dần về phía xa.
+Một bông hoa mai năm cánh trên nền xanh bo góc. "Mai" là nửa đầu của tên, năm
+cánh tỏa từ một tâm là "hub": một nơi gom nhiều kênh và nhiều tài khoản. Cánh
+hoa là năm hình tròn chồng mép nhau; nhụy là một chấm cùng màu nền.
 
-Ý nghĩa đặt trong ngữ cảnh: sản phẩm dùng cho một trung tâm đào tạo lái xe, nên
-dấu hiệu nói về **đường đi**, không phải về nhắn tin. Tên sản phẩm đã mang chữ
-"Connect" rồi, logo không cần nhắc lại.
+## Vì sao hình tròn, không phải cánh thật
 
-## Vì sao không dùng vô-lăng
-
-Vô-lăng là hình đầu tiên ai cũng nghĩ tới cho trường lái, nhưng nó hỏng ở đúng
-chỗ quan trọng nhất: **icon khay hệ thống cỡ 16px**. Nan vô-lăng ở cỡ đó mỏng
-dưới một pixel, tan hết, chỉ còn lại một vòng tròn vô nghĩa. Bản thử đầu tiên
-đã vẽ vô-lăng và đúng là như vậy.
-
-Chữ A thì chịu được cỡ nhỏ: khi các chi tiết tan đi, thứ còn lại vẫn là một
-chữ A đặc, vẫn nhận ra.
+Cánh mai thật có đầu nhọn và rãnh sâu; ở icon khay 16px các chi tiết đó tan
+hết. Năm hình tròn chồng nhau giữ được một khối đặc có năm "bướu" ở mọi cỡ,
+và nhụy màu nền co lại thành một chấm, nên hoa không thành đĩa trắng.
 
 ## Ràng buộc tỉ lệ (đã kiểm bằng mắt ở 16/24/32/48/64px)
 
 | Quyết định | Lý do |
 |---|---|
-| Mép đường mảnh (~15 đơn vị ở đáy) | Chân chữ dày thì lòng đường hẹp lại, phối cảnh không đọc ra, chỉ còn là chữ A thường |
-| Vạch ngang hạ thấp (y = 72…79) | Để phần lớn lòng đường nằm phía trên vạch, đủ chỗ cho vạch tim thu xa |
-| Vạch ngang kéo từ x = 26 đến 74 | Nằm sâu trong hai chân chữ ở **mọi** độ cao của khoảng y = 72…79, nên mối nối luôn liền, không hở ở đáy vạch |
-| Đỉnh chữ cắt bằng, không nhọn | Đỉnh nhọn ở cỡ nhỏ bị mảnh và tối đi |
-| Chỉ **hai** vạch tim, khe giữa 5 đơn vị | Bản thử ba vạch: vạch xa nhất chỉ rộng 1 đơn vị nên thành sợi mờ, và ở 16–24px cả ba dính lại thành một sọc liền làm lấp lòng đường |
+| Tâm cánh cách tâm hoa 23, bán kính cánh 18,5 | Cánh kề nhau chồng lên nhau đủ để không hở khe ở cỡ nhỏ, vẫn còn rãnh giữa cánh ở cỡ lớn |
+| Nhụy bán kính 8, màu nền | Nhỏ hơn thì mất ở 16px, lớn hơn thì hoa thành vòng |
+| Hoa chạm mép nền ở ~8,5 đơn vị | Giữ khoảng thở như logo trước, nền vẫn đọc là một ô vuông bo |
+| Chấm báo đặt ở (80, 20) | Nằm giữa hai cánh trên bên phải, không che cánh |
 
 ## Biến thể
 

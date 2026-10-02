@@ -15,6 +15,73 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.9.0',
+    date: '10/2026',
+    type: 'major',
+    highlights: [
+      '🌸 Đổi tên thành MaiHub — thương hiệu, logo hoa mai và thư mục dữ liệu mới',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Tên ứng dụng MaiHub, logo hoa mai năm cánh, bộ cài MaiHub-Setup',
+          'Liên kết mở app đổi thành maihub://',
+          'Tự chuyển dữ liệu từ thư mục AHV Connect sang MaiHub khi mở lần đầu',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Bỏ thông tin công ty khỏi bộ cài, mục Giới thiệu và tài liệu; nguồn gốc dự án giữ trong NOTICE.md',
+        ],
+      },
+      {
+        category: 'security',
+        items: [
+          'Trên Linux và macOS, khóa mã hóa gắn với tên ứng dụng nên sau khi chuyển dữ liệu cần đăng nhập lại tài khoản và nhập lại khóa API một lần',
+        ],
+      },
+    ],
+  },
+  {
+    version: '26.8.6',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🌐 Trình duyệt — Mỗi profile là một trình duyệt riêng với fingerprint, cookie và proxy riêng',
+      '🖥️ Giao diện mới theo phong cách macOS — Sidebar, toolbar, hộp thoại; sáng, tối hoặc theo hệ thống',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Trình duyệt (Browser Profiles) — Tạo, sửa, xóa, nhóm profile; tìm kiếm, lọc và thao tác hàng loạt',
+          'Fingerprint riêng và cố định cho từng profile; tạo lại được khi cần',
+          'Proxy riêng cho từng profile, lấy từ kho proxy hiện có; hỗ trợ proxy có mật khẩu (HTTP, HTTPS, SOCKS4, SOCKS5)',
+          'Tải nhân trình duyệt ngay trong ứng dụng (khoảng 190 MB, có kiểm tra toàn vẹn)',
+          'Chọn giao diện sáng, tối hoặc theo hệ thống',
+          'Nút cửa sổ và vật liệu nền theo từng hệ điều hành',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Sidebar thu gọn được, gom nhóm tài khoản và điều hướng',
+          'Màu sắc, chữ, nút, ô nhập, hộp thoại và thông báo dùng chung một hệ thiết kế',
+          'Độ tương phản chữ và viền đạt chuẩn ở cả giao diện sáng và tối',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Đóng profile trình duyệt không còn làm mất phiên đăng nhập vừa tạo',
+          'Proxy lỗi thì trình duyệt báo lỗi thay vì tự chuyển sang mạng trực tiếp',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.8.5',
     date: '08/2026',
     type: 'minor',

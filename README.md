@@ -1,56 +1,56 @@
 <div align="center">
 
-<img src="resources/icons/icon_128.png" alt="AHV Connect" width="96" />
+<img src="resources/icons/icon_128.png" alt="MaiHub" width="96" />
 
-# AHV Connect
+# MaiHub
 
-**Ứng dụng desktop nội bộ — Trung tâm Đào tạo Lái xe AHV**
+**Ứng dụng desktop cá nhân của Maiychrus**
 Vận hành tài khoản Zalo / Facebook / Telegram, CRM, workflow tự động và trợ lý AI trong một ứng dụng.
 
 </div>
 
-> ⚠️ **Bản dùng nội bộ.** Không phát hành công khai, không phân phối ra ngoài
-> trung tâm. Đọc [NOTICE.md](./NOTICE.md) trước khi cài đặt hoặc phát cho nhân sự.
+> Trước đây có tên **AHV Connect**. Từ bản 26.9.0 đổi tên thành MaiHub; xem mục
+> [Nâng cấp từ AHV Connect](#nâng-cấp-từ-ahv-connect). Đọc [NOTICE.md](./NOTICE.md) về nguồn gốc.
 
 ---
 
 ## Nhận diện
 
-Logo được vẽ riêng cho trung tâm: con đường thu xa, hai mép đường chụm thành
-chữ "A" của AHV. Nguồn gốc là `resources/icons/icon.svg`; mọi file PNG/ICO/ICNS
+Logo là bông hoa mai năm cánh: "Mai" trong tên, năm cánh tỏa từ một tâm là
+"hub" — một nơi, nhiều kênh. Nguồn gốc là `resources/icons/icon.svg`; mọi file PNG/ICO/ICNS
 đều dựng ra từ đó bằng `npm run build:icons`. Lý do thiết kế và các ràng buộc
 tỉ lệ: [DESIGN.md](./DESIGN.md).
 
 ## Nguồn gốc
 
-AHV Connect là bản phái sinh nội bộ của dự án mã nguồn mở
+MaiHub là bản phái sinh của dự án mã nguồn mở
 [Deplao](https://github.com/babyvibe/deplao-builder) (tác giả: babyvibe), giấy
 phép **MIT**. Bản quyền của tác giả gốc được giữ nguyên trong tệp
-[LICENSE](./LICENSE). Danh sách đầy đủ những thay đổi của trung tâm so với bản
-gốc nằm ở [NOTICE.md](./NOTICE.md).
+[LICENSE](./LICENSE). Danh sách đầy đủ những thay đổi so với bản gốc nằm ở
+[NOTICE.md](./NOTICE.md).
 
-## Giới hạn đang áp dụng cho bản nội bộ
+## Giới hạn đang áp dụng
 
 | Hạng mục | Trạng thái |
 |---|---|
 | Gửi dữ liệu telemetry ra ngoài | **Đã tắt** (`TrackingService`) |
 | Máy chủ thượng nguồn: premium, quét nhóm, thanh toán, affiliate | **Đã chặn** (`backendService`) |
-| Tự động kiểm tra & tải bản cập nhật | **Đã tắt** — phát hành theo kênh riêng của trung tâm |
+| Tự động kiểm tra & tải bản cập nhật | **Đã tắt** — tải bản mới ở GitHub Releases |
 | Trang donate / giới thiệu hoa hồng / link kho mã nguồn của tác giả | **Đã gỡ** |
 | Trần gửi theo ngày, giờ im lặng, cơ chế từ chối nhận | **Chưa có** |
 
 Vì chưa có hàng rào gửi tin ở dòng cuối, bản này **chỉ dùng để trải nghiệm và
-đánh giá**, chưa dùng gửi tin hàng loạt cho học viên thật.
+đánh giá**, chưa dùng gửi tin hàng loạt cho khách thật.
 
 ## Rủi ro cần biết trước khi dùng
 
 - Ứng dụng thao tác trên **tài khoản Zalo cá nhân** qua thư viện `zca-js`. Việc
   này **vi phạm chính sách của Zalo** và có thể dẫn tới khóa tài khoản. Dùng tài
-  khoản riêng cho công việc, **không dùng tài khoản cá nhân của nhân viên**.
-- Bản dựng **chưa ký số**; Windows/macOS sẽ cảnh báo khi cài. Chỉ cài bản do
-  trung tâm phát hành.
+  khoản riêng cho công việc.
+- Bản dựng **chưa ký số**; Windows/macOS sẽ cảnh báo khi cài. Chỉ cài bản tải
+  từ GitHub Releases của dự án.
 - **Không bật tunnel Cloudflare** của webhook gateway: nó mở một địa chỉ công
-  khai trỏ thẳng vào máy đang giữ phiên Zalo của trung tâm.
+  khai trỏ thẳng vào máy đang giữ phiên Zalo.
 
 ## Chạy ở môi trường phát triển
 
@@ -69,7 +69,7 @@ Windows x64 (bộ cài NSIS), macOS Apple Silicon và macOS Intel (dmg, zip).
 Trước khi đóng gói, workflow chạy type-check và unit test.
 
 - Chạy tay: tab **Actions** → **Build** → **Run workflow**, chọn nhánh.
-- Hoặc đẩy một tag bắt đầu bằng `v`, ví dụ `git tag v26.8.5 && git push origin v26.8.5`.
+- Hoặc đẩy một tag bắt đầu bằng `v`, ví dụ `git tag v26.9.0 && git push origin v26.9.0`.
 - Tải bản cài ở mục **Artifacts** của lần chạy (giữ 14 ngày).
 
 **Phát hành (Release):** sau khi build xong cả bốn bản, job "Phát hành" tạo một
@@ -83,7 +83,7 @@ Repo private nên Release chỉ người có quyền vào repo thấy.
 
 Bản macOS chưa ký bằng chứng chỉ Apple (chỉ ký ad-hoc). Lần mở đầu, macOS sẽ
 chặn: chuột phải vào app → **Open**, hoặc chạy
-`xattr -cr "/Applications/AHV Connect.app"`.
+`xattr -cr "/Applications/MaiHub.app"`.
 
 ### Trên máy
 
@@ -95,8 +95,8 @@ Cần Go ≥ 1.26 cho cầu nối E2EE. Bản cài ra ở `dist-electron-build/`
 chéo hệ điều hành: các thành phần native (better-sqlite3, ffmpeg, ngrok,
 cloudflared, cầu nối E2EE) phải đúng nền tảng.
 
-Cấu hình đóng gói (appId `com.ahv.connect`, productName `AHV Connect`, protocol
-`ahvconnect://`) nằm ở khối `build` trong [package.json](./package.json).
+Cấu hình đóng gói (appId `com.maihub.app`, productName `MaiHub`, protocol
+`maihub://`) nằm ở khối `build` trong [package.json](./package.json).
 
 ## Dữ liệu
 
@@ -104,12 +104,27 @@ Dữ liệu nằm hoàn toàn trên máy người dùng (SQLite trong thư mục
 ứng dụng). **Không có bản sao lưu tự động** — tự sao lưu định kỳ trước khi nâng
 cấp phiên bản.
 
-⚠️ Thư mục dữ liệu là `%AppData%\AHV Connect`, **không phải** `%AppData%\Deplao`.
-Máy nào đã dùng Deplao từ trước sẽ thấy cơ sở dữ liệu rỗng khi mở AHV Connect —
-dữ liệu cũ không mất, chỉ nằm ở thư mục khác. Cách chuyển và lý do giữ nguyên
-tên tệp `deplao-tool.db` / `deplao-config.json`: xem [NOTICE.md](./NOTICE.md).
+Thư mục dữ liệu là `%AppData%\MaiHub` (Windows), `~/.config/MaiHub` (Linux),
+`~/Library/Application Support/MaiHub` (macOS). Tên tệp bên trong vẫn là
+`deplao-tool.db` / `deplao-config.json` của dự án gốc: xem [NOTICE.md](./NOTICE.md).
+
+## Nâng cấp từ AHV Connect
+
+MaiHub có tên gói và appId khác, nên **cài song song** với AHV Connect chứ không
+thay thế. Các bước:
+
+1. Thoát AHV Connect hoàn toàn (kể cả biểu tượng ở khay hệ thống).
+2. Cài và mở MaiHub. Lần đầu mở, MaiHub tự chuyển thư mục dữ liệu `AHV Connect`
+   thành `MaiHub` (tin nhắn, CRM, workflow, proxy, profile trình duyệt đi theo).
+   Nếu AHV Connect còn chạy, MaiHub báo và thoát; thoát AHV Connect rồi mở lại.
+3. Kiểm tra dữ liệu đã có trong MaiHub, rồi gỡ AHV Connect.
+
+**Linux và macOS:** khóa mã hóa trong kho khóa hệ điều hành gắn với tên ứng
+dụng, nên sau khi chuyển phải **đăng nhập lại** các tài khoản Zalo/Facebook/
+Telegram và nhập lại khóa API, mật khẩu tích hợp một lần. Windows không bị
+ảnh hưởng.
 
 ## Hỗ trợ
 
-Bản nội bộ không dùng kênh issue công khai. Báo lỗi gửi cho bộ phận CNTT của
-trung tâm kèm ảnh chụp màn hình và log (trong ứng dụng: **Cài đặt → Nhật ký**).
+Báo lỗi tại mục Issues của kho GitHub, kèm ảnh chụp màn hình và log (trong ứng
+dụng: **Cài đặt → Nhật ký**).

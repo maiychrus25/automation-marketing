@@ -1,5 +1,5 @@
 /**
- * UpdateNotification - vô hiệu hóa trong bản nội bộ AHV Connect.
+ * UpdateNotification - vô hiệu hóa trong bản nội bộ MaiHub.
  *
  * Bản gốc hiển thị hộp thoại cập nhật với các nút tải trỏ thẳng tới kho phát
  * hành của tác giả thượng nguồn; bấm vào sẽ cài đè bản nội bộ của trung tâm.

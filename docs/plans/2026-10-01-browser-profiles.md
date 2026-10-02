@@ -33,7 +33,7 @@ Bốn tài liệu này được git theo dõi trên nhánh `feat/browser-profile
 - Lệnh kiểm chứng của repo (repo không có `Makefile`; `make build/test/lint` trong `AGENTS.md` không chạy được):
   - `npx tsc -p tsconfig.electron.json --noEmit` → không in gì, exit 0.
   - `npx tsc -p tsconfig.json --noEmit` → không in gì, exit 0.
-  - `npx jest` → tất cả PASS. Lần chạy đầu mất khoảng 90 giây vì ts-jest biên dịch.
+  - `npx jest` → tất cả PASS, khoảng 2 giây. `jest.config.js` đặt ts-jest ở chế độ `isolatedModules` (chỉ chuyển mã, không type-check) từ 02/10/2026: trước đó mỗi worker tự type-check cả dự án, `npx jest` đã làm treo máy 16 GB. Type-check do hai lệnh `tsc --noEmit` ở trên đảm nhận.
   - Cả ba lệnh đều sạch trên `main` tại thời điểm viết kế hoạch (commit `0c1fd3e`).
 
 ## Review Focus
@@ -192,7 +192,7 @@ Tính năng hiện có không bị sửa logic: Chat, CRM, Workflow, ERP, Tích 
   - `buildLaunchArgs({ userDataDir, fingerprint, persona, proxyPort }): string[]`
   - `isValidTimezone(tz: string): boolean`, `isValidLanguage(lang: string): boolean`
 
-- [ ] **Step 1: Tạo nhánh và thêm script test**
+- [x] **Step 1: Tạo nhánh và thêm script test**
 
 ```bash
 git checkout feat/browser-profiles
@@ -206,7 +206,7 @@ Trong `package.json`, tìm dòng bắt đầu bằng `    "dev": "npm run build:
     "test": "jest",
 ```
 
-- [ ] **Step 2: Tạo model**
+- [x] **Step 2: Tạo model**
 
 Tạo `src/models/browserProfile.ts`:
 
@@ -239,7 +239,7 @@ export interface BrowserProfileGroup {
 }
 ```
 
-- [ ] **Step 3: Tạo cấu hình nhân trình duyệt**
+- [x] **Step 3: Tạo cấu hình nhân trình duyệt**
 
 Tạo `src/configs/browserEngine.config.ts`:
 
@@ -276,7 +276,7 @@ export const BROWSER_ENGINE: BrowserEngineConfig = {
 };
 ```
 
-- [ ] **Step 4: Viết test trước**
+- [x] **Step 4: Viết test trước**
 
 Tạo `src/__tests__/browser/fingerprint.test.ts`:
 
@@ -372,12 +372,12 @@ describe('buildLaunchArgs', () => {
 });
 ```
 
-- [ ] **Step 5: Chạy test, xác nhận thất bại**
+- [x] **Step 5: Chạy test, xác nhận thất bại**
 
 Run: `npx jest src/__tests__/browser/fingerprint.test.ts`
 Expected: FAIL với `Cannot find module '../../services/browser/fingerprint'`.
 
-- [ ] **Step 6: Viết implementation**
+- [x] **Step 6: Viết implementation**
 
 Tạo `src/services/browser/fingerprint.ts`:
 
@@ -455,12 +455,12 @@ export function buildLaunchArgs(options: LaunchOptions): string[] {
 }
 ```
 
-- [ ] **Step 7: Chạy test, xác nhận qua**
+- [x] **Step 7: Chạy test, xác nhận qua**
 
 Run: `npx jest src/__tests__/browser/fingerprint.test.ts`
 Expected: PASS, `Tests: 10 passed, 10 total`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add package.json src/models/browserProfile.ts src/configs/browserEngine.config.ts src/services/browser/fingerprint.ts src/__tests__/browser/fingerprint.test.ts
@@ -488,7 +488,7 @@ Ghi chú thiết kế:
 - Proxy thật loại `http`/`https`: gửi `CONNECT` kèm header `Proxy-Authorization: Basic ...`. Loại `socks4`/`socks5`: dùng `SocksClient.createConnection` của gói `socks`.
 - Với HTTP thường qua SOCKS, không truyền option `agent` cho `http.request`: Node chỉ dùng `createConnection` khi `agent` không được đặt (đã gặp lỗi này khi thử: request đi thẳng tới `127.0.0.1:80`).
 
-- [ ] **Step 1: Khai báo dependency `socks`**
+- [x] **Step 1: Khai báo dependency `socks`**
 
 Gói `socks` 2.8.9 đã nằm trong `node_modules` (phụ thuộc của `socks-proxy-agent`). Khai báo tường minh để việc import không phụ thuộc vào hoisting:
 
@@ -499,7 +499,7 @@ git diff --stat package.json package-lock.json
 
 Expected: `package.json` có thêm dòng `"socks": "^2.8.9"` trong `dependencies`; không có gói nào mới được tải về.
 
-- [ ] **Step 2: Viết test trước**
+- [x] **Step 2: Viết test trước**
 
 Tạo `src/__tests__/browser/ProxyForwarder.test.ts`. Test dựng ba máy chủ giả trên `127.0.0.1`: máy đích, proxy HTTP yêu cầu Basic auth, và proxy SOCKS5 yêu cầu username/password.
 
@@ -743,12 +743,12 @@ describe('ProxyForwarder', () => {
 });
 ```
 
-- [ ] **Step 3: Chạy test, xác nhận thất bại**
+- [x] **Step 3: Chạy test, xác nhận thất bại**
 
 Run: `npx jest src/__tests__/browser/ProxyForwarder.test.ts`
 Expected: FAIL với `Cannot find module '../../services/browser/ProxyForwarder'`.
 
-- [ ] **Step 4: Viết implementation**
+- [x] **Step 4: Viết implementation**
 
 Tạo `src/services/browser/ProxyForwarder.ts`:
 
@@ -956,12 +956,12 @@ export class ProxyForwarder {
 
 > Lưu ý (post-review hardening): `upstream.on('error')` thay cho `once` để lỗi thứ hai không bị unhandled; `upstreamResponse` lỗi giữa chừng sẽ destroy response phía trình duyệt; nhánh SOCKS kiểm tra `this.server` sau handshake để không rò socket khi `stop()` đã chạy.
 
-- [ ] **Step 5: Chạy test, xác nhận qua**
+- [x] **Step 5: Chạy test, xác nhận qua**
 
 Run: `npx jest src/__tests__/browser/ProxyForwarder.test.ts`
 Expected: PASS, `Tests: 11 passed, 11 total`. Chạy lại 3 lần để chắc không chập chờn.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add package.json package-lock.json src/services/browser/ProxyForwarder.ts src/__tests__/browser/ProxyForwarder.test.ts
@@ -989,7 +989,7 @@ Ghi chú thiết kế:
 - `download` và `extract` truyền vào được để test không cần mạng. Mặc định: tải bằng `axios` dạng stream; giải nén bằng lệnh `tar -xf` của hệ điều hành.
 - Gia cố sau review: (1) trên Windows dùng bsdtar có sẵn tại `%SystemRoot%\System32\tar.exe`, không dùng `tar` đầu tiên trên PATH vì GNU tar của Git-for-Windows không đọc được .zip và hiểu sai `C:\...`; (2) `downloadFile` (export, nhận tham số idle timeout tùy chọn, mặc định 60 giây) hủy tải nếu không nhận được dữ liệu, kèm timeout socket của axios; (3) dùng `stream.pipeline` để khi lỗi hoặc đứt kết nối sớm thì đóng cả stream ghi và stream nhận, đợi file đóng hẳn trước khi trả lỗi để `rmSync(archive)` không bị EBUSY trên Windows; (4) `tar` ghi lại tối đa 500 ký tự stderr cuối vào thông báo lỗi và chờ sự kiện `close`.
 
-- [ ] **Step 1: Viết test trước**
+- [x] **Step 1: Viết test trước**
 
 Tạo `src/__tests__/browser/BrowserEngineManager.test.ts`:
 
@@ -1162,12 +1162,12 @@ describe('downloadFile', () => {
 });
 ```
 
-- [ ] **Step 2: Chạy test, xác nhận thất bại**
+- [x] **Step 2: Chạy test, xác nhận thất bại**
 
 Run: `npx jest src/__tests__/browser/BrowserEngineManager.test.ts`
 Expected: FAIL với `Cannot find module '../../services/browser/BrowserEngineManager'`.
 
-- [ ] **Step 3: Viết implementation**
+- [x] **Step 3: Viết implementation**
 
 Tạo `src/services/browser/BrowserEngineManager.ts`:
 
@@ -1341,12 +1341,12 @@ export class BrowserEngineManager {
 }
 ```
 
-- [ ] **Step 4: Chạy test, xác nhận qua**
+- [x] **Step 4: Chạy test, xác nhận qua**
 
 Run: `npx jest src/__tests__/browser/BrowserEngineManager.test.ts`
 Expected: PASS, `Tests: 11 passed, 11 total`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/services/browser/BrowserEngineManager.ts src/__tests__/browser/BrowserEngineManager.test.ts
@@ -1380,7 +1380,7 @@ Ghi chú thiết kế:
 
 **Phát hiện khi kiểm chứng Task 8 (Linux, engine thật):** thoát êm bằng `SIGTERM` làm mất cookie vừa ghi. Chromium coi `SIGTERM` là OS kết thúc phiên và tắt nhanh, bỏ qua việc flush cookie trong khoảng 30 giây gần nhất; đo thực tế: `SIGTERM` giữ được cookie mới 1/4 lần, `SIGINT` 5/5, `SIGHUP` 1/1, cả hai đều thoát sau khoảng 0,17 giây. Vì vậy `defaultTerminate` dùng `SIGINT` cho thoát êm trên Linux (kill cứng vẫn là `SIGKILL`, Windows giữ nguyên `taskkill`). Có test "the default terminator sends SIGINT ..." giữ hành vi này.
 
-- [ ] **Step 1: Viết test trước**
+- [x] **Step 1: Viết test trước**
 
 Tạo `src/__tests__/browser/BrowserProfileService.test.ts`:
 
@@ -1669,12 +1669,12 @@ describe('BrowserProfileService', () => {
 });
 ```
 
-- [ ] **Step 2: Chạy test, xác nhận thất bại**
+- [x] **Step 2: Chạy test, xác nhận thất bại**
 
 Run: `npx jest src/__tests__/browser/BrowserProfileService.test.ts`
 Expected: FAIL với `Cannot find module '../../services/browser/BrowserProfileService'`.
 
-- [ ] **Step 3: Viết implementation**
+- [x] **Step 3: Viết implementation**
 
 Tạo `src/services/browser/BrowserProfileService.ts`:
 
@@ -1884,12 +1884,12 @@ export class BrowserProfileService {
 }
 ```
 
-- [ ] **Step 4: Chạy test, xác nhận qua**
+- [x] **Step 4: Chạy test, xác nhận qua**
 
 Run: `npx jest`
 Expected: PASS, `Test Suites: 4 passed, 4 total`, `Tests: 51 passed, 51 total`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/services/browser/BrowserProfileService.ts src/__tests__/browser/BrowserProfileService.test.ts
@@ -1921,7 +1921,7 @@ git commit -m "feat(browser): add profile service for opening and closing browse
 
 Phần này không có unit test jest (xem mục 1). Kiểm chứng bằng type-check ở task này và kịch bản console ở Task 6.
 
-- [ ] **Step 1: Thêm import kiểu**
+- [x] **Step 1: Thêm import kiểu**
 
 Tìm dòng import cuối cùng ở đầu file:
 
@@ -1935,7 +1935,7 @@ Thêm ngay bên dưới:
 import type { BrowserFingerprint, BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
 ```
 
-- [ ] **Step 2: Thêm hai bảng trong `createTables()`**
+- [x] **Step 2: Thêm hai bảng trong `createTables()`**
 
 Tìm đoạn tạo bảng `proxies` (chú thích `// ─── Proxies ───`). Đoạn này kết thúc bằng:
 
@@ -1974,7 +1974,7 @@ Chèn khối sau vào giữa `        \`);` và `    }`:
         `);
 ```
 
-- [ ] **Step 3: Gỡ proxy khỏi profile khi xóa proxy**
+- [x] **Step 3: Gỡ proxy khỏi profile khi xóa proxy**
 
 Trong `deleteProxy(id: number)`, tìm:
 
@@ -1988,7 +1988,7 @@ Thêm ngay bên dưới:
         db!.prepare(`UPDATE browser_profiles SET proxy_id = NULL WHERE proxy_id = ?`).run(id);
 ```
 
-- [ ] **Step 4: Thêm các method**
+- [x] **Step 4: Thêm các method**
 
 Tìm dòng `    private decryptCookies(encrypted: string): string {` (ngay sau `getAccountProxy`). Chèn khối sau ngay phía trên dòng đó:
 
@@ -2092,12 +2092,12 @@ Tìm dòng `    private decryptCookies(encrypted: string): string {` (ngay sau `
 
 Không thêm `getDbPath()`: method này đã tồn tại trong file (thêm lần nữa sẽ lỗi `TS2393: Duplicate function implementation`).
 
-- [ ] **Step 5: Type-check**
+- [x] **Step 5: Type-check**
 
 Run: `npx tsc -p tsconfig.electron.json --noEmit`
 Expected: không in gì, exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/services/database/DatabaseService.ts
@@ -2143,7 +2143,7 @@ Quy tắc nghiệp vụ nằm ở IPC (không có trong spec bản đầu, đã 
 - Nhân trình duyệt cài tại `<userData>/browser-engine/<version>/`, dùng chung cho mọi workspace.
 - Dữ liệu trình duyệt của profile nằm tại `<thư mục chứa DB của workspace>/browser-profiles/<profile id>/`.
 
-- [ ] **Step 1: Tạo file IPC**
+- [x] **Step 1: Tạo file IPC**
 
 Tạo `electron/ipc/browserProfileIpc.ts`:
 
@@ -2384,7 +2384,7 @@ export function registerBrowserProfileIpc(): void {
 }
 ```
 
-- [ ] **Step 2: Đăng ký trong `electron/main.ts`**
+- [x] **Step 2: Đăng ký trong `electron/main.ts`**
 
 (a) Tìm:
 
@@ -2421,7 +2421,7 @@ Chèn khối sau ngay phía trên (phải đứng trước bước đóng DB):
 
 ```
 
-- [ ] **Step 3: Đóng profile trước khi chuyển workspace**
+- [x] **Step 3: Đóng profile trước khi chuyển workspace**
 
 Trong `electron/ipc/workspaceIpc.ts`:
 
@@ -2440,7 +2440,7 @@ try { closeAllBrowserProfiles(); } catch {}
 
 Kiểm tra: `grep -c "try { closeAllBrowserProfiles(); } catch {}" electron/ipc/workspaceIpc.ts` → `2`.
 
-- [ ] **Step 4: Công khai API trong `electron/preload.ts`**
+- [x] **Step 4: Công khai API trong `electron/preload.ts`**
 
 (a) Trong mảng `validChannels` của hàm `on`, tìm:
 
@@ -2490,12 +2490,12 @@ Thay bằng:
 });
 ```
 
-- [ ] **Step 5: Type-check và unit test**
+- [x] **Step 5: Type-check và unit test**
 
 Run: `npx tsc -p tsconfig.electron.json --noEmit && npx jest`
 Expected: tsc không in gì; jest `Tests: 51 passed, 51 total`.
 
-- [ ] **Step 6: Chạy app dev và kiểm chứng bằng console**
+- [x] **Step 6: Chạy app dev và kiểm chứng bằng console**
 
 Run: `npm run dev`
 Expected: app mở như bình thường, Dashboard hiển thị, không có lỗi mới trong terminal. (Nếu app trắng màn hình: gần như chắc chắn là lỗi cú pháp trong `preload.ts`.)
@@ -2555,7 +2555,7 @@ console.assert((await api.list()).profiles.every(p => p.id !== id1), 'gone');
 
 Expected: không có dòng `Assertion failed` nào trong Console.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add electron/ipc/browserProfileIpc.ts electron/main.ts electron/ipc/workspaceIpc.ts electron/preload.ts
@@ -2583,7 +2583,7 @@ git commit -m "feat(browser): expose browser profile IPC and wire lifecycle hook
 - Consumes: `window.electronAPI.browserProfile.*` và hai sự kiện (Task 6); `ipc.proxy.list()`; `useAppStore(s => s.showNotification)`; `showConfirm` từ `@/components/common/ConfirmDialog`; `Spinner` từ `@/components/common/PageLoading`; icon từ `@/components/common/icons`; class `input-field`, `btn-primary` từ `src/ui/index.css`.
 - Produces: `BrowserProfilesView` (default export), `BrowserProfileForm` (default export), `ProxyOption`.
 
-- [ ] **Step 1: Bổ sung `DESIGN.md`**
+- [x] **Step 1: Bổ sung `DESIGN.md`**
 
 `DESIGN.md` hiện chỉ mô tả logo. Sửa hai chỗ.
 
@@ -2663,7 +2663,7 @@ Lý do:
   `aria-label`; modal có `role="dialog"` và `aria-modal`; lỗi dùng `role="alert"`.
 ~~~~
 
-- [ ] **Step 2: Khai báo kiểu và export trong `src/ui/lib/ipc.ts`**
+- [x] **Step 2: Khai báo kiểu và export trong `src/ui/lib/ipc.ts`**
 
 (a) Tìm:
 
@@ -2714,7 +2714,7 @@ Thêm ngay bên dưới:
   browserProfile: window.electronAPI?.browserProfile,
 ```
 
-- [ ] **Step 3: Thêm view `'browser'`**
+- [x] **Step 3: Thêm view `'browser'`**
 
 Trong `src/ui/store/appStore.ts`, thay:
 
@@ -2728,7 +2728,7 @@ bằng:
 type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser';
 ```
 
-- [ ] **Step 4: Tạo form**
+- [x] **Step 4: Tạo form**
 
 Tạo `src/ui/features/browser/BrowserProfileForm.tsx`:
 
@@ -2946,7 +2946,7 @@ export default function BrowserProfileForm({ profile, groups, proxies, running, 
 }
 ```
 
-- [ ] **Step 5: Tạo màn hình danh sách**
+- [x] **Step 5: Tạo màn hình danh sách**
 
 Tạo `src/ui/features/browser/BrowserProfilesView.tsx`:
 
@@ -3474,7 +3474,7 @@ export default function BrowserProfilesView() {
 }
 ```
 
-- [ ] **Step 6: Render trong `src/ui/App.tsx`**
+- [x] **Step 6: Render trong `src/ui/App.tsx`**
 
 (a) Tìm:
 
@@ -3508,7 +3508,7 @@ Thêm ngay bên dưới:
           )}
 ```
 
-- [ ] **Step 7: Nút điều hướng trong `src/ui/components/layout/Sidebar.tsx`**
+- [x] **Step 7: Nút điều hướng trong `src/ui/components/layout/Sidebar.tsx`**
 
 (a) Tìm:
 
@@ -3537,12 +3537,12 @@ Thêm ngay bên dưới (`empMode` và `isSimulating` đã có sẵn trong compo
     ),
 ```
 
-- [ ] **Step 8: Type-check và build renderer**
+- [x] **Step 8: Type-check và build renderer**
 
 Run: `npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.electron.json --noEmit && npm run build:renderer`
 Expected: hai lệnh tsc không in gì; vite build kết thúc không lỗi.
 
-- [ ] **Step 9: Kiểm tra giao diện trên dev**
+- [x] **Step 9: Kiểm tra giao diện trên dev**
 
 Run: `npm run dev`. Kiểm tra từng mục; mục nào sai thì sửa rồi mới commit.
 
@@ -3557,7 +3557,7 @@ Run: `npm run dev`. Kiểm tra từng mục; mục nào sai thì sửa rồi m�
 9. Settings → Nhân viên → xem thử một nhân viên: nút "Trình duyệt" biến mất.
 10. Bàn phím: Tab đi được qua ô tìm kiếm, bộ lọc, nút, checkbox; vòng focus nhìn thấy được.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add DESIGN.md src/ui/lib/ipc.ts src/ui/store/appStore.ts src/ui/App.tsx src/ui/components/layout/Sidebar.tsx src/ui/features/browser/BrowserProfileForm.tsx src/ui/features/browser/BrowserProfilesView.tsx
@@ -3574,7 +3574,7 @@ git commit -m "feat(browser): add browser profiles screen"
 
 Task này không thêm code. Nó chạy hai vòng kiểm thử trên Linux và Windows theo `AGENTS.md` (mỗi vòng gồm desktop và mobile, dark và light), rồi cập nhật tài liệu.
 
-- [ ] **Step 1: Kiểm chứng tự động**
+- [x] **Step 1: Kiểm chứng tự động**
 
 Run:
 
@@ -3586,9 +3586,9 @@ npm run build:electron
 npm run build:renderer
 ```
 
-Expected: hai lệnh tsc không in gì; jest `Test Suites: 4 passed, 4 total`, `Tests: 51 passed, 51 total`; hai lệnh build không lỗi. Dán output vào mô tả PR.
+Expected: hai lệnh tsc không in gì; jest `Test Suites: 7 passed, 7 total`, `Tests: 177 passed, 177 total` (51 của Trình duyệt, 126 của giao diện); hai lệnh build không lỗi. Dán output vào mô tả PR.
 
-- [ ] **Step 2: Vòng 1 trên Linux (`npm run dev`)**
+- [x] **Step 2: Vòng 1 trên Linux (`npm run dev`)**
 
 1. **Tải nhân:** bấm "Tải trình duyệt". Tiến độ MB tăng dần; xong thì banner biến mất. Kiểm tra file đánh dấu tồn tại: `find ~/.config -maxdepth 4 -path '*browser-engine/148.0.7778.215/installed.json'` in ra đúng một đường dẫn (thư mục `userData` của app do `app.setName('AHV Connect')` trong `electron/main.ts` quyết định).
 2. **Fingerprint khác nhau và ổn định:** tạo profile A và B, mở cả hai, vào `https://abrahamjuliot.github.io/creepjs/`. "FP ID" của A khác B. Đóng A, mở lại A: "FP ID" giống lần trước.
@@ -3631,7 +3631,7 @@ for (let i = 1; i <= 1000; i++) await window.electronAPI.browserProfile.create({
    - Chế độ employee (nếu có workspace remote): không thấy nút "Trình duyệt"; trong Console, `await window.electronAPI.browserProfile.list()` trả `success: false`.
 4. Xóa 1.000 profile thử nghiệm.
 
-- [ ] **Step 5: Cập nhật `SYSTEM_DOCUMENTATION.md`**
+- [x] **Step 5: Cập nhật `SYSTEM_DOCUMENTATION.md`**
 
 Tìm tiêu đề `## 5. Mô hình dữ liệu theo nhóm`. Chèn khối sau ngay phía trên nó:
 
@@ -3669,6 +3669,33 @@ git commit -m "docs(browser): update browser profiles plan after verification"
 ```
 
 Không `git push` và không build production khi chưa được chủ sản phẩm duyệt.
+
+---
+
+## Kết quả kiểm chứng Task 8 (02/10/2026, trên `main` sau khi gộp giao diện macOS)
+
+Chạy trên Linux x86_64 với một bản app cách ly: `XDG_CONFIG_HOME` trỏ vào thư mục tạm (không đụng dữ liệu thật), màn hình ảo Xvfb, điều khiển renderer qua cổng remote-debugging của bản dev. Nhân trình duyệt là bản thật 148.0.7778.215.
+
+| Mục | Kết quả |
+|---|---|
+| Step 1: type-check hai cấu hình, build main và renderer | Đạt |
+| Step 1: unit test | Đạt, 177/177. Trước khi sửa `jest.config.js`, `npx jest` làm treo máy 16 GB; sau khi sửa chạy 2 giây, đỉnh RAM khoảng 170 MB |
+| Kịch bản Console của Task 6 | Đạt, không assertion nào sai |
+| 2.1 Tải nhân qua nút trên giao diện | Đạt: 23 giây, tiến độ MB hiển thị, banner biến mất, có `installed.json` |
+| 2.2 Fingerprint khác nhau và ổn định | Đạt ở mức tham số khởi chạy: seed của A khác B, khớp DB, giữ nguyên sau khi mở lại. Chưa mở CreepJS trong lần chạy này |
+| 2.3 Giữ phiên | Đạt: đặt cookie, bấm Đóng sau 4 giây, mở lại vẫn còn cookie. Trình duyệt thoát sau 0,15 giây |
+| 2.4 Trạng thái khi trình duyệt tự thoát | Đạt: trạng thái về "Đã dừng" sau 0,1 giây (mô phỏng bằng cách kết thúc tiến trình trình duyệt) |
+| 2.5 Chặn mở trùng | Đạt: hai lệnh mở đồng thời cho một thành công và một lỗi "Profile đang mở"; chỉ có một tiến trình |
+| 2.6 Proxy có mật khẩu | Đạt với proxy giả cục bộ yêu cầu Basic auth (mật khẩu có `@`, `:` và dấu cách): proxy nhận `CONNECT example.com:443` kèm đúng thông tin xác thực. Chưa thử với proxy thật ngoài Internet và chưa mở browserleaks |
+| 2.7 Proxy chết | Chưa thử trong app; chỉ có unit test của `ProxyForwarder` |
+| 2.8 Xóa | Đạt: profile đang mở bị bỏ qua (`skippedRunning`), đóng rồi xóa thì thư mục dữ liệu biến mất; đổi proxy khi đang mở bị từ chối |
+| 2.9 Thoát app khi đang mở 2 profile | Đạt: không còn tiến trình trình duyệt hay app nào trong vòng 12 giây (không đo chính xác hơn) |
+| 2.10 Chuyển workspace | Đạt: trình duyệt đang mở bị đóng; workspace mới có 0 profile; quay lại workspace cũ đủ profile |
+| 4.1 1.000 profile | Đạt: tạo 1.000 profile mất 0,24 giây; danh sách hiện sau 0,05 giây; 21 trang; tìm "Load 0999" ra 1 dòng; chọn cả trang và xóa hàng loạt xóa đúng 50 |
+| 4.2 Giới hạn 30 profile | Chưa thử với trình duyệt thật (cần khoảng 9 GB RAM); chỉ có unit test |
+| 4.3 Hồi quy | Một phần: Tổng quan, Chat, CRM, Báo cáo, Quản lý công việc, Cài đặt, Trình duyệt đều hiển thị, không có lỗi console; thêm/xóa proxy hoạt động. Chưa thử gửi/nhận tin nhắn thật, Workflow, và chế độ employee (bản cách ly không có tài khoản) |
+| Giao diện | Đạt ở 1440×900 và 400×800, cả light và dark: màn hình rỗng, danh sách, form tạo, hộp xác nhận xóa; không tràn ngang; modal vừa màn hình; Escape đóng modal |
+| Step 3: Windows | **Chưa làm.** Ba mục rủi ro cao nhất ở mục 4 vẫn chưa có bằng chứng |
 
 ---
 
