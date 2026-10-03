@@ -230,6 +230,7 @@ Mọi handler trả `{ success, ... }` hoặc `{ success: false, error }` và t�
 | `facebookPoster:listRuns` | `{ limit?, offset?, kind? }` | `{ runs[], total }` |
 | `facebookPoster:getRun` | `{ runId }` | `{ run, results[] }` |
 | `facebookPoster:listComments` | `{ postUrl?, limit?, offset? }` | `{ comments[], total }` |
+| `facebookPoster:listPostedUrls` | — | `{ posts[] }` (kết quả có `post_url`, mới nhất trước, không trùng; cho tab Bình luận) |
 | `facebookPoster:pickMedia` | — | `{ path \| null }` (hộp chọn tệp ảnh/video của hệ điều hành) |
 | `facebookPoster:exportRunCsv` | `{ runId }` | `{ path \| null }` (hộp lưu tệp) |
 
@@ -237,7 +238,7 @@ Kiểm tra input ở IPC:
 
 - `kind` thuộc bốn giá trị; `mode` là `group` hoặc `page`.
 - `text` không rỗng, tối đa 63.206 ký tự (giới hạn bài Facebook); `comment` tối đa 8.000 ký tự.
-- Mỗi `profileId` phải tồn tại; mỗi đích phải chuẩn hóa được bằng `normalizeTarget`; tổng số đích tối đa 500.
+- Mỗi `profileId` phải tồn tại. Mỗi đích chuẩn hóa bằng `normalizeTarget`; ở chế độ Nhóm, đích phải ra `kind = 'group'` và nếu là id/slug trần thì chỉ gồm `A-Z a-z 0-9 . _ -`. Đích trùng trong một profile gộp làm một. Tổng số đích tối đa 500.
 - `mediaPath` nếu có phải tồn tại và có đuôi ảnh/video (`jpg`, `jpeg`, `png`, `gif`, `webp`, `mp4`, `mov`, `webm`).
 - `minDelaySec` ≥ 0, `maxDelaySec` ≥ `minDelaySec`, tối đa 86.400; `concurrency` từ 1 đến 10; `limit` từ 1 đến 200.
 
