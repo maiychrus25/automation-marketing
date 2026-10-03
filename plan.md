@@ -999,4 +999,40 @@ Tasks run strictly in numeric order (one implementer at a time). Task 8 only nee
 
 ## Verification log
 
-(Filled in during Task 13. Each entry: date, command, result.)
+Date of all entries: 03/10/2026, Linux (Ubuntu 24.04, X11 :1), HEAD 18ba9ad plus the Task 13 script. Scratch/screenshots outside the repo in `/tmp/claude-1000/dryrun/`.
+
+**Step 1-2: dry-run (logged-out throwaway profile, public group 783713308689243)**
+- `npm run build:electron` -> exit 0. `node scripts/dev/facebook-poster-dry-run.js --profile-dir /tmp/claude-1000/dryrun/profile --engine <148.0.7778.215 chrome> --group-url https://www.facebook.com/groups/783713308689243/` -> **exit 2**, as expected.
+- PASS main browser process found (flags: `--remote-debugging-pipe --user-data-dir=... --fingerprint=123456 --fingerprint-platform=linux --fingerprint-brand=Chrome --fingerprint-hardware-concurrency=8 --lang=vi-VN --accept-lang=vi-VN,vi --timezone=Asia/Ho_Chi_Minh --no-first-run --no-default-browser-check`); PASS no `--remote-debugging-port`; PASS `--remote-debugging-pipe` present; PASS no listening TCP port (`ss -ltnpH` over all 9 browser processes: none); PASS `navigator.webdriver === false`; then "NOT LOGGED IN: composer step skipped", exit 2. No Publish click, nothing posted. No leftover browser process after exit.
+- Re-run against the production-built (strip-console) `dist-electron`: identical result, exit 2.
+- NOT VERIFIED here: the composer-open / type / "Publish enabled" half of the script (needs a logged-in profile; owner-only, see Step 8).
+
+**Step 3: packaged build**
+- `npm run production` -> exit 0 (2m38s; E2EE bridge build and native rebuild worked, no fallback needed). Produced `dist-electron-build/MaiHub-26.9.0.AppImage`, `maihub_26.9.0_amd64.deb`, `linux-unpacked/`.
+- `npx asar list dist-electron-build/linux-unpacked/resources/app.asar | grep -c playwright-core` -> 131. `resources/app.asar.unpacked/node_modules/playwright-core` exists (bin, browsers.json, cli.js, index.js, ...).
+- `grep -c "data-maihub-target" dist-electron/src/services/facebookPoster/postToTargets.js` -> 7 (>= 2); same count (7) in the file extracted from app.asar; `grep -c "console\."` on it -> 0. In-page functions intact after strip-console.
+- Side effect to note: `npm run production` runs `rebuild:native`, which rebuilds `node_modules/better-sqlite3` for the Electron ABI (NODE_MODULE_VERSION 145); plain `npx jest` then failed 48 tests ("compiled against a different Node.js version"). Restored with `npm rebuild better-sqlite3`; not a feature defect.
+
+**Step 4: whole-suite (after restoring better-sqlite3)**
+- `npx jest` -> 20 suites, 439 tests passed, 0 failed.
+- `npx tsc -p tsconfig.electron.json --noEmit` -> exit 0. `NODE_OPTIONS=--max-old-space-size=8192 npx tsc -p tsconfig.json --noEmit` -> exit 0.
+- `npm run build:electron` -> exit 0. `npm run build:renderer` -> exit 0 (vite, chunk-size warning only).
+
+**Step 5: UI checks (packaged `linux-unpacked/maihub`, isolated `XDG_CONFIG_HOME=/tmp/claude-1000/dryrun/xdg`, driven by playwright-core `connectOverCDP` on the app's own DevTools port)**
+- Playwright `_electron.launch` could not be used: the app exits when Playwright's `--inspect` is injected; the main process already opens `remote-debugging-port=0`, so the running window was driven over CDP instead. Note `ELECTRON_RUN_AS_NODE=1` is set in this shell and must be unset to run the app.
+- Reached the main UI directly (no lock/onboarding gate; empty account list). Opened "Đăng Facebook" from the sidebar.
+- Two rounds x {1440x900, 375x812} x {light, dark} (`page.setViewportSize`, theme via `localStorage.app_theme` + reload), each visiting all 4 tabs (Đăng bài, Tham gia nhóm, Bình luận, Lịch sử) plus the run panel ("Tiến độ"): 8 combinations, 32 tab views, 41 screenshots.
+- Result for every view: `documentElement.scrollWidth <= clientWidth` true; 0 overlapping text pairs; 0 elements sticking out right (excluding the intentionally scrollable tablist); `data-theme` matched (light bg rgb(242,242,247), dark rgb(21,21,22)); 0 page errors / console errors.
+- Keyboard: ArrowRight on the focused tab moves selection to "Tham gia nhóm" (8/8); Tab then moves focus into the tab panel (8/8).
+- Empty states render: "Chưa có profile. Tạo profile ở màn hình Trình duyệt." + button, "Chưa có bài nào có link để thu bình luận.", "Chưa có lịch sử.", "Chưa có việc nào đang chạy.".
+- Visual read of screenshots r2-mobile-dark-tab1 and r2-desktop-light-tab4: fine. At 375 px the 4th tab is clipped inside the horizontally scrollable tablist (by design).
+- NOT VERIFIED: live progress events on the run panel (no profile logged in to Facebook, nothing is run).
+- Screenshots: `/tmp/claude-1000/dryrun/ui/r{1,2}-{desktop,mobile}-{light,dark}-{tab1..tab4,runpanel}.png`, report `/tmp/claude-1000/dryrun/ui/ui-report.json`.
+
+**Step 6: regression**
+- Verified in the packaged app: Tổng quan, Chat, CRM, Báo cáo, Quản lý công việc, Trình duyệt, Cài đặt all load, no horizontal scroll, 0 console errors.
+- Browser Profiles by hand (real engine linked into the isolated profile dir): created "reg-test", **Mở** -> 1 browser process, UI "1/30 đang mở", flags have no `--remote-debugging-port` and no `--remote-debugging-pipe`; **Đóng** -> 0 processes within 1.5 s, "0/30 đang mở", status "Đã dừng". Quit (SIGTERM to the app PID) with a profile open -> 0 browser processes afterwards and the app exited (close-all on quit).
+- 30 limit message and workspace switch: NOT VERIFIED in the UI (would need 30 real browsers / a second workspace); covered by the unchanged `BrowserProfileService.test.ts` passing in the 439.
+- Proxy assignment screen for a Zalo account: NOT VERIFIED (no Zalo account in the isolated environment).
+
+**Step 8 (real-account checks, spec section 11 items 1-6):** PENDING, owner only; not performed.
