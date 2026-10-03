@@ -130,8 +130,9 @@ export class UpdateService {
         const version = this.latest.version;
         this.setState({ status: 'downloading', version, percent: 0 });
         try {
-            const found = await this.deps.updater.checkForUpdates() as { isUpdateAvailable?: boolean } | null;
-            if (!found || found.isUpdateAvailable === false) {
+            const found = await this.deps.updater.checkForUpdates() as { isUpdateAvailable?: boolean; updateInfo?: { version?: string } } | null;
+            const foundVersion = found?.updateInfo?.version;
+            if (!found || found.isUpdateAvailable === false || (foundVersion && foundVersion !== version)) {
                 throw new Error(`không có bản ${version} để tải tự động (bản phát hành thiếu latest*.yml hoặc lệch phiên bản)`);
             }
             await this.deps.updater.downloadUpdate();

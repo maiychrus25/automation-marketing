@@ -56,7 +56,7 @@ function main() {
       // makes it swallow following code. Refuse to ship such a file instead of producing a broken build.
       const parses = (code) => { try { new vm.Script(code, { filename: file }); return null; } catch (err) { return err; } };
       const after = parses(processed);
-      // Only blame the strip when the original parsed; a file vm.Script cannot read (ESM, top-level return) is left as is.
+      // Only blame the strip when the original parsed; a file vm.Script cannot read at all (ESM, top-level return) is written as before.
       if (after && !parses(original)) {
         broken.push(`${path.relative(DIST_DIR, file)}: ${after.message}`);
         continue;

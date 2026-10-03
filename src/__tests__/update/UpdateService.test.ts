@@ -177,6 +177,15 @@ describe('UpdateService.download', () => {
         expect(updater.calls).toEqual(['check']);
     });
 
+    test('latest*.yml chỉ một bản khác với thẻ GitHub thì không tải bản đó', async () => {
+        const { service, updater } = make();
+        updater.checkForUpdates = async () => { updater.calls.push('check'); return { isUpdateAvailable: true, updateInfo: { version: '26.12.0' } }; };
+        await service.check();
+        expect((await service.download()).success).toBe(false);
+        expect(service.getState()).toMatchObject({ status: 'error', message: expect.stringMatching(/26\.11\.0/) });
+        expect(updater.calls).toEqual(['check']);
+    });
+
     test('sự kiện error của electron-updater khi đang tải cũng chuyển sang error', async () => {
         const { service, updater } = make();
         await service.check();
