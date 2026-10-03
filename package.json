@@ -42,6 +42,7 @@
     "node-fetch": "^2.7.0",
     "nodemailer": "^8.0.3",
     "otplib": "^13.4.0",
+    "playwright-core": "1.62.1",
     "proxy-agent": "^8.0.1",
     "quill": "^2.0.3",
     "react-is": "^19.2.8",
@@ -137,7 +138,8 @@
       "node_modules/@ngrok/ngrok/**",
       "node_modules/better-sqlite3/**",
       "node_modules/cloudflared/**",
-      "node_modules/ffmpeg-static/**"
+      "node_modules/ffmpeg-static/**",
+      "node_modules/playwright-core/**"
     ],
     "afterPack": "./scripts/after-pack.js",
     "win": {

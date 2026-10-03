@@ -43,6 +43,7 @@ function makeHarness(options: {
     spawnFails?: boolean;
     forwarderFails?: boolean;
     useDefaultTerminate?: boolean;
+    launchAutomation?: BrowserProfileServiceDeps['launchAutomation'];
 } = {}): Harness {
     const profilesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profiles-test-'));
     const harness: Harness = {
@@ -79,6 +80,7 @@ function makeHarness(options: {
         },
         terminate: options.useDefaultTerminate ? undefined : (child, force) => { harness.terminated.push({ child, force }); },
         onStatusChanged: (ids) => { harness.statuses.push(ids); },
+        launchAutomation: options.launchAutomation,
     };
     harness.service = new BrowserProfileService(deps);
     return harness;
@@ -278,5 +280,97 @@ describe('BrowserProfileService', () => {
         expect((h.children[0] as FakeChild).signals).toEqual(['SIGINT']);
         jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
         expect((h.children[0] as FakeChild).signals).toEqual(['SIGINT', 'SIGKILL']);
+    });
+
+    describe('openForAutomation', () => {
+        function fakeContext() {
+            const ctx = new EventEmitter() as any;
+            ctx.closed = 0;
+            ctx.close = async () => { ctx.closed++; ctx.emit('close'); };
+            return ctx;
+        }
+        const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+        it('launches over the pipe with exactly buildLaunchArgs plus --remote-debugging-pipe', async () => {
+            const calls: Array<{ exe: string; dir: string; args: string[] }> = [];
+            const ctx = fakeContext();
+            const h = create({ launchAutomation: async (exe, dir, args) => { calls.push({ exe, dir, args }); return ctx; } });
+            const session = await h.service.openForAutomation('a');
+            expect(session.context).toBe(ctx);
+            expect(calls).toHaveLength(1);
+            expect(calls[0].exe).toBe('/engine/chrome');
+            expect(calls[0].args[0]).toBe('--remote-debugging-pipe');
+            expect(calls[0].args).toContain(`--user-data-dir=${calls[0].dir}`);
+            expect(calls[0].args.some((a) => a.startsWith('--remote-debugging-port'))).toBe(false);
+            expect(h.service.isRunning('a')).toBe(true);
+            expect(h.touched).toEqual(['a']);
+            expect(h.spawned).toHaveLength(0);
+        });
+
+        it('rejects when the profile is already open by hand', async () => {
+            const h = create({ launchAutomation: async () => fakeContext() });
+            await h.service.open('a');
+            await expect(h.service.openForAutomation('a')).rejects.toThrow('Profile đang mở. Đóng profile trước khi chạy tự động');
+        });
+
+        it('manual open is rejected while automation runs', async () => {
+            const h = create({ launchAutomation: async () => fakeContext() });
+            await h.service.openForAutomation('a');
+            await expect(h.service.open('a')).rejects.toThrow('Profile đang mở');
+        });
+
+        it('releases on context close', async () => {
+            const ctx = fakeContext();
+            const h = create({ launchAutomation: async () => ctx });
+            await h.service.openForAutomation('a');
+            ctx.emit('close');
+            expect(h.service.isRunning('a')).toBe(false);
+            expect(h.statuses[h.statuses.length - 1]).toEqual([]);
+        });
+
+        it('session.close is idempotent and closes the context once', async () => {
+            const ctx = fakeContext();
+            const h = create({ launchAutomation: async () => ctx });
+            const session = await h.service.openForAutomation('a');
+            await Promise.all([session.close(), session.close()]);
+            expect(ctx.closed).toBe(1);
+            expect(h.service.isRunning('a')).toBe(false);
+        });
+
+        it('closeAll closes automation sessions', async () => {
+            const ctx = fakeContext();
+            const h = create({ launchAutomation: async () => ctx });
+            await h.service.openForAutomation('a');
+            h.service.closeAll();
+            expect(h.service.isRunning('a')).toBe(false);
+            await flush();
+            expect(ctx.closed).toBe(1);
+        });
+
+        it('close(id) from the Browser Profiles screen closes an automation session', async () => {
+            const ctx = fakeContext();
+            const h = create({ launchAutomation: async () => ctx });
+            await h.service.openForAutomation('a');
+            h.service.close('a');
+            await flush();
+            expect(ctx.closed).toBe(1);
+            expect(h.service.isRunning('a')).toBe(false);
+        });
+
+        it('launch failure releases the slot and stops the forwarder', async () => {
+            const h = create({ profiles: [makeProfile('a', 5)], launchAutomation: async () => { throw new Error('boom'); } });
+            await expect(h.service.openForAutomation('a')).rejects.toThrow('Không mở được trình duyệt: boom');
+            expect(h.service.isRunning('a')).toBe(false);
+            expect(h.forwarders).toEqual([{ started: true, stopped: true }]);
+        });
+
+        it('counts toward MAX_RUNNING_PROFILES', async () => {
+            const profiles = Array.from({ length: MAX_RUNNING_PROFILES + 1 }, (_, i) => makeProfile(`p${i}`));
+            const h = create({ profiles, launchAutomation: async () => fakeContext() });
+            for (let i = 0; i < MAX_RUNNING_PROFILES; i++) await h.service.open(`p${i}`);
+            await expect(h.service.openForAutomation(`p${MAX_RUNNING_PROFILES}`))
+                .rejects.toThrow('Đã đạt giới hạn 30 profile mở cùng lúc');
+            expect(h.service.getRunningIds()).toHaveLength(MAX_RUNNING_PROFILES);
+        });
     });
 });
