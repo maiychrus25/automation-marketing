@@ -5,6 +5,7 @@ import {
   matchSnippet,
   postFirstComment,
   evaluatePostState,
+  markCommentSendButtonInPage,
 } from '../../services/facebookPoster/firstComment';
 import { fakeLocators, runWithFakeTimers } from './helpers';
 
@@ -136,4 +137,18 @@ test('send button is clicked through a trusted locator, not element.click()', as
   }));
   assert.strictEqual(out.status, 'posted');
   assert.deepStrictEqual(clicked.filter((c) => c === 'comment-send'), ['comment-send']);
+});
+
+test('markCommentSendButtonInPage clears a stale mark even when no send button is found', () => {
+  const stale: any = { attrs: { 'data-maihub-target': 'publish' }, removeAttribute(k: string) { delete this.attrs[k]; } };
+  const g = global as unknown as { document: unknown };
+  const old = g.document;
+  g.document = {
+    querySelector: () => null,
+    querySelectorAll: (sel: string) => (sel === '[data-maihub-target]' ? [stale].filter(n => 'data-maihub-target' in n.attrs) : []),
+  };
+  try {
+    assert.strictEqual(markCommentSendButtonInPage({ mark: 'data-maihub-comment-box', labels: ['Gửi'] }), false);
+  } finally { g.document = old; }
+  assert.ok(!('data-maihub-target' in stale.attrs), 'dấu cũ phải bị gỡ');
 });

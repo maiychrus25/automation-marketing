@@ -513,12 +513,18 @@ async function postToSingleTarget(
     sendLog('[Đăng Bài] Đang click nút Đăng bài...', 'info');
     try {
       published = await page.evaluate(markPublishButtonInPage, PUBLISH_LABELS);
+    } catch (e) {
+      sendLog(`Lỗi tìm nút Đăng bằng evaluate: ${(e as Error).message}`, 'warning');
+    }
+    if (published) {
       // Click tin cậy qua locator. Nếu click ném lỗi thì published vẫn là true:
       // không có bằng chứng nào ở đây cả, quyết định nằm ở phép chờ dialog đóng
       // / rời /post/create bên dưới (bằng chứng dương), không phải ở việc click.
-      if (published) await page.locator('[data-maihub-target="publish"]').first().click({ timeout: 10000 });
-    } catch (e) {
-      sendLog(`Lỗi tìm nút Đăng bằng evaluate: ${(e as Error).message}`, 'warning');
+      try {
+        await page.locator('[data-maihub-target="publish"]').first().click({ timeout: 10000 });
+      } catch (e) {
+        sendLog(`Bấm nút Đăng không được: ${(e as Error).message}`, 'warning');
+      }
     }
 
     if (!published) {
@@ -639,7 +645,7 @@ export async function postToTargets(
     await page.goto(FB_HOME, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
     if (!(await isLoggedIn(ctx))) {
-      throw new Error('Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập.');
+      throw new Error('Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập');
     }
 
     if (mediaPath) {

@@ -97,11 +97,12 @@ function markCommentBoxInPage({ mark }: { mark: string }): boolean {
  * Trèo lên tổ tiên vì nút gửi là anh em của ô nhập, không lồng bên trong nó.
  * Giới hạn phạm vi để không bấm trúng nút "Bình luận" của bài khác trên trang.
  */
-function markCommentSendButtonInPage({ mark, labels }: { mark: string; labels: string[] }): boolean {
+export function markCommentSendButtonInPage({ mark, labels }: { mark: string; labels: string[] }): boolean {
   const isVisible = (e: Element) => {
     const r = e.getBoundingClientRect();
     return r.width > 1 && r.height > 1;
   };
+  document.querySelectorAll('[data-maihub-target]').forEach(e => e.removeAttribute('data-maihub-target'));
   const box = document.querySelector(`[${mark}]`);
   if (!box) return false;
   for (let parent = box.parentElement, step = 0; parent && step < 6; parent = parent.parentElement, step++) {
@@ -109,7 +110,6 @@ function markCommentSendButtonInPage({ mark, labels }: { mark: string; labels: s
       .filter(isVisible)
       .find(e => labels.includes(String(e.getAttribute('aria-label') || (e as HTMLElement).innerText || '').trim()));
     if (button) {
-      document.querySelectorAll('[data-maihub-target]').forEach(e => e.removeAttribute('data-maihub-target'));
       button.setAttribute('data-maihub-target', 'comment-send');
       return true;
     }

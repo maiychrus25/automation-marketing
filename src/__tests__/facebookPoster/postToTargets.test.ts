@@ -103,7 +103,7 @@ test('chưa đăng nhập thì reject và vẫn đóng context', async () => {
       { text: 'xin chào', targets: ['123'], minDelay: 0, maxDelay: 0 },
       makeDeps(ctx, page),
     ),
-    /chưa đăng nhập Facebook/,
+    { message: 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập' },
   );
   assert.strictEqual(closed.length, 1);
 });
@@ -150,6 +150,32 @@ test('có media vẫn phải mở hộp soạn thảo trước, rồi mới tìm
   assert.ok(!clicked.includes('publish'), 'không có input file thì không được bấm đăng');
   assert.strictEqual(result.failed, 1);
   assert.strictEqual(closed.length, 1);
+});
+
+test('publish click failure is logged as a click error and the dialog-close evidence still decides', async () => {
+  const closed: boolean[] = [];
+  const logs: string[] = [];
+  const page = {
+    goto: async () => {},
+    $: async () => null,
+    on: () => {},
+    off: () => {},
+    evaluate: async (fn: AnyFn) => (fn.name === 'markPublishButtonInPage' || fn.name === 'composerIsOpenInPage' || fn.name === 'focusEditorInPage'),
+    locator: () => ({ first: () => ({ click: async () => { throw new Error('boom'); } }) }),
+    waitForSelector: async (_sel: string, opts?: { state?: string }) => {
+      if (opts && opts.state === 'hidden') return null;
+      throw new Error('không tìm thấy (giả lập)');
+    },
+    click: async () => {},
+    keyboard: { type: async () => {} },
+  };
+  const result = await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', targets: ['123'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx(closed), page, { sendLog: (m: string) => logs.push(m) }),
+  ));
+  assert.strictEqual(result.posted, 1);
+  assert.ok(logs.includes('Bấm nút Đăng không được: boom'), logs.join('\n'));
+  assert.ok(!logs.some((m) => m.includes('Lỗi tìm nút Đăng bằng evaluate')));
 });
 
 test('đăng thành công 2 targets: tổng hợp kết quả đúng, đóng context, tiến độ đạt 100%', async () => {
