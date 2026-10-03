@@ -20,6 +20,7 @@ import IntegrationPage from './components/integration/IntegrationPage';
 import AnalyticsPage from './components/analytics/AnalyticsPage';
 import ErpPage from './features/erp/ErpPage';
 import BrowserProfilesView from './features/browser/BrowserProfilesView';
+import UpdateNotice from './components/common/UpdateNotice';
 import FacebookPosterView from './features/facebookPoster/FacebookPosterView';
 import AccountInitPanel from './components/common/AccountInitPanel';
 import AccountSwitcherOverlay from './components/common/AccountSwitcherOverlay';
@@ -1590,6 +1591,8 @@ export default function App() {
       {addAccountModalOpen && (
         <AddAccountModal onClose={() => setAddAccountModalOpen(false)} />
       )}
+
+      <UpdateNotice />
 
       {/* Global Notification */}
       {notification && (

@@ -3,7 +3,6 @@ import * as os from 'os';
 import { resolveWindowAppearance, windowChromeOptions, titleBarOverlayFor, solidBackgroundFor, type WindowTheme } from './windowAppearance';
 import * as path from 'path';
 import * as fs from 'fs';
-import { autoUpdater } from 'electron-updater';
 import * as cron from 'node-cron';
 import DatabaseService from '../src/services/database/DatabaseService';
 import { registerLoginIpc } from './ipc/loginIpc';
@@ -24,6 +23,7 @@ import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
 import { registerProxyIpc } from './ipc/proxyIpc';
 import { registerBrowserProfileIpc, closeAllBrowserProfiles } from './ipc/browserProfileIpc';
 import { registerFacebookPosterIpc, cancelFacebookPosterJobs } from './ipc/facebookPosterIpc';
+import { registerUpdateIpc } from './ipc/updateIpc';
 import { registerErpTaskIpc } from './ipc/erpTaskIpc';
 import { registerErpCalendarIpc } from './ipc/erpCalendarIpc';
 import { registerErpNoteIpc } from './ipc/erpNoteIpc';
@@ -1228,67 +1228,8 @@ app.whenReady().then(async () => {
   });
   console.log('[MediaCleanup] Scheduler initialized - runs daily at 3:00 AM');
 
-  // Check for updates — đợi renderer sẵn sàng rồi mới check
-  if (!isDev) {
-    autoUpdater.autoDownload = false;
-    autoUpdater.autoInstallOnAppQuit = false;
-
-    // ── MaiHub: TẮT KIỂM TRA CẬP NHẬT ────────────────────────────────
-    // Bản gốc lấy bản mới từ kho phát hành của tác giả thượng nguồn; để nguyên
-    // thì bản nội bộ sẽ bị bản của họ ghi đè. Bản dựng nội bộ được phát theo
-    // kênh riêng của trung tâm. Khi nào trung tâm tự phát hành thì cấu hình
-    // `build.publish` trỏ về kho nội bộ rồi mở lại khối này.
-    console.log('[AutoUpdate] Đã tắt trong MaiHub — phát hành qua GitHub Releases');
-
-    autoUpdater.on('update-available', (info) => {
-      mainWindow?.webContents.send('update:available', {
-        version: info.version,
-        releaseNotes: info.releaseNotes,
-      });
-    });
-
-    autoUpdater.on('download-progress', (progress) => {
-      mainWindow?.webContents.send('update:progress', {
-        percent: Math.round(progress.percent),
-        bytesPerSecond: progress.bytesPerSecond,
-        total: progress.total,
-        transferred: progress.transferred,
-      });
-    });
-
-    autoUpdater.on('update-downloaded', (info) => {
-      mainWindow?.webContents.send('update:downloaded', {
-        version: info.version,
-      });
-    });
-
-    autoUpdater.on('update-not-available', () => {
-      mainWindow?.webContents.send('update:not-available');
-    });
-
-    autoUpdater.on('error', (err) => {
-      console.error('[AutoUpdate] Error:', err.message);
-      mainWindow?.webContents.send('update:error', {
-        message: err.message,
-        platform: process.platform,
-      });
-    });
-  }
-
-  // IPC từ renderer: trigger check for update
-  ipcMain.on('update:check', () => {
-    if (!isDev) autoUpdater.checkForUpdates();
-  });
-
-  // IPC từ renderer: trigger download (user confirmed)
-  ipcMain.on('update:download', () => {
-    if (!isDev) autoUpdater.downloadUpdate();
-  });
-
-  // IPC từ renderer: install và restart
-  ipcMain.on('update:install', () => {
-    if (!isDev) autoUpdater.quitAndInstall(false, true);
-  });
+  // Tự cập nhật từ GitHub Releases: xem electron/ipc/updateIpc.ts và docs/specs/2026-10-03-auto-update.md
+  registerUpdateIpc(() => mainWindow, isDev);
 });
 
 app.on('window-all-closed', () => {

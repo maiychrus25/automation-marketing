@@ -4,7 +4,7 @@
 # Kết quả: mục Artifacts của lần chạy (giữ 14 ngày).
 # Phát hành: tick "Tạo Release" khi Run workflow (tag lấy từ version trong package.json),
 # hoặc đẩy tag `v*` → job "Phát hành" tạo GitHub Release kèm toàn bộ bản cài.
-# Repo private nên Release chỉ người trong repo thấy.
+# Repo công khai; Release kèm latest*.yml và *.blockmap để app tự cập nhật (electron-updater).
 #
 # Mỗi hệ điều hành build trên runner của chính nó, nên các thành phần native
 # (better-sqlite3, ffmpeg-static, @ngrok/ngrok, cloudflared, cầu nối Go E2EE)
@@ -133,6 +133,15 @@ jobs:
           if [ "${{ runner.os }}" = "macOS" ]; then extra="-c.mac.identity=-"; fi
           npx electron-builder ${{ matrix.builder_args }} --publish never $extra
 
+      # Hai job macOS cùng sinh latest-mac.yml; chỉ giữ bản của arm64 để không ghi đè nhau khi gộp.
+      # macOS chưa ký số nên chỉ dùng tệp này để biết số phiên bản, không tự cài.
+      - name: Bỏ latest-mac.yml của bản Intel
+        if: matrix.name == 'macos-x64'
+        shell: bash
+        run: rm -f dist-electron-build/latest-mac.yml
+
+      # latest*.yml và *.blockmap là tệp mô tả phiên bản mà electron-updater đọc để tự cập nhật
+      # (xem docs/specs/2026-10-03-auto-update.md).
       - name: Tải lên bản cài
         uses: actions/upload-artifact@v4
         with:
@@ -143,6 +152,8 @@ jobs:
             dist-electron-build/*.exe
             dist-electron-build/*.dmg
             dist-electron-build/*.zip
+            dist-electron-build/latest*.yml
+            dist-electron-build/*.blockmap
           if-no-files-found: error
           retention-days: 14
 
