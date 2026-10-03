@@ -1,16 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
 import PostTab from './PostTab';
+import JoinTab from './JoinTab';
+import CommentsTab from './CommentsTab';
+import HistoryTab from './HistoryTab';
 import RunPanel, { PosterLog, PosterProgress } from './RunPanel';
 import type { FbPosterRun } from '../../../models/facebookPoster';
 
 const MAX_LOGS = 500;
 const TABS = ['Đăng bài', 'Tham gia nhóm', 'Bình luận', 'Lịch sử'] as const;
-
-// Task 12 thay ba panel này bằng nội dung thật.
-const JoinTab = () => <p className="text-sm text-gray-400">Đang hoàn thiện</p>;
-const CommentsTab = () => <p className="text-sm text-gray-400">Đang hoàn thiện</p>;
-const HistoryTab = () => <p className="text-sm text-gray-400">Đang hoàn thiện</p>;
 
 export default function FacebookPosterView() {
   const [tab, setTab] = useState(0);
@@ -82,8 +80,8 @@ export default function FacebookPosterView() {
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
         <div id="fb-tabpanel" role="tabpanel" aria-labelledby={`fb-tab-${tab}`} className="min-w-0 p-4 lg:flex-1 lg:overflow-y-auto">
           {tab === 0 && <PostTab busy={busy} profileNames={profileNames} />}
-          {tab === 1 && <JoinTab />}
-          {tab === 2 && <CommentsTab />}
+          {tab === 1 && <JoinTab busy={busy} />}
+          {tab === 2 && <CommentsTab busy={busy} />}
           {tab === 3 && <HistoryTab />}
         </div>
         <aside aria-label="Tiến độ" className="p-4 border-t lg:border-t-0 lg:border-l border-gray-700 lg:w-96 lg:shrink-0 min-w-0">
