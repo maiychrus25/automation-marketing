@@ -25,7 +25,7 @@ describe('validateStartParams: post', () => {
     expect(validateStartParams(post(), env)).toEqual({
       kind: 'post', mode: 'group', text: 'hello', mediaPath: null, comment: null,
       profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123/'] }],
-      minDelaySec: 300, maxDelaySec: 900, concurrency: 3,
+      minDelaySec: 300, maxDelaySec: 900, concurrency: 3, staggerMinSec: 30, staggerMaxSec: 90,
     });
   });
 
@@ -119,6 +119,20 @@ describe('validateStartParams: post', () => {
     expect([out.minDelaySec, out.maxDelaySec]).toEqual([0, 86400]);
   });
 
+  test('stagger defaults to 30-90 s, accepts 0-0, rejects max < min or out of range', () => {
+    const ok = validateStartParams(post(), env) as any;
+    expect([ok.staggerMinSec, ok.staggerMaxSec]).toEqual([30, 90]);
+    const zero = validateStartParams(post({ staggerMinSec: 0, staggerMaxSec: 0 }), env) as any;
+    expect([zero.staggerMinSec, zero.staggerMaxSec]).toEqual([0, 0]);
+    const bad = 'Giãn cách khởi động không hợp lệ';
+    fails(post({ staggerMinSec: 50, staggerMaxSec: 10 }), bad);
+    fails(post({ staggerMinSec: -1 }), bad);
+    fails(post({ staggerMaxSec: 3601 }), bad);
+    fails(post({ staggerMinSec: 'x' }), bad);
+    const scan = validateStartParams({ kind: 'scan_groups', params: { profileIds: ['p1'], staggerMinSec: 5, staggerMaxSec: 5 } }, env) as any;
+    expect([scan.staggerMinSec, scan.staggerMaxSec]).toEqual([5, 5]);
+  });
+
   test('concurrency must be an integer 1-10', () => {
     const bad = 'Số profile song song phải từ 1 đến 10';
     for (const c of [0, 11, 2.5, NaN, '3']) fails(post({ concurrency: c }), bad);
@@ -136,7 +150,7 @@ describe('validateStartParams: scan_groups', () => {
   const scan = (over: Record<string, unknown> = {}) => ({ kind: 'scan_groups', params: { profileIds: ['p1', 'p2'], ...over } });
 
   test('valid with default concurrency', () => {
-    expect(validateStartParams(scan(), env)).toEqual({ kind: 'scan_groups', profileIds: ['p1', 'p2'], concurrency: 3 });
+    expect(validateStartParams(scan(), env)).toEqual({ kind: 'scan_groups', profileIds: ['p1', 'p2'], concurrency: 3, staggerMinSec: 30, staggerMaxSec: 90 });
   });
   test('rejects no or unknown profiles and bad concurrency', () => {
     fails(scan({ profileIds: [] }), 'Chưa chọn profile');

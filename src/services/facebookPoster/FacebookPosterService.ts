@@ -13,8 +13,8 @@ import { normalizeTarget } from './targets';
 export interface ProfileInfo { id: string; name: string; }
 
 export type StartParams =
-    | { kind: 'post'; mode: FbPosterMode; text: string; mediaPath: string | null; comment: string | null; profiles: { profileId: string; targets: string[] }[]; minDelaySec: number; maxDelaySec: number; concurrency: number }
-    | { kind: 'scan_groups'; profileIds: string[]; concurrency: number }
+    | { kind: 'post'; mode: FbPosterMode; text: string; mediaPath: string | null; comment: string | null; profiles: { profileId: string; targets: string[] }[]; minDelaySec: number; maxDelaySec: number; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
+    | { kind: 'scan_groups'; profileIds: string[]; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
     | { kind: 'join'; profileId: string; keywords: string[]; limit: number; minDelaySec: number; maxDelaySec: number }
     | { kind: 'collect_comments'; profileId: string; postUrls: string[] };
 
@@ -46,7 +46,7 @@ const SLEEP_SLICE_MS = 500;
 
 interface PlannedTarget { url: string; name: string; }
 interface ProfilePlan { profileId: string; name: string; targets: PlannedTarget[]; progress: ProfileProgress; started: boolean; }
-interface ActiveRun { run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; }
+interface ActiveRun { run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number }; }
 interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; identity?: string; }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -104,8 +104,13 @@ export class FacebookPosterService {
         this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt });
         this.stopping = false;
         this.storeError = null;
-        const concurrency = params.kind === 'post' || params.kind === 'scan_groups' ? Math.max(1, params.concurrency) : 1;
-        this.active = { run, params, plans, concurrency };
+        const parallel = params.kind === 'post' || params.kind === 'scan_groups' ? params : null;
+        const concurrency = parallel ? Math.max(1, parallel.concurrency) : 1;
+        // Profile k starts a random staggerMin..staggerMax after profile k-1, so accounts never light up in the same second.
+        const staggerMs = parallel
+            ? { min: parallel.staggerMinSec * 1000, spread: Math.max(0, parallel.staggerMaxSec - parallel.staggerMinSec) * 1000 }
+            : { min: STAGGER_MIN_MS, spread: STAGGER_SPREAD_MS };
+        this.active = { run, params, plans, concurrency, staggerMs };
         this.idle = this.execute(this.active);
         return { runId: run.id };
     }
@@ -158,7 +163,7 @@ export class FacebookPosterService {
         const { run } = active;
         let fatal: string | null = null;
         try {
-            await this.runPool(active.plans, active.concurrency, (plan) => this.runProfile(active, plan));
+            await this.runPool(active.plans, active.concurrency, active.staggerMs, (plan) => this.runProfile(active, plan));
             for (const plan of active.plans) {
                 if (plan.started) continue;
                 this.skipRemaining(active, plan);
@@ -183,7 +188,7 @@ export class FacebookPosterService {
         this.emit('facebookPoster:runFinished', { runId: run.id, status });
     }
 
-    private async runPool<T>(items: T[], limit: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+    private async runPool<T>(items: T[], limit: number, stagger: { min: number; spread: number }, worker: (item: T, index: number) => Promise<void>): Promise<void> {
         let next = 0;
         let lastStart = 0;
         const runners = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
@@ -194,10 +199,11 @@ export class FacebookPosterService {
                 } else {
                     // Reserve this start slot BEFORE sleeping so runners waiting at the same time
                     // are spaced from each other, not all from the same previous start.
-                    const gap = STAGGER_MIN_MS + this.random() * STAGGER_SPREAD_MS;
+                    const gap = stagger.min + this.random() * stagger.spread;
                     const startAt = Math.max(this.now(), lastStart + gap);
                     lastStart = startAt;
-                    await this.sleep(startAt - this.now(), () => this.stopping);
+                    const wait = startAt - this.now();
+                    if (wait > 0) await this.sleep(wait, () => this.stopping);
                     if (this.stopping) break;
                 }
                 await worker(items[index], index);
