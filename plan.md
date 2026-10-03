@@ -1044,3 +1044,10 @@ Date of all entries: 03/10/2026, Linux (Ubuntu 24.04, X11 :1), base commit 18ba9
 
 - Facebook-only URLs (`parseFacebookUrl`, https and `facebook.com`/`*.facebook.com` only) in `normalizeTarget`, group targets and `collect_comments`; CSV formula-injection neutralised in `runCsv.ts`; workspace switch awaits `cancelAndWaitFacebookPosterJobs()`; `listPostedUrls` joins `fb_poster_runs`; run panel syncs a finished fast run via `getRun`, tabs call `current()` after `start()`; stale `comment-send` mark cleared before searching; exact not-logged-in message and separate Publish click-failure log; UI IPC errors caught; spec §5 `skipped` note.
 - `npx jest` -> 21 suites, 450 tests passed. `npx tsc -p tsconfig.electron.json --noEmit` -> exit 0. `NODE_OPTIONS=--max-old-space-size=8192 npx tsc -p tsconfig.json --noEmit` -> exit 0. `npm run build:electron` -> exit 0. `npm run build:renderer` -> exit 0.
+
+### Controller verification after the final fix wave (03/10/2026, HEAD f494e6e)
+
+- `npm run production` → exit 0 (packaged app rebuilt from f494e6e).
+- Packaged app launched with isolated `XDG_*` dirs and driven over CDP; two rounds × 1440×900 and 375×812 × light and dark, all four tabs and the run panel: `scrollWidth <= clientWidth` everywhere, 0 overlapping text pairs, 0 elements overflowing right, ArrowRight moves between tabs and Tab moves focus into the panel, 0 page/console errors. Screenshots in `/tmp/claude-1000/dryrun/ui/` (outside the repo).
+- `npm rebuild better-sqlite3` (production rebuilds it for Electron), then `npx jest` → 21 suites, 450 tests pass; electron and renderer `tsc --noEmit` → exit 0.
+- Still pending, owner only: Task 13 Step 8 real-account checks (logged-in dry-run half, real post on a test group, Page post, join, comment collection).
