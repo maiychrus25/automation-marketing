@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS fb_poster_comments (
 CREATE INDEX IF NOT EXISTS idx_fb_poster_comments_post ON fb_poster_comments(post_url);
 ```
 
-Giá trị `outcome`: kind `post` dùng `posted`, `failed`, `skipped`; kind `join` dùng `joined`, `pending`, `skipped`, `failed`, `unknown` (đúng như `join.js`); kind khác dùng `done`, `failed`. Giá trị `comment_status`: `not_requested`, `posted`, `no_post_url`, `pending_approval`, `post_not_found`, `failed` (đổi từ `khong-yeu-cau`, `da-dang`, `khong-co-link`, `cho-duyet`, `khong-thay-bai`, `hong` của FB Poster).
+Giá trị `outcome`: kind `post` dùng `posted`, `failed`, `skipped`; kind `join` dùng `joined`, `pending`, `skipped`, `failed`, `unknown` (đúng như `join.js`); kind khác dùng `done`, `failed`; `skipped` cũng dùng cho đích chưa làm tới hoặc bị hủy của `scan_groups` và `collect_comments`. Giá trị `comment_status`: `not_requested`, `posted`, `no_post_url`, `pending_approval`, `post_not_found`, `failed` (đổi từ `khong-yeu-cau`, `da-dang`, `khong-co-link`, `cho-duyet`, `khong-thay-bai`, `hong` của FB Poster).
 
 - Quét lại nhóm của một profile thay thế toàn bộ dòng của profile đó trong `fb_poster_groups`, trong một transaction.
 - Xóa browser profile: xóa luôn dòng của profile đó trong `fb_poster_groups`. Lịch sử và bình luận giữ lại.

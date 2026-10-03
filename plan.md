@@ -64,7 +64,8 @@
 | `src/services/facebookPoster/schema.ts` | `FB_POSTER_SCHEMA_SQL` constant (4 tables) |
 | `src/services/facebookPoster/FacebookPosterStore.ts` | All SQL for the 4 tables, over a small `SqlDatabase` interface |
 | `src/services/facebookPoster/FacebookPosterService.ts` | Job orchestration: one job, many profiles, concurrency, stagger, cancel, events |
-| `src/services/facebookPoster/validateStartParams.ts` | Pure validation/normalization of `facebookPoster:start` input |
+| `src/services/facebookPoster/validateStartParams.ts` | Pure validation/normalization of `facebookPoster:start` input (Facebook-only https URLs via `parseFacebookUrl` in `targets.ts`) |
+| `src/services/facebookPoster/runCsv.ts` | Pure `buildRunCsv` / `csvField` for the run CSV export (neutralises formula-injection cells) |
 | `electron/ipc/facebookPosterIpc.ts` | IPC handlers `facebookPoster:*` |
 | `src/models/facebookPoster.ts` | Types shared by renderer and main (run, result, group, comment rows, params) |
 | `src/ui/features/facebookPoster/FacebookPosterView.tsx` | Screen shell: tabs + run panel |
@@ -88,7 +89,7 @@
 | `src/__tests__/browser/BrowserProfileService.test.ts` | New cases for automation sessions |
 | `src/services/database/DatabaseService.ts` | Execute `FB_POSTER_SCHEMA_SQL` next to the browser-profile tables; `deleteBrowserProfile` also deletes that profile's `fb_poster_groups` rows |
 | `electron/main.ts` | Register `registerFacebookPosterIpc()`; call `cancelFacebookPosterJobs()` in `before-quit` before `closeAllBrowserProfiles()` |
-| `electron/ipc/workspaceIpc.ts` | Call `cancelFacebookPosterJobs()` before each `closeAllBrowserProfiles()` |
+| `electron/ipc/workspaceIpc.ts` | `await cancelAndWaitFacebookPosterJobs()` before each `closeAllBrowserProfiles()` and the DB switch |
 | `electron/preload.ts` | `facebookPoster` API block; 3 event channels in the allow-list |
 | `src/ui/lib/ipc.ts` | Types for `facebookPoster`; `facebookPoster: window.electronAPI?.facebookPoster` in the `ipc` object |
 | `src/ui/store/appStore.ts` | Add `'facebookPoster'` to `AppView` |
@@ -849,6 +850,7 @@ Behaviour (each bullet is at least one test):
   // facebookPosterIpc.ts
   export function registerFacebookPosterIpc(): void;
   export function cancelFacebookPosterJobs(): void;
+  export async function cancelAndWaitFacebookPosterJobs(timeoutMs?: number): Promise<void>;  // cancelAll + wait for whenIdle() (default 10 s); never throws; used by workspaceIpc
   ```
 
 - [ ] **Step 1: Failing tests for `validateStartParams`** — one test per rule in spec §8 and Global Constraints, with these exact messages:
@@ -1037,3 +1039,8 @@ Date of all entries: 03/10/2026, Linux (Ubuntu 24.04, X11 :1), base commit 18ba9
 - Proxy assignment screen for a Zalo account: NOT VERIFIED (no Zalo account in the isolated environment).
 
 **Step 8 (real-account checks, spec section 11 items 1-6):** PENDING, owner only; not performed.
+
+### Final fix wave (whole-branch review, 03/10/2026)
+
+- Facebook-only URLs (`parseFacebookUrl`, https and `facebook.com`/`*.facebook.com` only) in `normalizeTarget`, group targets and `collect_comments`; CSV formula-injection neutralised in `runCsv.ts`; workspace switch awaits `cancelAndWaitFacebookPosterJobs()`; `listPostedUrls` joins `fb_poster_runs`; run panel syncs a finished fast run via `getRun`, tabs call `current()` after `start()`; stale `comment-send` mark cleared before searching; exact not-logged-in message and separate Publish click-failure log; UI IPC errors caught; spec §5 `skipped` note.
+- `npx jest` -> 21 suites, 450 tests passed. `npx tsc -p tsconfig.electron.json --noEmit` -> exit 0. `NODE_OPTIONS=--max-old-space-size=8192 npx tsc -p tsconfig.json --noEmit` -> exit 0. `npm run build:electron` -> exit 0. `npm run build:renderer` -> exit 0.
