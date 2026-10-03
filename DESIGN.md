@@ -307,6 +307,16 @@ Những quyết định còn hiệu lực:
 - **Màu trạng thái** dùng bảng màu trạng thái mặc định của Tailwind (xanh lá =
   đang chạy, vàng = cảnh báo/không proxy, đỏ = xoá/lỗi), chưa nối token.
 
+## Màn hình Đăng Facebook
+
+Màn `src/ui/features/facebookPoster/`, không thêm token; dùng lại class gray/blue và trạng thái như màn Trình duyệt.
+
+- **Bố cục.** Thanh tab (`role="tablist"`, phím mũi tên đổi tab) và khung tiến độ cạnh nhau từ 1024 px (khung tiến độ rộng 384 px bên phải); dưới 1024 px khung tiến độ xếp xuống dưới nội dung. Cuộn ở vùng nội dung, không cuộn ngang cấp trang.
+- **Màu nhật ký.** info = `text-gray-400` (secondary), success = `text-green-400`, warning = `text-orange-400`, error = `text-red-400`; giờ `HH:mm:ss` màu `text-gray-500`.
+- **Chip trạng thái profile.** Chờ = gray-400, Đang chạy = blue-400, Xong = green-400, Lỗi = red-400, Đã hủy = orange-400; "Đang mở" của profile = yellow-400 như cảnh báo ở màn Trình duyệt.
+- **Một việc một lúc.** Khi có việc chạy, mọi nút Bắt đầu tắt và nêu lý do ngay cạnh nút; "Hủy" (đỏ) luôn qua `showConfirm`.
+- **Nhật ký** tự cuộn xuống cuối, trừ khi người dùng đã cuộn lên; giữ tối đa 500 dòng.
+
 ## Dấu hiệu
 
 Một bông hoa mai năm cánh trên nền xanh bo góc. "Mai" là nửa đầu của tên, năm

@@ -8,6 +8,7 @@ import type { TelegramPeer } from '../../models/telegram';
 import { CHANNEL } from '../../ui/lib/channelHelper';
 import { getTelegramMessagePreview } from '../telegram/TelegramMessagePreview';
 import type { BrowserFingerprint, BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
+import { FB_POSTER_SCHEMA_SQL } from '../facebookPoster/schema';
 
 // better-sqlite3: native SQLite - no WASM heap, memory-mapped I/O
 let db: BetterSqlite3.Database | null = null;
@@ -1130,6 +1131,9 @@ class DatabaseService {
             );
             CREATE INDEX IF NOT EXISTS idx_browser_profiles_group ON browser_profiles(group_id);
         `);
+
+        // ─── Facebook poster ─────────────────────────────────────────────────────
+        this.exec(FB_POSTER_SCHEMA_SQL);
 
     }
 
@@ -3071,6 +3075,7 @@ class DatabaseService {
 
     public deleteBrowserProfile(id: string): void {
         db!.prepare('DELETE FROM browser_profiles WHERE id = ?').run(id);
+        db!.prepare('DELETE FROM fb_poster_groups WHERE profile_id = ?').run(id);
     }
 
     /** Gắn/gỡ proxy cho nhiều profile, trả về số profile đã cập nhật */

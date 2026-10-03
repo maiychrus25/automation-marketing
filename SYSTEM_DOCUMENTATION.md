@@ -271,6 +271,18 @@ Nguồn: `src/ui/components/dashboard/`, `src/ui/components/analytics/`, `src/ui
 
 Nguồn: `src/services/browser/`, `electron/ipc/browserProfileIpc.ts`, `src/ui/features/browser/`, `src/configs/browserEngine.config.ts`, `docs/plans/2026-10-01-browser-profiles.md`.
 
+### 4.10 Đăng Facebook (từ 26.10.0)
+
+- Đăng một bài (kèm ảnh/video và bình luận đầu tiên tuỳ chọn) lên nhóm hoặc Page bằng nhiều browser profile cùng lúc; kèm quét nhóm đã tham gia, tìm và xin vào nhóm theo từ khoá, thu bình luận của bài đã đăng, lịch sử và xuất CSV.
+- Khi chạy việc, `BrowserProfileService.openForAutomation` cho `playwright-core` khởi chạy nhân trình duyệt của profile qua `--remote-debugging-pipe`, cùng bộ tham số như khi mở tay; **không mở cổng TCP**. Profile đang mở tay thì không nhận việc.
+- Một việc tại một thời điểm; tối đa 10 profile song song (mặc định 3); các profile bắt đầu cách nhau 30–90 giây; mỗi đích ghi kết quả ngay khi xong.
+- Chỉ nhận link `https://` thuộc `facebook.com` hoặc tên miền con của nó.
+- Dữ liệu ở bốn bảng `fb_poster_runs`, `fb_poster_results`, `fb_poster_groups`, `fb_poster_comments` trong DB của workspace. Run còn `running` khi app tắt đột ngột được đổi thành `failed` ở lần mở sau.
+- Chỉ dùng được ở chế độ Boss/Standalone. Chuyển workspace thì huỷ việc và chờ tối đa 10 giây cho việc dừng trước khi đổi DB.
+- Chưa được kiểm chứng bằng tài khoản Facebook thật và trên Windows tại thời điểm phát hành 26.10.0.
+
+Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`, `plan.md`.
+
 ## 5. Mô hình dữ liệu theo nhóm
 
 SQLite được bật WAL trong `DatabaseService`. Thay vì liệt kê mọi cột, bảng dưới nhóm các aggregate chính và quan hệ nghiệp vụ.
@@ -1008,6 +1020,7 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
 |---|---|---|
 | Zalo qua `zca-js` | Account cá nhân, chat và CRM actions | Không chính thức/rủi ro khóa tài khoản |
 | Facebook Messenger/E2EE | Chat Facebook, E2EE qua Go bridge | API/doc_id có thể đổi; một số bridge method chưa wire |
+| `playwright-core` 1.62.1 + nhân `fingerprint-chromium` | Tự động đăng bài/bình luận/xin vào nhóm Facebook trên browser profile | Facebook đổi giao diện thường xuyên; đăng cùng nội dung bằng nhiều tài khoản dễ bị coi là spam |
 | Telegram user/bot | Chat và bot integration | Session/token nhạy cảm; rate limit nền tảng |
 | OpenAI-compatible providers | AI assistant và workflow AI | Chi phí, quota, dữ liệu gửi ra ngoài |
 | Google Sheets | Workflow đọc/ghi sheet | OAuth/credential và quota |

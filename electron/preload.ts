@@ -836,6 +836,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // ─── Browser profile events ──────────────────────────────────
       'browserProfile:statusChanged',
       'browserProfile:engineProgress',
+      // ─── Facebook poster events ──────────────────────────────────
+      'facebookPoster:log',
+      'facebookPoster:progress',
+      'facebookPoster:runFinished',
     ];
     if (validChannels.includes(channel)) {
       const subscription = (_event: any, ...args: any[]) => callback(...args);
@@ -873,5 +877,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteGroup:   (id: number)                        => ipcRenderer.invoke('browserProfile:deleteGroup', { id }),
     engineStatus:  ()                                  => ipcRenderer.invoke('browserProfile:engineStatus'),
     installEngine: ()                                  => ipcRenderer.invoke('browserProfile:installEngine'),
+  },
+
+  // ─── Facebook poster ─────────────────────────────────────────────────────
+  facebookPoster: {
+    start:          (kind: string, params: any)  => ipcRenderer.invoke('facebookPoster:start', { kind, params }),
+    cancel:         ()                            => ipcRenderer.invoke('facebookPoster:cancel'),
+    current:        ()                            => ipcRenderer.invoke('facebookPoster:current'),
+    listGroups:     (profileIds: string[])        => ipcRenderer.invoke('facebookPoster:listGroups', { profileIds }),
+    listRuns:       (params?: any)                => ipcRenderer.invoke('facebookPoster:listRuns', params || {}),
+    getRun:         (runId: string)               => ipcRenderer.invoke('facebookPoster:getRun', { runId }),
+    listComments:   (params?: any)                => ipcRenderer.invoke('facebookPoster:listComments', params || {}),
+    listPostedUrls: ()                            => ipcRenderer.invoke('facebookPoster:listPostedUrls'),
+    pickMedia:      ()                            => ipcRenderer.invoke('facebookPoster:pickMedia'),
+    exportRunCsv:   (runId: string)               => ipcRenderer.invoke('facebookPoster:exportRunCsv', { runId }),
   },
 });

@@ -4,7 +4,7 @@ import { useEmployeeStore } from './employeeStore';
 import DataAccessor from '@/lib/data/DataAccessor';
 import { type AppTheme, type ThemePreference, THEME_STORAGE_KEY, parseThemePreference, resolveTheme, systemPrefersDark } from '../lib/theme';
 
-type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser';
+type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser' | 'facebookPoster';
 export type { AppTheme, ThemePreference };
 
 export interface GroupMember {

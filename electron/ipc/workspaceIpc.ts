@@ -11,6 +11,7 @@ import ConnectionManager from '../../src/utils/ConnectionManager';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import { closeAllBrowserProfiles } from './browserProfileIpc';
+import { cancelAndWaitFacebookPosterJobs } from './facebookPosterIpc';
 
 /**
  * HTTP/HTTPS POST helper for remote login requests.
@@ -160,7 +161,8 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                     AppModeManager.getInstance().clearOverride();
                     const newDbPath = wm().resolveDbPath(newActiveWs.dbPath || 'deplao-tool.db');
                     // Browser profile data belongs to the workspace being left: close before its DB goes away
-                    try { closeAllBrowserProfiles(); } catch {}
+                    try { await cancelAndWaitFacebookPosterJobs(); } catch {}
+                try { closeAllBrowserProfiles(); } catch {}
                     await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
                     FileStorageService.resetBaseDir();
 
@@ -199,6 +201,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                 // Switch DatabaseService to the new workspace's DB
                 const newDbPath = wm().resolveDbPath(result.workspace.dbPath || 'deplao-tool.db');
                 // Browser profile data belongs to the workspace being left: close before its DB goes away
+                try { await cancelAndWaitFacebookPosterJobs(); } catch {}
                 try { closeAllBrowserProfiles(); } catch {}
                 await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
 

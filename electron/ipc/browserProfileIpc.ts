@@ -49,6 +49,15 @@ function getProfileService(): BrowserProfileService {
     return profileService;
 }
 
+/** Shared with the Facebook poster so both IPC modules use one BrowserProfileService. */
+export function getBrowserProfileService(): BrowserProfileService {
+    return getProfileService();
+}
+
+export function isBrowserEngineInstalled(): boolean {
+    return getEngineManager().getExecutablePath() !== null;
+}
+
 /** Closes every running browser. Called on app quit and before the workspace database is switched. */
 export function closeAllBrowserProfiles(): void {
     profileService?.closeAll();

@@ -4,6 +4,7 @@
 import { useAppStore } from '../store/appStore';
 import type { TelegramForumTopicContext } from '../../models/telegram';
 import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
+import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment } from '../../models/facebookPoster';
 
 
 declare global {
@@ -660,6 +661,18 @@ declare global {
         engineStatus:  () => Promise<{ success: boolean; supported?: boolean; installed?: boolean; version?: string; error?: string }>;
         installEngine: () => Promise<{ success: boolean; supported?: boolean; installed?: boolean; version?: string; error?: string }>;
       };
+      facebookPoster: {
+        start:          (kind: FbPosterKind, params: Record<string, unknown>) => Promise<{ success: boolean; runId?: string; error?: string }>;
+        cancel:         () => Promise<{ success: boolean; error?: string }>;
+        current:        () => Promise<{ success: boolean; run?: FbPosterRun | null; progress?: { runId: string; done: number; total: number; profiles: { profileId: string; state: 'waiting' | 'running' | 'done' | 'failed' | 'cancelled'; done: number; total: number }[] } | null; error?: string }>;
+        listGroups:     (profileIds: string[]) => Promise<{ success: boolean; groups?: Record<string, FbPosterGroup[]>; error?: string }>;
+        listRuns:       (params?: { limit?: number; offset?: number; kind?: FbPosterKind }) => Promise<{ success: boolean; runs?: FbPosterRun[]; total?: number; error?: string }>;
+        getRun:         (runId: string) => Promise<{ success: boolean; run?: FbPosterRun; results?: FbPosterResult[]; error?: string }>;
+        listComments:   (params?: { postUrl?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; comments?: FbPosterComment[]; total?: number; error?: string }>;
+        listPostedUrls: () => Promise<{ success: boolean; posts?: { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number }[]; error?: string }>;
+        pickMedia:      () => Promise<{ success: boolean; path?: string | null; error?: string }>;
+        exportRunCsv:   (runId: string) => Promise<{ success: boolean; path?: string | null; error?: string }>;
+      };
       erp: {
       projectList:         (params?: { archived?: boolean }) => Promise<{ success: boolean; projects: any[]; error?: string }>;
       projectCreate:       (params: any) => Promise<{ success: boolean; project?: any; error?: string }>;
@@ -817,6 +830,7 @@ export const ipc = {
   telegramUser: window.electronAPI?.telegramUser,
   proxy: window.electronAPI?.proxy,
   browserProfile: window.electronAPI?.browserProfile,
+  facebookPoster: window.electronAPI?.facebookPoster,
 
   erp,
   lockScreen: window.electronAPI?.lockScreen,

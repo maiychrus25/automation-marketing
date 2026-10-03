@@ -1,6 +1,6 @@
 {
   "name": "maihub",
-  "version": "26.9.0",
+  "version": "26.10.0",
   "description": "Phần mềm desktop quản lý Zalo, Facebook & Telegram cá nhân Đa tài khoản tích hợp CRM, ERP, POS, Workflow và AI Assistant giúp đội nhóm bán hàng, chăm sóc khách hàng và marketing trên Zalo vận hành tập trung trong một ứng dụng duy nhất.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -42,6 +42,7 @@
     "node-fetch": "^2.7.0",
     "nodemailer": "^8.0.3",
     "otplib": "^13.4.0",
+    "playwright-core": "1.62.1",
     "proxy-agent": "^8.0.1",
     "quill": "^2.0.3",
     "react-is": "^19.2.8",
@@ -137,7 +138,8 @@
       "node_modules/@ngrok/ngrok/**",
       "node_modules/better-sqlite3/**",
       "node_modules/cloudflared/**",
-      "node_modules/ffmpeg-static/**"
+      "node_modules/ffmpeg-static/**",
+      "node_modules/playwright-core/**"
     ],
     "afterPack": "./scripts/after-pack.js",
     "win": {
