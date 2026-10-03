@@ -23,6 +23,7 @@ import { registerTelegramIpc } from './ipc/telegramIpc';
 import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
 import { registerProxyIpc } from './ipc/proxyIpc';
 import { registerBrowserProfileIpc, closeAllBrowserProfiles } from './ipc/browserProfileIpc';
+import { registerFacebookPosterIpc, cancelFacebookPosterJobs } from './ipc/facebookPosterIpc';
 import { registerErpTaskIpc } from './ipc/erpTaskIpc';
 import { registerErpCalendarIpc } from './ipc/erpCalendarIpc';
 import { registerErpNoteIpc } from './ipc/erpNoteIpc';
@@ -1137,6 +1138,7 @@ app.whenReady().then(async () => {
   registerTelegramUserIpc();
   registerProxyIpc();
   registerBrowserProfileIpc();
+  registerFacebookPosterIpc();
   registerErpTaskIpc();
   registerErpCalendarIpc();
   registerErpNoteIpc();
@@ -1340,6 +1342,10 @@ app.on('before-quit', () => {
   try {
     // Dừng webhook gateway
     WebhookGatewayService.getInstance().stop();
+  } catch {}
+
+  try {
+    cancelFacebookPosterJobs();
   } catch {}
 
   try {

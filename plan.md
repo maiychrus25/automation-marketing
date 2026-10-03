@@ -834,7 +834,7 @@ Behaviour (each bullet is at least one test):
 
 **Files:**
 - Create: `src/services/facebookPoster/validateStartParams.ts`, `electron/ipc/facebookPosterIpc.ts`
-- Modify: `electron/main.ts`, `electron/ipc/workspaceIpc.ts`, `electron/preload.ts`, `src/ui/lib/ipc.ts`
+- Modify: `electron/main.ts`, `electron/ipc/workspaceIpc.ts`, `electron/ipc/browserProfileIpc.ts`, `electron/preload.ts`, `src/ui/lib/ipc.ts`
 - Test: `src/__tests__/facebookPoster/validateStartParams.test.ts`
 
 **Interfaces:**
