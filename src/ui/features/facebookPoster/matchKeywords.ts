@@ -3,7 +3,7 @@ export function stripAccents(value: string): string {
   return String(value ?? '')
     .normalize('NFD')
     // Viết bằng mã escape: dấu thanh sau NFD là ký tự không nhìn thấy, dán thẳng vào mã nguồn thì không soát được.
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/[đĐ]/g, 'd')
     .toLowerCase();
 }

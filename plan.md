@@ -73,6 +73,7 @@
 | `src/ui/features/facebookPoster/JoinTab.tsx` | Join tab |
 | `src/ui/features/facebookPoster/CommentsTab.tsx` | Comments tab |
 | `src/ui/features/facebookPoster/HistoryTab.tsx` | History tab |
+| `src/ui/features/facebookPoster/matchKeywords.ts` | Port of FB Poster `khopTuKhoa`/`boDau`: accent-insensitive, comma-separated multi-keyword group-name filter |
 | `src/ui/features/facebookPoster/ProfilePicker.tsx` | Multi-select of browser profiles (used by Post tab; single-select mode for Join/Comments) |
 | `scripts/dev/facebook-poster-dry-run.js` | Manual, non-posting integration check |
 | `src/__tests__/facebookPoster/*.test.ts` | Ported and new tests |
