@@ -25,6 +25,7 @@ const ICONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 /** Các cỡ nhúng vào từng file .ico - theo đúng bộ cỡ bản gốc đã dùng. */
 const ICO_SIZES = [16, 32, 48, 64, 128, 256];
 const ICO_SIZES_SMALL = [16, 32, 48, 128];
+const LINUX_SIZES = [16, 24, 32, 48, 64, 128, 256, 512];
 /** Cỡ ICNS -> mã loại của Apple (mục chứa PNG, macOS 10.7 trở lên). */
 const ICNS_TYPES = { 16: 'icp4', 32: 'icp5', 128: 'ic07', 256: 'ic08', 512: 'ic09', 1024: 'ic10' };
 
@@ -234,7 +235,7 @@ try {
 
   for (const variant of ['icon', 'icon_dot']) {
     const showBadge = variant === 'icon_dot';
-    const sizes = [...new Set([...ICO_SIZES, ...Object.keys(ICNS_TYPES).map(Number), 1024])].sort((a, b) => a - b);
+    const sizes = [...new Set([...ICO_SIZES, ...LINUX_SIZES, ...Object.keys(ICNS_TYPES).map(Number), 1024])].sort((a, b) => a - b);
 
     const png = new Map();
     const decoded = new Map();
@@ -257,9 +258,13 @@ try {
     emit(`${variant}_128.ico`, buildIco(ICO_SIZES_SMALL.map(s => decoded.get(s))));
 
     if (variant === 'icon') {
-      // electron-builder chỉ đọc icon.ico (Windows) và icon.icns (macOS).
+      // electron-builder đọc icon.ico (Windows), icon.icns (macOS) và thư mục
+      // linux/ (Linux: mỗi cỡ một file "<size>.png"; GNOME chỉ tìm icon ở các
+      // cỡ chuẩn 16–512, một file 1024 duy nhất sẽ bị bỏ qua → icon mặc định).
       emit('icon.ico', buildIco(ICO_SIZES.map(s => decoded.get(s))));
       emit('icon.icns', buildIcns(png));
+      mkdirSync(path.join(ICONS_DIR, 'linux'), { recursive: true });
+      for (const size of LINUX_SIZES) emit(path.join('linux', `${size}x${size}.png`), png.get(size));
     } else {
       // Biến thể chấm đỏ không vào bản đóng gói, nhưng giữ cùng bộ file với
       // bản gốc để electron/main.ts không phải đổi đường dẫn.
