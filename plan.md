@@ -999,12 +999,13 @@ Tasks run strictly in numeric order (one implementer at a time). Task 8 only nee
 
 ## Verification log
 
-Date of all entries: 03/10/2026, Linux (Ubuntu 24.04, X11 :1), HEAD 18ba9ad plus the Task 13 script. Scratch/screenshots outside the repo in `/tmp/claude-1000/dryrun/`.
+Date of all entries: 03/10/2026, Linux (Ubuntu 24.04, X11 :1), base commit 18ba9ad (feat(facebook-poster): add join, comments and history tabs); the Task 13 script is added in 66ed32a and hardened in the fix commit that follows it. Scratch/screenshots outside the repo in `/tmp/claude-1000/dryrun/`.
 
 **Step 1-2: dry-run (logged-out throwaway profile, public group 783713308689243)**
 - `npm run build:electron` -> exit 0. `node scripts/dev/facebook-poster-dry-run.js --profile-dir /tmp/claude-1000/dryrun/profile --engine <148.0.7778.215 chrome> --group-url https://www.facebook.com/groups/783713308689243/` -> **exit 2**, as expected.
-- PASS main browser process found (flags: `--remote-debugging-pipe --user-data-dir=... --fingerprint=123456 --fingerprint-platform=linux --fingerprint-brand=Chrome --fingerprint-hardware-concurrency=8 --lang=vi-VN --accept-lang=vi-VN,vi --timezone=Asia/Ho_Chi_Minh --no-first-run --no-default-browser-check`); PASS no `--remote-debugging-port`; PASS `--remote-debugging-pipe` present; PASS no listening TCP port (`ss -ltnpH` over all 9 browser processes: none); PASS `navigator.webdriver === false`; then "NOT LOGGED IN: composer step skipped", exit 2. No Publish click, nothing posted. No leftover browser process after exit.
+- PASS main browser process found (flags: `--remote-debugging-pipe --user-data-dir=... --fingerprint=123456 --fingerprint-platform=linux --fingerprint-brand=Chrome --fingerprint-hardware-concurrency=8 --lang=vi-VN --accept-lang=vi-VN,vi --timezone=Asia/Ho_Chi_Minh --no-first-run --no-default-browser-check`); PASS no `--remote-debugging-port`; PASS `--remote-debugging-pipe` present; PASS no listening TCP port (`ss -ltnpH` over all 9 browser processes: none); PASS `navigator.webdriver === false`; then "NOT LOGGED IN: composer step skipped", exit 2. No Publish click, nothing posted. Leftover check: `ps -eo pid,args | grep -F -- "--user-data-dir=/tmp/claude-1000/dryrun/profile3" | grep -v grep` after exit -> no lines (grep exit 1).
 - Re-run against the production-built (strip-console) `dist-electron`: identical result, exit 2.
+- Fix round 1 (fail closed): the script now also requires `ss` to run (check "ss available"), requires a Publish-labelled button to exist (read-only in-page check, never marked or clicked) before "Publish enabled" can pass, resolves `--profile-dir`, matches `--user-data-dir=<dir>` as a whole argument, and launches inside the try. Re-run on profile3: same flags, PASS x6 incl. "ss available", NOT LOGGED IN, exit 2.
 - NOT VERIFIED here: the composer-open / type / "Publish enabled" half of the script (needs a logged-in profile; owner-only, see Step 8).
 
 **Step 3: packaged build**

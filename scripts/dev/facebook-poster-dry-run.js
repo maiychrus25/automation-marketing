@@ -12,7 +12,8 @@ const arg = (name) => {
   const i = process.argv.indexOf(`--${name}`);
   return i > -1 ? process.argv[i + 1] : undefined;
 };
-const profileDir = arg('profile-dir');
+const profileArg = arg('profile-dir');
+const profileDir = profileArg && path.resolve(profileArg);
 const engine = arg('engine');
 const groupUrl = arg('group-url');
 if (!profileDir || !engine || !groupUrl) {
@@ -32,16 +33,26 @@ const check = (name, ok, detail) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` -- ${detail}` : ''}`);
 };
 
+// Read-only: does a Publish-labelled button exist? Never marks or clicks it.
+// IN-PAGE function: self-contained, one argument, no console.*.
+function publishButtonExistsInPage(labels) {
+  let roots = Array.from(document.querySelectorAll('div[role="dialog"]'));
+  if (!roots.length && location.pathname.startsWith('/post/create')) roots = [document];
+  return roots.some(root => Array.from(root.querySelectorAll('div[role="button"], button')).some(b =>
+    labels.includes((b.getAttribute('aria-label') || '').trim()) || labels.includes((b.innerText || '').trim())));
+}
+
 // Processes of THIS browser only: selected by our own unique --user-data-dir.
 function browserProcesses() {
   const out = execSync('ps -eo pid=,args=', { encoding: 'utf8' });
-  return out.split('\n').map(l => l.trim()).filter(l => l.includes(`--user-data-dir=${profileDir}`))
+  const flag = `--user-data-dir=${profileDir}`;
+  return out.split('\n').map(l => l.trim()).filter(l => l.split(/\s+/).includes(flag))
     .map(l => ({ pid: Number(l.split(/\s+/)[0]), args: l.slice(l.indexOf(' ') + 1) }));
 }
 
 function listeningPorts(pids) {
   let out = '';
-  try { out = execSync('ss -ltnpH', { encoding: 'utf8' }); } catch { return []; }
+  try { out = execSync('ss -ltnpH', { encoding: 'utf8' }); } catch { return null; } // null = cannot tell, caller fails closed
   return out.split('\n').filter(l => pids.some(p => l.includes(`pid=${p},`)));
 }
 
@@ -52,9 +63,10 @@ function listeningPorts(pids) {
     persona: hostPersona(process.platform),
     proxyPort: null,
   })];
-  const ctx = await launchAutomationBrowser(engine, profileDir, args);
   let code = 1;
+  let ctx = null;
   try {
+    ctx = await launchAutomationBrowser(engine, profileDir, args);
     const procs = browserProcesses();
     const main = procs.find(p => !p.args.includes('--type='));
     console.log(`browser pid: ${main ? main.pid : 'NOT FOUND'}`);
@@ -63,8 +75,9 @@ function listeningPorts(pids) {
     check('no --remote-debugging-port flag', !!main && !/--remote-debugging-port/.test(main.args));
     check('--remote-debugging-pipe present', !!main && main.args.includes('--remote-debugging-pipe'));
     const ports = listeningPorts(procs.map(p => p.pid));
-    console.log(`listening TCP ports of ${procs.length} browser processes: ${ports.length ? '\n' + ports.join('\n') : 'none'}`);
-    check('no listening TCP port', ports.length === 0);
+    check('ss available', ports !== null);
+    console.log(`listening TCP ports of ${procs.length} browser processes: ${ports && ports.length ? '\n' + ports.join('\n') : 'none'}`);
+    check('no listening TCP port', ports !== null && ports.length === 0);
 
     const page = ctx.pages()[0] || await ctx.newPage();
     await page.goto('about:blank');
@@ -88,14 +101,16 @@ function listeningPorts(pids) {
       await page.keyboard.insertText('thử khô, không đăng');
       await page.waitForTimeout(1500);
       const disabled = await page.evaluate(poster.isPublishDisabledInPage, poster.PUBLISH_LABELS);
-      check('Publish enabled after typing (NOT clicked)', disabled === false);
+      const exists = await page.evaluate(publishButtonExistsInPage, poster.PUBLISH_LABELS);
+      check('Publish button exists (NOT clicked)', exists === true);
+      check('Publish enabled after typing (NOT clicked)', exists === true && disabled === false);
     }
     code = results.every(r => r.ok) ? 0 : 1;
   } catch (err) {
     console.error(`ERROR: ${err && err.message}`);
     code = 1;
   } finally {
-    await ctx.close().catch(() => {}); // closes without publishing; unposted text is discarded
+    if (ctx) await ctx.close().catch(() => {}); // closes without publishing; unposted text is discarded
     console.log(`exit ${code}`);
     process.exit(code);
   }
