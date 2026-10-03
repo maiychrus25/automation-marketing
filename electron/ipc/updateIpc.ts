@@ -2,6 +2,7 @@ import { app, ipcMain, shell, type BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { UpdateService, type ReleaseInfo } from '../../src/services/update/UpdateService';
 import { isFacebookPosterBusy } from './facebookPosterIpc';
+import Logger from '../../src/utils/Logger';
 
 /** Same repository as `build.publish` in package.json. It is public, so the API needs no token. */
 const LATEST_RELEASE_URL = 'https://api.github.com/repos/maiychrus25/automation-marketing/releases/latest';
@@ -46,9 +47,8 @@ export function registerUpdateIpc(getWindow: () => BrowserWindow | null, isDev: 
             const win = getWindow();
             if (win && !win.isDestroyed()) win.webContents.send('update:state', state);
         },
-        // Statement body on purpose: scripts/strip-console.js deletes `console.*(...)` up to the next `;`,
-        // so an expression-bodied arrow here would swallow the rest of the call and break the build.
-        log: (message) => { console.warn(message); },
+        // Logger keeps the line in the in-app log buffer; plain console.* is stripped from production builds.
+        log: (message) => { Logger.warn(message); },
     });
 
     ipcMain.handle('update:get-state', () => service!.getState());

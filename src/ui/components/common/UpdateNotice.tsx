@@ -20,7 +20,7 @@ export default function UpdateNotice() {
     return () => { cancelled = true; off?.(); };
   }, [applyState]);
 
-  if (!showPopup || status === 'idle' || !updateInfo && status !== 'error') return null;
+  if (!showPopup || status === 'idle' || (!updateInfo && status !== 'error')) return null;
 
   const version = updateInfo?.version;
   const notes = typeof updateInfo?.releaseNotes === 'string' ? updateInfo.releaseNotes : '';

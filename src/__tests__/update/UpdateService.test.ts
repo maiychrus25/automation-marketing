@@ -10,7 +10,7 @@ const RELEASE: ReleaseInfo = {
 function fakeUpdater() {
     const ee = new EventEmitter() as any;
     ee.calls = [] as string[];
-    ee.checkForUpdates = async () => { ee.calls.push('check'); };
+    ee.checkForUpdates = async () => { ee.calls.push('check'); return { isUpdateAvailable: true }; };
     ee.downloadUpdate = async () => { ee.calls.push('download'); };
     ee.quitAndInstall = (silent: boolean, run: boolean) => { ee.calls.push(`install:${silent}:${run}`); };
     return ee;
@@ -66,6 +66,46 @@ describe('UpdateService.check', () => {
         await service.download();
         updater.emit('update-downloaded', { version: '26.11.0' });
         expect((await service.check()).status).toBe('downloaded');
+    });
+});
+
+describe('UpdateService periodic re-check', () => {
+    test('kiểm tra lại khi đang có bản mới: không phát trạng thái trung gian làm thẻ chớp tắt', async () => {
+        const { service, states } = make();
+        await service.check();
+        const before = states.length;
+        await service.check();
+        expect(states.slice(before).every((s) => s.status === 'available')).toBe(true);
+    });
+
+    test('kiểm tra lại mà lỗi mạng thì giữ nguyên bản mới đã biết', async () => {
+        let fail = false;
+        const { service } = make({ fetchLatestRelease: async () => { if (fail) throw new Error('rate limit'); return RELEASE; } });
+        await service.check();
+        fail = true;
+        expect((await service.check()).status).toBe('available');
+        expect((await service.download()).success).toBe(true);
+    });
+
+    test('kiểm tra lại mà lỗi mạng khi đang ở trạng thái lỗi thì giữ trạng thái lỗi để còn bấm Thử lại', async () => {
+        let fail = false;
+        const { service, updater } = make({ fetchLatestRelease: async () => { if (fail) throw new Error('offline'); return RELEASE; } });
+        updater.downloadUpdate = async () => { throw new Error('ECONNRESET'); };
+        await service.check();
+        await service.download();
+        fail = true;
+        expect((await service.check()).status).toBe('error');
+    });
+
+    test('hai lần kiểm tra chồng nhau thì chỉ gọi GitHub một lần', async () => {
+        let calls = 0;
+        let release!: () => void;
+        const { service } = make({ fetchLatestRelease: () => { calls++; return new Promise((r) => { release = () => r(RELEASE); }); } });
+        const first = service.check();
+        const second = service.check();
+        release();
+        await Promise.all([first, second]);
+        expect(calls).toBe(1);
     });
 });
 
@@ -125,6 +165,16 @@ describe('UpdateService.download', () => {
         expect(state.message).not.toMatch(/Headers|createHttpError/);
         expect(state.message.length).toBeLessThanOrEqual('Không tải được bản cập nhật: '.length + 160);
         expect(logs.join('\n')).toMatch(/createHttpError/);
+    });
+
+    test('bản phát hành thiếu tệp mô tả hoặc lệch phiên bản (checkForUpdates không thấy bản mới) thì báo lỗi rõ, không tải', async () => {
+        const { service, updater } = make();
+        updater.checkForUpdates = async () => { updater.calls.push('check'); return { isUpdateAvailable: false }; };
+        await service.check();
+        const res = await service.download();
+        expect(res.success).toBe(false);
+        expect(service.getState()).toMatchObject({ status: 'error', message: expect.stringMatching(/không có bản 26\.11\.0 để tải tự động/) });
+        expect(updater.calls).toEqual(['check']);
     });
 
     test('sự kiện error của electron-updater khi đang tải cũng chuyển sang error', async () => {

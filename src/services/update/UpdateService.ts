@@ -3,7 +3,6 @@ import { isNewerVersion } from './versionCompare';
 /** Pure update state machine (no electron import) so it can be unit-tested. See docs/specs/2026-10-03-auto-update.md. */
 export type UpdateState =
     | { status: 'idle' }
-    | { status: 'checking' }
     | { status: 'available'; version: string; notes: string; url: string; canInstall: boolean }
     | { status: 'downloading'; version: string; percent: number }
     | { status: 'downloaded'; version: string }
@@ -20,7 +19,8 @@ export interface ReleaseInfo {
 
 /** The part of electron-updater's autoUpdater this service uses. */
 export interface UpdaterLike {
-    checkForUpdates(): Promise<unknown>;
+    /** electron-updater resolves null when inactive, or a result whose isUpdateAvailable says whether latest*.yml offers a newer build. */
+    checkForUpdates(): Promise<{ isUpdateAvailable?: boolean } | null | unknown>;
     downloadUpdate(): Promise<unknown>;
     quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
     on(event: string, listener: (...args: any[]) => void): unknown;
@@ -58,6 +58,8 @@ function summarizeNotes(body: string | null | undefined): string {
 export class UpdateService {
     private state: UpdateState = { status: 'idle' };
     private latest: { version: string; url: string } | null = null;
+    /** The check in progress, shared by overlapping callers. No intermediate state is emitted, so the card never flickers. */
+    private inFlight: Promise<UpdateState> | null = null;
 
     constructor(private readonly deps: UpdateServiceDeps) {
         const updater = deps.updater;
@@ -80,26 +82,38 @@ export class UpdateService {
         return this.state;
     }
 
-    /** Asks GitHub for the latest release. Network/404 errors are logged and end in `idle` (never shown to the user). */
-    public async check(): Promise<UpdateState> {
-        const busy = this.state.status;
-        if (busy === 'checking' || busy === 'downloading' || busy === 'downloaded') return this.state;
-        this.setState({ status: 'checking' });
+    /**
+     * Asks GitHub for the latest release. A network/404 error is only logged and keeps the current state,
+     * so a known update is not lost to a transient failure (and nothing is shown when there was none).
+     */
+    public check(): Promise<UpdateState> {
+        const status = this.state.status;
+        if (status === 'downloading' || status === 'downloaded') return Promise.resolve(this.state);
+        if (!this.inFlight) {
+            this.inFlight = this.runCheck().finally(() => { this.inFlight = null; });
+        }
+        return this.inFlight;
+    }
+
+    private async runCheck(): Promise<UpdateState> {
+        let release: ReleaseInfo;
         try {
-            const release = await this.deps.fetchLatestRelease();
-            if (release.draft || release.prerelease || !isNewerVersion(release.tag_name, this.deps.currentVersion)) {
-                this.latest = null;
-                this.setState({ status: 'idle' });
-                return this.state;
-            }
-            const version = release.tag_name.replace(/^v/, '');
-            this.latest = { version, url: release.html_url };
-            const notes = summarizeNotes(release.body);
-            this.setState({ status: 'available', version, notes, url: release.html_url, canInstall: this.deps.canInstall });
+            release = await this.deps.fetchLatestRelease();
         } catch (err: any) {
             this.deps.log?.(`[AutoUpdate] Không kiểm tra được bản mới: ${err?.message || err}`);
-            this.setState({ status: 'idle' });
+            return this.state;
         }
+        // A download may have started while the request was in flight; never overwrite it.
+        if (this.state.status === 'downloading' || this.state.status === 'downloaded') return this.state;
+        if (release.draft || release.prerelease || !isNewerVersion(release.tag_name, this.deps.currentVersion)) {
+            this.latest = null;
+            this.setState({ status: 'idle' });
+            return this.state;
+        }
+        const version = release.tag_name.replace(/^v/, '');
+        this.latest = { version, url: release.html_url };
+        if (this.state.status === 'error' && this.state.version === version) return this.state;
+        this.setState({ status: 'available', version, notes: summarizeNotes(release.body), url: release.html_url, canInstall: this.deps.canInstall });
         return this.state;
     }
 
@@ -116,7 +130,10 @@ export class UpdateService {
         const version = this.latest.version;
         this.setState({ status: 'downloading', version, percent: 0 });
         try {
-            await this.deps.updater.checkForUpdates();
+            const found = await this.deps.updater.checkForUpdates() as { isUpdateAvailable?: boolean } | null;
+            if (!found || found.isUpdateAvailable === false) {
+                throw new Error(`không có bản ${version} để tải tự động (bản phát hành thiếu latest*.yml hoặc lệch phiên bản)`);
+            }
             await this.deps.updater.downloadUpdate();
             return { success: true };
         } catch (err: any) {

@@ -20,10 +20,8 @@ describe('toStorePatch', () => {
         expect(toStorePatch(AVAILABLE, '26.10.5').showPopup).toBe(true);
     });
 
-    test('idle và checking thì xoá thông tin bản mới và đóng thông báo', () => {
-        for (const s of [{ status: 'idle' as const }, { status: 'checking' as const }]) {
-            expect(toStorePatch(s, null)).toEqual({ status: 'idle', updateInfo: null, progress: null, error: null, showPopup: false });
-        }
+    test('idle thì xoá thông tin bản mới và đóng thông báo', () => {
+        expect(toStorePatch({ status: 'idle' }, null)).toEqual({ status: 'idle', updateInfo: null, progress: null, error: null, showPopup: false });
     });
 
     test('đang tải: tiến độ theo phần trăm, thông báo mở', () => {

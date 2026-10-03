@@ -47,14 +47,13 @@ Nền tảng tự cài được: `process.platform === 'win32'`, hoặc `linux` 
 ```ts
 type UpdateState =
   | { status: 'idle' }
-  | { status: 'checking' }
   | { status: 'available'; version: string; notes: string; url: string; canInstall: boolean }
   | { status: 'downloading'; version: string; percent: number }
   | { status: 'downloaded'; version: string }
   | { status: 'error'; message: string; version: string | null };
 ```
 
-`UpdateService` (thuần, không import `electron`) giữ trạng thái, phát `update:state` mỗi lần đổi. Không có bản mới thì trạng thái về `idle` (không hiện gì). Người dùng bấm **Để sau** thì ẩn thông báo ở renderer tới lần kiểm tra kế tiếp có bản mới hơn bản đã ẩn.
+`UpdateService` (thuần, không import `electron`) giữ trạng thái, phát `update:state` mỗi lần đổi. Không có bản mới thì trạng thái về `idle` (không hiện gì). Lúc đang kiểm tra **không** phát trạng thái trung gian (để thẻ và chấm báo không chớp tắt mỗi 6 giờ); hai lần kiểm tra chồng nhau dùng chung một yêu cầu. Lỗi mạng khi kiểm tra chỉ ghi log và **giữ nguyên** trạng thái hiện có, để bản mới đã biết không mất. Trước khi tải, nếu `checkForUpdates()` của electron-updater không thấy bản mới (bản phát hành thiếu `latest*.yml` hoặc lệch phiên bản) thì chuyển sang lỗi với thông báo rõ. Người dùng bấm **Để sau** thì ẩn thông báo ở renderer tới lần kiểm tra kế tiếp có bản mới hơn bản đã ẩn.
 
 ### 3.4 IPC
 

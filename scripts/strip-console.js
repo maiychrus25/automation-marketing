@@ -54,10 +54,11 @@ function main() {
     if (processed !== original) {
       // The regex stops at the next `;`. A console call in expression position (e.g. `x => console.warn(m),`)
       // makes it swallow following code. Refuse to ship such a file instead of producing a broken build.
-      try {
-        new vm.Script(processed, { filename: file });
-      } catch (err) {
-        broken.push(`${path.relative(DIST_DIR, file)}: ${err.message}`);
+      const parses = (code) => { try { new vm.Script(code, { filename: file }); return null; } catch (err) { return err; } };
+      const after = parses(processed);
+      // Only blame the strip when the original parsed; a file vm.Script cannot read (ESM, top-level return) is left as is.
+      if (after && !parses(original)) {
+        broken.push(`${path.relative(DIST_DIR, file)}: ${after.message}`);
         continue;
       }
       fs.writeFileSync(file, processed, 'utf8');
