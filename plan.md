@@ -558,6 +558,7 @@ git commit -m "feat(browser): open profiles for automation over a pipe"
   ): Promise<{ posted: number; failed: number; results: PostTargetResult[] }>;
   ```
   `identity` is the string `readComposerIdentityInPage` returned for that target (`''` if none). `minDelay`/`maxDelay` are seconds between targets, as in FB Poster.
+  Extra exports (for Task 13's dry-run script, which imports them from the compiled module): `markComposerInviteInPage`, `isPublishDisabledInPage`, `composerIsOpenInPage`, `focusEditorInPage`, `EDITOR_SELECTORS`.
 
 - [ ] **Step 1:** Read `c135379:src/post.js`, `c135379:test/post.test.js`, `c135379:test/composer-invite.test.js` completely.
 - [ ] **Step 2: Port the tests.** All 29 tests of `post.test.js` and the 2 of `composer-invite.test.js`. Replace `runWithFakeTimers(t, run)` with the helper's `runWithFakeTimers(run)`. FB Poster fakes `launch` as `async () => ({ ctx, page })` — keep that, it already matches `TaskDeps.launch`. Fake pages dispatch `evaluate(fn, arg)` on `fn.name`; rename the names they check per the table. Because `markComposerInviteInPage` and `markPublishButtonInPage` no longer click, give every fake page `locator: fakeLocators(clicked)` and, in each test that previously relied on the composer opening or the post publishing, assert `clicked` contains `'composer-invite'` / `'publish'`. Add two new tests:
