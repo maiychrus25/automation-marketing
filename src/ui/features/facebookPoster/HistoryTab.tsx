@@ -73,7 +73,7 @@ export default function HistoryTab() {
       if (res?.success) { setRuns(res.runs || []); setTotal(res.total ?? 0); }
       else showNotification(res?.error || 'Không tải được lịch sử', 'error');
     }).catch(() => { if (!cancelled) showNotification('Không tải được lịch sử', 'error'); })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; setLoading(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, reloadTick]);
@@ -88,15 +88,19 @@ export default function HistoryTab() {
       if (res?.success) setDetails((prev) => ({ ...prev, [expanded]: res.results || [] }));
       else showNotification(res?.error || 'Không tải được chi tiết', 'error');
     }).catch(() => { if (!cancelled) showNotification('Không tải được chi tiết', 'error'); })
-      .finally(() => setDetailLoading(false));
+      .finally(() => { if (!cancelled) setDetailLoading(false); });
     return () => { cancelled = true; setDetailLoading(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, details]);
 
   const exportCsv = async (runId: string) => {
-    const res = await ipc.facebookPoster?.exportRunCsv(runId);
-    if (!res?.success) showNotification(res?.error || 'Không xuất được CSV', 'error');
-    else if (res.path) showNotification(`Đã xuất CSV: ${res.path}`, 'success');
+    try {
+      const res = await ipc.facebookPoster?.exportRunCsv(runId);
+      if (!res?.success) showNotification(res?.error || 'Không xuất được CSV', 'error');
+      else if (res.path) showNotification(`Đã xuất CSV: ${res.path}`, 'success');
+    } catch (err: any) {
+      showNotification(err?.message || 'Không xuất được CSV', 'error');
+    }
   };
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));

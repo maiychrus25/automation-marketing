@@ -3,11 +3,11 @@ import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import ProfilePicker from './ProfilePicker';
 
-interface Props { busy: boolean }
+interface Props { busy: boolean; onStarted: () => void }
 
 const splitLines = (value: string): string[] => value.split('\n').map((l) => l.trim()).filter(Boolean);
 
-export default function JoinTab({ busy }: Props) {
+export default function JoinTab({ busy, onStarted }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [profileIds, setProfileIds] = useState<string[]>([]);
   const [keywords, setKeywords] = useState('');
@@ -28,6 +28,9 @@ export default function JoinTab({ busy }: Props) {
     try {
       const res = await ipc.facebookPoster?.start('join', { profileId: profileIds[0], keywords: splitLines(keywords), limit, minDelaySec, maxDelaySec });
       if (!res?.success) showNotification(res?.error || 'Không bắt đầu được', 'error');
+      else onStarted();
+    } catch (err: any) {
+      showNotification(err?.message || 'Không bắt đầu được', 'error');
     } finally {
       setStarting(false);
     }

@@ -19,6 +19,19 @@ export default function FacebookPosterView() {
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const runIdRef = useRef<string | null>(null);
 
+  // Reads the run record for a runId the panel has not seen; a run that already finished is no longer "current".
+  const syncRun = (runId: string) => {
+    ipc.facebookPoster?.current().then((res) => {
+      if (res?.success && res.run?.id === runId) { setRun(res.run); return; }
+      return ipc.facebookPoster?.getRun(runId).then((r) => { if (r?.success && runIdRef.current === runId) setRun(r.run); });
+    }).catch(() => {});
+  };
+
+  // Tabs call this right after start() resolves, so Start stays disabled until the first event arrives.
+  const onStarted = () => {
+    ipc.facebookPoster?.current().then((res) => { if (res?.success && res.run) setRun(res.run); }).catch(() => {});
+  };
+
   useEffect(() => {
     ipc.browserProfile?.list().then((res) => {
       if (res?.success) setProfileNames(new Map((res.profiles || []).map((p: any) => [p.id, p.name])));
@@ -34,7 +47,7 @@ export default function FacebookPosterView() {
       if (data.runId !== runIdRef.current) {
         runIdRef.current = data.runId;
         setLogs([]);
-        ipc.facebookPoster?.current().then((res) => { if (res?.success && res.run?.id === data.runId) setRun(res.run); });
+        syncRun(data.runId);
       }
       setLogs((prev) => [...prev, data].slice(-MAX_LOGS));
     });
@@ -42,7 +55,7 @@ export default function FacebookPosterView() {
       if (data.runId !== runIdRef.current) {
         runIdRef.current = data.runId;
         setLogs([]);
-        ipc.facebookPoster?.current().then((res) => { if (res?.success && res.run?.id === data.runId) setRun(res.run); });
+        syncRun(data.runId);
       }
       setProgress(data);
     });
@@ -79,9 +92,9 @@ export default function FacebookPosterView() {
       </div>
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
         <div id="fb-tabpanel" role="tabpanel" aria-labelledby={`fb-tab-${tab}`} className="min-w-0 p-4 lg:flex-1 lg:overflow-y-auto">
-          {tab === 0 && <PostTab busy={busy} profileNames={profileNames} />}
-          {tab === 1 && <JoinTab busy={busy} />}
-          {tab === 2 && <CommentsTab busy={busy} />}
+          {tab === 0 && <PostTab busy={busy} profileNames={profileNames} onStarted={onStarted} />}
+          {tab === 1 && <JoinTab busy={busy} onStarted={onStarted} />}
+          {tab === 2 && <CommentsTab busy={busy} onStarted={onStarted} />}
           {tab === 3 && <HistoryTab />}
         </div>
         <aside aria-label="Tiến độ" className="p-4 border-t lg:border-t-0 lg:border-l border-gray-700 lg:w-96 lg:shrink-0 min-w-0">

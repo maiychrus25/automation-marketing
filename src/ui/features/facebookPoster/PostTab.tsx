@@ -11,12 +11,13 @@ const MAX_COMMENT = 8000;
 interface Props {
   busy: boolean;
   profileNames: Map<string, string>;
+  onStarted: () => void;
 }
 
 const splitLines = (value: string): string[] => value.split('\n').map((l) => l.trim()).filter(Boolean);
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 
-export default function PostTab({ busy, profileNames }: Props) {
+export default function PostTab({ busy, profileNames, onStarted }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [mode, setMode] = useState<FbPosterMode>('group');
   const [text, setText] = useState('');
@@ -45,7 +46,7 @@ export default function PostTab({ busy, profileNames }: Props) {
       if (res?.success) setGroupsByProfile(res.groups || {});
       else showNotification(res?.error || 'Không tải được danh sách nhóm', 'error');
     }).finally(() => { if (!cancelled) setGroupsLoading(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; setGroupsLoading(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsKey, mode, busy]);
 
@@ -86,6 +87,7 @@ export default function PostTab({ busy, profileNames }: Props) {
   const rescan = async (id: string) => {
     const res = await ipc.facebookPoster?.start('scan_groups', { profileIds: [id], concurrency: 1 });
     if (!res?.success) showNotification(res?.error || 'Không quét được nhóm', 'error');
+    else onStarted();
   };
 
   const disabledReason = busy ? 'Đang có việc chạy. Đợi xong hoặc hủy việc đó.'
@@ -96,15 +98,21 @@ export default function PostTab({ busy, profileNames }: Props) {
 
   const handleStart = async () => {
     setStarting(true);
-    const res = await ipc.facebookPoster?.start('post', {
-      mode, text,
-      mediaPath: mediaPath || null,
-      comment,
-      profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group' ? targetsFor(profileId) : [] })),
-      minDelaySec, maxDelaySec, concurrency,
-    });
-    setStarting(false);
-    if (!res?.success) showNotification(res?.error || 'Không bắt đầu được', 'error');
+    try {
+      const res = await ipc.facebookPoster?.start('post', {
+        mode, text,
+        mediaPath: mediaPath || null,
+        comment,
+        profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group' ? targetsFor(profileId) : [] })),
+        minDelaySec, maxDelaySec, concurrency,
+      });
+      if (!res?.success) showNotification(res?.error || 'Không bắt đầu được', 'error');
+      else onStarted();
+    } catch (err: any) {
+      showNotification(err?.message || 'Không bắt đầu được', 'error');
+    } finally {
+      setStarting(false);
+    }
   };
 
   const numberInput = (label: string, value: number, set: (n: number) => void, min: number, max?: number) => (

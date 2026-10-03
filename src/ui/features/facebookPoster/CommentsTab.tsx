@@ -8,12 +8,12 @@ import type { FbPosterComment } from '../../../models/facebookPoster';
 const PAGE_SIZE = 100;
 type PostedUrl = { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number };
 
-interface Props { busy: boolean }
+interface Props { busy: boolean; onStarted: () => void }
 
 const openLink = (url: string) => { if (ipc.shell?.openExternal) ipc.shell.openExternal(url); else window.open(url, '_blank'); };
 const formatTime = (at: number) => new Date(at).toLocaleString('vi-VN', { hour12: false });
 
-export default function CommentsTab({ busy }: Props) {
+export default function CommentsTab({ busy, onStarted }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [profileIds, setProfileIds] = useState<string[]>([]);
   const [posts, setPosts] = useState<PostedUrl[]>([]);
@@ -42,7 +42,7 @@ export default function CommentsTab({ busy }: Props) {
       if (res?.success) setPosts(res.posts || []);
       else showNotification(res?.error || 'Không tải được danh sách bài', 'error');
     }).catch(() => { if (!cancelled) showNotification('Không tải được danh sách bài', 'error'); })
-      .finally(() => setPostsLoading(false));
+      .finally(() => { if (!cancelled) setPostsLoading(false); });
     return () => { cancelled = true; setPostsLoading(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadTick]);
@@ -55,7 +55,7 @@ export default function CommentsTab({ busy }: Props) {
       if (res?.success) { setComments(res.comments || []); setTotal(res.total ?? 0); }
       else showNotification(res?.error || 'Không tải được bình luận', 'error');
     }).catch(() => { if (!cancelled) showNotification('Không tải được bình luận', 'error'); })
-      .finally(() => setCommentsLoading(false));
+      .finally(() => { if (!cancelled) setCommentsLoading(false); });
     return () => { cancelled = true; setCommentsLoading(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postFilter, page, reloadTick]);
@@ -76,6 +76,9 @@ export default function CommentsTab({ busy }: Props) {
     try {
       const res = await ipc.facebookPoster?.start('collect_comments', { profileId: profileIds[0], postUrls: [...picked] });
       if (!res?.success) showNotification(res?.error || 'Không bắt đầu được', 'error');
+      else onStarted();
+    } catch (err: any) {
+      showNotification(err?.message || 'Không bắt đầu được', 'error');
     } finally {
       setStarting(false);
     }
