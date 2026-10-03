@@ -29,7 +29,7 @@ Toàn bộ các tính năng đang chạy của FB Poster, trừ công cụ TopCV
 
 - **Nhiều profile song song.** Một lượt chọn N profile, mỗi profile chạy danh sách nhóm của nó cùng lúc, trong giới hạn số trình duyệt mở đồng thời của Browser Profiles (hiện 30).
 - **Nội dung giống hệt nhau** giữa các profile trong một lượt.
-- **Điều khiển trình duyệt qua cổng điều khiển cục bộ.** Khi chạy việc, MaiHub mở profile với cổng remote-debugging chỉ nghe trên `127.0.0.1`, rồi Playwright nối vào. Cách này tái dùng gần nguyên logic đã kiểm chứng của FB Poster (tìm phần tử theo chữ hiển thị, bằng chứng đăng thành công, chống bấm nút Đăng đang tắt).
+- **Điều khiển trình duyệt qua đường ống, không mở cổng.** Khi chạy việc, Playwright tự khởi chạy nhân trình duyệt của profile với đúng bộ tham số fingerprint và proxy như khi mở tay, và điều khiển qua `--remote-debugging-pipe`. Không có cổng mạng nào được mở (đã đo, xem `docs/reports/2026-10-03-browser-automation-pipe-spike.md`). Mở profile bằng tay giữ nguyên cách hiện tại. Cách này tái dùng gần nguyên logic đã kiểm chứng của FB Poster (tìm phần tử theo chữ hiển thị, bằng chứng đăng thành công, chống bấm nút Đăng đang tắt).
 
 ### Nơi thao tác
 
@@ -64,7 +64,7 @@ Toàn bộ các tính năng đang chạy của FB Poster, trừ công cụ TopCV
 
 | Thành phần | Ảnh hưởng |
 |---|---|
-| Browser Profiles (`src/services/browser/BrowserProfileService.ts`, `fingerprint.ts`) | Thêm chế độ mở có cổng điều khiển cục bộ; biết profile nào đang bị một việc tự động chiếm |
+| Browser Profiles (`src/services/browser/BrowserProfileService.ts`, `fingerprint.ts`) | Thêm chế độ mở để tự động hóa (Playwright khởi chạy qua đường ống, dùng chung `buildLaunchArgs` và `ProxyForwarder`); biết profile nào đang bị một việc tự động chiếm |
 | Dịch vụ đăng bài mới (`src/services/`, `electron/ipc/`) | Chuyển logic FB Poster từ JavaScript sang TypeScript theo cấu trúc dịch vụ và IPC của MaiHub |
 | SQLite (`src/services/database/DatabaseService.ts`) | Bảng lịch sử đăng bài và bình luận thu được, thay cho tệp `jsonl` của FB Poster |
 | Renderer (`src/ui/`) | Màn hình đăng bài mới, mục mới trên Sidebar, theo `DESIGN.md` |
@@ -82,8 +82,11 @@ Toàn bộ các tính năng đang chạy của FB Poster, trừ công cụ TopCV
 
 ## Constraints
 
-- **Đảo một quyết định của Browser Profiles.** Spec Browser Profiles ghi "không mở cổng remote-debugging, không cài extension". Tính năng này cần mở cổng đó, chỉ trên `127.0.0.1`, chỉ trong lúc chạy việc. Cần cập nhật spec Browser Profiles cho khớp.
-- **Không được lộ dấu hiệu tự động hóa hơn mức đang có.** Cổng điều khiển và các lệnh Playwright gửi qua nó có thể bị trang phát hiện. Phải đo trước khi chốt (câu hỏi mở 1).
+- **Giữ quyết định của Browser Profiles về cổng.** Spec Browser Profiles ghi "không mở cổng remote-debugging, không cài extension". Phương án đường ống không mở cổng nào, nên quyết định đó vẫn đúng; spec chỉ cần thêm chế độ mở để tự động hóa.
+- **Không dùng cổng điều khiển.** Cổng trên `127.0.0.1` không có xác thực: mọi chương trình trên máy nối vào được và điều khiển được tài khoản Facebook.
+- **Profile đang mở tay thì không chạy việc được.** Đường ống chỉ có khi Playwright tự khởi chạy trình duyệt, nên không gắn vào cửa sổ người dùng đang mở; phải đóng trước.
+- **Không được lộ dấu hiệu tự động hóa hơn mức đang có.** Spike đo được: không cổng, `navigator.webdriver` là false, BrowserScan chấm Normal ở mọi mục kể cả CDP. Patchright giữ làm dự phòng nếu sau này bị phát hiện qua `Runtime.enable`.
+- **Cú bấm phải là cú bấm thật.** FB Poster bấm nhiều nút bằng `element.click()` chạy trong trang, sinh sự kiện có `isTrusted = false`. Khi chuyển sang MaiHub, các cú bấm quan trọng (mở ô soạn, nút Đăng, bình luận) dùng cú bấm chuột của Playwright.
 - **Trình duyệt có giao diện.** FB Poster luôn chạy có giao diện; Browser Profiles cũng vậy. Không chuyển sang chạy ẩn.
 - **Một profile một việc.** Profile đang được người dùng mở tay hoặc đang chạy việc khác thì không được nhận việc mới, để không giành phiên đăng nhập.
 - **Đóng tử tế.** Profile phải đóng đúng cách sau khi chạy để cookie được ghi, như Browser Profiles đã làm (SIGINT, rồi mới giết cứng).
@@ -95,8 +98,8 @@ Toàn bộ các tính năng đang chạy của FB Poster, trừ công cụ TopCV
 
 ## Open questions
 
-1. **Cổng điều khiển có làm profile dễ bị phát hiện không?** Cần một spike: mở profile có và không có cổng, nối Playwright, chạy các trang kiểm tra (CreepJS, pixelscan, browserleaks) và so sánh. Nếu bị lộ rõ, phương án thay thế là extension trong profile, đổi lại phải viết lại phần tự động hóa.
-2. **Playwright có điều khiển được `fingerprint-chromium` không?** Nhân trình duyệt đang ở Chromium 148, còn Playwright mới nhất nhắm Chromium 151. Cần đo `connectOverCDP` chạy ổn với phiên bản đó, gồm tải tệp ảnh/video vào ô soạn bài.
+1. **Kiểm nốt khả năng bị phát hiện.** Spike (`docs/reports/2026-10-03-browser-automation-pipe-spike.md`) mới chạy BrowserScan trên Linux. Còn thiếu CreepJS, pixelscan, browserleaks, bản Windows của nhân trình duyệt, và tỉ lệ checkpoint khi đăng thật.
+2. **Tham số mặc định của Playwright.** Spike mới bỏ cờ `--enable-automation`. Playwright còn tự thêm nhiều cờ khác khi khởi chạy, có thể làm lệch fingerprint so với lúc mở tay. Cần chốt danh sách cờ bỏ đi, có thể bỏ hết (`ignoreDefaultArgs: true`) rồi chỉ thêm cờ cần thiết. Cũng cần đo tải tệp ảnh/video vào ô soạn bài trên nhân Chromium 148, khi Playwright nhắm Chromium 151.
 3. **Mở profile chạy việc khác gì mở tay?** Dùng chung cửa sổ người dùng đang nhìn thấy, hay mở riêng? Người dùng có được thao tác vào trình duyệt trong lúc việc đang chạy không?
 4. **Giới hạn song song cho đăng bài** là bao nhiêu trên một máy thường? Giới hạn 30 của Browser Profiles tính cho dùng tay, đăng bài tốn tài nguyên hơn.
 5. **Nghỉ giữa các profile:** các profile chạy song song có cần lệch giờ nhau để Facebook không thấy nhiều tài khoản cùng đăng một nội dung trong một phút không?
