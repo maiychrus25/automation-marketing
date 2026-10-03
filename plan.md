@@ -592,7 +592,7 @@ git commit -m "feat(browser): open profiles for automation over a pipe"
   export interface ScannedGroup { id: string; name: string; url: string; }   // keep source field set if it differs, and update this line
   export function parseGroupLinks(raw: unknown): ScannedGroup[];
   /** Same options object as FB Poster's scanGroups({ launch, env, settleMs, scrollWaitMs, maxScrolls, kienNhan }) minus env, kienNhan renamed patience. */
-  export function scanGroups(deps: TaskDeps & { settleMs?: number; scrollWaitMs?: number; maxScrolls?: number; patience?: number }): Promise<{ groups: ScannedGroup[]; hitScrollLimit: boolean; scrollRounds: number; scrollError: string | null }>;
+  export function scanGroups(deps: TaskDeps & { settleMs?: number; scrollWaitMs?: number; maxScrolls?: number; patience?: number }): Promise<{ groups: ScannedGroup[]; hitScrollLimit: boolean; scrollRounds: number; scrollError: boolean }>;
   ```
 - [ ] **Step 1:** Read `c135379:src/groups.js` and `c135379:test/groups.test.js`.
 - [ ] **Step 2:** Port all 27 tests (rename fields per table; `launch` fake returns `{ ctx, page }`).
