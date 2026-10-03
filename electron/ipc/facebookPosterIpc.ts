@@ -6,11 +6,11 @@ import AppModeManager from '../../src/utils/AppModeManager';
 import Logger from '../../src/utils/Logger';
 import { FacebookPosterService } from '../../src/services/facebookPoster/FacebookPosterService';
 import { FacebookPosterStore } from '../../src/services/facebookPoster/FacebookPosterStore';
+import { buildRunCsv } from '../../src/services/facebookPoster/runCsv';
 import { validateStartParams } from '../../src/services/facebookPoster/validateStartParams';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
 
 const MEDIA_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'mov', 'webm'];
-const CSV_COLUMNS = ['profile', 'target', 'name', 'outcome', 'error', 'post_url', 'comment_status', 'identity', 'time'];
 
 let service: FacebookPosterService | null = null;
 let lastDbPath: string | null = null;
@@ -53,6 +53,23 @@ export function cancelFacebookPosterJobs(): void {
     service?.cancelAll();
 }
 
+/** Cancels and waits (up to timeoutMs) for the running job to finish, so it cannot write into the next workspace DB. Never throws. */
+export async function cancelAndWaitFacebookPosterJobs(timeoutMs = 10000): Promise<void> {
+    if (!service) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+        service.cancelAll();
+        await Promise.race([
+            service.whenIdle(),
+            new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+        ]);
+    } catch {
+        // best effort: the caller goes on to switch the workspace
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
 function clampLimit(value: any, fallback: number, max: number): number {
     const n = Number(value);
     return Number.isInteger(n) && n >= 1 ? Math.min(n, max) : fallback;
@@ -62,8 +79,6 @@ function offsetOf(value: any): number {
     const n = Number(value);
     return Number.isInteger(n) && n >= 0 ? n : 0;
 }
-
-const csvField = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
 /** Same employee-mode guard and error envelope as browserProfileIpc. */
 function handle(channel: string, handler: (params: any) => Promise<Record<string, any> | void> | Record<string, any> | void): void {
@@ -141,12 +156,7 @@ export function registerFacebookPosterIpc(): void {
             filters: [{ name: 'CSV', extensions: ['csv'] }],
         });
         if (result.canceled || !result.filePath) return { path: null };
-        const rows = found.results.map((r) => [
-            r.profileName, r.targetUrl, r.targetName, r.outcome, r.error, r.postUrl ?? '', r.commentStatus, r.identity,
-            new Date(r.createdAt).toISOString(),
-        ]);
-        const csv = [CSV_COLUMNS, ...rows].map((row) => row.map(csvField).join(',')).join('\r\n');
-        fs.writeFileSync(result.filePath, '﻿' + csv + '\r\n', 'utf8');
+        fs.writeFileSync(result.filePath, buildRunCsv(found.results), 'utf8');
         return { path: result.filePath };
     });
 }

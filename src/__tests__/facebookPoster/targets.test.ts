@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { normalizeTarget, pickDelaySeconds } from '../../services/facebookPoster/targets';
+import { normalizeTarget, parseFacebookUrl, pickDelaySeconds } from '../../services/facebookPoster/targets';
 
 test('id thuần được ghép thành URL group', () => {
   assert.deepStrictEqual(normalizeTarget('1234567890'), {
@@ -40,4 +40,21 @@ test('delay chịu được trường hợp min lớn hơn max', () => {
     const d = pickDelaySeconds(60, 30);
     assert.ok(d >= 30 && d <= 60, `d=${d} ngoài khoảng`);
   }
+});
+
+test('parseFacebookUrl chỉ nhận https và host facebook.com', () => {
+  assert.ok(parseFacebookUrl('https://facebook.com/groups/x'));
+  assert.ok(parseFacebookUrl('https://m.facebook.com/groups/x'));
+  assert.ok(parseFacebookUrl('https://www.facebook.com/groups/x'));
+  for (const bad of ['https://evil.com/groups/x', 'https://www.facebook.com.evil.com/groups/x', 'https://evilfacebook.com/x',
+    'http://www.facebook.com/groups/x', 'file:///etc/passwd', 'javascript:alert(1)', 'not a url', '']) {
+    assert.strictEqual(parseFacebookUrl(bad), null, bad);
+  }
+});
+
+test('normalizeTarget từ chối URL không phải Facebook', () => {
+  assert.throws(() => normalizeTarget('https://evil.com/groups/x'), /Đích không hợp lệ: https:\/\/evil.com\/groups\/x/);
+  assert.throws(() => normalizeTarget('https://www.facebook.com.evil.com/groups/x'), /Đích không hợp lệ/);
+  assert.throws(() => normalizeTarget('http://www.facebook.com/groups/x'), /Đích không hợp lệ/);
+  assert.deepStrictEqual(normalizeTarget('https://m.facebook.com/groups/x'), { url: 'https://m.facebook.com/groups/x', kind: 'group' });
 });

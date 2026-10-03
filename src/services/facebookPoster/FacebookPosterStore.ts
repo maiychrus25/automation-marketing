@@ -126,9 +126,10 @@ export class FacebookPosterStore {
     /** Dòng mới nhất của mỗi post_url (bare column đi theo MAX() trong SQLite), mới nhất trước. */
     listPostedUrls(limit: number): { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number }[] {
         return this.db.query<any>(
-            `SELECT post_url, profile_id, profile_name, target_url, MAX(created_at) AS created_at
-             FROM fb_poster_results WHERE post_url IS NOT NULL
-             GROUP BY post_url ORDER BY created_at DESC LIMIT ?`,
+            `SELECT r.post_url, r.profile_id, r.profile_name, r.target_url, MAX(r.created_at) AS created_at
+             FROM fb_poster_results r JOIN fb_poster_runs u ON u.id = r.run_id
+             WHERE r.post_url IS NOT NULL
+             GROUP BY r.post_url ORDER BY created_at DESC LIMIT ?`,
             [limit],
         ).map((row) => ({
             postUrl: row.post_url,

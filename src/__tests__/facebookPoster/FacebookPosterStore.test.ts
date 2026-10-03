@@ -199,3 +199,11 @@ test('listPostedUrls: chỉ dòng có post_url, mỗi URL một lần, mới nh�
   assert.deepStrictEqual(list[1], { postUrl: 'https://x/a', profileId: 'p3', profileName: 'P3', targetUrl: 'https://www.facebook.com/groups/1/', createdAt: 20 });
   assert.strictEqual(s.listPostedUrls(1).length, 1);
 });
+
+test('listPostedUrls: bỏ kết quả mồ côi (run đã bị xóa)', () => {
+  const s = store();
+  s.createRun(newRun('r1', 1));
+  s.addResult(newResult('r1', { postUrl: 'https://x/kept', createdAt: 10 }));
+  s.addResult(newResult('ghost', { postUrl: 'https://x/orphan', createdAt: 20 }));
+  assert.deepStrictEqual(s.listPostedUrls(10).map((x) => x.postUrl), ['https://x/kept']);
+});

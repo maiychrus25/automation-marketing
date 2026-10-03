@@ -171,6 +171,19 @@ describe('validateStartParams: join', () => {
   });
 });
 
+describe('validateStartParams: facebook-only group targets', () => {
+  const withTarget = (t: string) => ({ kind: 'post', params: { mode: 'group', text: 'hi', profiles: [{ profileId: 'p1', targets: [t] }] } });
+  test('rejects lookalike hosts and non-https', () => {
+    for (const bad of ['https://evil.com/groups/x', 'https://www.facebook.com.evil.com/groups/x', 'http://www.facebook.com/groups/x', 'javascript:alert(1)']) {
+      fails(withTarget(bad), `Đích không hợp lệ: ${bad}`);
+    }
+  });
+  test('accepts m. and bare facebook.com', () => {
+    expect((validateStartParams(withTarget('https://m.facebook.com/groups/x'), env) as any).profiles[0].targets).toEqual(['https://m.facebook.com/groups/x']);
+    expect((validateStartParams(withTarget('https://facebook.com/groups/x'), env) as any).profiles[0].targets).toEqual(['https://facebook.com/groups/x']);
+  });
+});
+
 describe('validateStartParams: collect_comments', () => {
   const collect = (over: Record<string, unknown> = {}) => ({ kind: 'collect_comments', params: { profileId: 'p1', postUrls: ['https://www.facebook.com/groups/1/posts/2/'], ...over } });
 
@@ -184,6 +197,12 @@ describe('validateStartParams: collect_comments', () => {
     fails(collect({ postUrls: undefined }), 'Chưa chọn bài');
   });
   test('urls are trimmed and de-duplicated', () => {
-    expect((validateStartParams(collect({ postUrls: [' https://x/1 ', 'https://x/1', 'https://x/2'] }), env) as any).postUrls).toEqual(['https://x/1', 'https://x/2']);
+    expect((validateStartParams(collect({ postUrls: [' https://www.facebook.com/p/1 ', 'https://www.facebook.com/p/1', 'https://www.facebook.com/p/2'] }), env) as any).postUrls).toEqual(['https://www.facebook.com/p/1', 'https://www.facebook.com/p/2']);
+  });
+  test('rejects non-Facebook or non-https post urls', () => {
+    for (const bad of ['https://evil.com/groups/x', 'https://www.facebook.com.evil.com/p/1', 'http://www.facebook.com/p/1', 'file:///etc/passwd', 'javascript:alert(1)']) {
+      fails(collect({ postUrls: [bad] }), `Link bài không hợp lệ: ${bad}`);
+    }
+    expect((validateStartParams(collect({ postUrls: ['https://m.facebook.com/p/1'] }), env) as any).postUrls).toEqual(['https://m.facebook.com/p/1']);
   });
 });

@@ -1,5 +1,5 @@
 import type { StartParams } from './FacebookPosterService';
-import { normalizeTarget } from './targets';
+import { normalizeTarget, parseFacebookUrl } from './targets';
 
 export interface StartParamsEnv {
     profileExists: (id: string) => boolean;
@@ -113,8 +113,13 @@ export function validateStartParams(input: { kind?: unknown; params?: unknown },
         }
         case 'collect_comments': {
             const profileId = requireProfile(p.profileId, env);
-            const postUrls = uniqueTrimmed(p.postUrls);
-            if (!postUrls.length) throw new Error('Chưa chọn bài');
+            const trimmed = uniqueTrimmed(p.postUrls);
+            if (!trimmed.length) throw new Error('Chưa chọn bài');
+            const postUrls = [...new Set(trimmed.map((u) => {
+                const parsed = parseFacebookUrl(u);
+                if (!parsed) throw new Error(`Link bài không hợp lệ: ${u}`);
+                return parsed.href;
+            }))];
             return { kind: 'collect_comments', profileId, postUrls };
         }
         default:
