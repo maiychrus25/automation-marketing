@@ -210,6 +210,31 @@ describe('FacebookPosterService', () => {
     expect(sleeps).toEqual([15000]);
   });
 
+  test('lệch giờ với concurrency >= 2: mỗi profile bắt đầu cách profile liền trước 30-90 s', async () => {
+    let clock = 0;
+    // Đồng hồ giả: chờ song song, nên sleep chỉ kéo đồng hồ tới mốc đích (không cộng dồn).
+    const sleep = async (ms: number) => { const target = clock + ms; await tick(); clock = Math.max(clock, target); };
+    const gaps = [0, 0.99, 0.5];
+    let g = 0;
+    const starts: Record<string, number> = {};
+    const order: string[] = [];
+    const h = harness({
+      postToTargets: jest.fn(async (input: any, deps: any) => { await deps.launch(); order.push(input.targets[0]); starts[input.targets[0]] = clock; for (const url of input.targets) deps.onResult({ url, ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '' }); }),
+    }, { now: () => clock, sleep, random: () => gaps[g++ % gaps.length] });
+    h.service.start(postParams({
+      profiles: [1, 2, 3, 4].map((n) => ({ profileId: `p${n}`, targets: [`https://www.facebook.com/groups/${n}/`] })),
+      concurrency: 3,
+    }));
+    await h.service.whenIdle();
+    const times = order.map((url) => starts[url]);
+    expect(order).toHaveLength(4);
+    const diffs = times.slice(1).map((t, i) => t - times[i]);
+    for (const d of diffs) { expect(d).toBeGreaterThanOrEqual(30000); expect(d).toBeLessThanOrEqual(90000); }
+    expect(diffs[0]).toBeCloseTo(30000, 0);
+    expect(diffs[1]).toBeCloseTo(89400, 0);
+    expect(diffs[2]).toBeCloseTo(60000, 0);
+  });
+
   // 5
   test('launch mở phiên mới mỗi lần gọi, trả page đầu tiên, đóng mọi phiên kể cả khi tác vụ ném lỗi', async () => {
     const seen: any[] = [];
@@ -463,6 +488,41 @@ describe('FacebookPosterService', () => {
     expect(rows[0]).toMatchObject({ profileId: 'p1', targetUrl: JOINS_URL, targetName: '2 nhóm', outcome: 'done', error: '' });
     expect(rows[1]).toMatchObject({ profileId: 'p2', targetUrl: JOINS_URL, outcome: 'failed', error: 'quét hỏng' });
     expect(h.run(runId).mode).toBe('');
+  });
+
+  test('scan_groups: quét lỗi giữa chừng thì giữ danh sách cũ, dòng failed, cảnh báo trong nhật ký', async () => {
+    const message = 'Quét nhóm bị lỗi giữa chừng, giữ danh sách cũ';
+    const h = harness({
+      scanGroups: jest.fn(async (deps: any) => {
+        await deps.launch();
+        return { groups: [{ id: '9', name: 'Mới', url: 'https://www.facebook.com/groups/9/' }], hitScrollLimit: false, scrollRounds: 2, scrollError: true };
+      }),
+    });
+    h.store.replaceGroups('p1', [{ url: 'https://www.facebook.com/groups/old/', name: 'Cũ' }], 1);
+    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1 });
+    await h.service.whenIdle();
+    expect(h.store.listGroups(['p1']).p1.map((g) => g.url)).toEqual(['https://www.facebook.com/groups/old/']);
+    expect(h.results(runId).map((r) => [r.targetUrl, r.outcome, r.error])).toEqual([[JOINS_URL, 'failed', message]]);
+    const logs = h.emitted.filter((e) => e.channel === 'facebookPoster:log').map((e) => e.data);
+    expect(logs).toContainEqual({ runId, profileId: 'p1', level: 'warning', message, at: expect.any(Number) });
+    expect(h.closeCalls).toEqual(['p1']);
+  });
+
+  test('scan_groups: chạm trần cuộn thì vẫn ghi đè danh sách, dòng done kèm cảnh báo', async () => {
+    const message = 'Danh sách có thể thiếu (chạm trần cuộn)';
+    const h = harness({
+      scanGroups: jest.fn(async (deps: any) => {
+        await deps.launch();
+        return { groups: [{ id: '9', name: 'Mới', url: 'https://www.facebook.com/groups/9/' }], hitScrollLimit: true, scrollRounds: 200, scrollError: false };
+      }),
+    });
+    h.store.replaceGroups('p1', [{ url: 'https://www.facebook.com/groups/old/', name: 'Cũ' }], 1);
+    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1 });
+    await h.service.whenIdle();
+    expect(h.store.listGroups(['p1']).p1.map((g) => g.url)).toEqual(['https://www.facebook.com/groups/9/']);
+    expect(h.results(runId).map((r) => [r.targetName, r.outcome, r.error])).toEqual([['1 nhóm', 'done', message]]);
+    const logs = h.emitted.filter((e) => e.channel === 'facebookPoster:log').map((e) => e.data);
+    expect(logs).toContainEqual({ runId, profileId: 'p1', level: 'warning', message, at: expect.any(Number) });
   });
 
   // 12

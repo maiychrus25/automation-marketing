@@ -37,6 +37,8 @@ const BUSY_ERROR = 'Đang có việc chạy';
 const NOT_LOGGED_IN_ERROR = 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập';
 const STOPPED_REASON = 'Đã dừng';
 const POST_FAILED_DEFAULT = 'Không đăng được, xem nhật ký';
+const SCAN_ERROR_MESSAGE = 'Quét nhóm bị lỗi giữa chừng, giữ danh sách cũ';
+const SCAN_LIMIT_MESSAGE = 'Danh sách có thể thiếu (chạm trần cuộn)';
 const JOINS_URL = 'https://www.facebook.com/groups/joins/';
 const STAGGER_MIN_MS = 30000;
 const STAGGER_SPREAD_MS = 60000;
@@ -187,13 +189,17 @@ export class FacebookPosterService {
         const runners = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
             while (next < items.length && !this.stopping) {
                 const index = next++;
-                if (index > 0) {
+                if (index === 0) {
+                    lastStart = this.now();
+                } else {
+                    // Reserve this start slot BEFORE sleeping so runners waiting at the same time
+                    // are spaced from each other, not all from the same previous start.
                     const gap = STAGGER_MIN_MS + this.random() * STAGGER_SPREAD_MS;
-                    const wait = Math.max(0, lastStart + gap - this.now());
-                    await this.sleep(wait, () => this.stopping);
+                    const startAt = Math.max(this.now(), lastStart + gap);
+                    lastStart = startAt;
+                    await this.sleep(startAt - this.now(), () => this.stopping);
                     if (this.stopping) break;
                 }
-                lastStart = this.now();
                 await worker(items[index], index);
             }
         });
@@ -287,7 +293,12 @@ export class FacebookPosterService {
                 );
                 return;
             case 'scan_groups': {
-                const { groups } = await this.tasks.scanGroups(deps);
+                const { groups, scrollError, hitScrollLimit } = await this.tasks.scanGroups(deps);
+                if (scrollError) {
+                    // A truncated list must not overwrite the saved one: fail the profile instead.
+                    deps.sendLog(SCAN_ERROR_MESSAGE, 'warning');
+                    throw new Error(SCAN_ERROR_MESSAGE);
+                }
                 let saveError = '';
                 try {
                     this.store.replaceGroups(profileId, groups.map((g) => ({ url: g.url, name: g.name })), this.now());
@@ -297,7 +308,8 @@ export class FacebookPosterService {
                 }
                 this.record(active, plan, saveError
                     ? { url: JOINS_URL, name: '', outcome: 'failed', error: saveError }
-                    : { url: JOINS_URL, name: `${groups.length} nhóm`, outcome: 'done', error: '' });
+                    : { url: JOINS_URL, name: `${groups.length} nhóm`, outcome: 'done', error: hitScrollLimit ? SCAN_LIMIT_MESSAGE : '' });
+                if (hitScrollLimit && !saveError) deps.sendLog(SCAN_LIMIT_MESSAGE, 'warning');
                 return;
             }
             case 'join':

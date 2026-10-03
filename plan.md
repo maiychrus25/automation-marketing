@@ -808,20 +808,23 @@ Behaviour (each bullet is at least one test):
       const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
           while (next < items.length && !this.stopping) {
               const index = next++;
-              if (index > 0) {
+              if (index === 0) {
+                  lastStart = this.now();
+              } else {
+                  // Reserve the start slot BEFORE sleeping so concurrent waiters are spaced from each other.
                   const gap = 30000 + this.random() * 60000;
-                  const wait = Math.max(0, lastStart + gap - this.now());
-                  await this.sleep(wait, () => this.stopping);
+                  const startAt = Math.max(this.now(), lastStart + gap);
+                  lastStart = startAt;
+                  await this.sleep(startAt - this.now(), () => this.stopping);
                   if (this.stopping) break;
               }
-              lastStart = this.now();
               await worker(items[index], index);
           }
       });
       await Promise.all(runners);
   }
   ```
-  Bullet 4 is measured against this: the k-th start waits until `lastStart + gap`. In tests `now` is a fake clock advanced by `sleep`. After the pool, any profile never started records its targets `skipped`.
+  Bullet 4 is measured against this: the k-th start is reserved at `max(now, lastStart + gap)` before sleeping, so with concurrency > 1 successive starts are still 30–90 s apart (spec §7). A scan with `scrollError` keeps the stored groups and records `failed`; `hitScrollLimit` replaces them and records `done` with a warning in `error`. In tests `now` is a fake clock advanced by `sleep`. After the pool, any profile never started records its targets `skipped`.
 - [ ] **Step 4:** Run → PASS; electron tsc → exit 0.
 - [ ] **Step 5: Commit** `feat(facebook-poster): orchestrate jobs across profiles`.
 
