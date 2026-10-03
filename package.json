@@ -202,7 +202,7 @@
         "AppImage",
         "deb"
       ],
-      "icon": "resources/icons/linux",
+      "icon": "resources/icons/icon.png",
       "category": "Network"
     },
     "deb": {
