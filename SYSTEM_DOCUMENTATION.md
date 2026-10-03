@@ -281,7 +281,7 @@ Nguồn: `src/services/browser/`, `electron/ipc/browserProfileIpc.ts`, `src/ui/f
 - Chỉ dùng được ở chế độ Boss/Standalone. Chuyển workspace thì huỷ việc và chờ tối đa 10 giây cho việc dừng trước khi đổi DB.
 - Chưa được kiểm chứng bằng tài khoản Facebook thật và trên Windows tại thời điểm phát hành 26.10.0.
 
-Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`, `docs/plans/2026-10-03-facebook-poster.md`.
+Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`. (Kế hoạch triển khai của tính năng này chưa được đưa vào repo; cần bổ sung vào `docs/plans/`.)
 
 ### 4.11 Hộp thư Page Facebook (đang thiết kế)
 
@@ -1158,7 +1158,7 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
   - Trình duyệt (Browser Profiles): `docs/intent/2026-10-01-browser-profiles.md`, `docs/specs/2026-10-01-browser-profiles.md`, `docs/plans/2026-10-01-browser-profiles.md`, `docs/reports/2026-10-01-antidetect-chromium-spike.md`.
   - Giao diện macOS: `docs/intent/2026-10-02-macos-ui.md`, `docs/specs/2026-10-02-macos-ui.md`, `docs/plans/2026-10-02-macos-ui.md`.
   - Đổi thương hiệu MaiHub: `docs/intent/2026-10-02-maihub-rebrand.md`, `docs/specs/2026-10-02-maihub-rebrand.md`, `docs/plans/2026-10-02-maihub-rebrand.md`.
-  - Đăng Facebook: `docs/intent/2026-10-02-facebook-poster.md`, `docs/specs/2026-10-03-facebook-poster.md`, `docs/plans/2026-10-03-facebook-poster.md`, `docs/reports/2026-10-03-browser-automation-pipe-spike.md`.
+  - Đăng Facebook: `docs/intent/2026-10-02-facebook-poster.md`, `docs/specs/2026-10-03-facebook-poster.md`, `docs/reports/2026-10-03-browser-automation-pipe-spike.md` (plan chưa có trong repo).
   - Hộp thư Page Facebook: `docs/intent/2026-10-03-facebook-page-inbox.md`, `docs/reports/2026-10-03-facebook-page-inbox-spike.md`, `docs/plans/2026-10-03-facebook-page-inbox.md`.
 
 ## 26. Checklist xác nhận vận hành trước khi dùng thật
