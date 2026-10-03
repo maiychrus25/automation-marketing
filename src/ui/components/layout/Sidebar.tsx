@@ -121,7 +121,10 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
         )}
         {/* Browser profiles - Boss/Standalone only; hidden while previewing an employee */}
         {empMode !== 'employee' && !isSimulating && (
+          <>
           <NavItem icon="browser" label="Trình duyệt" collapsed={collapsed} active={view === 'browser'} onClick={() => setView('browser')} />
+          <NavItem icon="facebookPoster" label="Đăng Facebook" collapsed={collapsed} active={view === 'facebookPoster'} onClick={() => setView('facebookPoster')} />
+          </>
         )}
       </nav>
 
@@ -326,6 +329,12 @@ function NavIcon({ name }: { name: string }) {
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
           <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+      );
+    case 'facebookPoster':
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/>
         </svg>
       );
     case 'settings':
