@@ -336,10 +336,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ─── Auto-update ─────────────────────────────────────────────────
   update: {
-    check:         () => ipcRenderer.send('update:check'),
-    download:      () => ipcRenderer.send('update:download'),
-    install:       () => ipcRenderer.send('update:install'),
-    rendererReady: () => ipcRenderer.send('update:renderer-ready'),
+    getState:      () => ipcRenderer.invoke('update:get-state'),
+    check:         () => ipcRenderer.invoke('update:check'),
+    download:      () => ipcRenderer.invoke('update:download'),
+    install:       () => ipcRenderer.invoke('update:install'),
   },
 
   // ─── Nhật ký (Logger) ─────────────────────────────────────────────
@@ -753,10 +753,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'event:typing',
       'event:seen',
       'qr:update',
-      'update:available',
-      'update:progress',
-      'update:downloaded',
-      'update:error',
+      'update:state',
       'app:openThread',
       'app:windowFocus',
       'app:drawBadge',

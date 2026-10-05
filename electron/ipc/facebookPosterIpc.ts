@@ -48,6 +48,11 @@ function getService(): FacebookPosterService {
     return service;
 }
 
+/** True while a job is running; the updater refuses to restart then. */
+export function isFacebookPosterBusy(): boolean {
+    return !!service?.current();
+}
+
 /** Stops a running job (if any). Called on app quit and before the workspace database is switched. */
 export function cancelFacebookPosterJobs(): void {
     service?.cancelAll();

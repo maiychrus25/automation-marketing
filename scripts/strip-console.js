@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 const DIST_DIR = path.join(__dirname, '..', 'dist-electron');
 
@@ -46,15 +47,30 @@ function main() {
   }
 
   let stripped = 0;
+  const broken = [];
   for (const file of files) {
     const original = fs.readFileSync(file, 'utf8');
     const processed = stripConsoleFromCode(original);
     if (processed !== original) {
+      // The regex stops at the next `;`. A console call in expression position (e.g. `x => console.warn(m),`)
+      // makes it swallow following code. Refuse to ship such a file instead of producing a broken build.
+      const parses = (code) => { try { new vm.Script(code, { filename: file }); return null; } catch (err) { return err; } };
+      const after = parses(processed);
+      // Only blame the strip when the original parsed; a file vm.Script cannot read at all (ESM, top-level return) is written as before.
+      if (after && !parses(original)) {
+        broken.push(`${path.relative(DIST_DIR, file)}: ${after.message}`);
+        continue;
+      }
       fs.writeFileSync(file, processed, 'utf8');
       stripped++;
     }
   }
 
+  if (broken.length) {
+    console.error('[strip-console] Stripping console.* broke the syntax of:\n  ' + broken.join('\n  ')
+      + '\nWrap those console calls in a statement, e.g. `(m) => { console.warn(m); }`.');
+    process.exit(1);
+  }
   console.log(`[strip-console] Done: ${stripped}/${files.length} files modified.`);
 }
 

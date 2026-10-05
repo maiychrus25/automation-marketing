@@ -35,7 +35,7 @@ phép **MIT**. Bản quyền của tác giả gốc được giữ nguyên trong
 |---|---|
 | Gửi dữ liệu telemetry ra ngoài | **Đã tắt** (`TrackingService`) |
 | Máy chủ thượng nguồn: premium, quét nhóm, thanh toán, affiliate | **Đã chặn** (`backendService`) |
-| Tự động kiểm tra & tải bản cập nhật | **Đã tắt** — tải bản mới ở GitHub Releases |
+| Tự động kiểm tra & tải bản cập nhật | **Bật từ 26.11.0** — xem mục [Tự cập nhật](#tự-cập-nhật) |
 | Trang donate / giới thiệu hoa hồng / link kho mã nguồn của tác giả | **Đã gỡ** |
 | Trần gửi theo ngày, giờ im lặng, cơ chế từ chối nhận | **Chưa có** |
 
@@ -79,7 +79,24 @@ GitHub Release kèm toàn bộ bản cài, khi:
   [package.json](./package.json) (tăng `version` trước khi phát hành bản mới); hoặc
 - đẩy tag `v*`: tag đó là tên Release.
 
-Repo private nên Release chỉ người có quyền vào repo thấy.
+Repo công khai, nên ai cũng tải được bản cài và app tự cập nhật được mà không cần token.
+
+### Tự cập nhật
+
+Từ 26.11.0, app hỏi GitHub Releases 15 giây sau khi mở rồi mỗi 6 giờ. Có bản mới thì hiện
+thẻ thông báo ở góc trên bên phải (và chấm báo cạnh tên MaiHub ở Sidebar):
+
+| Nền tảng | Cách cập nhật |
+|---|---|
+| Windows (bộ cài `.exe`) | Bấm **Cập nhật** → tải trong app → **Khởi động lại để cập nhật** |
+| Linux AppImage | Như Windows |
+| Linux `.deb`, macOS (chưa ký số) | Bấm **Tải bản mới** → mở trang Release, tải và cài tay |
+
+- Đang có việc Đăng Facebook chạy thì app không cho khởi động lại để cài.
+- Muốn bản mới đến được người dùng: tăng `version` trong `package.json`, gắn thẻ `v<version>`
+  và đẩy thẻ. Release phải ở trạng thái đã công bố (không phải nháp, không phải pre-release).
+- Bản 26.10.0 trở về trước chưa bật tự cập nhật: cài tay 26.11.0 một lần.
+- Thiết kế: [docs/specs/2026-10-03-auto-update.md](./docs/specs/2026-10-03-auto-update.md).
 
 Bản macOS chưa ký bằng chứng chỉ Apple (chỉ ký ad-hoc). Lần mở đầu, macOS sẽ
 chặn: chuột phải vào app → **Open**, hoặc chạy

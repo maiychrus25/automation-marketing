@@ -283,6 +283,15 @@ Nguồn: `src/services/browser/`, `electron/ipc/browserProfileIpc.ts`, `src/ui/f
 
 Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`, `plan.md`.
 
+### 4.11 Tự cập nhật (từ 26.11.0)
+
+- Kiểm tra bản mới qua API công khai `releases/latest` của kho `maiychrus25/automation-marketing`, 15 giây sau khi mở app rồi mỗi 6 giờ; lỗi mạng không hiện cho người dùng.
+- Windows (NSIS) và Linux AppImage tải và cài bằng `electron-updater` khi người dùng bấm; macOS (chưa ký) và `.deb` chỉ mở trang Release.
+- Không cho khởi động lại để cài khi đang có việc Đăng Facebook.
+- Mỗi Release phải kèm `latest.yml`, `latest-linux.yml`, `latest-mac.yml` và `*.blockmap` (workflow `build.yml` tải lên).
+
+Nguồn: `src/services/update/`, `electron/ipc/updateIpc.ts`, `src/ui/components/common/UpdateNotice.tsx`, `src/ui/store/updateStore.ts`, `docs/specs/2026-10-03-auto-update.md`.
+
 ## 5. Mô hình dữ liệu theo nhóm
 
 SQLite được bật WAL trong `DatabaseService`. Thay vì liệt kê mọi cột, bảng dưới nhóm các aggregate chính và quan hệ nghiệp vụ.

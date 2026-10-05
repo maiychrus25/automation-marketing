@@ -4,6 +4,7 @@
 import { useAppStore } from '../store/appStore';
 import type { TelegramForumTopicContext } from '../../models/telegram';
 import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
+import type { UpdateState, ActionResult as UpdateActionResult } from '../../services/update/UpdateService';
 import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment } from '../../models/facebookPoster';
 
 
@@ -361,8 +362,10 @@ declare global {
       on: (channel: string, callback: (...args: any[]) => void) => () => void;
       removeAllListeners: (channel: string) => void;
       update: {
-        download: () => void;
-        install:  () => void;
+        getState: () => Promise<UpdateState>;
+        check:    () => Promise<UpdateState>;
+        download: () => Promise<UpdateActionResult>;
+        install:  () => Promise<UpdateActionResult>;
       };
       logs: {
         getBuffer: () => Promise<{ ts: number; level: string; msg: string }[]>;
@@ -831,6 +834,7 @@ export const ipc = {
   proxy: window.electronAPI?.proxy,
   browserProfile: window.electronAPI?.browserProfile,
   facebookPoster: window.electronAPI?.facebookPoster,
+  update: window.electronAPI?.update,
 
   erp,
   lockScreen: window.electronAPI?.lockScreen,
