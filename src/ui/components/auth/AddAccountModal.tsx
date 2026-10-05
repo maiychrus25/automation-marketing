@@ -10,6 +10,7 @@ import { Spinner } from '@/components/common/PageLoading';
 import { AlertIcon, BookIcon, CheckIcon, ClockIcon, CloseIcon, KeyIcon, LockIcon, PinIcon, PluginIcon, RefreshIcon, SmartphoneIcon, StarIcon, SunIcon, WrenchIcon } from '@/components/common/icons';
 import TelegramBotLoginStep from './TelegramBotLoginStep';
 import PhoneLoginTab from './PhoneLoginTab';
+import FacebookPagesPanel, { FacebookPageItem } from '../facebook/FacebookPagesPanel';
 
 interface AddAccountModalProps {
   onClose: () => void;
@@ -37,7 +38,7 @@ function TosFooter() {
 }
 
 type Channel = 'zalo' | 'facebook' | 'telegram_bot' | 'telegram_user';
-type Step = 'channel' | 'proxy' | 'detail' | 'telegram' | 'telegram_user';
+type Step = 'channel' | 'proxy' | 'detail' | 'telegram' | 'telegram_user' | 'pages';
 
 export default function AddAccountModal({ onClose }: AddAccountModalProps) {
   const { addAccountInitialChannel } = useAppStore();
@@ -58,6 +59,22 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
   const [selectedProxyId, setSelectedProxyId] = useState<number | null>(null);
   const [proxies, setProxies] = useState<any[]>([]);
   const [proxyLoading, setProxyLoading] = useState(false);
+  const [pagesParent, setPagesParent] = useState<{ accountId: string; pages: FacebookPageItem[] } | null>(null);
+
+  // Sau khi thêm Facebook: có Page quản trị thì cho chọn Page, không có (hoặc lỗi) thì đóng như cũ
+  const handleFacebookAdded = async (facebookId?: string) => {
+    if (facebookId) {
+      try {
+        const res = await ipc.fb?.listPages({ accountId: facebookId });
+        if (res?.success && res.pages && res.pages.length > 0) {
+          setPagesParent({ accountId: facebookId, pages: res.pages });
+          setStep('pages');
+          return;
+        }
+      } catch {}
+    }
+    onClose();
+  };
 
   // Load proxies khi bước proxy được hiển thị
   useEffect(() => {
@@ -87,7 +104,8 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
   };
 
   const headerTitle =
-    step === 'channel' ? 'Thêm tài khoản'
+    step === 'pages' ? 'Chọn Page'
+    : step === 'channel' ? 'Thêm tài khoản'
     : step === 'proxy' ? 'Chọn Proxy (tuỳ chọn)'
     : step === 'telegram' ? 'Kết nối Telegram Bot'
     : step === 'telegram_user' ? 'Đăng nhập Telegram cá nhân'
@@ -100,7 +118,7 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
           <div className="flex items-center gap-3">
-            {step !== 'channel' && (
+            {step !== 'channel' && step !== 'pages' && (
               <button
                 onClick={handleBack}
                 className="text-gray-400 hover:text-white transition-colors"
@@ -278,12 +296,30 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
             </div>
             <div className="p-6">
               {fbTab === 'account' ? (
-                <FacebookAccountLoginTab onSuccess={onClose} proxyId={selectedProxyId} />
+                <FacebookAccountLoginTab onSuccess={handleFacebookAdded} proxyId={selectedProxyId} />
               ) : (
-                <FacebookCookieLoginTab onSuccess={onClose} proxyId={selectedProxyId} />
+                <FacebookCookieLoginTab onSuccess={handleFacebookAdded} proxyId={selectedProxyId} />
               )}
             </div>
           </>
+        )}
+
+        {step === 'pages' && pagesParent && (
+          <div className="p-6 space-y-4">
+            <p className="text-gray-400 text-sm">
+              Bật Page để nhận và trả lời tin nhắn của Page ngay trong MaiHub. Có thể đổi sau ở menu "Quản lý Page" của tài khoản.
+            </p>
+            <div className="max-h-[50vh] overflow-y-auto">
+              <FacebookPagesPanel accountId={pagesParent.accountId} initialPages={pagesParent.pages} />
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-blue-500/35"
+            >
+              Xong
+            </button>
+          </div>
         )}
 
         {/* Step Telegram - Bot Token */}
@@ -668,7 +704,7 @@ function QRLoginTab({ onSuccess, proxyId }: { onSuccess: () => void; proxyId?: n
 
 // ─── Facebook Account Login Tab ────────────────────────────────────────────────
 
-function FacebookAccountLoginTab({ onSuccess, proxyId }: { onSuccess: () => void; proxyId?: number | null }) {
+function FacebookAccountLoginTab({ onSuccess, proxyId }: { onSuccess: (facebookId?: string) => void; proxyId?: number | null }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [twoFASecret, setTwoFASecret] = useState('');
@@ -698,7 +734,7 @@ function FacebookAccountLoginTab({ onSuccess, proxyId }: { onSuccess: () => void
         if (res?.accounts) setAccounts(res.accounts);
 
         showNotification('✅ Tài khoản Facebook đã được thêm vào ứng dụng!', 'success');
-        onSuccess();
+        onSuccess(result.facebookId);
       } else if (result?.need2FA) {
         setNeed2FA(true);
         setError(result?.error || 'Tài khoản yêu cầu xác thực 2 yếu tố (2FA). Vui lòng nhập mã bí mật 2FA.');
@@ -827,7 +863,7 @@ function FacebookAccountLoginTab({ onSuccess, proxyId }: { onSuccess: () => void
 
 // ─── Facebook Cookie Login Tab ─────────────────────────────────────────────────
 
-function FacebookCookieLoginTab({ onSuccess, proxyId }: { onSuccess: () => void; proxyId?: number | null }) {
+function FacebookCookieLoginTab({ onSuccess, proxyId }: { onSuccess: (facebookId?: string) => void; proxyId?: number | null }) {
   const [cookie, setCookie] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -850,7 +886,7 @@ function FacebookCookieLoginTab({ onSuccess, proxyId }: { onSuccess: () => void;
 
         showNotification('✅ Tài khoản Facebook đã được thêm vào ứng dụng!', 'success');
 
-        onSuccess();
+        onSuccess(result.facebookId);
       } else {
         setError(result?.error || 'Thêm tài khoản Facebook thất bại');
       }
