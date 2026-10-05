@@ -2285,15 +2285,16 @@ export class FacebookService {
     return sender.send(threadId, input);
   }
 
-  /** Gửi đính kèm (ảnh/file) vai Page qua Business Suite. */
-  public async sendPageAttachment(threadId: string, filePath: string, body?: string): Promise<FBSendResult> {
-    const { classifyFile } = require('./pageSendHelpers');
-    const result = await this.sendViaPageBrowser(threadId, {
-      text: body,
-      files: [{ path: filePath, type: classifyFile(filePath) }],
-    });
-    if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
-    return result;
+  /**
+   * Gửi đính kèm (ảnh/file) vai Page qua Business Suite.
+   *
+   * TẠM CHẶN: gửi đính kèm qua DOM Business Suite chưa đáng tin — upload chưa xong đã bấm gửi
+   * khiến ảnh bị bỏ, trong khi tín hiệu xác nhận (nút "Gửi lượt thích" quay lại) trở về cả khi
+   * đính kèm bị huỷ → báo success giả. Trả lỗi rõ thay vì gửi hụt. Code driver (attachFiles)
+   * giữ nguyên để bật lại khi có xác nhận giao hàng tin cậy (hoặc chuyển sang Approach A).
+   */
+  public async sendPageAttachment(_threadId: string, _filePath: string, _body?: string): Promise<FBSendResult> {
+    return { success: false, error: 'Gửi ảnh/file từ Page đang hoàn thiện, chưa khả dụng. Tạm thời chỉ gửi được tin nhắn văn bản.' };
   }
 
   public async getThreadList(): Promise<FBThread[]> {

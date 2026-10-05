@@ -26,3 +26,8 @@ export function classifyFile(path: string): PageFileType {
   const m = /\.([a-z0-9]+)$/i.exec(path);
   return (m && EXT_TYPE[m[1].toLowerCase()]) || 'file';
 }
+
+/** threadId gửi được của Page = selected_item_id, luôn là id khách toàn số. */
+export function isSendableThreadId(threadId: string): boolean {
+  return typeof threadId === 'string' && /^\d+$/.test(threadId);
+}

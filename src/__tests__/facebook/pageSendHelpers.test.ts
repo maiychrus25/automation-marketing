@@ -1,4 +1,4 @@
-import { buildThreadUrl, classifyFile } from '../../services/facebook/pageSendHelpers';
+import { buildThreadUrl, classifyFile, isSendableThreadId } from '../../services/facebook/pageSendHelpers';
 
 describe('pageSendHelpers', () => {
   it('buildThreadUrl chèn asset + thread vào template', () => {
@@ -23,5 +23,13 @@ describe('pageSendHelpers', () => {
   it('classifyFile mặc định file khi không có đuôi nhận dạng', () => {
     expect(classifyFile('/a/b')).toBe('file');
     expect(classifyFile('/a/b.xyz')).toBe('file');
+  });
+
+  it('isSendableThreadId chỉ chấp nhận id toàn số', () => {
+    expect(isSendableThreadId('100032442095141')).toBe(true);
+    expect(isSendableThreadId('')).toBe(false);
+    expect(isSendableThreadId('user:100032442095141')).toBe(false);
+    expect(isSendableThreadId('abc')).toBe(false);
+    expect(isSendableThreadId(undefined as any)).toBe(false);
   });
 });

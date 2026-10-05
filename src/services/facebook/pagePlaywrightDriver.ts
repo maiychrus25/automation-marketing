@@ -5,16 +5,21 @@
  *
  * Phiên đăng nhập nằm trong userDataDir (đăng nhập 1 lần headful; sau đó headless dùng lại).
  * Cookie app được inject thêm nhưng KHÔNG đủ tự đăng nhập web — userDataDir là nguồn phiên chính.
+ *
+ * Xác nhận đã gửi (tín hiệu dương, không phải "composer trống"): Business Suite hiện nút
+ * "Gửi lượt thích" khi KHÔNG có nội dung chờ gửi; có text/đính kèm → nút biến mất; gửi xong
+ * → quay lại. Vậy: trước gửi phải thấy "có nội dung" (nút vắng), sau gửi phải thấy nút quay lại.
  */
 
 import { chromium, BrowserContext, Page } from 'playwright-core';
 import path from 'path';
+import fs from 'fs';
 import { FacebookPageBrowserSender, PageInboxDriver } from './FacebookPageBrowserSender';
 import { PAGE_BIZ_SUITE } from './pageBusinessSuiteSelectors';
-import { buildThreadUrl } from './pageSendHelpers';
+import { buildThreadUrl, isSendableThreadId } from './pageSendHelpers';
 
 const OPEN_TIMEOUT_MS = 25000;
-const UPLOAD_WAIT_MS = 4000;
+const STAGE_TIMEOUT_MS = 30000; // chờ đính kèm lên khung (upload) → có nội dung chờ gửi
 const IDLE_CLOSE_MS = 5 * 60 * 1000;
 
 function resolveEngineExecutable(): string {
@@ -34,17 +39,23 @@ function resolveUserDataDir(pageAccountId: string): string {
 }
 
 function parseCookiePairs(cookieStr: string) {
-  return cookieStr.split(';').map((p) => p.trim()).filter(Boolean).map((pair) => {
-    const i = pair.indexOf('=');
-    return { name: pair.slice(0, i), value: pair.slice(i + 1), domain: '.facebook.com', path: '/', secure: true };
-  });
+  return cookieStr.split(';').map((p) => p.trim()).filter(Boolean)
+    .map((pair) => { const i = pair.indexOf('='); return i < 0 ? null : { name: pair.slice(0, i), value: pair.slice(i + 1), domain: '.facebook.com', path: '/', secure: true }; })
+    .filter((c): c is NonNullable<typeof c> => c !== null);
 }
 
 /** Driver điều khiển một BrowserContext đã mở trên inbox Business Suite của một Page. */
 class PlaywrightPageInboxDriver implements PageInboxDriver {
   constructor(private page: Page, private delegatePageId: string) {}
 
+  /** true nếu đang CÓ nội dung chờ gửi (nút "Gửi lượt thích" vắng mặt). */
+  private async hasPendingContent(): Promise<boolean> {
+    return (await this.page.locator(PAGE_BIZ_SUITE.likeButton).count()) === 0;
+  }
+
   async openThread(threadId: string): Promise<void> {
+    if (!this.delegatePageId) throw new Error('thiếu delegate page id của Page');
+    if (!isSendableThreadId(threadId)) throw new Error(`threadId không hợp lệ: ${threadId}`);
     const url = buildThreadUrl(this.delegatePageId, threadId);
     await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     if (/loginpage/.test(this.page.url())) {
@@ -58,34 +69,46 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
   }
 
   async attachFiles(paths: string[]): Promise<void> {
+    for (const p of paths) {
+      if (!fs.existsSync(p)) throw new Error(`file không tồn tại: ${p}`);
+    }
     const [chooser] = await Promise.all([
       this.page.waitForEvent('filechooser', { timeout: 10000 }),
       this.page.locator(PAGE_BIZ_SUITE.attachButton).first().click({ timeout: 8000 }),
     ]);
     await chooser.setFiles(paths);
-    await this.page.waitForTimeout(UPLOAD_WAIT_MS); // ponytail: chờ upload cố định; đổi sang chờ preview nếu flaky
+    // Xác nhận đã lên khung (upload xong → có nội dung chờ gửi), KHÔNG dùng delay cố định.
+    const deadline = Date.now() + STAGE_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (await this.hasPendingContent()) return;
+      await this.page.waitForTimeout(400);
+    }
+    throw new Error('đính kèm chưa sẵn sàng để gửi (không thấy nội dung chờ gửi)');
   }
 
   async sendText(text: string): Promise<void> {
     const composer = this.page.locator(PAGE_BIZ_SUITE.composer).first();
     await composer.click();
     if (text) await composer.type(text, { delay: 15 });
+    // Bắt buộc có nội dung chờ gửi trước khi gửi (chặn gửi rỗng / đính kèm hụt).
+    if (!(await this.hasPendingContent())) {
+      throw new Error('không có nội dung để gửi');
+    }
     await composer.press('Enter');
-    // Fallback: nếu Enter không gửi (composer vẫn còn chữ), bấm nút Gửi
-    await this.page.waitForTimeout(800);
-    const remaining = (await composer.innerText().catch(() => '')).trim();
-    if (text && remaining.includes(text.trim())) {
-      const btn = this.page.locator(PAGE_BIZ_SUITE.sendButton).last();
+    await this.page.waitForTimeout(600);
+    // Enter gửi được text nhưng KHÔNG gửi đính kèm. Còn nội dung chờ gửi → bấm nút "Gửi"
+    // ĐANG HIỂN THỊ (khi có đính kèm, tồn tại cả nút "Gửi" ẩn lẫn hiện — phải chọn cái visible).
+    if (await this.hasPendingContent()) {
+      const btn = this.page.locator(`${PAGE_BIZ_SUITE.sendButton}:visible`).first();
       if (await btn.count()) await btn.click({ timeout: 5000 }).catch(() => {});
     }
   }
 
   async waitSent(timeoutMs: number): Promise<void> {
-    const composer = this.page.locator(PAGE_BIZ_SUITE.composer).first();
+    // Đã gửi = nội dung chờ gửi được tiêu thụ (nút "Gửi lượt thích" quay lại).
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const txt = (await composer.innerText().catch(() => '')).trim();
-      if (txt === '') return; // composer trống = đã gửi
+      if (!(await this.hasPendingContent())) return;
       await this.page.waitForTimeout(400);
     }
     throw new Error('quá hạn chờ xác nhận đã gửi');
@@ -102,6 +125,7 @@ export interface PageBrowserSenderDeps {
 
 /** Lấy/khởi tạo sender trình duyệt cho một Page; giữ sống & tái dùng, tự đóng khi idle. */
 export async function getPageBrowserSender(pageAccountId: string, deps: PageBrowserSenderDeps): Promise<FacebookPageBrowserSender> {
+  if (!deps.delegatePageId) throw new Error('Page thiếu delegate page id — không gửi được qua Business Suite');
   const existing = live.get(pageAccountId);
   if (existing) { armIdle(pageAccountId); return existing.sender; }
 
@@ -112,16 +136,21 @@ export async function getPageBrowserSender(pageAccountId: string, deps: PageBrow
     args: ['--no-first-run', '--no-default-browser-check'],
   });
   try {
-    const cookie = deps.getCookie();
-    if (cookie) await ctx.addCookies(parseCookiePairs(cookie));
-  } catch { /* cookie phụ trợ; phiên chính nằm ở userDataDir */ }
+    try {
+      const cookie = deps.getCookie();
+      if (cookie) await ctx.addCookies(parseCookiePairs(cookie));
+    } catch { /* cookie phụ trợ; phiên chính nằm ở userDataDir */ }
 
-  const page = ctx.pages()[0] || await ctx.newPage();
-  const driver = new PlaywrightPageInboxDriver(page, deps.delegatePageId);
-  const sender = new FacebookPageBrowserSender({ driver, delegatePageId: deps.delegatePageId });
-  live.set(pageAccountId, { ctx, sender, idleTimer: null });
-  armIdle(pageAccountId);
-  return sender;
+    const page = ctx.pages()[0] || await ctx.newPage();
+    const driver = new PlaywrightPageInboxDriver(page, deps.delegatePageId);
+    const sender = new FacebookPageBrowserSender({ driver, delegatePageId: deps.delegatePageId });
+    live.set(pageAccountId, { ctx, sender, idleTimer: null });
+    armIdle(pageAccountId);
+    return sender;
+  } catch (err) {
+    try { await ctx.close(); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 function armIdle(pageAccountId: string): void {

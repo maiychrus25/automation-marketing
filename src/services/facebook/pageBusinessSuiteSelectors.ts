@@ -11,12 +11,19 @@ export interface PageBizSuiteSelectors {
   sendButton: string;
   /** Nút đính kèm; click sẽ bật file chooser của trình duyệt. */
   attachButton: string;
+  /**
+   * Nút "Gửi lượt thích" (thả tim) — CHỈ hiện khi KHÔNG có nội dung chờ gửi.
+   * Có nội dung (text/đính kèm) → nút này biến mất. Dùng làm tín hiệu:
+   *   có mặt = rỗng; vắng mặt = đang có nội dung chờ gửi; quay lại = đã gửi xong.
+   */
+  likeButton: string;
 }
 
 export const PAGE_BIZ_SUITE: PageBizSuiteSelectors = {
   composer: 'div[contenteditable="true"][role="textbox"]',
-  sendButton: 'div[aria-label*="Gửi" i][role="button"]',
+  sendButton: 'div[aria-label="Gửi"][role="button"]',
   attachButton: '[aria-label="Đính kèm file"]',
+  likeButton: 'div[aria-label="Gửi lượt thích"][role="button"]',
 };
 
 /**
