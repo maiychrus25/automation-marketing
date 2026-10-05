@@ -111,7 +111,7 @@ function postParams(over: Partial<Extract<StartParams, { kind: 'post' }>> = {}):
   return {
     kind: 'post', mode: 'group', text: 'xin chào', mediaPath: null, comment: null,
     profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/1/', 'https://www.facebook.com/groups/2/'] }],
-    minDelaySec: 5, maxDelaySec: 9, concurrency: 3, ...over,
+    minDelaySec: 5, maxDelaySec: 9, concurrency: 3, staggerMinSec: 30, staggerMaxSec: 90, ...over,
   };
 }
 
@@ -175,7 +175,7 @@ describe('FacebookPosterService', () => {
     });
     const params: StartParams = kind === 'post'
       ? postParams({ profiles: ids.map((profileId) => ({ profileId, targets: ['https://www.facebook.com/groups/1/'] })), concurrency })
-      : { kind: 'scan_groups', profileIds: ids, concurrency };
+      : { kind: 'scan_groups', profileIds: ids, concurrency, staggerMinSec: 30, staggerMaxSec: 90 };
     h.service.start(params);
     await h.service.whenIdle();
     expect(h.opened).toHaveLength(count);
@@ -193,6 +193,27 @@ describe('FacebookPosterService', () => {
     // random() = 0.5 -> khoảng cách 60000; đồng hồ giả chỉ nhích khi sleep, nên mỗi lần chờ đủ 60000.
     expect(h.sleeps).toEqual([60000, 60000]);
     expect(h.opened).toEqual(['p1', 'p2', 'p3']);
+  });
+
+  test('giãn cách 0: các profile bắt đầu ngay, không sleep', async () => {
+    const h = harness({ postToTargets: postAll() });
+    h.service.start(postParams({
+      profiles: ['p1', 'p2', 'p3'].map((profileId) => ({ profileId, targets: ['https://www.facebook.com/groups/1/'] })),
+      concurrency: 3, staggerMinSec: 0, staggerMaxSec: 0,
+    }));
+    await h.service.whenIdle();
+    expect(h.sleeps).toEqual([]);
+    expect(h.maxLive()).toBe(3);
+  });
+
+  test('giãn cách tùy chỉnh 5-5 s: mỗi profile cách nhau 5000 ms', async () => {
+    const h = harness({ postToTargets: postAll() });
+    h.service.start(postParams({
+      profiles: ['p1', 'p2'].map((profileId) => ({ profileId, targets: ['https://www.facebook.com/groups/1/'] })),
+      concurrency: 1, staggerMinSec: 5, staggerMaxSec: 5,
+    }));
+    await h.service.whenIdle();
+    expect(h.sleeps).toEqual([5000]);
   });
 
   test('lệch giờ: thời gian profile trước đã chạy được trừ vào khoảng chờ', async () => {
@@ -267,7 +288,7 @@ describe('FacebookPosterService', () => {
         close: async () => {},
       }),
     });
-    h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1 });
+    h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 30, staggerMaxSec: 90 });
     await h.service.whenIdle();
     expect(h.run('run-1').status).toBe('done');
     expect(h.results('run-1')[0].outcome).toBe('done');
@@ -475,7 +496,7 @@ describe('FacebookPosterService', () => {
         };
       }),
     });
-    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1', 'p2'], concurrency: 1 });
+    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1', 'p2'], concurrency: 1, staggerMinSec: 30, staggerMaxSec: 90 });
     await h.service.whenIdle();
     const groups = h.store.listGroups(['p1', 'p2']);
     expect(groups.p1.map((g) => [g.url, g.name, g.scannedAt])).toEqual([
@@ -499,7 +520,7 @@ describe('FacebookPosterService', () => {
       }),
     });
     h.store.replaceGroups('p1', [{ url: 'https://www.facebook.com/groups/old/', name: 'Cũ' }], 1);
-    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1 });
+    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 30, staggerMaxSec: 90 });
     await h.service.whenIdle();
     expect(h.store.listGroups(['p1']).p1.map((g) => g.url)).toEqual(['https://www.facebook.com/groups/old/']);
     expect(h.results(runId).map((r) => [r.targetUrl, r.outcome, r.error])).toEqual([[JOINS_URL, 'failed', message]]);
@@ -517,7 +538,7 @@ describe('FacebookPosterService', () => {
       }),
     });
     h.store.replaceGroups('p1', [{ url: 'https://www.facebook.com/groups/old/', name: 'Cũ' }], 1);
-    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1 });
+    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 30, staggerMaxSec: 90 });
     await h.service.whenIdle();
     expect(h.store.listGroups(['p1']).p1.map((g) => g.url)).toEqual(['https://www.facebook.com/groups/9/']);
     expect(h.results(runId).map((r) => [r.targetName, r.outcome, r.error])).toEqual([['1 nhóm', 'done', message]]);
@@ -727,7 +748,7 @@ describe('FacebookPosterService', () => {
       scanGroups: jest.fn(async (deps: any) => { await deps.launch(); return { groups: [{ id: '1', name: 'A', url: 'u' }], hitScrollLimit: false, scrollRounds: 1, scrollError: false }; }),
     });
     jest.spyOn(h.store, 'replaceGroups').mockImplementation(() => { throw new Error('locked'); });
-    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1 });
+    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 30, staggerMaxSec: 90 });
     await h.service.whenIdle();
     expect(h.run(runId)).toMatchObject({ status: 'failed', error: 'locked' });
     expect(h.results(runId).map((r) => [r.outcome, r.error])).toEqual([['failed', 'locked']]);

@@ -33,6 +33,8 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
   const [minDelaySec, setMinDelaySec] = useState(300);
   const [maxDelaySec, setMaxDelaySec] = useState(900);
   const [concurrency, setConcurrency] = useState(3);
+  const [staggerMinSec, setStaggerMinSec] = useState(30);
+  const [staggerMaxSec, setStaggerMaxSec] = useState(90);
   const [starting, setStarting] = useState(false);
 
   // Reload scanned groups when the selection changes and when a run ends (a scan may have just finished).
@@ -104,7 +106,7 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
         mediaPath: mediaPath || null,
         comment,
         profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group' ? targetsFor(profileId) : [] })),
-        minDelaySec, maxDelaySec, concurrency,
+        minDelaySec, maxDelaySec, concurrency, staggerMinSec, staggerMaxSec,
       });
       if (!res?.success) showNotification(res?.error || 'Không bắt đầu được', 'error');
       else onStarted();
@@ -226,6 +228,13 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
         {numberInput('Nghỉ tối thiểu (giây)', minDelaySec, setMinDelaySec, 0, 86400)}
         {numberInput('Nghỉ tối đa (giây)', maxDelaySec, setMaxDelaySec, 0, 86400)}
         {numberInput('Số profile song song (1–10)', concurrency, setConcurrency, 1, 10)}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {numberInput('Giãn cách khởi động tối thiểu (giây)', staggerMinSec, setStaggerMinSec, 0, 3600)}
+        {numberInput('Giãn cách khởi động tối đa (giây)', staggerMaxSec, setStaggerMaxSec, 0, 3600)}
+        <p className="text-[11px] text-gray-400 self-end pb-2">
+          Profile sau bắt đầu cách profile trước một khoảng ngẫu nhiên trong giới hạn này. Đặt 0–0 để bật đồng loạt; giãn cách giúp các tài khoản không khởi động cùng một lúc.
+        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

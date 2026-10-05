@@ -33,6 +33,17 @@ function readDelays(p: Record<string, any>): { minDelaySec: number; maxDelaySec:
     return { minDelaySec, maxDelaySec };
 }
 
+const MAX_STAGGER_SEC = 3600;
+
+/** Gap between consecutive profile starts; 0-0 starts every runner at once. */
+function readStagger(p: Record<string, any>): { staggerMinSec: number; staggerMaxSec: number } {
+    const staggerMinSec = p.staggerMinSec ?? 30;
+    const staggerMaxSec = p.staggerMaxSec ?? 90;
+    const ok = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_STAGGER_SEC;
+    if (!ok(staggerMinSec) || !ok(staggerMaxSec) || staggerMaxSec < staggerMinSec) throw new Error('Giãn cách khởi động không hợp lệ');
+    return { staggerMinSec, staggerMaxSec };
+}
+
 function readConcurrency(p: Record<string, any>): number {
     const concurrency = p.concurrency ?? 3;
     if (!isInt(concurrency, 1, 10)) throw new Error('Số profile song song phải từ 1 đến 10');
@@ -88,7 +99,7 @@ function validatePost(p: Record<string, any>, env: StartParamsEnv): StartParams 
         mediaPath: readMediaPath(p.mediaPath, env),
         comment: rawComment.trim() ? rawComment : null,
         profiles: [...byProfile].map(([profileId, targets]) => ({ profileId, targets })),
-        ...readDelays(p), concurrency: readConcurrency(p),
+        ...readDelays(p), concurrency: readConcurrency(p), ...readStagger(p),
     };
 }
 
@@ -101,7 +112,7 @@ export function validateStartParams(input: { kind?: unknown; params?: unknown },
         case 'scan_groups': {
             const ids = [...new Set(asArray(p.profileIds))];
             if (!ids.length) throw new Error('Chưa chọn profile');
-            return { kind: 'scan_groups', profileIds: ids.map((id) => requireProfile(id, env)), concurrency: readConcurrency(p) };
+            return { kind: 'scan_groups', profileIds: ids.map((id) => requireProfile(id, env)), concurrency: readConcurrency(p), ...readStagger(p) };
         }
         case 'join': {
             const profileId = requireProfile(p.profileId, env);

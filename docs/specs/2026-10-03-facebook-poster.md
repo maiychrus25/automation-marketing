@@ -202,7 +202,7 @@ Quy tắc bắt buộc khi chuyển:
 | `collect_comments` | `profileId`, `postUrls[]` | `collectComments` |
 
 - **Song song:** kind `post` và `scan_groups` chạy tối đa `concurrency` profile cùng lúc, mặc định 3, cho phép 1 đến 10. Kind `join` và `collect_comments` chạy một profile.
-- **Lệch giờ:** profile thứ k (k ≥ 1) chỉ bắt đầu sau profile thứ k−1 một khoảng ngẫu nhiên từ 30 đến 90 giây. Trong một profile, giữa hai đích nghỉ ngẫu nhiên từ `minDelaySec` đến `maxDelaySec` (mặc định 300 và 900, như FB Poster).
+- **Lệch giờ:** profile thứ k (k ≥ 1) chỉ bắt đầu sau profile thứ k−1 một khoảng ngẫu nhiên từ `staggerMinSec` đến `staggerMaxSec` (mặc định 30 đến 90 giây, cho phép 0 đến 3600; 0–0 là bật đồng loạt — người dùng tự chịu rủi ro nhận diện). Khoảng này do người dùng đặt trong tab Đăng bài; tab quét nhóm dùng mặc định. Trong một profile, giữa hai đích nghỉ ngẫu nhiên từ `minDelaySec` đến `maxDelaySec` (mặc định 300 và 900, như FB Poster).
 - **Kiểm tra đăng nhập** trước khi làm gì trên một profile: chưa đăng nhập thì mọi đích của profile đó ghi `failed` với lỗi "Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập", và chuyển sang profile khác.
 - **Hủy:** đặt cờ dừng; mỗi tác vụ kiểm tra cờ giữa các bước như FB Poster; đích chưa làm ghi `skipped`; mọi phiên tự động hóa đóng tử tế; run ghi `cancelled`.
 - **Lỗi một profile không làm hỏng các profile khác.** Không mở được profile (đang mở tay, quá giới hạn, proxy mất) thì mọi đích của profile đó ghi `failed` với lỗi tương ứng.
