@@ -43,8 +43,11 @@ export default function FacebookPagesPanel({ accountId, initialPages }: { accoun
       const res = await ipc.fb?.setPageEnabled({ accountId, profileId: page.profileId, enabled: next });
       if (res?.success) {
         setPages((list) => list && list.map((p) => (p.profileId === page.profileId ? { ...p, enabled: next } : p)));
-        const acc = await ipc.login?.getAccounts();
-        if (acc?.accounts) setAccounts(acc.accounts);
+        // Page đã bật/tắt; làm mới danh sách tài khoản lỗi thì bỏ qua
+        try {
+          const acc = await ipc.login?.getAccounts();
+          if (acc?.accounts) setAccounts(acc.accounts);
+        } catch {}
       } else {
         setRowError((e) => ({ ...e, [page.profileId]: res?.error || 'Thao tác thất bại' }));
       }
@@ -96,7 +99,7 @@ export default function FacebookPagesPanel({ accountId, initialPages }: { accoun
               type="button"
               role="switch"
               aria-checked={page.enabled}
-              aria-label={`${page.enabled ? 'Tắt' : 'Bật'} Page ${page.name}`}
+              aria-label={`Page ${page.name}`}
               disabled={busyId !== null}
               onClick={() => toggle(page)}
               className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-blue-500/35 ${

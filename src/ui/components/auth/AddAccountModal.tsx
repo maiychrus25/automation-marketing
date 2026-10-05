@@ -704,7 +704,7 @@ function QRLoginTab({ onSuccess, proxyId }: { onSuccess: () => void; proxyId?: n
 
 // ─── Facebook Account Login Tab ────────────────────────────────────────────────
 
-function FacebookAccountLoginTab({ onSuccess, proxyId }: { onSuccess: (facebookId?: string) => void; proxyId?: number | null }) {
+function FacebookAccountLoginTab({ onSuccess, proxyId }: { onSuccess: (facebookId?: string) => void | Promise<void>; proxyId?: number | null }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [twoFASecret, setTwoFASecret] = useState('');
@@ -734,7 +734,7 @@ function FacebookAccountLoginTab({ onSuccess, proxyId }: { onSuccess: (facebookI
         if (res?.accounts) setAccounts(res.accounts);
 
         showNotification('✅ Tài khoản Facebook đã được thêm vào ứng dụng!', 'success');
-        onSuccess(result.facebookId);
+        await onSuccess(result.facebookId);
       } else if (result?.need2FA) {
         setNeed2FA(true);
         setError(result?.error || 'Tài khoản yêu cầu xác thực 2 yếu tố (2FA). Vui lòng nhập mã bí mật 2FA.');
@@ -863,7 +863,7 @@ function FacebookAccountLoginTab({ onSuccess, proxyId }: { onSuccess: (facebookI
 
 // ─── Facebook Cookie Login Tab ─────────────────────────────────────────────────
 
-function FacebookCookieLoginTab({ onSuccess, proxyId }: { onSuccess: (facebookId?: string) => void; proxyId?: number | null }) {
+function FacebookCookieLoginTab({ onSuccess, proxyId }: { onSuccess: (facebookId?: string) => void | Promise<void>; proxyId?: number | null }) {
   const [cookie, setCookie] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -886,7 +886,7 @@ function FacebookCookieLoginTab({ onSuccess, proxyId }: { onSuccess: (facebookId
 
         showNotification('✅ Tài khoản Facebook đã được thêm vào ứng dụng!', 'success');
 
-        onSuccess(result.facebookId);
+        await onSuccess(result.facebookId);
       } else {
         setError(result?.error || 'Thêm tài khoản Facebook thất bại');
       }
