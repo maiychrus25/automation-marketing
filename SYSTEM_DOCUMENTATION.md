@@ -6,10 +6,10 @@
 
 | Thuộc tính | Giá trị |
 |---|---|
-| Tên hệ thống | MaiHub (trước 26.9.0: MaiHub) |
-| Phiên bản ứng dụng được khảo sát | `26.8.5` |
-| Phiên bản tài liệu | `1.0` |
-| Ngày lập | 2026-09-18 |
+| Tên hệ thống | MaiHub (trước 26.9.0: AHV Connect) |
+| Phiên bản ứng dụng được khảo sát | `26.10.0` (khảo sát gốc trên 26.8.5; các mục 4.9–4.11 cập nhật theo bản mới) |
+| Phiên bản tài liệu | `1.1` |
+| Ngày lập | 2026-09-18, cập nhật 2026-10-03 |
 | Trạng thái | Baseline theo mã nguồn nhánh hiện tại |
 | Chủ sở hữu | Maiychrus (dự án cá nhân) |
 | Độc giả | Ban vận hành, BA/PM, đội CNTT, phát triển, kiểm thử, hỗ trợ người dùng |
@@ -275,13 +275,21 @@ Nguồn: `src/services/browser/`, `electron/ipc/browserProfileIpc.ts`, `src/ui/f
 
 - Đăng một bài (kèm ảnh/video và bình luận đầu tiên tuỳ chọn) lên nhóm hoặc Page bằng nhiều browser profile cùng lúc; kèm quét nhóm đã tham gia, tìm và xin vào nhóm theo từ khoá, thu bình luận của bài đã đăng, lịch sử và xuất CSV.
 - Khi chạy việc, `BrowserProfileService.openForAutomation` cho `playwright-core` khởi chạy nhân trình duyệt của profile qua `--remote-debugging-pipe`, cùng bộ tham số như khi mở tay; **không mở cổng TCP**. Profile đang mở tay thì không nhận việc.
-- Một việc tại một thời điểm; tối đa 10 profile song song (mặc định 3); các profile bắt đầu cách nhau 30–90 giây; mỗi đích ghi kết quả ngay khi xong.
+- Một việc tại một thời điểm; tối đa 10 profile song song (mặc định 3). Các profile bắt đầu cách nhau một khoảng ngẫu nhiên do người dùng đặt (`staggerMinSec`–`staggerMaxSec`, mặc định 30–90 giây, 0–0 là bật đồng loạt); mỗi đích ghi kết quả ngay khi xong.
 - Chỉ nhận link `https://` thuộc `facebook.com` hoặc tên miền con của nó.
 - Dữ liệu ở bốn bảng `fb_poster_runs`, `fb_poster_results`, `fb_poster_groups`, `fb_poster_comments` trong DB của workspace. Run còn `running` khi app tắt đột ngột được đổi thành `failed` ở lần mở sau.
 - Chỉ dùng được ở chế độ Boss/Standalone. Chuyển workspace thì huỷ việc và chờ tối đa 10 giây cho việc dừng trước khi đổi DB.
 - Chưa được kiểm chứng bằng tài khoản Facebook thật và trên Windows tại thời điểm phát hành 26.10.0.
 
-Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`, `plan.md`.
+Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`. (Kế hoạch triển khai của tính năng này chưa được đưa vào repo; cần bổ sung vào `docs/plans/`.)
+
+### 4.11 Hộp thư Page Facebook (đang thiết kế)
+
+- Mục tiêu: mỗi Page mà tài khoản Facebook cá nhân quản trị hiện trong Chat như một tài khoản con, nhận và trả lời tin nhắn; Workflow/CRM/AI dùng được như tài khoản thường. Bình luận bài Page để đợt sau.
+- Hướng kỹ thuật đã chốt: giao thức không chính thức qua phiên cá nhân (như Messenger web), không dùng Graph API. Spike 03/10/2026 xác nhận liệt kê được Page (`bookmarks/pages`) và chuyển vai sang Page bằng cookie `i_user` + khởi tạo lại phiên; việc đọc hộp thư Page qua query thread list cũ chưa kết luận vì Page thử nghiệm chưa có tin.
+- Chưa có mã trong sản phẩm. Người nhận việc bắt đầu từ bước 0 của kế hoạch bàn giao.
+
+Nguồn: `docs/intent/2026-10-03-facebook-page-inbox.md`, `docs/reports/2026-10-03-facebook-page-inbox-spike.md`, `docs/plans/2026-10-03-facebook-page-inbox.md`.
 
 ### 4.11 Tự cập nhật (từ 26.11.0)
 
@@ -1021,7 +1029,9 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
 | Data dictionary | Duy trì cùng migration/schema, không cần sao chép toàn bộ 70+ bảng vào tài liệu tổng thể |
 | Runbook vận hành | Backup/restore, release, rollback, log, mất mạng, credential rotation |
 | Security checklist | IPC, RBAC, secret, webhook, tunnel, dependency và nền tảng không chính thức |
-| Release notes | Version, artifact, checksum, migration, known issues |
+| Release notes | Version, artifact, checksum, migration, known issues; hiện ở GitHub Releases và `ChangelogSettings.tsx` |
+| Intent / spec / plan theo tính năng | `docs/intent/`, `docs/specs/`, `docs/plans/` (được git theo dõi; tên file `YYYY-MM-DD-<tính-năng>.md`). Mỗi tính năng mới đi theo thứ tự intent → spec → plan; plan là nguồn tham chiếu khi triển khai và review |
+| Báo cáo spike / kiểm chứng | `docs/reports/` (chỉ file được thêm bằng `git add -f`; thư mục này mặc định bị ignore) |
 
 ## 21. Tích hợp bên ngoài và phụ thuộc quan trọng
 
@@ -1154,6 +1164,12 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
 - Workspace/app mode: `src/utils/WorkspaceManager.ts`, `src/utils/AppModeManager.ts`.
 - Renderer: `src/ui/App.tsx`, `src/ui/components/`, `src/ui/features/`, `src/ui/store/`.
 - Facebook E2EE bridge: `src/bridge-e2ee/README.md`, `src/bridge-e2ee/main.go`.
+- Tài liệu tính năng (intent/spec/plan/report):
+  - Trình duyệt (Browser Profiles): `docs/intent/2026-10-01-browser-profiles.md`, `docs/specs/2026-10-01-browser-profiles.md`, `docs/plans/2026-10-01-browser-profiles.md`, `docs/reports/2026-10-01-antidetect-chromium-spike.md`.
+  - Giao diện macOS: `docs/intent/2026-10-02-macos-ui.md`, `docs/specs/2026-10-02-macos-ui.md`, `docs/plans/2026-10-02-macos-ui.md`.
+  - Đổi thương hiệu MaiHub: `docs/intent/2026-10-02-maihub-rebrand.md`, `docs/specs/2026-10-02-maihub-rebrand.md`, `docs/plans/2026-10-02-maihub-rebrand.md`.
+  - Đăng Facebook: `docs/intent/2026-10-02-facebook-poster.md`, `docs/specs/2026-10-03-facebook-poster.md`, `docs/reports/2026-10-03-browser-automation-pipe-spike.md` (plan chưa có trong repo).
+  - Hộp thư Page Facebook: `docs/intent/2026-10-03-facebook-page-inbox.md`, `docs/reports/2026-10-03-facebook-page-inbox-spike.md`, `docs/plans/2026-10-03-facebook-page-inbox.md`.
 
 ## 26. Checklist xác nhận vận hành trước khi dùng thật
 
