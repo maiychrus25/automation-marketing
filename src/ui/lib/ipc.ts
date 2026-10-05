@@ -496,6 +496,8 @@ declare global {
         removeAccount:        (params: { accountId: string }) => Promise<{ success: boolean; error?: string }>;
         updateCookie:         (params: { accountId: string; cookie: string }) => Promise<{ success: boolean; error?: string }>;
         refreshProfile:       (params: { accountId: string }) => Promise<{ success: boolean; name?: string; avatarUrl?: string; error?: string, facebookId?: string }>;
+        listPages:            (params: { accountId: string }) => Promise<{ success: boolean; pages?: Array<{ profileId: string; name: string; delegatePageId: string | null; avatarUrl: string | null; enabled: boolean }>; error?: string }>;
+        setPageEnabled:       (params: { accountId: string; profileId: string; enabled: boolean }) => Promise<{ success: boolean; error?: string }>;
         getAccounts:          () => Promise<{ success: boolean; accounts: any[]; error?: string }>;
         connect:              (params: { accountId: string }) => Promise<{ success: boolean; error?: string }>;
         disconnect:           (params: { accountId: string }) => Promise<{ success: boolean; error?: string }>;

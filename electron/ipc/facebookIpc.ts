@@ -16,6 +16,7 @@ import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import FacebookService from "../../src/services/facebook/FacebookService";
 import { resolveFBCookie, resolveFBProxyId } from '../../src/services/facebook/FacebookAccountCookie';
+import { fetchManagedPages, mergePageList, stripPageCookie, buildPageCookie } from '../../src/services/facebook/FacebookPages';
 
 // ─── Cookie secure storage helpers ───────────────────────────────────────────
 
@@ -80,6 +81,56 @@ async function getFBServiceOrReconnect(internalId: string): Promise<FacebookServ
   }
 }
 
+/** Proxy agent từ proxyId (null nếu không có proxy hoặc lỗi). */
+function proxyAgentFor(proxyId: number | null | undefined): any {
+  if (!proxyId) return undefined;
+  try {
+    const proxy = DatabaseService.getInstance().getProxyById(proxyId);
+    if (proxy) {
+      const { createProxyAgent } = require('../../src/utils/ProxyHelper');
+      return createProxyAgent(proxy);
+    }
+  } catch {}
+  return undefined;
+}
+
+/** Kết nối lại các Page con đang bật sau khi cookie tài khoản cha đổi. */
+async function reconnectPageChildren(parentFacebookId: string): Promise<void> {
+  for (const child of DatabaseService.getInstance().getFBPageChildren(parentFacebookId)) {
+    if (child.enabled !== 1) continue;
+    try {
+      await FacebookConnectionManager.disconnect(child.id).catch(() => {});
+      FacebookService.removeInstance(child.id);
+      const cookie = resolveFBCookie(child);
+      if (!cookie) continue;
+      await FacebookConnectionManager.getOrCreate(child.id, cookie, resolveFBProxyId(child));
+    } catch (err: any) {
+      Logger.warn(`[facebookIpc] reconnect Page ${child.facebook_id} failed: ${err.message}`);
+    }
+  }
+}
+
+/**
+ * Xóa các Page con (kể cả đã tắt) cùng tài khoản cha.
+ * delete: như fb:removeAccount. deleteWithData / deactivate: như login:removeAccount có / không xóa dữ liệu.
+ */
+export async function removePageChildren(parentFacebookId: string, mode: 'delete' | 'deleteWithData' | 'deactivate'): Promise<void> {
+  const db = DatabaseService.getInstance();
+  for (const child of db.getFBPageChildren(parentFacebookId)) {
+    await FacebookConnectionManager.disconnect(child.id).catch(() => {});
+    FacebookService.removeInstance(child.id);
+    if (mode === 'delete') {
+      db.deleteFBAccount(child.id);
+      db.deleteAccount(child.facebook_id);
+    } else if (mode === 'deleteWithData') {
+      db.deleteAccountData(child.facebook_id);
+      FileStorageService.deleteAccountMedia(child.facebook_id);
+    } else {
+      db.setFBPageEnabled(child.id, false);
+    }
+  }
+}
+
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 export function registerFacebookIpc(): void {
@@ -88,20 +139,13 @@ export function registerFacebookIpc(): void {
    * Shared helper: verify cookie, save account to DB, connect.
    * Dùng chung cho cả cookie-based và credentials-based login.
    */
-  async function _addFBAccountCommon(cookie: string, proxyId: number | null | undefined): Promise<{
+  async function _addFBAccountCommon(rawCookie: string, proxyId: number | null | undefined): Promise<{
     success: boolean; account?: any; facebookId?: string; name?: string; error?: string;
   }> {
+    // Cookie dán vào có i_user (đang đứng vai Page) → bỏ, để luôn thêm tài khoản cá nhân
+    const cookie = stripPageCookie(rawCookie);
     // Resolve proxy agent để dùng cho initSession
-    let httpsAgent: any = undefined;
-    if (proxyId) {
-      try {
-        const proxy = DatabaseService.getInstance().getProxyById(proxyId);
-        if (proxy) {
-          const { createProxyAgent } = require('../../src/utils/ProxyHelper');
-          httpsAgent = createProxyAgent(proxy);
-        }
-      } catch {}
-    }
+    const httpsAgent = proxyAgentFor(proxyId);
 
     // 1. Verify cookie alive + init session (with proxy)
     const sessionData = await initSession(cookie, httpsAgent);
@@ -158,6 +202,9 @@ export function registerFacebookIpc(): void {
 
     // 5. Connect (with proxy) - getOrCreate đã tự động connect
     await FacebookConnectionManager.getOrCreate(accountId, cookie, proxyId);
+
+    // Thêm lại cùng tài khoản: Page con gắn theo facebook_id nên vẫn còn, kết nối lại bằng cookie mới
+    reconnectPageChildren(fbId).catch(() => {});
 
     const account = DatabaseService.getInstance().getFBAccount(accountId);
     return { success: true, account, facebookId: fbId, name };
@@ -239,6 +286,8 @@ export function registerFacebookIpc(): void {
   ipcMain.handle('fb:removeAccount', async (_event, { accountId }: { accountId: string }) => {
     try {
       const internalId = resolveInternalId(accountId);
+      const fbAcc = DatabaseService.getInstance().getFBAccount(internalId);
+      if (fbAcc && !fbAcc.parent_facebook_id) await removePageChildren(fbAcc.facebook_id, 'delete');
       await FacebookConnectionManager.disconnect(internalId);
       secureDelete(fbCookieKey(internalId));
       DatabaseService.getInstance().deleteFBAccount(internalId);
@@ -258,6 +307,10 @@ export function registerFacebookIpc(): void {
       const internalId = resolveInternalId(accountId);
       const account = DatabaseService.getInstance().getFBAccount(internalId);
       if (!account) return { success: false, error: 'Tài khoản không tồn tại' };
+      if (account.parent_facebook_id) {
+        return { success: false, error: 'Page dùng cookie của tài khoản cha. Hãy cập nhật cookie ở tài khoản cá nhân.' };
+      }
+      cookie = stripPageCookie(cookie);
 
       // Verify cookie alive + init session
       const sessionData = await initSession(cookie);
@@ -296,6 +349,7 @@ export function registerFacebookIpc(): void {
         [name, avatarUrl, fbId]
       );
 
+      reconnectPageChildren(account.facebook_id).catch(() => {});
       Logger.log(`[facebookIpc] fb:updateCookie success for ${internalId}`);
       return { success: true };
     } catch (err: any) {
@@ -414,6 +468,79 @@ export function registerFacebookIpc(): void {
       return { success: true, accounts };
     } catch (err: any) {
       return { success: false, accounts: [], error: err.message };
+    }
+  });
+
+  /**
+   * Danh sách Page mà tài khoản cá nhân quản trị, kèm trạng thái bật trong MaiHub
+   */
+  ipcMain.handle('fb:listPages', async (_event, { accountId }: { accountId: string }) => {
+    try {
+      const db = DatabaseService.getInstance();
+      const parent = db.getFBAccount(resolveInternalId(accountId));
+      if (!parent) return { success: false, error: 'Tài khoản không tồn tại' };
+      if (parent.parent_facebook_id) return { success: false, error: 'Tài khoản này là Page' };
+      const cookie = resolveFBCookie(parent);
+      if (!cookie) return { success: false, error: 'Không tìm thấy cookie. Vui lòng cập nhật cookie.' };
+      const remote = await fetchManagedPages(cookie, proxyAgentFor(resolveFBProxyId(parent)));
+      return { success: true, pages: mergePageList(remote, db.getFBPageChildren(parent.facebook_id)) };
+    } catch (err: any) {
+      Logger.error(`[facebookIpc] fb:listPages error: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  });
+
+  /**
+   * Bật / tắt một Page thành tài khoản con. Tắt: ngắt kết nối, giữ dữ liệu.
+   */
+  ipcMain.handle('fb:setPageEnabled', async (_event, { accountId, profileId, enabled }: { accountId: string; profileId: string; enabled: boolean }) => {
+    try {
+      const db = DatabaseService.getInstance();
+      const parent = db.getFBAccount(resolveInternalId(accountId));
+      if (!parent) return { success: false, error: 'Tài khoản không tồn tại' };
+      if (parent.parent_facebook_id) return { success: false, error: 'Tài khoản này là Page' };
+      if (!/^\d+$/.test(String(profileId || ''))) return { success: false, error: 'Id Page không hợp lệ' };
+      const existing = db.getFBPageChildren(parent.facebook_id).find((c: any) => c.facebook_id === profileId);
+
+      if (!enabled) {
+        if (existing) {
+          await FacebookConnectionManager.disconnect(existing.id).catch(() => {});
+          FacebookService.removeInstance(existing.id);
+          db.setFBPageEnabled(existing.id, false);
+        }
+        return { success: true };
+      }
+
+      const owner = db.getFBAccountByFacebookId(profileId);
+      if (owner && owner.parent_facebook_id !== parent.facebook_id) {
+        return { success: false, error: 'Page này đã được thêm dưới một tài khoản khác' };
+      }
+
+      const cookie = resolveFBCookie(parent);
+      if (!cookie) return { success: false, error: 'Không tìm thấy cookie. Vui lòng cập nhật cookie.' };
+      const proxyId = resolveFBProxyId(parent);
+      const page = (await fetchManagedPages(cookie, proxyAgentFor(proxyId))).find((p) => p.profileId === profileId);
+      if (!page) return { success: false, error: 'Tài khoản không quản trị Page này' };
+
+      const id = existing?.id || uuid();
+      db.saveFBPageAccount({
+        id, facebook_id: page.profileId, name: page.name, avatar_url: page.avatarUrl || '',
+        parent_facebook_id: parent.facebook_id, delegate_page_id: page.delegatePageId, proxy_id: proxyId,
+      });
+      try {
+        // connect → initSession với cookie i_user, kiểm FacebookID === id Page (FacebookService._doConnect)
+        await FacebookConnectionManager.getOrCreate(id, buildPageCookie(cookie, page.profileId), proxyId);
+      } catch (err: any) {
+        await FacebookConnectionManager.disconnect(id).catch(() => {});
+        FacebookService.removeInstance(id);
+        db.setFBPageEnabled(id, false);
+        return { success: false, error: err.message };
+      }
+      Logger.log(`[facebookIpc] fb:setPageEnabled: Page ${page.profileId} (${page.name}) enabled under ${parent.facebook_id}`);
+      return { success: true };
+    } catch (err: any) {
+      Logger.error(`[facebookIpc] fb:setPageEnabled error: ${err.message}`);
+      return { success: false, error: err.message };
     }
   });
 
