@@ -98,7 +98,9 @@ export class FacebookService {
       const acc = DatabaseService.getInstance().getFBAccount(accountId);
       this._isPage = !!acc?.parent_facebook_id;
       this._delegatePageId = acc?.delegate_page_id || null;
-    } catch {}
+    } catch (err: any) {
+      Logger.warn(`[FacebookService:${accountId}] Cannot read account row for Page info: ${err.message}`);
+    }
     // E2EE bridge dùng c_user + xs, tức là vai tài khoản cá nhân → Page không chạy bridge
     if (this._isPage) this.e2eeEnabled = false;
   }
@@ -259,11 +261,7 @@ export class FacebookService {
       // initSession() now validates REQUIRED_SESSION_FIELDS + FacebookID là số
       // và throw error nếu thiếu - không cần check thủ công
       this.dataFB = await initSession(this.cookie, this.httpsAgent);
-      // Page: Facebook phải trả actorID = id Page, nếu không là chưa chuyển vai (mất quyền quản trị)
-      if (this._isPage && this.dataFB.FacebookID !== this.getFacebookId()) {
-        const acc = DatabaseService.getInstance().getFBAccount(this.accountId);
-        throw new Error(`Không chuyển được sang Page ${acc?.name || this.getFacebookId()}. Kiểm tra quyền quản trị Page.`);
-      }
+      this.assertPageRole(this.dataFB);
 
       // 2. Fetch latest seqId via GraphQL to avoid ERROR_QUEUE_OVERFLOW
       // Sending seq=0 asks Facebook to sync ALL messages → overflow on accounts with many messages
@@ -2440,6 +2438,14 @@ export class FacebookService {
   public getAccountId(): string { return this.accountId; }
   public getRealFacebookId(): string | null { return this.dataFB?.FacebookID || null; }
   public isPage(): boolean { return this._isPage; }
+
+  /** Page: Facebook phải trả actorID = id Page, nếu không là chưa chuyển vai (mất quyền quản trị) */
+  private assertPageRole(session: FBSessionData): void {
+    if (this._isPage && session.FacebookID !== this.getFacebookId()) {
+      const acc = DatabaseService.getInstance().getFBAccount(this.accountId);
+      throw new Error(`Không chuyển được sang Page ${acc?.name || this.getFacebookId()}. Kiểm tra quyền quản trị Page.`);
+    }
+  }
   public isConnected(): boolean { return this.status === 'connected'; }
 
   /**
@@ -2472,7 +2478,9 @@ export class FacebookService {
     if (this._mqttOverflowCount > 2) {
       Logger.warn(`[FacebookService:${this.accountId}] MQTT overflow persistent (${this._mqttOverflowCount}x) - using REST only`);
       try {
-        this.dataFB = await initSession(this.cookie, this.httpsAgent);
+        const session = await initSession(this.cookie, this.httpsAgent);
+        this.assertPageRole(session);
+        this.dataFB = session;
         Logger.log(`[FacebookService:${this.accountId}] Session refreshed for overflow fallback`);
         if (this.status !== 'connected') this.setStatus('connected');
         return true;
