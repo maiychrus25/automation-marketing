@@ -1046,6 +1046,7 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
 - `safeStorage` cho setting nhạy cảm và integration credential; UI nhận secret đã mask.
 - Mật khẩu employee có trường `password_hash` và service dùng `bcryptjs`.
 - ERP actor được suy ra tại main process; `requirePermission` chặn action không hợp lệ.
+- Relay boss↔nhân viên chỉ thực thi các kênh trong danh sách cho phép (`src/services/http/relayChannelPolicy.ts`: `login:connect`, `zalo:`, `crm:`, `ai:`, `integration:`, `db:`); mọi kênh khác bị từ chối trước khi kiểm quyền module và phạm vi tài khoản. Chức năng chỉ-Boss (Trình duyệt, Đăng Facebook, quản trị relay/nhân viên/workspace/proxy) không gọi được từ nhân viên. Route REST quản lý proxy (`/api/query/proxies`, `/api/command/proxies`, `/api/command/accounts/proxy`) trả 403 với nhân viên; trước 05/10/2026 các route này trả cả mật khẩu proxy cho mọi nhân viên đã đăng nhập.
 - SQLite WAL, log nghiệp vụ và tách database theo workspace.
 - Tracking và backend thượng nguồn được mô tả là bị chặn trong bản nội bộ.
 

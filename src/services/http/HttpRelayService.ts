@@ -13,6 +13,7 @@ import { handlers as restHandlers } from './handlers/RestApiHandlers';
 import { handleMediaRequest as handleMediaFileServe } from './handlers/MediaHandler';
 import { libraryHandlers } from './handlers/LibraryHandler';
 import FileStorageService from '../file/FileStorageService';
+import { isEmployeeChannelAllowed } from './relayChannelPolicy';
 
 interface RegisteredEmployee {
     employee_id: string;
@@ -694,6 +695,12 @@ class HttpRelayService {
     }
 
     private async executeProxyAction(employee: RegisteredEmployee, channel: string, params: any): Promise<any> {
+        // Allow-list first: the boss must never run a boss-only/admin handler for an employee.
+        if (!isEmployeeChannelAllowed(channel)) {
+            Logger.warn(`[HttpRelayService] Refused channel "${channel}" from employee ${employee.employee_id}`);
+            return { success: false, error: 'Nhân viên không được dùng chức năng này qua máy Boss' };
+        }
+
         let zaloId = params?.zaloId || params?.zalo_id || '';
 
         if (!zaloId && employee.assigned_accounts.length > 0) {
@@ -1549,12 +1556,10 @@ class HttpRelayService {
             }
 
             // ── Proxies ──
-            if (method === 'GET' && pathname === '/api/query/proxies') {
-                return this.json(res, 200, restHandlers.getProxies(employee, params));
-            }
-            if (method === 'GET' && pathname.match(/^\/api\/query\/proxies\/\d+$/)) {
-                const id = pathname.split('/').pop() || '';
-                return this.json(res, 200, restHandlers.getProxyById(employee, { ...params, id }));
+            // Proxy records hold upstream credentials and proxy management is a boss task:
+            // employees never read or change them over the relay (the employee app does not call these).
+            if (method === 'GET' && (pathname === '/api/query/proxies' || /^\/api\/query\/proxies\/\d+$/.test(pathname))) {
+                return this.json(res, 403, { success: false, error: 'Quản lý proxy chỉ dùng ở máy Boss' });
             }
 
             // ── Friends last fetched ──
@@ -2009,19 +2014,9 @@ class HttpRelayService {
             }
 
             // ── Proxies CRUD ──
-            if (pathname === '/api/command/proxies') {
-                const id = db.saveProxy(params.proxy || params);
-                return { success: true, data: { id } };
-            }
-            if (pathname.match(/^\/api\/command\/proxies\/\d+$/)) {
-                const id = parseInt(pathname.split('/').pop() || '0');
-                db.deleteProxy(id);
-                return { success: true };
-            }
-            if (pathname === '/api/command/accounts/proxy') {
-                // Assign proxy to account: params.zaloId, params.proxyId
-                db.run('UPDATE accounts SET proxy_id=? WHERE zalo_id=?', [params.proxyId || null, params.zaloId || zaloId]);
-                return { success: true };
+            // Proxy management (create, delete, assign to an account) is boss-only; see /api/query/proxies.
+            if (pathname === '/api/command/proxies' || /^\/api\/command\/proxies\/\d+$/.test(pathname) || pathname === '/api/command/accounts/proxy') {
+                return { success: false, error: 'Quản lý proxy chỉ dùng ở máy Boss' };
             }
 
             // ── Messages — mark-read, mark-recalled, delete, reaction, local-paths ──
