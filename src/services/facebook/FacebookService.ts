@@ -158,12 +158,16 @@ export class FacebookService {
     const instanceKey = FacebookService.resolveInstanceKey(accountId);
 
     if (!FacebookService.instances.has(instanceKey)) {
+      const row = (() => { try { return DatabaseService.getInstance().getFBAccount(instanceKey); } catch { return undefined; } })();
+      // Page đang tắt thì không bao giờ tạo instance sống
+      if (row?.parent_facebook_id && row.enabled === 0) {
+        throw new Error(`[FacebookService] Page ${row.name || row.facebook_id} đang tắt trong MaiHub`);
+      }
       // Nếu không có cookie, thử lấy từ secure storage
       if (!cookie) {
         try {
           // Sử dụng instanceKey (đã resolve) để lookup cookie; Page dựng từ cookie cha
-          const acc = DatabaseService.getInstance().getFBAccount(instanceKey);
-          if (acc) cookie = resolveFBCookie(acc) || undefined;
+          if (row) cookie = resolveFBCookie(row) || undefined;
         } catch {}
       }
       if (!cookie) throw new Error(`[FacebookService] Cookie required for new instance: ${accountId}`);
@@ -171,6 +175,14 @@ export class FacebookService {
       FacebookService.instances.set(instanceKey, service);
       // Tự động kết nối
       await service.connect();
+      // Page có thể bị tắt trong lúc đang kết nối (reconnect nền chạy đua với setPageEnabled)
+      if (row?.parent_facebook_id) {
+        const now = DatabaseService.getInstance().getFBAccount(instanceKey);
+        if (!now || now.enabled === 0) {
+          FacebookService.removeInstance(instanceKey);
+          throw new Error(`[FacebookService] Page ${row.name || row.facebook_id} đã tắt trong lúc kết nối`);
+        }
+      }
     }
     return FacebookService.instances.get(instanceKey)!;
   }
@@ -260,8 +272,9 @@ export class FacebookService {
       // 1. Init session (with proxy support)
       // initSession() now validates REQUIRED_SESSION_FIELDS + FacebookID là số
       // và throw error nếu thiếu - không cần check thủ công
-      this.dataFB = await initSession(this.cookie, this.httpsAgent);
-      this.assertPageRole(this.dataFB);
+      const session = await initSession(this.cookie, this.httpsAgent);
+      this.assertPageRole(session);
+      this.dataFB = session;
 
       // 2. Fetch latest seqId via GraphQL to avoid ERROR_QUEUE_OVERFLOW
       // Sending seq=0 asks Facebook to sync ALL messages → overflow on accounts with many messages
