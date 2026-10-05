@@ -48,8 +48,17 @@ jobs:
           node-version: 24
           cache: npm
 
+      # Tải binary Electron/native đôi khi bị 500 từ máy chủ phân phối → thử lại tối đa 3 lần.
       - name: Cài dependency
-        run: npm ci
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm ci && break
+            echo "npm ci thất bại (lần $i), thử lại sau 20 giây..."
+            rm -rf node_modules
+            sleep 20
+            [ "$i" = 3 ] && exit 1
+          done
 
       - name: In giới hạn heap của Node
         run: node -e "console.log('heap limit MB:', Math.round(require('v8').getHeapStatistics().heap_size_limit / 1048576))"
@@ -98,8 +107,17 @@ jobs:
           go-version-file: src/bridge-e2ee/go.mod
           cache-dependency-path: src/bridge-e2ee/go.sum
 
+      # Tải binary Electron/native đôi khi bị 500 từ máy chủ phân phối → thử lại tối đa 3 lần.
       - name: Cài dependency
-        run: npm ci
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm ci && break
+            echo "npm ci thất bại (lần $i), thử lại sau 20 giây..."
+            rm -rf node_modules
+            sleep 20
+            [ "$i" = 3 ] && exit 1
+          done
 
       # Thư mục build/ của cầu nối đang chứa sẵn một bản .exe cũ (và file backup .exe~)
       # trong repo; xóa để gói chỉ mang đúng binary vừa build cho nền tảng này.
