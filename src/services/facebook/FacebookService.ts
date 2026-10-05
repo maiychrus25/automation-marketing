@@ -12,6 +12,7 @@ import {
 import { initSession, checkCookieAlive, fetchUserAvatarFromProfile, getUserInfoFacebookHtml } from './FacebookSession';
 import { sendMessage as sendMessageREST, unsendMessage, addReaction, editMessage, forwardMessage, pinMessage, unpinMessage, createPoll, votePoll } from './FacebookMessageSender';
 import { uploadAttachment } from './FacebookAttachment';
+import { isOwnSender } from './FacebookPages';
 import {
   getThreadList, parseThreadNodes, fetchThreadMessages,
   changeThreadName, changeThreadEmoji, changeNickname,
@@ -54,6 +55,10 @@ export class FacebookService {
   private statusChangeCallback?: (status: FBAccountStatus) => void;
   /** Cached real Facebook UID - resolved once from DB, used for broadcasts */
   private _facebookId: string | null = null;
+  /** Dòng này là Page con (có parent_facebook_id): không E2EE bridge, gửi qua REST */
+  private _isPage = false;
+  /** id Page cổ điển: tin của Page có thể mang id này thay vì id profile */
+  private _delegatePageId: string | null = null;
   /** Last known good MQTT seqId - dùng làm fallback khi getLastSeqId thất bại,
    *  tránh connect với seqId=0 → ERROR_QUEUE_OVERFLOW */
   private _lastGoodSeqId: string = '0';
@@ -89,6 +94,13 @@ export class FacebookService {
     this.cookie = cookie;
     this.proxyId = proxyId ?? null;
     this.httpsAgent = this.resolveProxyAgent();
+    try {
+      const acc = DatabaseService.getInstance().getFBAccount(accountId);
+      this._isPage = !!acc?.parent_facebook_id;
+      this._delegatePageId = acc?.delegate_page_id || null;
+    } catch {}
+    // E2EE bridge dùng c_user + xs, tức là vai tài khoản cá nhân → Page không chạy bridge
+    if (this._isPage) this.e2eeEnabled = false;
   }
 
   /** Tạo proxy agent từ proxyId */
@@ -247,6 +259,11 @@ export class FacebookService {
       // initSession() now validates REQUIRED_SESSION_FIELDS + FacebookID là số
       // và throw error nếu thiếu - không cần check thủ công
       this.dataFB = await initSession(this.cookie, this.httpsAgent);
+      // Page: Facebook phải trả actorID = id Page, nếu không là chưa chuyển vai (mất quyền quản trị)
+      if (this._isPage && this.dataFB.FacebookID !== this.getFacebookId()) {
+        const acc = DatabaseService.getInstance().getFBAccount(this.accountId);
+        throw new Error(`Không chuyển được sang Page ${acc?.name || this.getFacebookId()}. Kiểm tra quyền quản trị Page.`);
+      }
 
       // 2. Fetch latest seqId via GraphQL to avoid ERROR_QUEUE_OVERFLOW
       // Sending seq=0 asks Facebook to sync ALL messages → overflow on accounts with many messages
@@ -479,7 +496,7 @@ export class FacebookService {
   private async handleIncomingMessage(msg: FBMQTTMessage): Promise<void> {
     const threadId = msg.replyToID && msg.replyToID !== '0' ? msg.replyToID : null;
     const ts = parseInt(msg.timestamp) || Date.now();
-    const isSelf = this.dataFB?.FacebookID && msg.userID === this.dataFB.FacebookID ? 1 : 0;
+    const isSelf = isOwnSender(msg.userID, this.dataFB?.FacebookID, this._delegatePageId) ? 1 : 0;
 
     // ── Self-echo dedup: skip messages we already saved+broadcast locally ──
     // Khi gửi tin qua bridge (E2EE hoặc MQTT), bridge echo ngược lại message
@@ -1681,6 +1698,7 @@ export class FacebookService {
    * @throws Error nếu bridge không thể khởi động - caller nên kiểm tra isE2EEConnected()
    */
   public async retryE2EE(): Promise<void> {
+    if (this._isPage) return; // Page không có E2EE bridge; caller kiểm isE2EEConnected() và đi REST
     // Clean up stale bridge
     await this.stopE2EEBridge();
     // Reset flags so startE2EEBridge will attempt again
@@ -1944,6 +1962,13 @@ export class FacebookService {
     const ready = await this.ensureConnected();
     if (!ready) {
       return { success: false, error: 'Mất kết nối Facebook. Vui lòng kết nối lại tài khoản.' };
+    }
+
+    // Page: không có E2EE bridge → mọi thread gửi REST, người gửi = dataFB.FacebookID = id Page
+    if (this._isPage) {
+      const pageResult = await sendMessageREST(this.requireSession(), threadId, body, opts, agent);
+      if (pageResult.success && pageResult.messageId) this.markMessageLocallySent(pageResult.messageId);
+      return pageResult;
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -2414,6 +2439,7 @@ export class FacebookService {
   public getStatus(): FBAccountStatus { return this.status; }
   public getAccountId(): string { return this.accountId; }
   public getRealFacebookId(): string | null { return this.dataFB?.FacebookID || null; }
+  public isPage(): boolean { return this._isPage; }
   public isConnected(): boolean { return this.status === 'connected'; }
 
   /**

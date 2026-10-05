@@ -538,7 +538,8 @@ export function registerFacebookIpc(): void {
       if (!service) return { success: false, error: 'Tài khoản chưa kết nối. Vui lòng kết nối lại Facebook.' };
 
       // C2: 1:1 → gửi qua E2EE bridge
-      const isUserMessage = params.typeChat === 'user';
+      // Page không có E2EE bridge → 1:1 cũng đi đường upload + REST như nhóm
+      const isUserMessage = params.typeChat === 'user' && !service.isPage();
       if (isUserMessage) {
         if (!service.isE2EEConnected()) {
           try {
@@ -746,7 +747,8 @@ export function registerFacebookIpc(): void {
       if (!service) return { success: false, error: 'Tài khoản chưa kết nối. Vui lòng kết nối lại Facebook.' };
 
       // C2: 1:1 → gửi qua E2EE bridge
-      const isUserMessage = params.typeChat === 'user';
+      // Page không có E2EE bridge → 1:1 cũng đi đường upload + REST như nhóm
+      const isUserMessage = params.typeChat === 'user' && !service.isPage();
       if (isUserMessage) {
         if (!service.isE2EEConnected()) {
           try { await service.retryE2EE(); } catch {}
