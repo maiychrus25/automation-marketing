@@ -71,7 +71,7 @@ function AccountAvatar({ account, size }: { account: AccountInfo; size: number }
         <ChannelBadge channel={(account.channel as any) || CHANNEL.ZALO} size="xs" />
       </span>
       {account.parent_zalo_id && (
-        <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-blue-600 text-white flex items-center justify-center pointer-events-none" title="Page Facebook">
+        <span className="absolute -bottom-0.5 -left-0.5 w-3 h-3 rounded-full bg-blue-600 text-white flex items-center justify-center pointer-events-none" title="Page Facebook">
           <svg width="7" height="7" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 3v18h2v-7h6l1 2h6V5h-6l-1-2H5z"/></svg>
         </span>
       )}
@@ -224,8 +224,8 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
               key={account.zalo_id}
               draggable={canDrag && !isChild}
               onDragStart={(e) => { dragIndexRef.current = index; e.dataTransfer.effectAllowed = 'move'; }}
-              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverIndex(index); }}
-              onDrop={(e) => {
+              onDragOver={isChild ? undefined : (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverIndex(index); }}
+              onDrop={isChild ? undefined : (e) => {
                 e.preventDefault();
                 const from = dragIndexRef.current;
                 if (from !== null && from !== index) reorderAccounts(from, index);
