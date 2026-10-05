@@ -287,6 +287,9 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
                     if (!fbAcc.parent_facebook_id) {
                         const { removePageChildren } = require('./facebookIpc');
                         await removePageChildren(zaloId, deleteData ? 'deleteWithData' : 'deactivate');
+                    } else if (!deleteData) {
+                        // Page bị gỡ mà giữ dữ liệu: đánh dấu tắt để không bị kết nối lại
+                        DatabaseService.getInstance().setFBPageEnabled(fbAcc.id, false);
                     }
                     // Không gọi deleteFBAccount ở đây - deleteAccountData sẽ xử lý FB tables
                 }
