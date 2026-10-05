@@ -466,6 +466,9 @@ export class FacebookService {
       this.listener.disconnect();
       this.listener = null;
     }
+    if (this._isPage) {
+      try { require('./pagePlaywrightDriver').closePageBrowserSender(this.accountId); } catch { /* ignore */ }
+    }
     this.setStatus('disconnected');
     Logger.log(`[FacebookService:${this.accountId}] Disconnected`);
   }
@@ -2037,9 +2040,9 @@ export class FacebookService {
       return { success: false, error: 'Mất kết nối Facebook. Vui lòng kết nối lại tài khoản.' };
     }
 
-    // Page: không có E2EE bridge → mọi thread gửi REST, người gửi = dataFB.FacebookID = id Page
+    // Page: gửi qua tự động hoá Meta Business Suite (endpoint REST cổ điển không tới nơi).
     if (this._isPage) {
-      const pageResult = await sendMessageREST(this.requireSession(), threadId, body, opts, agent);
+      const pageResult = await this.sendViaPageBrowser(threadId, { text: body, replyToMessageId: opts?.replyToMessageId });
       if (pageResult.success && pageResult.messageId) this.markMessageLocallySent(pageResult.messageId);
       return pageResult;
     }
@@ -2267,6 +2270,30 @@ export class FacebookService {
 
   public async uploadAttachment(filePath: string): Promise<FBAttachmentUploadResult | null> {
     return uploadAttachment(this.requireSession(), filePath, this.httpsAgent);
+  }
+
+  /** Gửi qua trình duyệt Business Suite (chỉ dùng cho Page). Lazy-require để tài khoản thường không nạp playwright. */
+  private async sendViaPageBrowser(
+    threadId: string,
+    input: { text?: string; files?: { path: string; type: 'image' | 'video' | 'audio' | 'file' }[]; replyToMessageId?: string },
+  ): Promise<FBSendResult> {
+    const { getPageBrowserSender } = require('./pagePlaywrightDriver');
+    const sender = await getPageBrowserSender(this.accountId, {
+      getCookie: () => this.cookie,
+      delegatePageId: this._delegatePageId || '',
+    });
+    return sender.send(threadId, input);
+  }
+
+  /** Gửi đính kèm (ảnh/file) vai Page qua Business Suite. */
+  public async sendPageAttachment(threadId: string, filePath: string, body?: string): Promise<FBSendResult> {
+    const { classifyFile } = require('./pageSendHelpers');
+    const result = await this.sendViaPageBrowser(threadId, {
+      text: body,
+      files: [{ path: filePath, type: classifyFile(filePath) }],
+    });
+    if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
+    return result;
   }
 
   public async getThreadList(): Promise<FBThread[]> {

@@ -679,6 +679,43 @@ export function registerFacebookIpc(): void {
       const service = await getFBServiceOrReconnect(internalId);
       if (!service) return { success: false, error: 'Tài khoản chưa kết nối. Vui lòng kết nối lại Facebook.' };
 
+      // Page: gửi đính kèm qua tự động hoá Business Suite (không upload REST, không E2EE)
+      if (service.isPage()) {
+        const path = require('path');
+        const fileName = path.basename(params.filePath);
+        const result = await service.sendPageAttachment(params.threadId, params.filePath, params.body);
+        if (result.success && result.messageId) {
+          try {
+            const { classifyFile } = require('../../src/services/facebook/pageSendHelpers');
+            const attachType = classifyFile(params.filePath);
+            const fbId = resolveRealFacebookId(internalId, service);
+            let localRelPath: string | undefined;
+            try {
+              const fs = require('fs');
+              const buffer = fs.readFileSync(params.filePath);
+              const ext = path.extname(fileName) || '.bin';
+              const savedName = `sent_${result.messageId.slice(-8)}_${Date.now()}${ext}`;
+              const absPath = await FileStorageService.saveBuffer(fbId, buffer, savedName);
+              localRelPath = FileStorageService.toRelativePath(absPath);
+            } catch (fsErr: any) {
+              Logger.warn(`[facebookIpc] Page attachment media copy failed: ${fsErr.message}`);
+            }
+            const { FacebookSendService } = require('../../src/services/facebook/FacebookSendService');
+            await FacebookSendService.persistSentMessage({
+              accountId: internalId, threadId: params.threadId, messageId: result.messageId,
+              body: params.body || null, fbSenderId: fbId, timestamp: result.timestamp || Date.now(),
+              type: attachType, isUserMessage: true,
+              attachments: JSON.stringify([{ type: attachType, name: fileName, ...(localRelPath ? { localPath: localRelPath } : {}) }]),
+              ...(localRelPath ? { localPath: localRelPath } : {}),
+              ...(params.replyToMessageId ? { replyToMessageId: params.replyToMessageId } : {}),
+            });
+          } catch (dbErr: any) {
+            Logger.warn(`[facebookIpc] Page attachment persist error: ${dbErr.message}`);
+          }
+        }
+        return { ...result, fileName };
+      }
+
       // C2: 1:1 → gửi qua E2EE bridge
       // Page không có E2EE bridge → 1:1 cũng đi đường upload + REST như nhóm
       const isUserMessage = params.typeChat === 'user' && !service.isPage();
@@ -887,6 +924,43 @@ export function registerFacebookIpc(): void {
       const internalId = resolveInternalId(params.accountId);
       const service = await getFBServiceOrReconnect(internalId);
       if (!service) return { success: false, error: 'Tài khoản chưa kết nối. Vui lòng kết nối lại Facebook.' };
+
+      // Page: gửi từng file qua Business Suite browser (có mutex nội bộ nên nối tiếp an toàn)
+      if (service.isPage()) {
+        const path = require('path');
+        const { classifyFile } = require('../../src/services/facebook/pageSendHelpers');
+        const { FacebookSendService } = require('../../src/services/facebook/FacebookSendService');
+        const fbId = resolveRealFacebookId(internalId, service);
+        let ok = 0;
+        for (let i = 0; i < params.filePaths.length; i++) {
+          const fp = params.filePaths[i];
+          const fileName = path.basename(fp);
+          // body chỉ kèm file đầu, tránh lặp caption
+          const r = await service.sendPageAttachment(params.threadId, fp, i === 0 ? params.body : undefined);
+          if (r.success && r.messageId) {
+            ok++;
+            try {
+              const attachType = classifyFile(fp);
+              let localRelPath: string | undefined;
+              try {
+                const fs = require('fs');
+                const buffer = fs.readFileSync(fp);
+                const ext = path.extname(fileName) || '.bin';
+                const absPath = await FileStorageService.saveBuffer(fbId, buffer, `sent_${r.messageId.slice(-8)}_${Date.now()}${ext}`);
+                localRelPath = FileStorageService.toRelativePath(absPath);
+              } catch {}
+              await FacebookSendService.persistSentMessage({
+                accountId: internalId, threadId: params.threadId, messageId: r.messageId,
+                body: i === 0 ? (params.body || null) : null, fbSenderId: fbId, timestamp: r.timestamp || Date.now(),
+                type: attachType, isUserMessage: true,
+                attachments: JSON.stringify([{ type: attachType, name: fileName, ...(localRelPath ? { localPath: localRelPath } : {}) }]),
+                ...(localRelPath ? { localPath: localRelPath } : {}),
+              });
+            } catch (e: any) { Logger.warn(`[facebookIpc] Page batch persist error: ${e.message}`); }
+          }
+        }
+        return { success: ok > 0, uploadedCount: ok, totalCount: params.filePaths.length };
+      }
 
       // C2: 1:1 → gửi qua E2EE bridge
       // Page không có E2EE bridge → 1:1 cũng đi đường upload + REST như nhóm
