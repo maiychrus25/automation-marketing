@@ -2482,6 +2482,22 @@ class DatabaseService {
             Logger.warn(`[DatabaseService] edit_history migration: ${err.message}`);
         }
 
+        // ── fb_accounts: Page con (parent_facebook_id, delegate_page_id, enabled) ──
+        try {
+            const fbAccCols = this.query<any>(`PRAGMA table_info(fb_accounts)`);
+            const hasCol = (name: string) => fbAccCols.some((c: any) => c.name === name);
+            const added: string[] = [];
+            if (!hasCol('parent_facebook_id')) { db!.exec(`ALTER TABLE fb_accounts ADD COLUMN parent_facebook_id TEXT DEFAULT NULL`); added.push('parent_facebook_id'); }
+            if (!hasCol('delegate_page_id')) { db!.exec(`ALTER TABLE fb_accounts ADD COLUMN delegate_page_id TEXT DEFAULT NULL`); added.push('delegate_page_id'); }
+            if (!hasCol('enabled')) { db!.exec(`ALTER TABLE fb_accounts ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`); added.push('enabled'); }
+            if (added.length > 0) {
+                this.save();
+                Logger.log(`[DatabaseService] Migration: added ${added.join(', ')} to fb_accounts`);
+            }
+        } catch (err: any) {
+            Logger.warn(`[DatabaseService] fb_accounts Page columns migration: ${err.message}`);
+        }
+
         // ── ai_assistants.base_url ────────────────────────────────────────────
         try {
             const aiCols = this.query<any>(`PRAGMA table_info(ai_assistants)`);
@@ -7834,6 +7850,47 @@ class DatabaseService {
         this.run(`DELETE FROM fb_threads WHERE account_id = ?`, [id]);
         this.run(`DELETE FROM fb_crm_contacts WHERE fb_account_id = ?`, [id]);
         this.run(`DELETE FROM fb_accounts WHERE id = ?`, [id]);
+    }
+
+    /** Các Page con của một tài khoản cá nhân, kể cả Page đã tắt. */
+    public getFBPageChildren(parentFacebookId: string): any[] {
+        return this.query<any>(
+            `SELECT * FROM fb_accounts WHERE parent_facebook_id = ? ORDER BY created_at ASC`,
+            [parentFacebookId]
+        );
+    }
+
+    /** Ghi dòng fb_accounts + accounts cho một Page đang bật. Cookie Page không lưu (dựng từ cookie cha lúc chạy). */
+    public saveFBPageAccount(page: {
+        id: string; facebook_id: string; name: string; avatar_url: string;
+        parent_facebook_id: string; delegate_page_id: string | null; proxy_id: number | null;
+    }): void {
+        const now = Date.now();
+        this.run(`
+            INSERT INTO fb_accounts (id, facebook_id, name, avatar_url, cookie_encrypted, session_data, status, last_cookie_check,
+                                     created_at, updated_at, parent_facebook_id, delegate_page_id, enabled)
+            VALUES (?, ?, ?, ?, '', '', 'disconnected', 0, ?, ?, ?, ?, 1)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name, avatar_url = excluded.avatar_url,
+              parent_facebook_id = excluded.parent_facebook_id, delegate_page_id = excluded.delegate_page_id,
+              enabled = 1, updated_at = excluded.updated_at
+        `, [page.id, page.facebook_id, page.name, page.avatar_url, now, now, page.parent_facebook_id, page.delegate_page_id]);
+        this.run(
+            `INSERT INTO accounts (zalo_id, full_name, avatar_url, phone, is_business, imei, user_agent, cookies, is_active, channel, proxy_id, created_at)
+             VALUES (?, ?, ?, '', 0, '', '', '', 1, 'facebook', ?, datetime('now'))
+             ON CONFLICT(zalo_id) DO UPDATE SET
+               full_name = excluded.full_name, avatar_url = excluded.avatar_url,
+               channel = 'facebook', is_active = 1, proxy_id = excluded.proxy_id`,
+            [page.facebook_id, page.name, page.avatar_url, page.proxy_id]
+        );
+    }
+
+    /** Bật/tắt Page: tắt thì giữ dữ liệu, ẩn khỏi danh sách tài khoản (getAccounts lọc is_active = 1). */
+    public setFBPageEnabled(id: string, enabled: boolean): void {
+        const acc = this.getFBAccount(id);
+        if (!acc?.parent_facebook_id) return;
+        this.run(`UPDATE fb_accounts SET enabled = ?, updated_at = ? WHERE id = ?`, [enabled ? 1 : 0, Date.now(), id]);
+        this.run(`UPDATE accounts SET is_active = ? WHERE zalo_id = ?`, [enabled ? 1 : 0, acc.facebook_id]);
     }
 
     // ── FB Threads ──

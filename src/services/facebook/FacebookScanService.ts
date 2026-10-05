@@ -313,6 +313,8 @@ export class FacebookScanService {
    * Lấy cookie từ secure storage
    */
   private getCookie(accountId: string): string | null {
+    const acc = DatabaseService.getInstance().getFBAccount(accountId);
+    if (acc?.parent_facebook_id) throw new Error('Tính năng quét chưa hỗ trợ tài khoản Page');
     return secureGet(fbCookieKey(accountId));
   }
 

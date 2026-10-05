@@ -15,6 +15,7 @@ import FileStorageService from '../../src/services/file/FileStorageService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import FacebookService from "../../src/services/facebook/FacebookService";
+import { resolveFBCookie, resolveFBProxyId } from '../../src/services/facebook/FacebookAccountCookie';
 
 // ─── Cookie secure storage helpers ───────────────────────────────────────────
 
@@ -64,14 +65,10 @@ async function getFBServiceOrReconnect(internalId: string): Promise<FacebookServ
   const account = DatabaseService.getInstance().getFBAccount(internalId);
   if (!account) return null;
 
-  const cookie = secureGet(fbCookieKey(internalId)) || account.cookie_encrypted;
+  const cookie = resolveFBCookie(account);
   if (!cookie) return null;
 
-  let proxyId: number | null | undefined;
-  try {
-    const accRow = DatabaseService.getInstance().queryOne<any>('SELECT proxy_id FROM accounts WHERE zalo_id = ?', [account.facebook_id || internalId]);
-    proxyId = accRow?.proxy_id ?? null;
-  } catch { proxyId = null; }
+  const proxyId = resolveFBProxyId(account);
 
   try {
     service = await FacebookConnectionManager.getOrCreate(internalId, cookie, proxyId);
@@ -316,7 +313,7 @@ export function registerFacebookIpc(): void {
       const account = DatabaseService.getInstance().getFBAccount(internalId);
       if (!account) return { success: false, error: 'Tài khoản không tồn tại' };
 
-      const cookie = secureGet(fbCookieKey(internalId)) || account.cookie_encrypted;
+      const cookie = resolveFBCookie(account);
       if (!cookie) return { success: false, error: 'Không tìm thấy cookie. Vui lòng cập nhật cookie.' };
 
       let name = account.name || account.facebook_id;
@@ -355,7 +352,8 @@ export function registerFacebookIpc(): void {
   ipcMain.handle('fb:refreshContactAvatar', async (_event, { accountId, userId }: { accountId: string; userId: string }) => {
     try {
       const internalId = resolveInternalId(accountId);
-      const cookie = secureGet(fbCookieKey(internalId));
+      const fbAcc = DatabaseService.getInstance().getFBAccount(internalId);
+      const cookie = fbAcc ? resolveFBCookie(fbAcc) : null;
       if (!cookie) return { success: false, error: 'Không tìm thấy cookie. Vui lòng cập nhật cookie.', avatarUrl: null };
 
       const service = FacebookConnectionManager.get(internalId);
@@ -385,7 +383,8 @@ export function registerFacebookIpc(): void {
       // Chỉ cho phép user ID dạng số (không phải group chat)
       if (!/^\d+$/.test(userId)) return { success: false, error: 'Chỉ hỗ trợ user 1-1' };
       const internalId = resolveInternalId(accountId);
-      const cookie = secureGet(fbCookieKey(internalId));
+      const fbAcc = DatabaseService.getInstance().getFBAccount(internalId);
+      const cookie = fbAcc ? resolveFBCookie(fbAcc) : null;
       if (!cookie) return { success: false, error: 'Cookie not found' };
       const info = await getUserInfoFacebookHtml(cookie, userId);
       if (info) {
@@ -428,15 +427,10 @@ export function registerFacebookIpc(): void {
       const account = DatabaseService.getInstance().getFBAccount(internalId);
       if (!account) return { success: false, error: 'Account not found' };
 
-      // Đọc proxyId từ unified accounts table
-      let proxyId: number | null | undefined;
-      try {
-        const accRow = DatabaseService.getInstance().queryOne<any>('SELECT proxy_id FROM accounts WHERE zalo_id = ?', [account.facebook_id || accountId]);
-        proxyId = accRow?.proxy_id ?? null;
-      } catch { proxyId = null; }
+      const proxyId = resolveFBProxyId(account);
 
       // Test cookie health trước
-      const cookie = secureGet(fbCookieKey(internalId)) || account.cookie_encrypted;
+      const cookie = resolveFBCookie(account);
       if (!cookie) return { success: false, error: 'No cookie found for this account' };
 
       try {
@@ -2011,7 +2005,13 @@ export async function reconnectAllFBAccounts(): Promise<void> {
           continue;
         }
 
-        const cookie = secureGet(fbCookieKey(acc.id)) || acc.cookie_encrypted;
+        // Page đã tắt: không kết nối
+        if (acc.enabled === 0) {
+          Logger.log(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: Page disabled, skipping`);
+          continue;
+        }
+
+        const cookie = resolveFBCookie(acc);
         if (!cookie) {
           Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: no cookie found, skipping`);
           continue;
@@ -2030,11 +2030,7 @@ export async function reconnectAllFBAccounts(): Promise<void> {
         }
 
         // Đọc proxy_id từ unified accounts table
-        let proxyId: number | null | undefined;
-        try {
-          const accRow = DatabaseService.getInstance().queryOne<any>('SELECT proxy_id FROM accounts WHERE zalo_id = ?', [acc.facebook_id || acc.id]);
-          proxyId = accRow?.proxy_id ?? null;
-        } catch { proxyId = null; }
+        const proxyId = resolveFBProxyId(acc);
 
         const service = await FacebookConnectionManager.getOrCreate(acc.id, cookie, proxyId);
         // Reset retry count sau khi connect thành công

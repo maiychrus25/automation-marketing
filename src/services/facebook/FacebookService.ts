@@ -30,6 +30,7 @@ import DatabaseService from '../database/DatabaseService';
 import FileStorageService from '../file/FileStorageService';
 import { createProxyAgent } from '../../utils/ProxyHelper';
 import { secureGet } from '../secure/SecureSettingsService';
+import { resolveFBCookie } from './FacebookAccountCookie';
 import path from 'path';
 import Logger from '../../utils/Logger';
 
@@ -146,13 +147,9 @@ export class FacebookService {
       // Nếu không có cookie, thử lấy từ secure storage
       if (!cookie) {
         try {
-          // Sử dụng instanceKey (đã resolve) để lookup cookie
-          cookie = secureGet(fbCookieKey(instanceKey)) || undefined;
-          // Fallback: lấy từ DB (cookie_encrypted)
-          if (!cookie) {
-            const acc = DatabaseService.getInstance().getFBAccount(instanceKey);
-            if (acc?.cookie_encrypted) cookie = acc.cookie_encrypted;
-          }
+          // Sử dụng instanceKey (đã resolve) để lookup cookie; Page dựng từ cookie cha
+          const acc = DatabaseService.getInstance().getFBAccount(instanceKey);
+          if (acc) cookie = resolveFBCookie(acc) || undefined;
         } catch {}
       }
       if (!cookie) throw new Error(`[FacebookService] Cookie required for new instance: ${accountId}`);
