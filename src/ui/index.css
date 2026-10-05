@@ -248,6 +248,7 @@ html[data-theme="dark"] {
   .app-account:hover { background: var(--hover); }
   .app-account.is-active { background: var(--selected); }
   .app-account.is-drag-over { opacity: 0.6; }
+  .app-account.is-child { padding-left: 25px; }
   .app-sidebar.is-collapsed .app-account { height: 44px; justify-content: center; padding: 0; }
   .app-account-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .app-account-name.is-dim { color: var(--text-secondary); }
