@@ -8,6 +8,7 @@ import ChannelBadge, { ZaloIcon, FacebookIcon, TelegramIcon } from '../common/Ch
 import { isFacebook, isTelegram, CHANNEL } from '@/lib/channelHelper';
 import { toLocalMediaUrl } from '@/lib/localMedia';
 import { formatPhone } from '@/utils/phoneUtils';
+import { orderAccountsWithChildren } from '@/lib/accountTree';
 import { FolderIcon } from '@/components/common/icons';
 
 /** Hiện ô lọc khi có từ chừng này tài khoản trở lên (spec mục 7.2). */
@@ -69,6 +70,11 @@ function AccountAvatar({ account, size }: { account: AccountInfo; size: number }
       <span className="absolute -top-1.5 -left-1 pointer-events-none">
         <ChannelBadge channel={(account.channel as any) || CHANNEL.ZALO} size="xs" />
       </span>
+      {account.parent_zalo_id && (
+        <span className="absolute -bottom-0.5 -left-0.5 w-3 h-3 rounded-full bg-blue-600 text-white flex items-center justify-center pointer-events-none" title="Page Facebook">
+          <svg width="7" height="7" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 3v18h2v-7h6l1 2h6V5h-6l-1-2H5z"/></svg>
+        </span>
+      )}
     </span>
   );
 }
@@ -78,6 +84,7 @@ function accountTooltip(account: AccountInfo, listenerDead: boolean): string {
     account.full_name || account.zalo_id,
     account.phone ? formatPhone(account.phone) : account.username ? `@${account.username}` : null,
     account.is_business ? 'Tài khoản Zalo Business' : null,
+    account.parent_zalo_id ? 'Page Facebook' : null,
     listenerDead ? 'Listener chết' : !account.isConnected ? 'Chưa kết nối' : null,
   ].filter(Boolean).join('\n');
 }
@@ -100,9 +107,11 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
   // Ô lọc ẩn khi thu gọn, nên bỏ lọc để danh sách không bị lọc ngầm.
   const filterVisible = !collapsed && accounts.length >= FILTER_THRESHOLD;
   const query = filterVisible ? filter.trim().toLowerCase() : '';
+  // Page con đứng ngay sau tài khoản cha; thứ tự dựng lại mỗi lần render nên kéo cha thì con đi theo
+  const ordered = orderAccountsWithChildren(accounts);
   const shown = query
-    ? accounts.filter((a) => (a.full_name || '').toLowerCase().includes(query) || (a.phone || '').includes(query))
-    : accounts;
+    ? ordered.filter((a) => (a.full_name || '').toLowerCase().includes(query) || (a.phone || '').includes(query))
+    : ordered;
   // Kéo thả dùng chỉ số trong danh sách đầy đủ; tắt khi đang lọc để không đổi nhầm vị trí.
   const canDrag = !query;
 
@@ -125,7 +134,7 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
         </span>
       ) : null}
       {!account.isConnected && !listenerDead && (
-        <span className={`absolute w-3 h-3 rounded-full bg-gray-800 border border-gray-600 flex items-center justify-center pointer-events-none ${collapsed ? 'bottom-1.5 right-3' : 'left-6 top-5'}`} title="Chưa kết nối">
+        <span className={`absolute w-3 h-3 rounded-full bg-gray-800 border border-gray-600 flex items-center justify-center pointer-events-none ${collapsed ? 'bottom-1.5 right-3' : account.parent_zalo_id ? 'left-10 top-5' : 'left-6 top-5'}`} title="Chưa kết nối">
           <svg width="6" height="6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" className="text-red-500"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </span>
       )}
@@ -209,13 +218,14 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
           const unread = unreadOf(account.zalo_id);
           const listenerDead = account.isConnected && account.listenerActive === false;
           const isActive = activeAccountId === account.zalo_id;
+          const isChild = !!account.parent_zalo_id;
           return (
             <div
               key={account.zalo_id}
-              draggable={canDrag}
+              draggable={canDrag && !isChild}
               onDragStart={(e) => { dragIndexRef.current = index; e.dataTransfer.effectAllowed = 'move'; }}
-              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverIndex(index); }}
-              onDrop={(e) => {
+              onDragOver={isChild ? undefined : (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverIndex(index); }}
+              onDrop={isChild ? undefined : (e) => {
                 e.preventDefault();
                 const from = dragIndexRef.current;
                 if (from !== null && from !== index) reorderAccounts(from, index);
@@ -226,12 +236,12 @@ export default function SidebarAccounts({ collapsed, onAddAccount }: SidebarAcco
             >
               <button
                 type="button"
-                className={`app-account ${isActive ? 'is-active' : ''} ${dragOverIndex === index ? 'is-drag-over' : ''} ${listenerDead ? 'ring-1 ring-inset ring-red-500/60' : ''}`}
+                className={`app-account ${isActive ? 'is-active' : ''} ${dragOverIndex === index ? 'is-drag-over' : ''} ${isChild ? 'is-child' : ''} ${listenerDead ? 'ring-1 ring-inset ring-red-500/60' : ''}`}
                 onClick={() => openAccount(account)}
                 aria-label={account.full_name || account.zalo_id}
                 aria-current={isActive ? 'true' : undefined}
                 title={accountTooltip(account, listenerDead)}
-                style={{ cursor: canDrag ? 'grab' : 'pointer' }}
+                style={{ cursor: canDrag && !isChild ? 'grab' : 'pointer' }}
               >
                 <AccountAvatar account={account} size={collapsed ? 32 : 24} />
                 {!collapsed && (

@@ -20,6 +20,8 @@ export interface AccountInfo {
   listenerActive?: boolean;
   channel?: Channel;
   facebook_id?: string;
+  /** Page Facebook: facebook_id của tài khoản cá nhân cha; null/undefined với tài khoản thường */
+  parent_zalo_id?: string | null;
   proxy_id?: number | null;
   username?: string; // @username telegram
 }
@@ -62,7 +64,8 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
           && a.isOnline === b?.isOnline
           && a.isConnected === b?.isConnected
           && a.listenerActive === b?.listenerActive
-          && a.channel === b?.channel;
+          && a.channel === b?.channel
+          && a.parent_zalo_id === b?.parent_zalo_id;
       })
     ) {
       // Danh sách không đổi, nhưng vẫn đảm bảo có active account nếu đang thiếu.

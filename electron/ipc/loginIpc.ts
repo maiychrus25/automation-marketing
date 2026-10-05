@@ -221,10 +221,12 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
             const accounts = DatabaseService.getInstance().getAccounts();
             // Build FB account lookup (fbId → uuid) for connection status checks
             let fbIdToUuid: Record<string, string> = {};
+            let fbParentOf: Record<string, string | null> = {};
             try {
                 const fbAccounts = DatabaseService.getInstance().getFBAccounts();
                 for (const fb of fbAccounts) {
                     if (fb.facebook_id && fb.id) fbIdToUuid[fb.facebook_id] = fb.id;
+                    if (fb.facebook_id) fbParentOf[fb.facebook_id] = fb.parent_facebook_id || null;
                 }
             } catch {}
             // Thêm trạng thái online/offline
@@ -255,7 +257,7 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
                                 ? isBotConnected
                                 : ConnectionManager.getConnection(acc.zalo_id) !== undefined,
                     // For FB accounts, zalo_id IS the facebook_id now - expose for display
-                    ...(isFB ? { facebook_id: acc.zalo_id } : {}),
+                    ...(isFB ? { facebook_id: acc.zalo_id, parent_zalo_id: fbParentOf[acc.zalo_id] ?? null } : {}),
                 };
             });
             return { success: true, accounts: accountsWithStatus };
@@ -281,6 +283,14 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
                     await FacebookConnectionManager.disconnect(fbAcc.id).catch(() => {});
                     const { secureDelete } = require('../../src/services/secure/SecureSettingsService');
                     secureDelete(`fb_cookie_${fbAcc.id}`);
+                    // Page con đi cùng tài khoản cha, cùng lựa chọn xóa dữ liệu
+                    if (!fbAcc.parent_facebook_id) {
+                        const { removePageChildren } = require('./facebookIpc');
+                        await removePageChildren(zaloId, deleteData ? 'deleteWithData' : 'deactivate');
+                    } else if (!deleteData) {
+                        // Page bị gỡ mà giữ dữ liệu: đánh dấu tắt để không bị kết nối lại
+                        DatabaseService.getInstance().setFBPageEnabled(fbAcc.id, false);
+                    }
                     // Không gọi deleteFBAccount ở đây - deleteAccountData sẽ xử lý FB tables
                 }
             } else if (isTelegramUser) {

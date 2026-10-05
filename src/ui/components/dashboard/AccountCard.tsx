@@ -10,6 +10,7 @@ import PhoneDisplay from '../common/PhoneDisplay';
 import { showConfirm } from '../common/ConfirmDialog';
 import { extractApiError } from '@/utils/apiError';
 import ChannelBadge from '../common/ChannelBadge';
+import FacebookPagesPanel from '../facebook/FacebookPagesPanel';
 import { CHANNEL, isZalo, isFacebook, isTelegram, isTelegramUser, isTelegramBot } from '@/lib/channelHelper';
 import { toLocalMediaUrl } from '@/lib/localMedia';
 import { PhoneIcon } from '@/components/common/icons';
@@ -81,12 +82,15 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
   const [menuOpen, setMenuOpen] = useState(false);
   const [updatingInfo, setUpdatingInfo] = useState(false);
   const [fbCookieModalOpen, setFbCookieModalOpen] = useState(false);
+  const [pagesModalOpen, setPagesModalOpen] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const avatarRetryDone = useRef(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const accountChannel = resolveAccountChannel(acc);
   const isFacebookAcc = isFacebook(accountChannel);
   const isZaloAcc = isZalo(accountChannel);
+  const isPageAcc = isFacebookAcc && !!acc.parent_zalo_id;
+  const parentName = useAccountStore((s) => s.accounts.find((a) => a.zalo_id === acc.parent_zalo_id)?.full_name);
 
   // Close menu on outside click
   useEffect(() => {
@@ -159,7 +163,9 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
     setMenuOpen(false);
     const ok = await showConfirm({
       title: 'Xóa tài khoản này?',
-      message: `Tài khoản "${acc.full_name || acc.zalo_id}" sẽ bị xóa khỏi ứng dụng. Bạn cần đăng nhập lại để thêm lại.`,
+      message: isPageAcc
+        ? `Page "${acc.full_name || acc.zalo_id}" sẽ bị xóa khỏi MaiHub cùng lịch sử tin nhắn đã lưu. Muốn giữ lịch sử, hãy tắt Page trong "Quản lý Page" của tài khoản cá nhân.`
+        : `Tài khoản "${acc.full_name || acc.zalo_id}" sẽ bị xóa khỏi ứng dụng. Bạn cần đăng nhập lại để thêm lại.`,
       confirmText: 'Xóa',
       variant: 'danger',
     });
@@ -346,6 +352,9 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
           <p className="text-xs text-gray-400 truncate">
             {isFacebookAcc ? `${acc.facebook_id || acc.zalo_id}` : acc.zalo_id}
           </p>
+          {isPageAcc && (
+            <p className="text-xs text-gray-400 truncate">Page của {parentName || acc.parent_zalo_id}</p>
+          )}
           {acc.phone ? (
             <p className="text-xs text-gray-400 truncate mt-0.5">
               <PhoneIcon className="w-3 h-3 inline" /> <PhoneDisplay phone={acc.phone} className="text-xs text-gray-400" />
@@ -386,6 +395,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
                   )}
                   {updatingInfo ? 'Đang cập nhật...' : 'Cập nhật thông tin'}
                 </button>
+                {!isPageAcc && (
                 <button
                   onClick={() => { setMenuOpen(false); setFbCookieModalOpen(true); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
@@ -396,6 +406,18 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
                   </svg>
                   Cập nhật Cookie FB
                 </button>
+                )}
+                {!isPageAcc && (
+                  <button
+                    onClick={() => { setMenuOpen(false); setPagesModalOpen(true); }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <path d="M4 21V4h9l1 2h6v9h-7l-1-2H6v8"/>
+                    </svg>
+                    Quản lý Page
+                  </button>
+                )}
                 </>
               ) : (
               <button
@@ -509,6 +531,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
               </svg>
               Reconnect
             </button>
+            {!isPageAcc && (
             <button
               onClick={() => {
                 if (isFacebookAcc) {
@@ -533,12 +556,40 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
               </svg>
               {isFacebookAcc ? 'Cập nhật Cookie' : isTelegram(accountChannel) ? 'Đăng nhập lại' : 'Quét QR mới'}
             </button>
+            )}
           </div>
         )}
       </div>
     </div>
     {fbCookieModalOpen && (
       <FBUpdateCookieModal accountId={acc.zalo_id} onClose={() => setFbCookieModalOpen(false)} />
+    )}
+    {pagesModalOpen && (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200] p-4" onClick={() => setPagesModalOpen(false)}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Quản lý Page"
+          className="bg-gray-800 rounded-xl w-full max-w-sm p-5 border border-gray-700 shadow-2xl max-h-[80vh] flex flex-col"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-white font-semibold">Quản lý Page</h3>
+            <button
+              type="button"
+              onClick={() => setPagesModalOpen(false)}
+              aria-label="Đóng"
+              className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-700 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-blue-500/35"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mb-3">Bật Page để nhận và trả lời tin nhắn của Page trong MaiHub.</p>
+          <div className="overflow-y-auto min-h-0">
+            <FacebookPagesPanel accountId={acc.zalo_id} />
+          </div>
+        </div>
+      </div>
     )}
     </>
   );

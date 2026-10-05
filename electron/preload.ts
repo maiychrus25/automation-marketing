@@ -468,6 +468,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     removeAccount:       (params: { accountId: string }) => ipcRenderer.invoke('fb:removeAccount', params),
     updateCookie:        (params: { accountId: string; cookie: string }) => ipcRenderer.invoke('fb:updateCookie', params),
     refreshProfile:      (params: { accountId: string }) => ipcRenderer.invoke('fb:refreshProfile', params),
+    listPages:           (params: { accountId: string }) => ipcRenderer.invoke('fb:listPages', params),
+    setPageEnabled:      (params: { accountId: string; profileId: string; enabled: boolean }) => ipcRenderer.invoke('fb:setPageEnabled', params),
     getAccounts:         () => ipcRenderer.invoke('fb:getAccounts'),
     connect:             (params: { accountId: string }) => ipcRenderer.invoke('fb:connect', params),
     disconnect:          (params: { accountId: string }) => ipcRenderer.invoke('fb:disconnect', params),
