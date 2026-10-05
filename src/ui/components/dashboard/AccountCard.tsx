@@ -163,7 +163,9 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
     setMenuOpen(false);
     const ok = await showConfirm({
       title: 'Xóa tài khoản này?',
-      message: `Tài khoản "${acc.full_name || acc.zalo_id}" sẽ bị xóa khỏi ứng dụng. Bạn cần đăng nhập lại để thêm lại.`,
+      message: isPageAcc
+        ? `Page "${acc.full_name || acc.zalo_id}" sẽ bị xóa khỏi MaiHub cùng lịch sử tin nhắn đã lưu. Muốn giữ lịch sử, hãy tắt Page trong "Quản lý Page" của tài khoản cá nhân.`
+        : `Tài khoản "${acc.full_name || acc.zalo_id}" sẽ bị xóa khỏi ứng dụng. Bạn cần đăng nhập lại để thêm lại.`,
       confirmText: 'Xóa',
       variant: 'danger',
     });

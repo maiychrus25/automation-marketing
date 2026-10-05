@@ -373,10 +373,25 @@ export function registerFacebookIpc(): void {
       let name = account.name || account.facebook_id;
       let avatarUrl = account.avatar_url || '';
       try {
-        const html = await fetchFBHomepage(cookie);
-        const profile = await fetchBasicProfileFromHome(html);
-        if (profile.name) name = profile.name;
-        if (profile.avatarUrl) avatarUrl = profile.avatarUrl;
+        if (account.parent_facebook_id) {
+          // Page: trang chủ trả về hồ sơ cá nhân của cha, nên lấy tên/avatar từ danh sách Page cha quản trị
+          const parent = DatabaseService.getInstance().getFBAccountByFacebookId(account.parent_facebook_id);
+          const parentCookie = parent ? resolveFBCookie(parent) : '';
+          if (!parent || !parentCookie) throw new Error('Không tìm thấy tài khoản cha của Page');
+          const page = (await fetchManagedPages(parentCookie, proxyAgentFor(resolveFBProxyId(parent)), 15000))
+            .find((p) => p.profileId === account.facebook_id);
+          if (page) {
+            name = page.name || name;
+            avatarUrl = page.avatarUrl || '';
+          } else {
+            Logger.warn(`[facebookIpc] fb:refreshProfile: không thấy Page ${account.facebook_id} trong danh sách của cha, giữ nguyên`);
+          }
+        } else {
+          const html = await fetchFBHomepage(cookie);
+          const profile = await fetchBasicProfileFromHome(html);
+          if (profile.name) name = profile.name;
+          if (profile.avatarUrl) avatarUrl = profile.avatarUrl;
+        }
       } catch (err: any) {
         Logger.warn(`[facebookIpc] fb:refreshProfile fetch error: ${err.message}`);
       }
@@ -482,7 +497,7 @@ export function registerFacebookIpc(): void {
       if (parent.parent_facebook_id) return { success: false, error: 'Tài khoản này là Page' };
       const cookie = resolveFBCookie(parent);
       if (!cookie) return { success: false, error: 'Không tìm thấy cookie. Vui lòng cập nhật cookie.' };
-      const remote = await fetchManagedPages(cookie, proxyAgentFor(resolveFBProxyId(parent)));
+      const remote = await fetchManagedPages(cookie, proxyAgentFor(resolveFBProxyId(parent)), 15000);
       return { success: true, pages: mergePageList(remote, db.getFBPageChildren(parent.facebook_id)) };
     } catch (err: any) {
       Logger.error(`[facebookIpc] fb:listPages error: ${err.message}`);
@@ -523,11 +538,11 @@ export function registerFacebookIpc(): void {
       if (!page) return { success: false, error: 'Tài khoản không quản trị Page này' };
 
       const id = existing?.id || uuid();
-      db.saveFBPageAccount({
-        id, facebook_id: page.profileId, name: page.name, avatar_url: page.avatarUrl || '',
-        parent_facebook_id: parent.facebook_id, delegate_page_id: page.delegatePageId, proxy_id: proxyId,
-      });
       try {
+        db.saveFBPageAccount({
+          id, facebook_id: page.profileId, name: page.name, avatar_url: page.avatarUrl || '',
+          parent_facebook_id: parent.facebook_id, delegate_page_id: page.delegatePageId, proxy_id: proxyId,
+        });
         // connect → initSession với cookie i_user, kiểm FacebookID === id Page (FacebookService._doConnect)
         await FacebookConnectionManager.getOrCreate(id, buildPageCookie(cookie, page.profileId), proxyId);
       } catch (err: any) {

@@ -122,11 +122,11 @@ export function parseManagedPages(html: string): ManagedPage[] {
 }
 
 /** GET bookmarks/pages với vai tài khoản cá nhân. Header đầy đủ: header tối giản bị 400 (spike §1.1). */
-export async function fetchManagedPages(cookie: string, httpsAgent?: any): Promise<ManagedPage[]> {
+export async function fetchManagedPages(cookie: string, httpsAgent?: any, timeoutMs = 60000): Promise<ManagedPage[]> {
   try {
     const res = await axios.get(BOOKMARKS_PAGES_URL, {
       headers: fbHeaders(stripPageCookie(cookie)),
-      timeout: 60000,
+      timeout: timeoutMs,
       responseType: 'text',
       ...(httpsAgent ? { httpsAgent } : {}),
     });
