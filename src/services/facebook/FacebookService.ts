@@ -12,7 +12,7 @@ import {
 import { initSession, checkCookieAlive, fetchUserAvatarFromProfile, getUserInfoFacebookHtml } from './FacebookSession';
 import { sendMessage as sendMessageREST, unsendMessage, addReaction, editMessage, forwardMessage, pinMessage, unpinMessage, createPoll, votePoll } from './FacebookMessageSender';
 import { uploadAttachment } from './FacebookAttachment';
-import { isOwnSender } from './FacebookPages';
+import { isOwnSender, parsePageSenderName } from './FacebookPages';
 import {
   getThreadList, parseThreadNodes, fetchThreadMessages,
   changeThreadName, changeThreadEmoji, changeNickname,
@@ -312,6 +312,11 @@ export class FacebookService {
         this.handleThreadEvent(data);
       });
 
+      this.listener.on('pageMessage', (n: any) => {
+        this.handlePageMessageNotification(n).catch(err =>
+          Logger.warn(`[FacebookService:${this.accountId}] pageMessage error: ${err.message}`));
+      });
+
       this.listener.on('participantEvent', (data: any) => {
         this.handleGroupParticipantEvent(data);
       });
@@ -502,6 +507,63 @@ export class FacebookService {
     this.cookie = newCookie;
     await this.disconnect();
     await this.connect();
+  }
+
+  /**
+   * Tin nhắn khách gửi vào Page, nhận qua kết nối của tài khoản cá nhân (deltaBiiMPageMessageNotification).
+   * Chạy trên FacebookService của tài khoản cha; định tuyến về Page con rồi lưu + phát fb:onMessage
+   * dưới danh tính của Page. Đợt này chỉ tin văn bản (thông báo chỉ mang body).
+   */
+  private async handlePageMessageNotification(n: {
+    pageId: string; messageId: string; senderId: string; body: string;
+    title: string; pageName: string; senderAvatarUrl: string;
+  }): Promise<void> {
+    if (!n.senderId || n.senderId === '0' || !n.messageId) return;
+    const db = DatabaseService.getInstance();
+    // Page con đang bật của chính tài khoản này, khớp delegate_page_id
+    const page = db.queryOne<any>(
+      `SELECT id, facebook_id FROM fb_accounts WHERE delegate_page_id = ? AND parent_facebook_id = ? AND enabled = 1`,
+      [n.pageId, this.getFacebookId()]
+    );
+    if (!page?.id) return; // Không phải Page của tài khoản này, hoặc Page đang tắt
+
+    const ts = Date.now();
+    const senderName = parsePageSenderName(n.title, n.pageName);
+    const body = n.body || '[Tin nhắn trên Page]';
+
+    // saveFBMessage: INSERT OR IGNORE theo messageId (chống trùng khi Facebook phát lại),
+    // tự ghi bảng messages/contacts hợp nhất với owner = facebook_id của Page.
+    try {
+      db.saveFBMessage({
+        id: n.messageId, account_id: page.id, thread_id: n.senderId, sender_id: n.senderId,
+        sender_name: senderName, body, timestamp: ts, type: 'text', is_self: 0, is_unsent: 0,
+      });
+    } catch (err: any) {
+      Logger.warn(`[FacebookService:${this.accountId}] Page message save error: ${err.message}`);
+      return;
+    }
+
+    // Tên + avatar người gửi cho danh sách hội thoại (saveFBMessage không đặt tên cho hội thoại mới)
+    try {
+      db.run?.(
+        `UPDATE contacts
+            SET display_name = CASE WHEN (display_name = '' OR display_name IS NULL) AND ? != '' THEN ? ELSE display_name END,
+                avatar_url   = CASE WHEN ? != '' THEN ? ELSE avatar_url END
+          WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'`,
+        [senderName, senderName, n.senderAvatarUrl, n.senderAvatarUrl, page.facebook_id, n.senderId]
+      );
+    } catch {}
+
+    EventBroadcaster.emit('fb:onMessage', {
+      fbAccountId: page.facebook_id,
+      message: {
+        body, timestamp: String(ts), userID: n.senderId, messageID: n.messageId,
+        replyToID: n.senderId, type: 'user', attachments: { id: 0, url: null }, isSelf: false,
+      },
+      ...(senderName ? { contactName: senderName } : {}),
+      ...(n.senderAvatarUrl ? { contactAvatar: n.senderAvatarUrl } : {}),
+    });
+    Logger.log(`[FacebookService:${this.accountId}] Page message → page=${page.facebook_id} from=${n.senderId} "${body.slice(0, 50)}"`);
   }
 
   private async handleIncomingMessage(msg: FBMQTTMessage): Promise<void> {

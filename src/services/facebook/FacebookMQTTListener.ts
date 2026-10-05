@@ -522,6 +522,31 @@ export class FacebookMQTTListener extends EventEmitter {
       return;
     }
 
+    // ─── 3b. Thông báo tin nhắn Page (payload dạng mảng byte) ────────────────
+    // Hộp thư Page đi qua kết nối của tài khoản cá nhân: Facebook đẩy
+    // deltaBiiMPageMessageNotification xuống đây (MQTT riêng của Page bị
+    // ERROR_QUEUE_LOST). Giải mã rồi phát 'pageMessage' cho FacebookService.
+    if (Array.isArray((delta as any).payload)) {
+      try {
+        const inner = JSON.parse(Buffer.from((delta as any).payload).toString('utf8'));
+        for (const d of inner?.deltas || []) {
+          const n = d?.deltaBiiMPageMessageNotification;
+          if (n && n.pageId && n.messageId && n.senderId) {
+            this.emit('pageMessage', {
+              pageId: String(n.pageId),
+              messageId: String(n.messageId),
+              senderId: String(n.senderId),
+              body: typeof n.body === 'string' ? n.body : '',
+              title: n.title || '',
+              pageName: n.pageName || '',
+              senderAvatarUrl: n.senderProfPicUrl || '',
+            });
+          }
+        }
+      } catch {}
+      return;
+    }
+
     // ─── 4. Deltas requiring messageMetadata ─────────────────────────────────
     if (!delta?.messageMetadata) {
       Logger.log(`[FBMqtt:${this.accountId}] Unhandled delta: ${JSON.stringify(delta).slice(0, 200)}`);

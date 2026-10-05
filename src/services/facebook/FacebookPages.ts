@@ -179,3 +179,18 @@ export function isOwnSender(
   if (!userId) return false;
   return userId === facebookId || (!!delegatePageId && userId === delegatePageId);
 }
+
+/**
+ * Tên người gửi từ tiêu đề thông báo Page.
+ * Facebook gửi title dạng "<tên người gửi> đến <tên Page>" (deltaBiiMPageMessageNotification).
+ * Bỏ phần " đến <pageName>" ở cuối để lấy tên người gửi; không khớp thì trả nguyên title.
+ */
+export function parsePageSenderName(title: string | undefined | null, pageName: string | undefined | null): string {
+  const raw = (title || '').trim();
+  if (!raw) return '';
+  if (pageName && raw.endsWith(pageName)) {
+    const head = raw.slice(0, raw.length - pageName.length).replace(/\s*đến\s*$/u, '').trim();
+    if (head) return head;
+  }
+  return raw;
+}

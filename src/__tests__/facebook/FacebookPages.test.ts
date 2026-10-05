@@ -1,5 +1,5 @@
 import {
-  stripPageCookie, buildPageCookie, parseManagedPages, mergePageList, pickFBCookie, isOwnSender,
+  stripPageCookie, buildPageCookie, parseManagedPages, mergePageList, pickFBCookie, isOwnSender, parsePageSenderName,
   FBAccountCookieRow, ManagedPage,
 } from '../../services/facebook/FacebookPages';
 
@@ -104,3 +104,19 @@ describe('isOwnSender', () => {
     expect(isOwnSender(undefined, undefined, null)).toBe(false);
   });
 });
+
+describe('parsePageSenderName', () => {
+  it('bỏ hậu tố " đến <tên Page>"', () => {
+    expect(parsePageSenderName('Nịnh Thanh Khương đến Media Soec', 'Media Soec')).toBe('Nịnh Thanh Khương');
+  });
+  it('title rỗng trả chuỗi rỗng', () => {
+    expect(parsePageSenderName('', 'Media Soec')).toBe('');
+    expect(parsePageSenderName(null, null)).toBe('');
+  });
+  it('không khớp tên Page thì giữ nguyên title', () => {
+    expect(parsePageSenderName('Ai đó nhắn tin', 'Media Soec')).toBe('Ai đó nhắn tin');
+  });
+  it('tên Page rỗng thì giữ nguyên title', () => {
+    expect(parsePageSenderName('Khách A đến Shop', '')).toBe('Khách A đến Shop');
+  });
+})
