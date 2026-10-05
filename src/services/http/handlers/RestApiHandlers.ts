@@ -590,22 +590,6 @@ export const handlers = {
   },
 
   // ═══════════════════════════════════════════════════════════════
-  // PROXIES
-  // ═══════════════════════════════════════════════════════════════
-
-  getProxies(employee: RegisteredEmployee, _params: any): JsonResponse {
-    const proxies = db().getProxies() || [];
-    return success({ items: proxies });
-  },
-
-  getProxyById(employee: RegisteredEmployee, params: any): JsonResponse {
-    const id = parseInt(params.id) || 0;
-    if (!id) return error('Missing proxy id');
-    const proxy = db().getProxyById(id);
-    return success(proxy || null);
-  },
-
-  // ═══════════════════════════════════════════════════════════════
   // FRIENDS — last fetched
   // ═══════════════════════════════════════════════════════════════
 
