@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 05/10/2026 |
-| Trạng thái | Chờ duyệt |
+| Trạng thái | Đã duyệt (05/10/2026) |
 | Intent | `docs/intent/2026-10-03-facebook-page-inbox.md` (hướng A: giao thức không chính thức qua phiên cá nhân) |
 | Bằng chứng kỹ thuật | `docs/reports/2026-10-03-facebook-page-inbox-spike.md` |
 | Kế hoạch triển khai | `docs/plans/2026-10-03-facebook-page-inbox.md` |
