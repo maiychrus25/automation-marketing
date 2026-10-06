@@ -4,6 +4,7 @@ import {useAccountStore} from '@/store/accountStore';
 import {useAppStore} from '@/store/appStore';
 import {useEmployeeStore} from '@/store/employeeStore';
 import ipc from '@/lib/ipc'
+import { toLocalMediaUrl } from '@/lib/localMedia';
 import DataAccessor from '@/lib/data/DataAccessor';;
 import { messageQueue, generateTempId, extractMsgIdFromResponse } from '@/lib/MessageQueue';
 import { Spinner } from '@/components/common/PageLoading';
@@ -53,7 +54,14 @@ interface ContactCardSuggestion {
 
 export default function MessageInput() {
   const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
+  const [sending, setSendingState] = useState(false);
+  // Guard chống gửi lặp: ref đọc ĐỒNG BỘ (state React cập nhật trễ 1 render nên bấm nhanh
+  // nhiều lần đều lọt qua guard; Page gửi chậm càng dễ spam). setSending set cả ref lẫn state.
+  const sendingRef = useRef(false);
+  const setSending = (v: boolean) => { sendingRef.current = v; setSendingState(v); };
+  // Debounce chống gửi lặp: gửi FB là optimistic (enqueue rồi return ngay) nên sendingRef hạ
+  // gần như tức thì → giữ Enter / bấm nhanh vẫn spam. Chặn mọi lần gửi cách nhau < 500ms.
+  const lastSendAtRef = useRef(0);
   const [joiningTelegramGroup, setJoiningTelegramGroup] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showStickerPicker, setShowStickerPicker] = useState(false);
@@ -99,6 +107,9 @@ export default function MessageInput() {
   const [mentions, setMentions] = useState<Array<{ uid: string; pos: number; len: number; text: string }>>([]);
   // Clipboard images state: {id, dataUrl, blob}[]
   const [clipboardImages, setClipboardImages] = useState<Array<{ id: string; dataUrl: string; blob: Blob }>>([]);
+  // Ảnh đính kèm từ nút ảnh (Page): chờ ở ô soạn để thêm chú thích rồi gửi kèm.
+  // dataUrl để render thumbnail (như kéo/paste); path để gửi file.
+  const [pendingImages, setPendingImages] = useState<Array<{ path: string; dataUrl: string }>>([]);
   // Drag-and-drop state
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -1707,10 +1718,59 @@ export default function MessageInput() {
     const msgText = el ? getPlainText(el).replace(/\u200B/g, '').trim() : '';
     const hasText = !!msgText;
     const hasImages = clipboardImages.length > 0;
-    if (!hasText && !hasImages) return;
-    if (!activeThreadId || !activeAccountId || sending) return;
+    const hasPending = pendingImages.length > 0;
+    if (!hasText && !hasImages && !hasPending) return;
+    // Page: ảnh phải kèm chú thích mới gửi được (gửi ảnh-trần qua Business Suite chưa tin cậy).
+    if (hasPending && isFacebook(activeContact?.channel) && !hasText) {
+      showNotification('Vui lòng nhập chú thích đi kèm ảnh để gửi', 'warning');
+      textareaRef.current?.focus();
+      return;
+    }
+    if (!activeThreadId || !activeAccountId || sendingRef.current) return;
+    const nowTs = Date.now();
+    if (nowTs - lastSendAtRef.current < 500) return; // chống gửi lặp (giữ Enter / bấm nhanh)
+    lastSendAtRef.current = nowTs;
     const auth = getAuth();
     if (!auth) return;
+
+    // ── Facebook: gửi ảnh đang chờ ở ô soạn + chú thích (ảnh + caption cùng lúc) ──
+    if (hasPending && isFacebook(activeContact?.channel)) {
+      const imgs = pendingImages.map((p) => p.path);
+      const caption = msgText;
+      setPendingImages([]);
+      justSentRef.current = true;
+      if (el) el.innerHTML = '';
+      setText('');
+      setTimeout(() => { justSentRef.current = false; }, 50);
+      setSending(true);
+      const ch = activeContact!.channel as any;
+      const tempId = generateTempId();
+      addMessage(activeAccountId, activeThreadId, {
+        msg_id: tempId, owner_zalo_id: activeAccountId, thread_id: activeThreadId,
+        thread_type: activeThreadType, sender_id: activeAccountId, content: caption,
+        msg_type: 'image', timestamp: Date.now(), is_sent: 1, status: 'sending', channel: ch,
+        send_status: 'sending', temp_id: tempId, media_type: 'image',
+        attachments: JSON.stringify(imgs.map((fp) => ({ type: 'image', localPath: fp }))),
+        local_paths: JSON.stringify(imgs.reduce((acc, fp, i) => ({ ...acc, [`img${i}`]: fp }), {})),
+      });
+      messageQueue.enqueue({
+        tempId, zaloId: activeAccountId, threadId: activeThreadId, threadType: activeThreadType, channel: ch,
+        sendFn: async () => {
+          try {
+            const res = await ipc.fb?.sendAttachments({
+              accountId: activeAccountId, threadId: activeThreadId,
+              filePaths: imgs, body: caption || undefined,
+              typeChat: activeThreadType === 0 ? 'user' : null,
+            });
+            if (!res?.success) return { success: false, error: res?.error || 'Gửi ảnh Facebook thất bại' };
+            return { success: true, msgId: (res as any)?.messageId };
+          } catch (err: any) { return { success: false, error: err?.message || String(err) }; }
+        },
+        onSuccess: () => { removeMessage(activeAccountId, activeThreadId, tempId); },
+      });
+      setTimeout(() => setSending(false), 0);
+      return;
+    }
 
     // ── Edit mode: call editMessage instead of sendMessage ────────────────
     if (editingMsg && hasText && !hasImages) {
@@ -2088,6 +2148,22 @@ export default function MessageInput() {
     const quotePayload = buildQuotePayload(replyTo);
     const ch = activeContact?.channel || CHANNEL.ZALO;
     const filePaths = result.filePaths;
+
+    // Page Facebook: đưa ảnh vào ô soạn để thêm chú thích rồi gửi kèm (gửi ảnh + caption cùng lúc).
+    // FB thường giữ gửi ngay như cũ (gửi ảnh-trần vẫn tới nơi qua đường chuẩn).
+    const acc = getActiveAccount();
+    if (isFacebook(ch) && !!acc?.parent_zalo_id) {
+      for (const fp of filePaths) {
+        let dataUrl = toLocalMediaUrl(fp);
+        try {
+          const r = await ipc.file?.readImageAsBase64({ localPath: fp });
+          if (r?.success && r.base64) dataUrl = `data:${r.mimeType || 'image/jpeg'};base64,${r.base64}`;
+        } catch {}
+        setPendingImages((prev) => [...prev, { path: fp, dataUrl }]);
+      }
+      textareaRef.current?.focus();
+      return;
+    }
 
     // ── Tạo 1 temp batch preview (hiển thị ngay khi đang upload) ──
     const batchTempId = generateTempId();
@@ -2507,7 +2583,7 @@ export default function MessageInput() {
 
   const handleSendStickerItem = async (sticker: any) => {
     const auth = getAuth();
-    if (!auth || !activeThreadId || sending) return;
+    if (!auth || !activeThreadId || sendingRef.current) return;
     setShowStickerPicker(false);
     setSending(true);
     try {
@@ -2533,7 +2609,7 @@ export default function MessageInput() {
   /** Send sticker from inline suggestion bar and clear text + suggestions */
   const handleInlineStickerSend = async (sticker: any) => {
     const auth = getAuth();
-    if (!auth || !activeThreadId || sending) return;
+    if (!auth || !activeThreadId || sendingRef.current) return;
     setInlineStickerSuggestions([]);
     inlineStickerLastKwRef.current = '';
     setSending(true);
@@ -3178,6 +3254,32 @@ export default function MessageInput() {
         </div>
       )}
 
+      {pendingImages.length > 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800 overflow-x-auto">
+          <span className="text-xs text-gray-400 flex-shrink-0">Ảnh sẽ gửi kèm chú thích:</span>
+          {pendingImages.map((img, idx) => (
+            <div key={img.path + idx} className="relative flex-shrink-0 group/clip">
+              <img
+                src={img.dataUrl}
+                alt="pending"
+                title={img.path}
+                className="w-16 h-16 rounded-lg object-cover border border-gray-600"
+              />
+              <button
+                onClick={() => setPendingImages((prev) => prev.filter((_, i) => i !== idx))}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-600 hover:bg-red-500 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-lg transition-colors"
+                title="Xóa ảnh"
+              >✕</button>
+            </div>
+          ))}
+          <button
+            onClick={() => setPendingImages([])}
+            className="flex-shrink-0 text-xs text-gray-400 hover:text-red-400 px-2 py-1 rounded hover:bg-gray-700 transition-colors ml-auto"
+            title="Xóa tất cả"
+          >Xóa tất cả</button>
+        </div>
+      )}
+
       {/* Local label row - Pancake-style horizontal pills */}
       {showLocalLabels && localLabels.length > 0 && (
         <div className="flex items-start gap-1.5 px-3 py-2 border-b border-gray-700/50 transition-all">
@@ -3364,7 +3466,7 @@ export default function MessageInput() {
                 accountId={activeAccountId || ''}
                 onSelect={async (sticker) => {
                   setShowStickerPicker(false);
-                  if (!activeThreadId || sending) return;
+                  if (!activeThreadId || sendingRef.current) return;
                   setSending(true);
                   try {
                     await ipc.telegramUser?.sendSticker({
@@ -3396,8 +3498,14 @@ export default function MessageInput() {
         {channelCap.supportsImage && hasChatPermission && (
           <ToolbarBtn
             onClick={() => {
-              setLibraryPickerType('image');
-              setShowLibraryPicker(true);
+              // Page: chọn ảnh từ máy → đưa vào ô soạn để thêm chú thích rồi gửi kèm.
+              const acc = getActiveAccount();
+              if (isFacebook(activeContact?.channel) && !!acc?.parent_zalo_id) {
+                void handleSendImage();
+              } else {
+                setLibraryPickerType('image');
+                setShowLibraryPicker(true);
+              }
             }}
             title="Gửi ảnh"
             disabled={sending}
@@ -4063,7 +4171,7 @@ export default function MessageInput() {
         </div>
 
         {/* Send or Like */}
-        {(text.trim() || clipboardImages.length > 0) ? (
+        {(text.trim() || clipboardImages.length > 0 || pendingImages.length > 0) ? (
           <button
             onClick={handleSend}
             disabled={sending}

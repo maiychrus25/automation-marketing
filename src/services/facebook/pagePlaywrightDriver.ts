@@ -50,6 +50,7 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
   private lastText = '';
   private imgBaseline = 0;
   private currentThreadId = '';
+  private lastSendHadFiles = false;
 
   constructor(private page: Page, private delegatePageId: string) {}
 
@@ -58,13 +59,24 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     return (await this.page.locator(PAGE_BIZ_SUITE.likeButton).count()) === 0;
   }
 
-  /** Số ảnh trong trang (avatar + ảnh tin); dùng mốc so sánh để xác nhận ảnh đã lên khung. */
+  /** Số ảnh ĐI (outgoing, lệch phải) trong khung — mốc để xác nhận ảnh GỬI đã lên khung. */
   private async imageCount(): Promise<number> {
-    return this.page.evaluate(() =>
-      document.querySelectorAll('img[src*="fbcdn"],img[src*="scontent"],img[src^="blob:"]').length);
+    return this.page.evaluate(() => {
+      const W = window.innerWidth;
+      let n = 0;
+      document.querySelectorAll('img').forEach((im) => {
+        const el = im as HTMLImageElement; const r = el.getBoundingClientRect(); const src = el.src || '';
+        if (!/fbcdn|scontent/.test(src)) return;
+        if (r.width < 60 || r.height < 60 || r.x < 480) return;
+        if ((r.x + r.width) < (W - 150)) return;   // chỉ đếm ảnh ĐI (hugs phải)
+        n++;
+      });
+      return n;
+    });
   }
 
   async openThread(threadId: string): Promise<void> {
+    this.lastSendHadFiles = false; // reset đầu mỗi lần gửi
     if (!this.delegatePageId) throw new Error('thiếu delegate page id của Page');
     if (!isSendableThreadId(threadId)) throw new Error(`threadId không hợp lệ: ${threadId}`);
     const composer = this.page.locator(PAGE_BIZ_SUITE.composer).first();
@@ -92,6 +104,7 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
   }
 
   async attachFiles(paths: string[]): Promise<void> {
+    this.lastSendHadFiles = true;
     for (const p of paths) {
       if (!fs.existsSync(p)) throw new Error(`file không tồn tại: ${p}`);
     }
@@ -167,25 +180,15 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
   }
 
   async waitSent(timeoutMs: number): Promise<void> {
-    // Xác nhận GIAO HÀNG bằng tín hiệu dương, không phải "composer trống":
-    //  - có text/caption → chờ đúng chữ hiện thành bong bóng trong khung.
-    //  - không caption (ảnh/file) → chờ số ảnh trong khung tăng so với mốc trước khi đính kèm.
-    const text = this.lastText.trim();
-    if (text) {
-      try {
-        await this.page.locator('div[dir="auto"]', { hasText: text }).first()
-          .waitFor({ state: 'visible', timeout: timeoutMs });
-        return;
-      } catch {
-        throw new Error('không xác nhận được tin đã lên khung (có thể chưa gửi được)');
-      }
-    }
+    // Xác nhận bằng "nội dung đã được tiêu thụ" (nút "Gửi lượt thích" quay lại) cho MỌI loại.
+    // Tin cậy cho text/emoji và ảnh-có-caption → KHÔNG fail giả → KHÔNG kích hoạt queue retry
+    // (retry là nguồn spam vì trình duyệt thật ra đã gửi). getByText/đếm-ảnh hay fail giả nên bỏ.
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if ((await this.imageCount()) > this.imgBaseline) return;
-      await this.page.waitForTimeout(500);
+      if (!(await this.hasPendingContent())) return;
+      await this.page.waitForTimeout(400);
     }
-    throw new Error('không xác nhận được đính kèm đã lên khung (có thể chưa gửi được)');
+    throw new Error('quá hạn chờ xác nhận đã gửi');
   }
 }
 

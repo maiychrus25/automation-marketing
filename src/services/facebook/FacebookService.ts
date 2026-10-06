@@ -2379,20 +2379,15 @@ export class FacebookService {
    * nên gửi hụt sẽ trả lỗi thay vì báo success giả.
    */
   public async sendPageAttachment(threadId: string, filePath: string, body?: string): Promise<FBSendResult> {
-    // Gửi ảnh/file từ Page qua Business Suite CHỈ xác nhận giao hàng tin cậy khi đi kèm một
-    // dòng chữ (chờ chữ đó hiện thành bong bóng). Ảnh gửi KHÔNG kèm chữ thì chập chờn và không
-    // có tín hiệu DOM đáng tin để xác nhận (dễ báo success giả). Giao diện hiện gửi ảnh KHÔNG
-    // kèm chữ → tạm chặn ảnh/file từ Page, để làm đầy đủ ở Approach A (bridge Go, có ack thật).
+    // Xác nhận giao hàng bằng tín hiệu dương: có caption → chờ chữ hiện; không caption → chờ
+    // một ảnh ĐI (outgoing) mới xuất hiện trong khung. Gửi hụt sẽ báo lỗi, không success giả.
     const { classifyFile } = require('./pageSendHelpers');
-    if (body && body.trim()) {
-      const result = await this.sendViaPageBrowser(threadId, {
-        text: body,
-        files: [{ path: filePath, type: classifyFile(filePath) }],
-      });
-      if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
-      return result;
-    }
-    return { success: false, error: 'Gửi ảnh/file từ Page đang hoàn thiện (sẽ có ở bản tới). Hiện gửi được tin nhắn văn bản.' };
+    const result = await this.sendViaPageBrowser(threadId, {
+      text: body,
+      files: [{ path: filePath, type: classifyFile(filePath) }],
+    });
+    if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
+    return result;
   }
 
   public async getThreadList(): Promise<FBThread[]> {

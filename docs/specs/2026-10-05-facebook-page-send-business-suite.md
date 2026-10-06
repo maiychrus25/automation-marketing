@@ -87,3 +87,20 @@ class FacebookPageBrowserSender {
 ## 6. Phạm vi đợt sau (không làm bây giờ)
 - Approach A (mở rộng bridge Go gửi vai Page qua task native) — thay thế Business Suite browser khi ổn định.
 - Reaction/thu hồi/sửa tin, reply trích dẫn chính xác, nhiều Page gửi song song quy mô lớn.
+
+## 7. Roadmap mở rộng Page (PO 06/10/2026)
+
+Thứ tự ưu tiên PO đưa ra:
+1. Nhận đủ media còn lại: video / file / voice (hiện mới có ảnh).
+2. Sticker + icon (thả tim): gửi & nhận.
+3. Gửi ảnh kèm chú thích (đã chạy; hoàn thiện UX).
+4. Chất lượng / hiệu năng / ổn định như Facebook: **load lại tin nhắn cũ (history)**, **hiển thị time gửi đúng**.
+
+### Ghi chú chiến lược (quan trọng)
+Mục (1),(2) có thể làm tiếp bằng trích DOM Business Suite như ảnh, nhưng mục (4) —
+**history + timestamp đúng** — thì **trích DOM KHÔNG kham nổi** (DOM virtualize, không phân
+trang, không có mốc thời gian chuẩn). Hai yêu cầu này đòi **dữ liệu tin có cấu trúc**, tức
+phải **dò ngược GraphQL BizInbox của Business Suite** (list hội thoại + get messages có
+timestamp + phân trang) — chính "Approach B đầy đủ" đã nêu. Khi tới mục (4), nên chuyển
+receive-side sang BizInbox GraphQL (thay cho scraping DOM), và cân nhắc làm sớm vì nó cũng
+bao trọn (1),(2) một cách sạch sẽ. Đây là nền bền thật sự cho hộp thư Page.
