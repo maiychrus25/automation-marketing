@@ -15,6 +15,82 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.12.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '📨 Hộp thư Page Facebook — trả lời khách bằng Page ngay trong MaiHub',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Page do tài khoản cá nhân quản trị hiện như tài khoản con, bật/tắt từng Page',
+          'Gửi tin nhắn văn bản với vai Page (khách nhận được, đứng tên Page)',
+          'Nhận và hiển thị văn bản, ảnh, video khách gửi vào Page',
+          'Gửi ảnh kèm chú thích với vai Page',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Chống gửi lặp (emoji, bấm gửi nhanh) khi trả lời bằng Page',
+        ],
+      },
+    ],
+  },
+  {
+    version: '26.11.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '⬆️ Tự cập nhật trong ứng dụng',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Kiểm tra bản mới trên GitHub Releases và cập nhật ngay trong app',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Cập nhật: từ chối tải bản sai phiên bản; giữ danh sách bản cập nhật qua các lần kiểm tra',
+        ],
+      },
+      {
+        category: 'security',
+        items: [
+          'Relay: chỉ cho phép kênh nhân viên trong danh sách; chặn rò thông tin proxy',
+        ],
+      },
+    ],
+  },
+  {
+    version: '26.10.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '📣 Facebook Poster — đăng bài và tương tác nhóm/trang hàng loạt',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Đăng bài lên nhóm và trang Facebook qua nhiều hồ sơ trình duyệt',
+          'Tìm và tham gia nhóm, thu thập bình luận, xem lịch sử chạy',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Ổn định chạy nhiều hồ sơ; giới hạn URL trong phạm vi Facebook; khử công thức trong tệp CSV',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.9.0',
     date: '10/2026',
     type: 'major',
