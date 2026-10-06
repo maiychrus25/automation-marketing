@@ -129,8 +129,8 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     await composer.press('Enter');
   }
 
-  async readIncomingImages(_threadId: string, max: number): Promise<string[]> {
-    // openThread đã do caller (doRead) gọi. Cuộn đáy rồi lấy ảnh-tin ĐẾN (khách gửi).
+  async readIncomingMedia(_threadId: string, max: number): Promise<{ type: 'image' | 'video'; url: string }[]> {
+    // openThread đã do caller (doRead) gọi. Cuộn đáy rồi lấy media-tin ĐẾN (khách gửi).
     try {
       await this.page.evaluate(() => {
         document.querySelectorAll('*').forEach((el) => {
@@ -139,28 +139,31 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
       });
       await this.page.waitForTimeout(1200);
     } catch { /* ignore */ }
-    const urls = await this.page.evaluate((limit) => {
+    return this.page.evaluate((limit) => {
       const W = window.innerWidth;
-      const out: { src: string; y: number }[] = [];
+      const out: { type: 'image' | 'video'; url: string; y: number }[] = [];
+      // ảnh đến: hugs trái, đủ lớn (bỏ avatar/emoji), cột phải (bỏ danh sách)
       document.querySelectorAll('img').forEach((im) => {
-        const el = im as HTMLImageElement;
-        const r = el.getBoundingClientRect();
-        const src = el.src || '';
+        const el = im as HTMLImageElement; const r = el.getBoundingClientRect(); const src = el.src || '';
         if (!/fbcdn|scontent/.test(src)) return;
-        if (r.width < 60 || r.height < 60) return;       // bỏ avatar/emoji nhỏ
-        if (r.x < 480) return;                            // bỏ cột danh sách bên trái
-        const rightEdge = r.x + r.width;
-        const incoming = rightEdge < (W - 150);           // ảnh đi hugs phải; đến lệch trái
-        if (!incoming) return;
-        out.push({ src, y: r.y });
+        if (r.width < 60 || r.height < 60 || r.x < 480) return;
+        if ((r.x + r.width) >= (W - 150)) return;          // hugs phải = ảnh đi
+        out.push({ type: 'image', url: src, y: r.y });
       });
-      out.sort((a, b) => b.y - a.y);                      // mới (dưới) → cũ
+      // video đến: <video src=fbcdn>, hugs trái
+      document.querySelectorAll('video').forEach((v) => {
+        const el = v as HTMLVideoElement; const r = el.getBoundingClientRect();
+        const src = el.src || el.currentSrc || '';
+        if (!/fbcdn|scontent/.test(src) || r.x < 480) return;
+        if ((r.x + r.width) >= (W - 150)) return;
+        out.push({ type: 'video', url: src, y: r.y });
+      });
+      out.sort((a, b) => b.y - a.y);                       // mới (dưới) → cũ
       const seen = new Set<string>();
-      const res: string[] = [];
-      for (const o of out) { if (!seen.has(o.src)) { seen.add(o.src); res.push(o.src); } if (res.length >= limit) break; }
+      const res: { type: 'image' | 'video'; url: string }[] = [];
+      for (const o of out) { if (!seen.has(o.url)) { seen.add(o.url); res.push({ type: o.type, url: o.url }); } if (res.length >= limit) break; }
       return res;
     }, max);
-    return urls;
   }
 
   async waitSent(timeoutMs: number): Promise<void> {
@@ -188,6 +191,7 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
 
 interface Live { ctx: BrowserContext; sender: FacebookPageBrowserSender; idleTimer: NodeJS.Timeout | null; }
 const live = new Map<string, Live>();
+const launching = new Map<string, Promise<FacebookPageBrowserSender>>();
 
 export interface PageBrowserSenderDeps {
   getCookie: () => string;
@@ -199,7 +203,15 @@ export async function getPageBrowserSender(pageAccountId: string, deps: PageBrow
   if (!deps.delegatePageId) throw new Error('Page thiếu delegate page id — không gửi được qua Business Suite');
   const existing = live.get(pageAccountId);
   if (existing) { armIdle(pageAccountId); return existing.sender; }
+  // Chống mở trình duyệt đồng thời (thông báo Page hay bị phát trùng) trên cùng userDataDir.
+  const pending = launching.get(pageAccountId);
+  if (pending) return pending;
+  const p = launchSender(pageAccountId, deps).finally(() => launching.delete(pageAccountId));
+  launching.set(pageAccountId, p);
+  return p;
+}
 
+async function launchSender(pageAccountId: string, deps: PageBrowserSenderDeps): Promise<FacebookPageBrowserSender> {
   const ctx = await chromium.launchPersistentContext(resolveUserDataDir(pageAccountId), {
     executablePath: resolveEngineExecutable(),
     headless: process.env.FB_PAGE_HEADLESS === '0' ? false : true,

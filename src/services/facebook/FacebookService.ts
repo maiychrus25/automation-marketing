@@ -59,6 +59,8 @@ export class FacebookService {
   private _isPage = false;
   /** id Page cổ điển: tin của Page có thể mang id này thay vì id profile */
   private _delegatePageId: string | null = null;
+  /** Chống xử lý trùng thông báo tin Page (Facebook hay phát trùng 2 lần). */
+  private _recentPageMsgIds = new Set<string>();
   /** Last known good MQTT seqId - dùng làm fallback khi getLastSeqId thất bại,
    *  tránh connect với seqId=0 → ERROR_QUEUE_OVERFLOW */
   private _lastGoodSeqId: string = '0';
@@ -522,6 +524,12 @@ export class FacebookService {
     title: string; pageName: string; senderAvatarUrl: string;
   }): Promise<void> {
     if (!n.senderId || n.senderId === '0' || !n.messageId) return;
+    // Dedupe: Facebook hay phát thông báo Page 2 lần → tránh fetch media / lưu 2 lần.
+    if (this._recentPageMsgIds.has(n.messageId)) return;
+    this._recentPageMsgIds.add(n.messageId);
+    if (this._recentPageMsgIds.size > 300) {
+      this._recentPageMsgIds.delete(this._recentPageMsgIds.values().next().value as string);
+    }
     const db = DatabaseService.getInstance();
     // Page con đang bật của chính tài khoản này, khớp delegate_page_id
     const page = db.queryOne<any>(
@@ -533,14 +541,18 @@ export class FacebookService {
     const ts = Date.now();
     const senderName = parsePageSenderName(n.title, n.pageName);
 
-    // Thông báo Page chỉ mang body dạng chữ; ẢNH thì body là "Đã gửi một ảnh" (không kèm ảnh).
-    // Lấy ảnh thật từ Business Suite qua trình duyệt Page rồi lưu type=image.
-    if (/đã gửi.*ảnh|sent .*photo/i.test(n.body || '')) {
-      const okImage = await this.saveIncomingPageImage(page, n, senderName, ts).catch((e) => {
-        Logger.warn(`[FacebookService:${this.accountId}] Page image receive failed: ${e?.message}`); return false;
+    // Thông báo Page chỉ mang body chữ; media thì body là "Đã gửi một ảnh / tin nhắn video"
+    // (không kèm nội dung). Lấy media thật từ Business Suite qua trình duyệt Page rồi lưu đúng type.
+    const wantType: 'image' | 'video' | null =
+      /đã gửi.*ảnh|sent .*photo/i.test(n.body || '') ? 'image'
+      : /tin nhắn video|đã gửi.*video|sent .*video/i.test(n.body || '') ? 'video'
+      : null;
+    if (wantType) {
+      const okMedia = await this.saveIncomingPageMedia(page, n, senderName, ts, wantType).catch((e) => {
+        Logger.warn(`[FacebookService:${this.accountId}] Page media receive failed: ${e?.message}`); return false;
       });
-      if (okImage) return;
-      // không lấy được ảnh → rơi xuống lưu text thông báo để không mất tin
+      if (okMedia) return;
+      // không lấy được media → rơi xuống lưu text thông báo để không mất tin
     }
 
     const body = n.body || '[Tin nhắn trên Page]';
@@ -581,14 +593,15 @@ export class FacebookService {
   }
 
   /**
-   * Lấy ảnh khách gửi vào Page từ Business Suite (qua trình duyệt Page), tải về, lưu type=image + emit.
-   * Trả true nếu lưu được ít nhất 1 ảnh. Thông báo Page không kèm ảnh nên phải đọc DOM để lấy URL.
+   * Lấy media (ảnh/video) khách gửi vào Page từ Business Suite (qua trình duyệt Page), tải về,
+   * lưu đúng type + emit. Trả true nếu lưu được. Thông báo Page không kèm media nên phải đọc DOM.
    */
-  private async saveIncomingPageImage(
+  private async saveIncomingPageMedia(
     page: { id: string; facebook_id: string },
     n: { pageId: string; messageId: string; senderId: string; senderAvatarUrl: string },
     senderName: string,
     ts: number,
+    wantType: 'image' | 'video',
   ): Promise<boolean> {
     const { getPageBrowserSender } = require('./pagePlaywrightDriver');
     const { resolveFBCookie } = require('./FacebookAccountCookie');
@@ -596,20 +609,23 @@ export class FacebookService {
     const pageRow = db.getFBAccount(page.id) as any;
     const cookie = resolveFBCookie(pageRow) || '';
     const sender = await getPageBrowserSender(page.id, { getCookie: () => cookie, delegatePageId: n.pageId });
-    const urls: string[] = await sender.readIncomingImages(n.senderId, 1);
-    if (!urls.length) return false;
+    const media: { type: 'image' | 'video'; url: string }[] = await sender.readIncomingMedia(n.senderId, 3);
+    const hit = media.find((m) => m.type === wantType) || media[0];
+    if (!hit) return false;
 
-    const filename = `page_${n.messageId.slice(-8)}_${Date.now()}.jpg`;
-    const localPath = await FileStorageService.downloadImage(
-      page.facebook_id, urls[0], filename, cookie, undefined, 'https://business.facebook.com/',
-    );
+    const type = hit.type;
+    const ext = type === 'video' ? '.mp4' : '.jpg';
+    const filename = `page_${n.messageId.slice(-8)}_${Date.now()}${ext}`;
+    const localPath = type === 'video'
+      ? await FileStorageService.downloadVideo(page.facebook_id, hit.url, filename, cookie, undefined)
+      : await FileStorageService.downloadImage(page.facebook_id, hit.url, filename, cookie, undefined, 'https://business.facebook.com/');
     if (!localPath) return false;
     const relativePath = FileStorageService.toRelativePath(localPath);
 
     db.saveFBMessage({
       id: n.messageId, account_id: page.id, thread_id: n.senderId, sender_id: n.senderId,
-      sender_name: senderName, body: null, timestamp: ts, type: 'image', is_self: 0, is_unsent: 0,
-      attachments: JSON.stringify([{ type: 'image', name: filename, localPath: relativePath }]),
+      sender_name: senderName, body: null, timestamp: ts, type, is_self: 0, is_unsent: 0,
+      attachments: JSON.stringify([{ type, name: filename, localPath: relativePath }]),
     } as any);
     try {
       db.updateLocalPaths(page.facebook_id, n.messageId, { main: relativePath });
@@ -629,7 +645,7 @@ export class FacebookService {
       message: {
         body: null, timestamp: String(ts), userID: n.senderId, messageID: n.messageId,
         replyToID: n.senderId, type: 'user', isSelf: false,
-        attachments: { id: 1, url: null, attachmentType: 'image', name: filename, localPath: relativePath },
+        attachments: { id: 1, url: null, attachmentType: type, name: filename, localPath: relativePath },
       },
       ...(senderName ? { contactName: senderName } : {}),
       ...(n.senderAvatarUrl ? { contactAvatar: n.senderAvatarUrl } : {}),
@@ -637,7 +653,7 @@ export class FacebookService {
     EventBroadcaster.emit('event:localPath', {
       zaloId: page.facebook_id, msgId: n.messageId, threadId: n.senderId, localPaths: { main: relativePath },
     });
-    Logger.log(`[FacebookService:${this.accountId}] Page IMAGE received → page=${page.facebook_id} from=${n.senderId} ${relativePath}`);
+    Logger.log(`[FacebookService:${this.accountId}] Page ${type.toUpperCase()} received → page=${page.facebook_id} from=${n.senderId} ${relativePath}`);
     return true;
   }
 

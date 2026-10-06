@@ -30,9 +30,11 @@ export interface PageInboxDriver {
   attachFiles(paths: string[]): Promise<void>;
   /** Chờ tin vừa gửi lên khung; ném nếu quá hạn. */
   waitSent(timeoutMs: number): Promise<void>;
-  /** URL ảnh ĐẾN (khách gửi) mới nhất trong khung, mới → cũ. Tối đa `max` cái. */
-  readIncomingImages(threadId: string, max: number): Promise<string[]>;
+  /** Media ĐẾN (khách gửi) mới nhất trong khung, mới → cũ. Tối đa `max` cái. */
+  readIncomingMedia(threadId: string, max: number): Promise<PageIncomingMedia[]>;
 }
+
+export interface PageIncomingMedia { type: 'image' | 'video'; url: string; }
 
 const SENT_TIMEOUT_MS = 20000;
 
@@ -51,8 +53,8 @@ export class FacebookPageBrowserSender {
     return run;
   }
 
-  /** Lấy URL ảnh ĐẾN mới nhất của hội thoại (dùng chung mutex với gửi để không tranh trang). */
-  readIncomingImages(threadId: string, max = 3): Promise<string[]> {
+  /** Lấy media ĐẾN mới nhất của hội thoại (dùng chung mutex với gửi để không tranh trang). */
+  readIncomingMedia(threadId: string, max = 3): Promise<PageIncomingMedia[]> {
     const run = this.queue.then(
       () => this.doRead(threadId, max),
       () => this.doRead(threadId, max),
@@ -61,10 +63,10 @@ export class FacebookPageBrowserSender {
     return run;
   }
 
-  private async doRead(threadId: string, max: number): Promise<string[]> {
+  private async doRead(threadId: string, max: number): Promise<PageIncomingMedia[]> {
     try {
       await this.deps.driver.openThread(threadId);
-      return await this.deps.driver.readIncomingImages(threadId, max);
+      return await this.deps.driver.readIncomingMedia(threadId, max);
     } catch {
       return [];
     }
