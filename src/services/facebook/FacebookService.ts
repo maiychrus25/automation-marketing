@@ -532,6 +532,17 @@ export class FacebookService {
 
     const ts = Date.now();
     const senderName = parsePageSenderName(n.title, n.pageName);
+
+    // Thông báo Page chỉ mang body dạng chữ; ẢNH thì body là "Đã gửi một ảnh" (không kèm ảnh).
+    // Lấy ảnh thật từ Business Suite qua trình duyệt Page rồi lưu type=image.
+    if (/đã gửi.*ảnh|sent .*photo/i.test(n.body || '')) {
+      const okImage = await this.saveIncomingPageImage(page, n, senderName, ts).catch((e) => {
+        Logger.warn(`[FacebookService:${this.accountId}] Page image receive failed: ${e?.message}`); return false;
+      });
+      if (okImage) return;
+      // không lấy được ảnh → rơi xuống lưu text thông báo để không mất tin
+    }
+
     const body = n.body || '[Tin nhắn trên Page]';
 
     // saveFBMessage: INSERT OR IGNORE theo messageId (chống trùng khi Facebook phát lại),
@@ -567,6 +578,67 @@ export class FacebookService {
       ...(n.senderAvatarUrl ? { contactAvatar: n.senderAvatarUrl } : {}),
     });
     Logger.log(`[FacebookService:${this.accountId}] Page message → page=${page.facebook_id} from=${n.senderId} "${body.slice(0, 50)}"`);
+  }
+
+  /**
+   * Lấy ảnh khách gửi vào Page từ Business Suite (qua trình duyệt Page), tải về, lưu type=image + emit.
+   * Trả true nếu lưu được ít nhất 1 ảnh. Thông báo Page không kèm ảnh nên phải đọc DOM để lấy URL.
+   */
+  private async saveIncomingPageImage(
+    page: { id: string; facebook_id: string },
+    n: { pageId: string; messageId: string; senderId: string; senderAvatarUrl: string },
+    senderName: string,
+    ts: number,
+  ): Promise<boolean> {
+    const { getPageBrowserSender } = require('./pagePlaywrightDriver');
+    const { resolveFBCookie } = require('./FacebookAccountCookie');
+    const db = DatabaseService.getInstance();
+    const pageRow = db.getFBAccount(page.id) as any;
+    const cookie = resolveFBCookie(pageRow) || '';
+    const sender = await getPageBrowserSender(page.id, { getCookie: () => cookie, delegatePageId: n.pageId });
+    const urls: string[] = await sender.readIncomingImages(n.senderId, 1);
+    if (!urls.length) return false;
+
+    const filename = `page_${n.messageId.slice(-8)}_${Date.now()}.jpg`;
+    const localPath = await FileStorageService.downloadImage(
+      page.facebook_id, urls[0], filename, cookie, undefined, 'https://business.facebook.com/',
+    );
+    if (!localPath) return false;
+    const relativePath = FileStorageService.toRelativePath(localPath);
+
+    db.saveFBMessage({
+      id: n.messageId, account_id: page.id, thread_id: n.senderId, sender_id: n.senderId,
+      sender_name: senderName, body: null, timestamp: ts, type: 'image', is_self: 0, is_unsent: 0,
+      attachments: JSON.stringify([{ type: 'image', name: filename, localPath: relativePath }]),
+    } as any);
+    try {
+      db.updateLocalPaths(page.facebook_id, n.messageId, { main: relativePath });
+    } catch {}
+
+    try {
+      db.run?.(
+        `UPDATE contacts SET display_name = CASE WHEN (display_name = '' OR display_name IS NULL) AND ? != '' THEN ? ELSE display_name END,
+             avatar_url = CASE WHEN ? != '' THEN ? ELSE avatar_url END
+           WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'`,
+        [senderName, senderName, n.senderAvatarUrl, n.senderAvatarUrl, page.facebook_id, n.senderId]
+      );
+    } catch {}
+
+    EventBroadcaster.emit('fb:onMessage', {
+      fbAccountId: page.facebook_id,
+      message: {
+        body: null, timestamp: String(ts), userID: n.senderId, messageID: n.messageId,
+        replyToID: n.senderId, type: 'user', isSelf: false,
+        attachments: { id: 1, url: null, attachmentType: 'image', name: filename, localPath: relativePath },
+      },
+      ...(senderName ? { contactName: senderName } : {}),
+      ...(n.senderAvatarUrl ? { contactAvatar: n.senderAvatarUrl } : {}),
+    });
+    EventBroadcaster.emit('event:localPath', {
+      zaloId: page.facebook_id, msgId: n.messageId, threadId: n.senderId, localPaths: { main: relativePath },
+    });
+    Logger.log(`[FacebookService:${this.accountId}] Page IMAGE received → page=${page.facebook_id} from=${n.senderId} ${relativePath}`);
+    return true;
   }
 
   private async handleIncomingMessage(msg: FBMQTTMessage): Promise<void> {
@@ -2291,19 +2363,20 @@ export class FacebookService {
    * nên gửi hụt sẽ trả lỗi thay vì báo success giả.
    */
   public async sendPageAttachment(threadId: string, filePath: string, body?: string): Promise<FBSendResult> {
-    // Chỉ xác nhận giao hàng tin cậy khi có caption (chờ caption hiện trong khung). Ảnh/file
-    // KHÔNG caption gửi qua Business Suite còn chập chờn và chưa có tín hiệu xác nhận đáng tin
-    // (đếm ảnh bị nhiễu) → yêu cầu kèm chú thích thay vì báo success giả.
-    if (!body || !body.trim()) {
-      return { success: false, error: 'Khi gửi ảnh/file từ Page, vui lòng kèm một dòng chú thích (tính năng gửi không chú thích đang hoàn thiện).' };
-    }
+    // Gửi ảnh/file từ Page qua Business Suite CHỈ xác nhận giao hàng tin cậy khi đi kèm một
+    // dòng chữ (chờ chữ đó hiện thành bong bóng). Ảnh gửi KHÔNG kèm chữ thì chập chờn và không
+    // có tín hiệu DOM đáng tin để xác nhận (dễ báo success giả). Giao diện hiện gửi ảnh KHÔNG
+    // kèm chữ → tạm chặn ảnh/file từ Page, để làm đầy đủ ở Approach A (bridge Go, có ack thật).
     const { classifyFile } = require('./pageSendHelpers');
-    const result = await this.sendViaPageBrowser(threadId, {
-      text: body,
-      files: [{ path: filePath, type: classifyFile(filePath) }],
-    });
-    if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
-    return result;
+    if (body && body.trim()) {
+      const result = await this.sendViaPageBrowser(threadId, {
+        text: body,
+        files: [{ path: filePath, type: classifyFile(filePath) }],
+      });
+      if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
+      return result;
+    }
+    return { success: false, error: 'Gửi ảnh/file từ Page đang hoàn thiện (sẽ có ở bản tới). Hiện gửi được tin nhắn văn bản.' };
   }
 
   public async getThreadList(): Promise<FBThread[]> {

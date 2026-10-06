@@ -24,6 +24,9 @@ class FakeDriver implements PageInboxDriver {
     if (this.failWait) throw new Error('timeout chờ xác nhận');
     this.calls.push('sent');
   }
+  async readIncomingImages(): Promise<string[]> {
+    return [];
+  }
 }
 
 describe('FacebookPageBrowserSender', () => {

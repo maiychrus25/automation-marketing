@@ -49,6 +49,7 @@ function parseCookiePairs(cookieStr: string) {
 class PlaywrightPageInboxDriver implements PageInboxDriver {
   private lastText = '';
   private imgBaseline = 0;
+  private currentThreadId = '';
 
   constructor(private page: Page, private delegatePageId: string) {}
 
@@ -66,16 +67,28 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
   async openThread(threadId: string): Promise<void> {
     if (!this.delegatePageId) throw new Error('thiếu delegate page id của Page');
     if (!isSendableThreadId(threadId)) throw new Error(`threadId không hợp lệ: ${threadId}`);
+    const composer = this.page.locator(PAGE_BIZ_SUITE.composer).first();
+
+    // Tối ưu trễ: nếu đang ở ĐÚNG hội thoại và ô soạn còn đó → khỏi tải lại trang.
+    if (threadId === this.currentThreadId && !/loginpage/.test(this.page.url())) {
+      if (await composer.count()) {
+        try { await composer.waitFor({ state: 'visible', timeout: 3000 }); return; } catch { /* tải lại bên dưới */ }
+      }
+    }
+
     const url = buildThreadUrl(this.delegatePageId, threadId);
     await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     if (/loginpage/.test(this.page.url())) {
+      this.currentThreadId = '';
       throw new Error('phiên Business Suite đã đăng xuất — cần đăng nhập lại 1 lần cho Page này');
     }
     try {
-      await this.page.locator(PAGE_BIZ_SUITE.composer).first().waitFor({ state: 'visible', timeout: OPEN_TIMEOUT_MS });
+      await composer.waitFor({ state: 'visible', timeout: OPEN_TIMEOUT_MS });
     } catch {
+      this.currentThreadId = '';
       throw new Error('không mở được hội thoại (không thấy ô soạn tin)');
     }
+    this.currentThreadId = threadId;
   }
 
   async attachFiles(paths: string[]): Promise<void> {
@@ -114,6 +127,40 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     // Gửi bằng Enter MỘT lần. KHÔNG bấm nút "Gửi" và KHÔNG lặp Enter/re-click:
     // Enter sớm (trước khi upload xong) hoặc click nút đều làm Business Suite BỎ đính kèm.
     await composer.press('Enter');
+  }
+
+  async readIncomingImages(_threadId: string, max: number): Promise<string[]> {
+    // openThread đã do caller (doRead) gọi. Cuộn đáy rồi lấy ảnh-tin ĐẾN (khách gửi).
+    try {
+      await this.page.evaluate(() => {
+        document.querySelectorAll('*').forEach((el) => {
+          if ((el as HTMLElement).scrollHeight > (el as HTMLElement).clientHeight + 50) (el as HTMLElement).scrollTop = (el as HTMLElement).scrollHeight;
+        });
+      });
+      await this.page.waitForTimeout(1200);
+    } catch { /* ignore */ }
+    const urls = await this.page.evaluate((limit) => {
+      const W = window.innerWidth;
+      const out: { src: string; y: number }[] = [];
+      document.querySelectorAll('img').forEach((im) => {
+        const el = im as HTMLImageElement;
+        const r = el.getBoundingClientRect();
+        const src = el.src || '';
+        if (!/fbcdn|scontent/.test(src)) return;
+        if (r.width < 60 || r.height < 60) return;       // bỏ avatar/emoji nhỏ
+        if (r.x < 480) return;                            // bỏ cột danh sách bên trái
+        const rightEdge = r.x + r.width;
+        const incoming = rightEdge < (W - 150);           // ảnh đi hugs phải; đến lệch trái
+        if (!incoming) return;
+        out.push({ src, y: r.y });
+      });
+      out.sort((a, b) => b.y - a.y);                      // mới (dưới) → cũ
+      const seen = new Set<string>();
+      const res: string[] = [];
+      for (const o of out) { if (!seen.has(o.src)) { seen.add(o.src); res.push(o.src); } if (res.length >= limit) break; }
+      return res;
+    }, max);
+    return urls;
   }
 
   async waitSent(timeoutMs: number): Promise<void> {
