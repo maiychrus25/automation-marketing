@@ -2288,13 +2288,15 @@ export class FacebookService {
   /**
    * Gửi đính kèm (ảnh/file) vai Page qua Business Suite.
    *
-   * TẠM CHẶN: gửi đính kèm qua DOM Business Suite chưa đáng tin — upload chưa xong đã bấm gửi
-   * khiến ảnh bị bỏ, trong khi tín hiệu xác nhận (nút "Gửi lượt thích" quay lại) trở về cả khi
-   * đính kèm bị huỷ → báo success giả. Trả lỗi rõ thay vì gửi hụt. Code driver (attachFiles)
-   * giữ nguyên để bật lại khi có xác nhận giao hàng tin cậy (hoặc chuyển sang Approach A).
+   * TẠM CHẶN: đường gửi đính kèm qua DOM chưa đáng tin. Business Suite BỎ đính kèm nếu Enter
+   * bấm trước khi upload xong, trong khi tín hiệu xác nhận (nút "Gửi lượt thích" quay lại) vẫn
+   * trở về → báo success giả, ảnh không tới. Chưa có tín hiệu "upload xong"/"đã giao" đáng tin
+   * qua DOM (tin hiển thị nằm trong script JSON, không có selector bong bóng ổn định).
+   * Trả lỗi rõ thay vì gửi hụt. Code driver (attachFiles/sendText) giữ nguyên để hoàn thiện ở
+   * đợt sau (dò trạng thái upload-xong + xác nhận giao hàng, hoặc chuyển Approach A có ack thật).
    */
   public async sendPageAttachment(_threadId: string, _filePath: string, _body?: string): Promise<FBSendResult> {
-    return { success: false, error: 'Gửi ảnh/file từ Page đang hoàn thiện, chưa khả dụng. Tạm thời chỉ gửi được tin nhắn văn bản.' };
+    return { success: false, error: 'Gửi ảnh/file từ Page đang hoàn thiện, chưa khả dụng. Hiện chỉ gửi được tin nhắn văn bản.' };
   }
 
   public async getThreadList(): Promise<FBThread[]> {

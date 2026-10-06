@@ -19,7 +19,8 @@ import { PAGE_BIZ_SUITE } from './pageBusinessSuiteSelectors';
 import { buildThreadUrl, isSendableThreadId } from './pageSendHelpers';
 
 const OPEN_TIMEOUT_MS = 25000;
-const STAGE_TIMEOUT_MS = 30000; // chờ đính kèm lên khung (upload) → có nội dung chờ gửi
+const STAGE_TIMEOUT_MS = 30000; // chờ đính kèm hiện lên khung
+const ATTACH_SETTLE_MS = 7000;  // chờ upload đính kèm xong trước khi Enter (Enter sớm làm rớt ảnh)
 const IDLE_CLOSE_MS = 5 * 60 * 1000;
 
 function resolveEngineExecutable(): string {
@@ -77,13 +78,18 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
       this.page.locator(PAGE_BIZ_SUITE.attachButton).first().click({ timeout: 8000 }),
     ]);
     await chooser.setFiles(paths);
-    // Xác nhận đã lên khung (upload xong → có nội dung chờ gửi), KHÔNG dùng delay cố định.
+    // Chờ đính kèm LÊN KHUNG (nút "Gửi lượt thích" biến mất = có nội dung chờ gửi).
     const deadline = Date.now() + STAGE_TIMEOUT_MS;
+    let staged = false;
     while (Date.now() < deadline) {
-      if (await this.hasPendingContent()) return;
+      if (await this.hasPendingContent()) { staged = true; break; }
       await this.page.waitForTimeout(400);
     }
-    throw new Error('đính kèm chưa sẵn sàng để gửi (không thấy nội dung chờ gửi)');
+    if (!staged) throw new Error('đính kèm chưa sẵn sàng để gửi (không thấy nội dung chờ gửi)');
+    // QUAN TRỌNG: bấm Enter TRƯỚC khi upload xong sẽ làm Business Suite BỎ ảnh.
+    // Chưa có tín hiệu "upload xong" rõ ràng → chờ settle cố định.
+    // ponytail: settle cố định ATTACH_SETTLE_MS; thay bằng dò trạng thái ready nếu file lớn flaky.
+    await this.page.waitForTimeout(ATTACH_SETTLE_MS);
   }
 
   async sendText(text: string): Promise<void> {
@@ -94,18 +100,14 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     if (!(await this.hasPendingContent())) {
       throw new Error('không có nội dung để gửi');
     }
+    // Gửi bằng Enter MỘT lần. KHÔNG bấm nút "Gửi" và KHÔNG lặp Enter/re-click:
+    // Enter sớm (trước khi upload xong) hoặc click nút đều làm Business Suite BỎ đính kèm.
+    // Việc chờ upload xong đã làm ở attachFiles (settle).
     await composer.press('Enter');
-    await this.page.waitForTimeout(600);
-    // Enter gửi được text nhưng KHÔNG gửi đính kèm. Còn nội dung chờ gửi → bấm nút "Gửi"
-    // ĐANG HIỂN THỊ (khi có đính kèm, tồn tại cả nút "Gửi" ẩn lẫn hiện — phải chọn cái visible).
-    if (await this.hasPendingContent()) {
-      const btn = this.page.locator(`${PAGE_BIZ_SUITE.sendButton}:visible`).first();
-      if (await btn.count()) await btn.click({ timeout: 5000 }).catch(() => {});
-    }
   }
 
   async waitSent(timeoutMs: number): Promise<void> {
-    // Đã gửi = nội dung chờ gửi được tiêu thụ (nút "Gửi lượt thích" quay lại).
+    // sendText đã xác nhận tiêu thụ; kiểm nhanh lại (phòng race).
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (!(await this.hasPendingContent())) return;
