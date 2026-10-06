@@ -2287,16 +2287,23 @@ export class FacebookService {
 
   /**
    * Gửi đính kèm (ảnh/file) vai Page qua Business Suite.
-   *
-   * TẠM CHẶN: đường gửi đính kèm qua DOM chưa đáng tin. Business Suite BỎ đính kèm nếu Enter
-   * bấm trước khi upload xong, trong khi tín hiệu xác nhận (nút "Gửi lượt thích" quay lại) vẫn
-   * trở về → báo success giả, ảnh không tới. Chưa có tín hiệu "upload xong"/"đã giao" đáng tin
-   * qua DOM (tin hiển thị nằm trong script JSON, không có selector bong bóng ổn định).
-   * Trả lỗi rõ thay vì gửi hụt. Code driver (attachFiles/sendText) giữ nguyên để hoàn thiện ở
-   * đợt sau (dò trạng thái upload-xong + xác nhận giao hàng, hoặc chuyển Approach A có ack thật).
+   * Xác nhận giao hàng bằng tín hiệu dương (caption hiện trong khung, hoặc số ảnh tăng),
+   * nên gửi hụt sẽ trả lỗi thay vì báo success giả.
    */
-  public async sendPageAttachment(_threadId: string, _filePath: string, _body?: string): Promise<FBSendResult> {
-    return { success: false, error: 'Gửi ảnh/file từ Page đang hoàn thiện, chưa khả dụng. Hiện chỉ gửi được tin nhắn văn bản.' };
+  public async sendPageAttachment(threadId: string, filePath: string, body?: string): Promise<FBSendResult> {
+    // Chỉ xác nhận giao hàng tin cậy khi có caption (chờ caption hiện trong khung). Ảnh/file
+    // KHÔNG caption gửi qua Business Suite còn chập chờn và chưa có tín hiệu xác nhận đáng tin
+    // (đếm ảnh bị nhiễu) → yêu cầu kèm chú thích thay vì báo success giả.
+    if (!body || !body.trim()) {
+      return { success: false, error: 'Khi gửi ảnh/file từ Page, vui lòng kèm một dòng chú thích (tính năng gửi không chú thích đang hoàn thiện).' };
+    }
+    const { classifyFile } = require('./pageSendHelpers');
+    const result = await this.sendViaPageBrowser(threadId, {
+      text: body,
+      files: [{ path: filePath, type: classifyFile(filePath) }],
+    });
+    if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
+    return result;
   }
 
   public async getThreadList(): Promise<FBThread[]> {

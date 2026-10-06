@@ -47,11 +47,20 @@ function parseCookiePairs(cookieStr: string) {
 
 /** Driver điều khiển một BrowserContext đã mở trên inbox Business Suite của một Page. */
 class PlaywrightPageInboxDriver implements PageInboxDriver {
+  private lastText = '';
+  private imgBaseline = 0;
+
   constructor(private page: Page, private delegatePageId: string) {}
 
   /** true nếu đang CÓ nội dung chờ gửi (nút "Gửi lượt thích" vắng mặt). */
   private async hasPendingContent(): Promise<boolean> {
     return (await this.page.locator(PAGE_BIZ_SUITE.likeButton).count()) === 0;
+  }
+
+  /** Số ảnh trong trang (avatar + ảnh tin); dùng mốc so sánh để xác nhận ảnh đã lên khung. */
+  private async imageCount(): Promise<number> {
+    return this.page.evaluate(() =>
+      document.querySelectorAll('img[src*="fbcdn"],img[src*="scontent"],img[src^="blob:"]').length);
   }
 
   async openThread(threadId: string): Promise<void> {
@@ -73,6 +82,7 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     for (const p of paths) {
       if (!fs.existsSync(p)) throw new Error(`file không tồn tại: ${p}`);
     }
+    this.imgBaseline = await this.imageCount(); // mốc ảnh trước khi đính kèm
     const [chooser] = await Promise.all([
       this.page.waitForEvent('filechooser', { timeout: 10000 }),
       this.page.locator(PAGE_BIZ_SUITE.attachButton).first().click({ timeout: 8000 }),
@@ -93,6 +103,7 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
   }
 
   async sendText(text: string): Promise<void> {
+    this.lastText = text || '';
     const composer = this.page.locator(PAGE_BIZ_SUITE.composer).first();
     await composer.click();
     if (text) await composer.type(text, { delay: 15 });
@@ -102,18 +113,29 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     }
     // Gửi bằng Enter MỘT lần. KHÔNG bấm nút "Gửi" và KHÔNG lặp Enter/re-click:
     // Enter sớm (trước khi upload xong) hoặc click nút đều làm Business Suite BỎ đính kèm.
-    // Việc chờ upload xong đã làm ở attachFiles (settle).
     await composer.press('Enter');
   }
 
   async waitSent(timeoutMs: number): Promise<void> {
-    // sendText đã xác nhận tiêu thụ; kiểm nhanh lại (phòng race).
+    // Xác nhận GIAO HÀNG bằng tín hiệu dương, không phải "composer trống":
+    //  - có text/caption → chờ đúng chữ hiện thành bong bóng trong khung.
+    //  - không caption (ảnh/file) → chờ số ảnh trong khung tăng so với mốc trước khi đính kèm.
+    const text = this.lastText.trim();
+    if (text) {
+      try {
+        await this.page.locator('div[dir="auto"]', { hasText: text }).first()
+          .waitFor({ state: 'visible', timeout: timeoutMs });
+        return;
+      } catch {
+        throw new Error('không xác nhận được tin đã lên khung (có thể chưa gửi được)');
+      }
+    }
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (!(await this.hasPendingContent())) return;
-      await this.page.waitForTimeout(400);
+      if ((await this.imageCount()) > this.imgBaseline) return;
+      await this.page.waitForTimeout(500);
     }
-    throw new Error('quá hạn chờ xác nhận đã gửi');
+    throw new Error('không xác nhận được đính kèm đã lên khung (có thể chưa gửi được)');
   }
 }
 
