@@ -477,6 +477,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sendMessage:         (params: any) => ipcRenderer.invoke('fb:sendMessage', params),
     sendAttachment:      (params: any) => ipcRenderer.invoke('fb:sendAttachment', params),
     sendAttachments:     (params: any) => ipcRenderer.invoke('fb:sendAttachments', params),
+    listPageStickers:    (params: any) => ipcRenderer.invoke('fb:listPageStickers', params),
+    sendPageSticker:     (params: any) => ipcRenderer.invoke('fb:sendPageSticker', params),
     unsendMessage:       (params: any) => ipcRenderer.invoke('fb:unsendMessage', params),
     addReaction:         (params: any) => ipcRenderer.invoke('fb:addReaction', params),
     getThreads:          (params: any) => ipcRenderer.invoke('fb:getThreads', params),

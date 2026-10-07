@@ -32,9 +32,15 @@ export interface PageInboxDriver {
   waitSent(timeoutMs: number): Promise<void>;
   /** Media ĐẾN (khách gửi) mới nhất trong khung, mới → cũ. Tối đa `max` cái. */
   readIncomingMedia(threadId: string, max: number): Promise<PageIncomingMedia[]>;
+  /** Liệt kê sticker theo keyword (scrape bảng chọn). */
+  listStickers(threadId: string, keyword: string, max: number): Promise<PageStickerThumb[]>;
+  /** Gửi sticker thứ `index` trong kết quả search `keyword`. Ném nếu không xác nhận gửi. */
+  sendSticker(threadId: string, keyword: string, index: number): Promise<void>;
 }
 
-export interface PageIncomingMedia { type: 'image' | 'video'; url: string; }
+export interface PageIncomingMedia { type: 'image' | 'video' | 'sticker'; url: string; }
+
+export interface PageStickerThumb { label: string; thumbUrl: string; }
 
 const SENT_TIMEOUT_MS = 20000;
 
@@ -61,6 +67,45 @@ export class FacebookPageBrowserSender {
     );
     this.queue = run.catch(() => {});
     return run;
+  }
+
+  /** Liệt kê sticker theo keyword (dùng chung mutex để không tranh trang). */
+  listStickers(threadId: string, keyword: string, max = 24): Promise<PageStickerThumb[]> {
+    const run = this.queue.then(
+      () => this.doListStickers(threadId, keyword, max),
+      () => this.doListStickers(threadId, keyword, max),
+    );
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  /** Gửi sticker thứ `index` trong kết quả search `keyword` (nối tiếp qua mutex). */
+  sendSticker(threadId: string, keyword: string, index: number): Promise<PageSendResult> {
+    const run = this.queue.then(
+      () => this.doSendSticker(threadId, keyword, index),
+      () => this.doSendSticker(threadId, keyword, index),
+    );
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  private async doListStickers(threadId: string, keyword: string, max: number): Promise<PageStickerThumb[]> {
+    try {
+      await this.deps.driver.openThread(threadId);
+      return await this.deps.driver.listStickers(threadId, keyword, max);
+    } catch {
+      return [];
+    }
+  }
+
+  private async doSendSticker(threadId: string, keyword: string, index: number): Promise<PageSendResult> {
+    try {
+      await this.deps.driver.openThread(threadId);
+      await this.deps.driver.sendSticker(threadId, keyword, index);
+      return { success: true, messageId: `page:${Date.now()}` };
+    } catch (err: any) {
+      return { success: false, error: `Chưa gửi được sticker từ Page qua Business Suite: ${err?.message || err}` };
+    }
   }
 
   private async doRead(threadId: string, max: number): Promise<PageIncomingMedia[]> {

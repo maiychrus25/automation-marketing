@@ -31,3 +31,15 @@ export function classifyFile(path: string): PageFileType {
 export function isSendableThreadId(threadId: string): boolean {
   return typeof threadId === 'string' && /^\d+$/.test(threadId);
 }
+
+/**
+ * Phân loại media từ body thông báo Page (thông báo không kèm nội dung thật).
+ * Thứ tự: sticker trước (vì "nhãn dán" không trùng ảnh/video), rồi video, rồi ảnh.
+ */
+export function classifyPageNotification(body: string): 'image' | 'video' | 'sticker' | null {
+  const b = body || '';
+  if (/nhãn dán|sent a sticker/i.test(b)) return 'sticker';
+  if (/tin nhắn video|đã gửi.*video|sent .*video/i.test(b)) return 'video';
+  if (/đã gửi.*ảnh|sent .*photo/i.test(b)) return 'image';
+  return null;
+}

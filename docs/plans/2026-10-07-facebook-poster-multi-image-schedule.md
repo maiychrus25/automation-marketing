@@ -433,3 +433,7 @@ Steps:
 - Evidence (outside the repo): `/tmp/claude-1000/-home-maiychrus-Auto-Reup-Facebook/62ac0103-910e-433e-a7dd-c8f0b2bebce7/scratchpad/verify/` (`shots/`, `round1–4.json`).
 
 **Final review fixes**: (1) workspace switch/delete restart the poster scheduler in `finally`, so a rolled-back switch no longer leaves it stopped; (2) scheduled runs skip the up-front profile check and `FacebookPosterService` fails only a deleted profile's targets with `Không tìm thấy profile`; (3) a non-multiple `filechooser` with more than one image attaches nothing and fails the target with `Không đính kèm được ảnh thứ 2` (no partial posts); (4) History shows `Theo lịch: <name>` via a `LEFT JOIN` in `listRuns`/`getRun` (`scheduleName`, null when the schedule is deleted); (5) `MediaPicker.pick` catches `pickMedia` errors and notifies.
+
+### Release
+
+- Released as **26.14.0**: 26.13.0 was taken by the Page sticker release on `main` (07/10/2026). The branch merged `origin/main`; the changelog keeps both entries.

@@ -3453,7 +3453,7 @@ export default function MessageInput() {
       <div className="flex items-center gap-1 px-2 pt-2 pb-1 border-b border-gray-700/50">
         {/* Emoji / Biểu cảm */}
         {/* Sticker (ẩn trong employee mode nếu không có permission, ẩn cho Telegram tạm thời) */}
-        {channelCap.supportsSticker && hasChatPermission && !isTelegramUser(activeContact?.channel) && !isTelegramBot(activeContact?.channel) && (
+        {(channelCap.supportsSticker || (isFacebook(activeContact?.channel) && !!getActiveAccount()?.parent_zalo_id)) && hasChatPermission && !isTelegramUser(activeContact?.channel) && !isTelegramBot(activeContact?.channel) && (
         <div className="relative">
           <ToolbarBtn onClick={handleSendSticker} title="Sticker" active={showStickerPicker}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -3461,7 +3461,14 @@ export default function MessageInput() {
             </svg>
           </ToolbarBtn>
           {showStickerPicker && (
-            isTelegramUser(activeContact?.channel) || isTelegramBot(activeContact?.channel)
+            (isFacebook(activeContact?.channel) && !!getActiveAccount()?.parent_zalo_id && activeThreadId && activeAccountId)
+            ? <FbStickerPicker
+                accountId={activeAccountId}
+                threadId={activeThreadId}
+                onClose={() => setShowStickerPicker(false)}
+                showNotification={showNotification}
+              />
+            : isTelegramUser(activeContact?.channel) || isTelegramBot(activeContact?.channel)
             ? <TelegramStickerPicker
                 accountId={activeAccountId || ''}
                 onSelect={async (sticker) => {
@@ -4496,6 +4503,73 @@ type StickerPack = {
 
 // Popular Vietnamese keywords to seed the sticker store
 const STICKER_SEED_KEYWORDS = ['haha', 'buồn', 'yêu', 'vui', 'hi', 'ok', 'cảm ơn', 'chúc mừng', 'giận', 'ngủ'];
+
+/** Bảng chọn sticker cho Facebook Page: search keyword → lưới thumbnail → click gửi qua Business Suite. */
+function FbStickerPicker({ accountId, threadId, onClose, showNotification }: {
+  accountId: string; threadId: string; onClose: () => void;
+  showNotification: (msg: string, type: 'warning' | 'error' | 'success') => void;
+}) {
+  const [keyword, setKeyword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [results, setResults] = useState<Array<{ label: string; thumbUrl: string }>>([]);
+  const ref = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    document.addEventListener('mousedown', h, true);
+    return () => document.removeEventListener('mousedown', h, true);
+  }, [onClose]);
+
+  const doSearch = (kw: string) => {
+    if (!kw.trim()) { setResults([]); return; }
+    setLoading(true);
+    ipc.fb?.listPageStickers({ accountId, threadId, keyword: kw.trim() })
+      .then((r: any) => setResults(r?.success ? (r.stickers || []) : []))
+      .catch(() => setResults([]))
+      .finally(() => setLoading(false));
+  };
+
+  const onType = (v: string) => {
+    setKeyword(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => doSearch(v), 500);
+  };
+
+  const pick = async (index: number) => {
+    if (sending) return;
+    setSending(true);
+    try {
+      const r = await ipc.fb?.sendPageSticker({
+        accountId, threadId, keyword: keyword.trim(), index, thumbUrl: results[index]?.thumbUrl,
+      });
+      if (r?.success) onClose();
+      else showNotification(r?.error || 'Gửi sticker thất bại', 'error');
+    } catch (e: any) { showNotification('Gửi sticker lỗi: ' + (e?.message || ''), 'error'); }
+    finally { setSending(false); }
+  };
+
+  return (
+    <div ref={ref} className="absolute bottom-14 left-0 z-50 w-80 rounded-xl border border-gray-200 bg-white p-3 shadow-xl dark:border-gray-700 dark:bg-gray-800">
+      <input autoFocus value={keyword} onChange={(e) => onType(e.target.value)} placeholder="Tìm nhãn dán (vd: vui, yêu, buồn)..."
+        className="mb-2 w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100" />
+      {loading && <div className="py-6 text-center text-sm text-gray-400">Đang tìm…</div>}
+      {!loading && keyword.trim() && results.length === 0 && <div className="py-6 text-center text-sm text-gray-400">Không tìm thấy nhãn dán</div>}
+      {!loading && !keyword.trim() && <div className="py-6 text-center text-sm text-gray-400">Gõ từ khoá để tìm nhãn dán</div>}
+      <div className="grid max-h-64 grid-cols-4 gap-2 overflow-y-auto">
+        {results.map((s, i) => (
+          <button key={i} disabled={sending} onClick={() => pick(i)} title={s.label}
+            className="flex aspect-square items-center justify-center rounded-lg p-1 hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-gray-700">
+            <img src={s.thumbUrl} alt={s.label} loading="lazy"
+              onError={(e) => { (e.currentTarget.style.display = 'none'); }}
+              className="max-h-full max-w-full object-contain" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function StickerPicker({
   getAuth,

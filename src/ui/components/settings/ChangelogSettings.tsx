@@ -15,7 +15,7 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
-    version: '26.13.0',
+    version: '26.14.0',
     date: '10/2026',
     type: 'minor',
     highlights: [
@@ -28,6 +28,28 @@ const CHANGELOG: VersionEntry[] = [
           'Đăng 1–10 ảnh trong một bài, sắp thứ tự và bỏ từng ảnh ngay trên màn hình',
           'Lên lịch đăng một lần hoặc lặp lại theo thứ trong tuần, tab "Lịch đăng" để xem, tạm dừng, sửa giờ và xoá',
           'Lượt đến giờ mà app đang tắt hoặc chờ quá 2 giờ sẽ ghi "Đã lỡ" vào Lịch sử và báo cho bạn, không đăng bù',
+        ],
+      },
+    ],
+  },
+  {
+    version: '26.13.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🎨 Gửi nhãn dán (sticker) với vai Page Facebook',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Gửi nhãn dán (sticker) với vai Page — tìm theo từ khoá rồi chọn gửi',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Nhận ảnh vào Page hiển thị đúng ảnh khách gửi (trước đây đôi khi hiện nhầm ảnh khác)',
         ],
       },
     ],

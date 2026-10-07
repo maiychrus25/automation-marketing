@@ -315,8 +315,8 @@ Màn `src/ui/features/facebookPoster/`, không thêm token; dùng lại class gr
 - **Màu nhật ký.** info = `text-gray-400` (secondary), success = `text-green-400`, warning = `text-orange-400`, error = `text-red-400`; giờ `HH:mm:ss` màu `text-gray-500`.
 - **Chip trạng thái profile.** Chờ = gray-400, Đang chạy = blue-400, Xong = green-400, Lỗi = red-400, Đã hủy = orange-400; "Đang mở" của profile = yellow-400 như cảnh báo ở màn Trình duyệt.
 - **Một việc một lúc.** Khi có việc chạy, mọi nút Bắt đầu tắt và nêu lý do ngay cạnh nút; "Hủy" (đỏ) luôn qua `showConfirm`.
-- **Lưới ảnh (MediaPicker, từ 26.13.0).** Ô 72×72 px, bo góc như thẻ gray hiện có, số thứ tự ở góc, nút Lên/Xuống/Bỏ có `aria-label`; lưới xuống dòng, không cuộn ngang. Vượt giới hạn thì hiện lý do màu đỏ cạnh nút và tắt "Bắt đầu đăng"/"Lên lịch".
-- **Tab "Lịch đăng" (từ 26.13.0).** Nằm giữa "Đăng bài" và "Tham gia nhóm"; hàng danh sách dùng lại class gray/blue, công tắc Bật/Tạm dừng, xoá qua `showConfirm`. Trạng thái "Đã lỡ" = orange-400 như cảnh báo. Dưới 1024 px mỗi hàng xếp dọc, không tràn ngang.
+- **Lưới ảnh (MediaPicker, từ 26.14.0).** Ô 72×72 px, bo góc như thẻ gray hiện có, số thứ tự ở góc, nút Lên/Xuống/Bỏ có `aria-label`; lưới xuống dòng, không cuộn ngang. Vượt giới hạn thì hiện lý do màu đỏ cạnh nút và tắt "Bắt đầu đăng"/"Lên lịch".
+- **Tab "Lịch đăng" (từ 26.14.0).** Nằm giữa "Đăng bài" và "Tham gia nhóm"; hàng danh sách dùng lại class gray/blue, công tắc Bật/Tạm dừng, xoá qua `showConfirm`. Trạng thái "Đã lỡ" = orange-400 như cảnh báo. Dưới 1024 px mỗi hàng xếp dọc, không tràn ngang.
 - **Nhật ký** tự cuộn xuống cuối, trừ khi người dùng đã cuộn lên; giữ tối đa 500 dòng.
 
 ## Dấu hiệu

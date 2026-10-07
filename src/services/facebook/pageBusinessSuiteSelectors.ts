@@ -17,6 +17,12 @@ export interface PageBizSuiteSelectors {
    *   có mặt = rỗng; vắng mặt = đang có nội dung chờ gửi; quay lại = đã gửi xong.
    */
   likeButton: string;
+  /** Nút mở bảng chọn nhãn dán. */
+  stickerButton: string;
+  /** Ô tìm kiếm nhãn dán trong bảng chọn. */
+  stickerSearch: string;
+  /** Một ô sticker (ảnh qua background-image) trong bảng chọn hoặc trong khung. */
+  stickerCell: string;
 }
 
 export const PAGE_BIZ_SUITE: PageBizSuiteSelectors = {
@@ -24,6 +30,9 @@ export const PAGE_BIZ_SUITE: PageBizSuiteSelectors = {
   sendButton: 'div[aria-label="Gửi"][role="button"]',
   attachButton: '[aria-label="Đính kèm file"]',
   likeButton: 'div[aria-label="Gửi lượt thích"][role="button"]',
+  stickerButton: 'div[aria-label="Đăng nhãn dán"][role="button"]',
+  stickerSearch: 'input[placeholder="Tìm kiếm nhãn dán"]',
+  stickerCell: 'div[role="img"][aria-label$=" sticker"]',
 };
 
 /**

@@ -505,6 +505,8 @@ declare global {
         sendMessage:          (params: { accountId: string; threadId: string; body: string; options?: any }) => Promise<{ success: boolean; messageId?: string; error?: string }>;
         sendAttachment:       (params: { accountId: string; threadId: string; filePath: string; body?: string; typeChat?: 'user' | null; fileType?: 'image' | 'video' | 'audio' | 'file' }) => Promise<{ success: boolean; error?: string }>;
         sendAttachments:      (params: { accountId: string; threadId: string; filePaths: string[]; body?: string; typeChat?: 'user' | null }) => Promise<{ success: boolean; uploadedCount?: number; totalCount?: number; error?: string }>;
+        listPageStickers:     (params: { accountId: string; threadId: string; keyword: string }) => Promise<{ success: boolean; stickers?: Array<{ label: string; thumbUrl: string }>; error?: string }>;
+        sendPageSticker:      (params: { accountId: string; threadId: string; keyword: string; index: number; thumbUrl?: string }) => Promise<{ success: boolean; messageId?: string; error?: string }>;
         unsendMessage:        (params: { accountId: string; messageId: string }) => Promise<{ success: boolean; error?: string }>;
         addReaction:          (params: { accountId: string; messageId: string; emoji: string; action: 'add' | 'remove' }) => Promise<{ success: boolean; error?: string }>;
         getThreads:           (params: { accountId: string; forceRefresh?: boolean }) => Promise<{ success: boolean; threads: any[]; error?: string }>;
