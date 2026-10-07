@@ -230,6 +230,7 @@ export function computeNextRun(s: { kind: 'once' | 'recurring'; runAt: number | 
 export function describeRecurrence(days: number[], time: string): string;
 ```
 Implementation for `recurring`: parse `HH:mm`; for d = 0..7, candidate = local date of `after` + d days at HH:mm:00.000 (`new Date(y, m, day + d, hh, mm)`); return the first candidate `> after` whose `getDay()` is in `days`; invalid time or empty days → null.
+Clarifications: `days` uses `getDay()` numbering (0 = CN … 6 = T7) and is treated as a set (duplicates/out-of-range ignored); `once` returns `runAt` only when `runAt > after`, else null, ignoring `days`/`time`; `describeRecurrence` returns `Hằng ngày lúc HH:mm` when all 7 days are present.
 
 - [ ] **Step 1: failing tests** — run under a fixed zone: set `process.env.TZ = 'Asia/Ho_Chi_Minh'` at the top of the test file **before** any Date use. Cases: once in future → runAt; once in past/equal → null; recurring daily (all 7 days) before today's time → today; after today's time → tomorrow; only Monday from a Saturday → next Monday; across month end (Jan 31 → Feb 1); `days` empty → null; bad time `25:00` → null; `describeRecurrence([1,3,5],'08:00')` → `T2, T4, T6 lúc 08:00`; `[0,6]` → `T7, CN lúc …`; all 7 days → `Hằng ngày lúc …`.
 - [ ] **Step 2:** FAIL. **Step 3:** implement. **Step 4:** PASS.
