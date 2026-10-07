@@ -22,7 +22,7 @@ import { registerTelegramIpc } from './ipc/telegramIpc';
 import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
 import { registerProxyIpc } from './ipc/proxyIpc';
 import { registerBrowserProfileIpc, closeAllBrowserProfiles } from './ipc/browserProfileIpc';
-import { registerFacebookPosterIpc, cancelFacebookPosterJobs } from './ipc/facebookPosterIpc';
+import { registerFacebookPosterIpc, cancelFacebookPosterJobs, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './ipc/facebookPosterIpc';
 import { registerUpdateIpc } from './ipc/updateIpc';
 import { registerErpTaskIpc } from './ipc/erpTaskIpc';
 import { registerErpCalendarIpc } from './ipc/erpCalendarIpc';
@@ -1139,6 +1139,7 @@ app.whenReady().then(async () => {
   registerProxyIpc();
   registerBrowserProfileIpc();
   registerFacebookPosterIpc();
+  try { startFacebookPosterScheduler(); } catch (err: any) { Logger.error(`[FacebookPoster] scheduler start failed: ${err?.message}`); }
   registerErpTaskIpc();
   registerErpCalendarIpc();
   registerErpNoteIpc();
@@ -1283,6 +1284,10 @@ app.on('before-quit', () => {
   try {
     // Dừng webhook gateway
     WebhookGatewayService.getInstance().stop();
+  } catch {}
+
+  try {
+    stopFacebookPosterScheduler();
   } catch {}
 
   try {
