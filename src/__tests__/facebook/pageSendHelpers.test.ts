@@ -1,4 +1,4 @@
-import { buildThreadUrl, classifyFile, isSendableThreadId } from '../../services/facebook/pageSendHelpers';
+import { buildThreadUrl, classifyFile, isSendableThreadId, classifyPageNotification } from '../../services/facebook/pageSendHelpers';
 
 describe('pageSendHelpers', () => {
   it('buildThreadUrl chèn asset + thread vào template', () => {
@@ -31,5 +31,24 @@ describe('pageSendHelpers', () => {
     expect(isSendableThreadId('user:100032442095141')).toBe(false);
     expect(isSendableThreadId('abc')).toBe(false);
     expect(isSendableThreadId(undefined as any)).toBe(false);
+  });
+});
+
+describe('classifyPageNotification', () => {
+  it('ảnh', () => {
+    expect(classifyPageNotification('Đã gửi một ảnh')).toBe('image');
+    expect(classifyPageNotification('sent a photo')).toBe('image');
+  });
+  it('video', () => {
+    expect(classifyPageNotification('Đã gửi một tin nhắn video')).toBe('video');
+    expect(classifyPageNotification('sent a video')).toBe('video');
+  });
+  it('sticker 2 ngôn ngữ', () => {
+    expect(classifyPageNotification('Đã gửi một nhãn dán')).toBe('sticker');
+    expect(classifyPageNotification('sent a sticker')).toBe('sticker');
+  });
+  it('text thường → null', () => {
+    expect(classifyPageNotification('chào shop')).toBeNull();
+    expect(classifyPageNotification('')).toBeNull();
   });
 });

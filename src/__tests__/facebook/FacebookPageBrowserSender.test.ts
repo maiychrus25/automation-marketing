@@ -27,6 +27,15 @@ class FakeDriver implements PageInboxDriver {
   async readIncomingMedia(): Promise<{ type: 'image' | 'video'; url: string }[]> {
     return [];
   }
+  stickers: { label: string; thumbUrl: string }[] = [{ label: 'a sticker', thumbUrl: 'u1' }];
+  async listStickers(id: string, kw: string): Promise<{ label: string; thumbUrl: string }[]> {
+    this.calls.push('list:' + id + ':' + kw);
+    return this.stickers;
+  }
+  async sendSticker(id: string, kw: string, index: number): Promise<void> {
+    if (this.failWait) throw new Error('timeout chờ xác nhận');
+    this.calls.push('sticker:' + id + ':' + kw + ':' + index);
+  }
 }
 
 describe('FacebookPageBrowserSender', () => {
@@ -75,5 +84,28 @@ describe('FacebookPageBrowserSender', () => {
     const s = new FacebookPageBrowserSender({ driver: d, delegatePageId: 'X' });
     await Promise.all([s.send('1', { text: 'a' }), s.send('2', { text: 'b' })]);
     expect(d.maxActive).toBe(1);
+  });
+
+  it('listStickers: open ngầm + trả danh sách', async () => {
+    const d = new FakeDriver();
+    const s = new FacebookPageBrowserSender({ driver: d, delegatePageId: 'X' });
+    const r = await s.listStickers('123', 'vui', 20);
+    expect(r).toEqual([{ label: 'a sticker', thumbUrl: 'u1' }]);
+    expect(d.calls).toContain('list:123:vui');
+  });
+
+  it('sendSticker: open → sticker, success', async () => {
+    const d = new FakeDriver();
+    const s = new FacebookPageBrowserSender({ driver: d, delegatePageId: 'X' });
+    const r = await s.sendSticker('123', 'vui', 0);
+    expect(r.success).toBe(true);
+    expect(d.calls).toEqual(['open:123', 'sticker:123:vui:0']);
+  });
+
+  it('sendSticker lỗi → success=false, error Business Suite', async () => {
+    const d = new FakeDriver(); d.failWait = true;
+    const r = await new FacebookPageBrowserSender({ driver: d, delegatePageId: 'X' }).sendSticker('1', 'vui', 0);
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/Business Suite/);
   });
 });
