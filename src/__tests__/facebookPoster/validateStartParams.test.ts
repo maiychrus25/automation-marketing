@@ -84,10 +84,12 @@ describe('validateStartParams: post', () => {
     expect(out.profiles.map((p: any) => p.targets.length)).toEqual([1, 1]);
   });
 
-  test('total target limit 500 counts after de-dup', () => {
-    const ids = (n: number) => Array.from({ length: n }, (_, i) => String(i + 1));
-    expect(() => validateStartParams(post({ profiles: [{ profileId: 'p1', targets: [...ids(250), ...ids(250)] }, { profileId: 'p2', targets: ids(250) }] }), env)).not.toThrow();
-    fails(post({ profiles: [{ profileId: 'p1', targets: ids(251) }, { profileId: 'p2', targets: ids(250) }] }), 'Tối đa 500 đích cho một lần chạy');
+  test('total target limit 10000 counts after de-dup', () => {
+    const ids = (n: number, start = 1) => Array.from({ length: n }, (_, i) => String(start + i));
+    // 10,000 unique targets after de-duplication should pass.
+    expect(() => validateStartParams(post({ profiles: [{ profileId: 'p1', targets: [...ids(5000), ...ids(5000)] }, { profileId: 'p2', targets: ids(5000) }] }), env)).not.toThrow();
+    // 10,001 unique targets across profiles should fail.
+    fails(post({ profiles: [{ profileId: 'p1', targets: ids(5001) }, { profileId: 'p2', targets: ids(5000, 5002) }] }), 'Tối đa 10000 đích cho một lần chạy');
   });
 
   test('page mode ignores targets', () => {
