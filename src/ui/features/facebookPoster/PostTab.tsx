@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import ProfilePicker from './ProfilePicker';
+import ScheduleDialog from './ScheduleDialog';
 import MediaPicker from './MediaPicker';
 import { matchesKeywords } from './matchKeywords';
 import { validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
@@ -37,6 +38,7 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
   const [staggerMinSec, setStaggerMinSec] = useState(30);
   const [staggerMaxSec, setStaggerMaxSec] = useState(90);
   const [starting, setStarting] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
 
   // Reload scanned groups when the selection changes and when a run ends (a scan may have just finished).
   const idsKey = profileIds.join(',');
@@ -87,11 +89,12 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
     else onStarted();
   };
 
-  const disabledReason = busy ? 'Đang có việc chạy. Đợi xong hoặc hủy việc đó.'
-    : profileIds.length === 0 ? 'Chọn ít nhất một profile.'
+  // Scheduling is allowed while a run is active, so the busy clause is only part of the Start reason.
+  const scheduleDisabledReason = profileIds.length === 0 ? 'Chọn ít nhất một profile.'
     : !text.trim() ? 'Nhập nội dung bài.'
     : mode === 'group' && targetCounts.some((n) => n === 0) ? 'Mỗi profile cần ít nhất một nhóm.'
     : validateMediaSelection(media) ?? '';
+  const disabledReason = busy ? 'Đang có việc chạy. Đợi xong hoặc hủy việc đó.' : scheduleDisabledReason;
 
   const postParams = () => ({
     mode, text,
@@ -230,8 +233,12 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
         <button type="button" onClick={handleStart} disabled={!!disabledReason || starting} className="btn-primary text-sm px-4 py-2 text-white disabled:opacity-60">
           {starting ? 'Đang bắt đầu...' : 'Bắt đầu đăng'}
         </button>
+        <button type="button" onClick={() => setScheduling(true)} disabled={!!scheduleDisabledReason} className="px-4 py-2 rounded-lg text-sm border border-gray-600 text-gray-200 hover:border-gray-400 disabled:opacity-60">
+          Lên lịch
+        </button>
         {disabledReason && <span className="text-xs text-gray-400">{disabledReason}</span>}
       </div>
+      {scheduling && <ScheduleDialog onClose={() => setScheduling(false)} buildParams={postParams} defaultName={text.trim()} />}
     </div>
   );
 }

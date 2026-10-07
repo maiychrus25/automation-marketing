@@ -8,11 +8,12 @@ const PAGE_SIZE = 50;
 
 const KIND_LABEL: Record<string, string> = { post: 'Đăng bài', join: 'Tham gia nhóm', scan_groups: 'Quét nhóm', collect_comments: 'Thu bình luận' };
 const MODE_LABEL: Record<string, string> = { group: 'Nhóm', page: 'Page' };
-const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
+export const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   running: { label: 'Đang chạy', cls: 'text-blue-400' },
   done: { label: 'Xong', cls: 'text-green-400' },
   cancelled: { label: 'Đã hủy', cls: 'text-orange-400' },
   failed: { label: 'Lỗi', cls: 'text-red-400' },
+  missed: { label: 'Đã lỡ', cls: 'text-orange-400' },
 };
 const OUTCOME_LABEL: Record<string, { label: string; cls: string }> = {
   posted: { label: 'Đã đăng', cls: 'text-green-400' },
@@ -123,6 +124,7 @@ export default function HistoryTab() {
                   className="flex-1 min-w-[12rem] text-left text-sm text-gray-200">
                   {open ? '▾' : '▸'} {formatTime(run.startedAt)} · {KIND_LABEL[run.kind] || run.kind}{run.mode ? ` · ${MODE_LABEL[run.mode] || run.mode}` : ''}
                 </button>
+                {run.scheduleId && <span className="text-xs text-gray-400 whitespace-nowrap">Theo lịch</span>}
                 <Chip map={STATUS_LABEL} value={run.status} />
                 <button type="button" onClick={() => exportCsv(run.id)} className="px-2.5 py-1 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400">Xuất CSV</button>
               </div>
