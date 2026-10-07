@@ -359,11 +359,38 @@ interface SingleTargetOutcome {
   identity: string;
 }
 
+/**
+ * Đọc trạng thái tải ảnh lên trong hộp soạn thảo. CHẠY TRONG TRÌNH DUYỆT.
+ * Chỉ nhìn BÊN TRONG gốc soạn bài (dialog có ô nhập, hoặc form của trang
+ * /post/create) — ngoài đó là thanh tải của bài khác/ô bình luận.
+ * progress = số [role=progressbar] đang có; 0 là đã tải xong. publishDisabled
+ * chỉ để ghi log: nút Đăng tắt cho tới khi có chữ (đo được), mà ảnh gắn TRƯỚC
+ * khi gõ chữ, nên không được dùng nó làm điều kiện dừng.
+ */
+export function readUploadStateInPage(
+  arg: { editorSelectors: string[]; labels: string[] },
+): { progress: number; publishDisabled: boolean | null } {
+  const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+  const hasEditor = (root: Element) => arg.editorSelectors.some(sel => root.querySelectorAll(sel).length > 0);
+  const root = dialogs.length
+    ? dialogs.find(hasEditor)
+    : Array.from(document.querySelectorAll('div[role="form"]')).find(hasEditor);
+  if (!root) return { progress: 0, publishDisabled: null };
+  const button = Array.from(root.querySelectorAll('div[role="button"], button')).find(b =>
+    arg.labels.includes((b.getAttribute('aria-label') || '').trim()) ||
+    arg.labels.includes(((b as HTMLElement).innerText || '').trim()),
+  );
+  return {
+    progress: root.querySelectorAll('[role="progressbar"]').length,
+    publishDisabled: button ? button.getAttribute('aria-disabled') === 'true' : null,
+  };
+}
+
 async function postToSingleTarget(
   page: Page,
   ctx: BrowserContext,
   target: { url: string; kind: 'group' | 'page' },
-  { text, mediaPath, comment }: { text: string; mediaPath: string | null; comment: string | null },
+  { text, mediaPaths, comment }: { text: string; mediaPaths: string[]; comment: string | null },
   deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog'>,
 ): Promise<SingleTargetOutcome> {
   const { url, kind } = target;
@@ -426,7 +453,7 @@ async function postToSingleTarget(
 
   // 2. Nạp media — input file phải nằm TRONG dialog (hoặc form của trang
   // /post/create), ngoài đó là input của ô bình luận.
-  if (mediaPath) {
+  if (mediaPaths.length) {
     let input = await page.$(FILE_INPUT_SELECTOR).catch(() => null);
     if (!input) {
       sendLog('[Đăng Bài] Đang mở phần đính kèm Ảnh/Video trong hộp soạn thảo...', 'info');
@@ -442,9 +469,41 @@ async function postToSingleTarget(
       sendLog(`[${kind}] [ERROR] Không tìm thấy ô tải tệp trong hộp soạn thảo: ${url}`, 'error');
       return failed();
     }
-    sendLog('[Đăng Bài] Đang nạp tệp media đính kèm...', 'warning');
-    await input.setInputFiles(mediaPath);
-    await delayRandom(4000, 6000);
+    sendLog(`[Đăng Bài] Đang nạp ${mediaPaths.length} tệp media đính kèm...`, 'warning');
+    // ĐO ĐƯỢC 07/10/2026 (hộp "Tạo bài viết" cá nhân): ô tải tệp có multiple=true,
+    // 10 ảnh trong một lần setInputFiles lên đúng thứ tự. Nhóm và Page chưa đo,
+    // nên ô không multiple thì đưa từng tệp, tìm lại ô sau mỗi lần.
+    const multiple = await input.evaluate(el => (el as HTMLInputElement).multiple).catch(() => false);
+    if (multiple) {
+      await input.setInputFiles(mediaPaths);
+      await delayRandom(1500, 2500);
+    } else {
+      for (let k = 1; k <= mediaPaths.length; k++) {
+        const slot = k === 1 ? input : await page.$(FILE_INPUT_SELECTOR).catch(() => null);
+        if (!slot) {
+          sendLog(`[${kind}] [ERROR] Không đính kèm được ảnh thứ ${k}: ${url}`, 'error');
+          return failed();
+        }
+        await slot.setInputFiles(mediaPaths[k - 1]);
+        await delayRandom(1500, 2500);
+      }
+    }
+    // Đợi thanh tải biến mất: 1 giây một lần, tối đa 15 s + 5 s mỗi tệp.
+    const maxPolls = 15 + 5 * mediaPaths.length;
+    let uploaded = false;
+    for (let i = 0; i < maxPolls && !uploaded; i++) {
+      if (getIsStopping()) return failed();
+      const state = await page
+        .evaluate(readUploadStateInPage, { editorSelectors: EDITOR_SELECTORS, labels: PUBLISH_LABELS })
+        .catch(() => null);
+      uploaded = !!state && state.progress === 0;
+      if (!uploaded) await delayRandom(1000, 1000);
+      else sendLog(`[Đăng Bài] Ảnh đã tải lên xong (nút Đăng ${state.publishDisabled === true ? 'đang tắt' : 'không tắt'}).`, 'info');
+    }
+    if (!uploaded) {
+      sendLog(`[${kind}] [ERROR] Ảnh chưa tải lên xong: ${url}`, 'error');
+      return failed();
+    }
   }
   if (getIsStopping()) return failed();
   await delayRandom(500, 1000);
@@ -614,8 +673,7 @@ export interface PostTargetResult {
 
 export interface PostInput {
   text: string;
-  mediaPath?: string | null;
-  /** Tạm thời: Task 2 sẽ nạp đủ nhiều ảnh; hiện chỉ dùng ảnh đầu. */
+  /** Rỗng/thiếu = không đính kèm. Thứ tự là thứ tự ảnh trong bài. */
   mediaPaths?: string[];
   comment?: string | null;
   targets: string[];
@@ -630,7 +688,7 @@ export async function postToTargets(
   deps: TaskDeps & { onResult?: (result: PostTargetResult) => void },
 ): Promise<{ posted: number; failed: number; results: PostTargetResult[] }> {
   const { text, mediaPaths, comment = null, targets, minDelay = 30, maxDelay = 60 } = (input || {}) as Partial<PostInput>;
-  const mediaPath = (input as Partial<PostInput>)?.mediaPath ?? mediaPaths?.[0] ?? null;
+  const files = Array.isArray(mediaPaths) ? mediaPaths : [];
   const { getIsStopping, sendLog, updateProgress, onResult } = deps;
 
   if (!text || !String(text).trim()) {
@@ -651,11 +709,16 @@ export async function postToTargets(
       throw new Error('Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập');
     }
 
-    if (mediaPath) {
+    if (files.length) {
       page.on('filechooser', async chooser => {
         try {
-          sendLog(`[Đăng Bài] Đã chặn hộp thoại file và nạp tệp: ${mediaPath}`, 'info');
-          await chooser.setFiles(mediaPath);
+          sendLog(`[Đăng Bài] Đã chặn hộp thoại file và nạp tệp: ${files.join(', ')}`, 'info');
+          if (chooser.isMultiple()) {
+            await chooser.setFiles(files);
+          } else {
+            if (files.length > 1) sendLog('Hộp chọn tệp gốc không nhận nhiều tệp: chỉ đính kèm được ảnh đầu tiên.', 'warning');
+            await chooser.setFiles(files[0]);
+          }
         } catch (err) {
           sendLog(`Lỗi nạp tệp qua filechooser: ${(err as Error).message}`, 'warning');
         }
@@ -679,7 +742,7 @@ export async function postToTargets(
       let commentStatus: CommentStatus = 'not_requested';
       let identity = '';
       try {
-        const single = await postToSingleTarget(page, ctx, target, { text, mediaPath, comment },
+        const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment },
           { getIsStopping, sendLog });
         // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
         // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
