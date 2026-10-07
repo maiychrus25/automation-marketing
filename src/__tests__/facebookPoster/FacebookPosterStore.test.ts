@@ -1,21 +1,8 @@
-import Database from 'better-sqlite3';
 import assert from 'node:assert';
-import { FacebookPosterStore, type SqlDatabase } from '../../services/facebookPoster/FacebookPosterStore';
+import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
+import { memoryDb } from './helpers';
 import { keyOf, type CollectedComment } from '../../services/facebookPoster/collectComments';
 
-function memoryDb(): SqlDatabase {
-  const db = new Database(':memory:');
-  return {
-    exec: (sql) => { db.exec(sql); },
-    run: (sql, p = []) => { db.prepare(sql).run(...p); },
-    runInsert: (sql, p = []) => Number(db.prepare(sql).run(...p).lastInsertRowid),
-    transaction: (fn) => db.transaction(fn)(),
-    // Spread: .all() trả mảng của realm Node; jest chạy test trong realm khác nên deepStrictEqual sẽ báo lệch prototype.
-    query: (sql, p = []) => [...db.prepare(sql).all(...p)] as any,
-    // Giống DatabaseService.queryOne: không có dòng thì trả undefined.
-    queryOne: (sql, p = []) => db.prepare(sql).get(...p) as any,
-  };
-}
 function store() { const s = new FacebookPosterStore(memoryDb()); s.ensureSchema(); return s; }
 
 function newRun(id: string, startedAt: number, kind: 'post' | 'join' = 'post') {
@@ -43,7 +30,7 @@ test('createRun rồi getRun trả lại params JSON và trạng thái running',
   const got = s.getRun('r1')!;
   assert.deepStrictEqual(got.run, {
     id: 'r1', kind: 'post', mode: 'group', params: { text: 'xin chào', n: 2 },
-    status: 'running', error: '', startedAt: 100, finishedAt: null,
+    status: 'running', error: '', startedAt: 100, finishedAt: null, scheduleId: null, scheduleName: null,
   });
   assert.deepStrictEqual(got.results, []);
   assert.strictEqual(s.getRun('nope'), null);
@@ -206,4 +193,99 @@ test('listPostedUrls: bỏ kết quả mồ côi (run đã bị xóa)', () => {
   s.addResult(newResult('r1', { postUrl: 'https://x/kept', createdAt: 10 }));
   s.addResult(newResult('ghost', { postUrl: 'https://x/orphan', createdAt: 20 }));
   assert.deepStrictEqual(s.listPostedUrls(10).map((x) => x.postUrl), ['https://x/kept']);
+});
+
+function newSchedule(id: string, over: Record<string, unknown> = {}) {
+  return {
+    id, name: `Lịch ${id}`, kind: 'recurring' as 'once' | 'recurring', params: { kind: 'post', mode: 'group', mediaPaths: ['01-a.jpg'] },
+    runAt: null as number | null, days: [1, 3, 5], time: '09:30', enabled: true, nextRunAt: 100 as number | null, createdAt: 1, ...over,
+  };
+}
+
+describe('schedules', () => {
+  test('ensureSchema hai lần vẫn ổn và run lưu/đọc được scheduleId', () => {
+    const s = store();
+    s.ensureSchema();
+    s.createRun({ ...newRun('r1', 1), scheduleId: 'sch-1' });
+    s.createRun(newRun('r2', 2));
+    assert.strictEqual(s.getRun('r1')!.run.scheduleId, 'sch-1');
+    assert.strictEqual(s.getRun('r2')!.run.scheduleId, null);
+  });
+
+  test('listRuns trả scheduleName qua LEFT JOIN: có lịch thì có tên, lịch đã xóa hoặc chạy tay thì null', () => {
+    const s = store();
+    s.createSchedule(newSchedule('a'));
+    s.createSchedule(newSchedule('b'));
+    s.createRun({ ...newRun('r1', 1), scheduleId: 'a' });
+    s.createRun({ ...newRun('r2', 2), scheduleId: 'b' });
+    s.createRun(newRun('r3', 3));
+    s.deleteSchedule('b');
+    const names = Object.fromEntries(s.listRuns({ limit: 10, offset: 0 }).runs.map(r => [r.id, r.scheduleName]));
+    assert.deepStrictEqual(names, { r1: 'Lịch a', r2: null, r3: null });
+    assert.deepStrictEqual(s.listRuns({ limit: 10, offset: 0, kind: 'post' }).runs.map(r => r.id), ['r3', 'r2', 'r1']);
+    assert.strictEqual(s.getRun('r1')!.run.scheduleName, 'Lịch a');
+  });
+
+  test('create/get/update/delete schedule khứ hồi', () => {
+    const s = store();
+    s.createSchedule(newSchedule('a'));
+    const got = s.getSchedule('a')!;
+    assert.deepStrictEqual(got.days, [1, 3, 5]);
+    assert.strictEqual(got.enabled, true);
+    assert.deepStrictEqual(got.params, { kind: 'post', mode: 'group', mediaPaths: ['01-a.jpg'] });
+    assert.strictEqual(got.lastRunId, null);
+    assert.strictEqual(got.updatedAt, 1);
+    s.updateSchedule('a', { name: 'Mới', enabled: false, days: [0], time: '10:00', nextRunAt: null, lastRunId: 'r1' }, 50);
+    const upd = s.getSchedule('a')!;
+    assert.deepStrictEqual([upd.name, upd.enabled, upd.days, upd.time, upd.nextRunAt, upd.lastRunId, upd.updatedAt], ['Mới', false, [0], '10:00', null, 'r1', 50]);
+    s.createSchedule(newSchedule('o', { kind: 'once', days: [], time: '', runAt: 500 }));
+    assert.deepStrictEqual(s.getSchedule('o')!.days, []);
+    assert.strictEqual(s.countSchedules(), 2);
+    s.deleteSchedule('a');
+    assert.strictEqual(s.getSchedule('a'), null);
+    assert.strictEqual(s.countSchedules(), 1);
+  });
+
+  test('listDueSchedules chỉ lấy lịch bật có next_run_at <= t, theo thứ tự', () => {
+    const s = store();
+    s.createSchedule(newSchedule('late', { nextRunAt: 20, createdAt: 1 }));
+    s.createSchedule(newSchedule('early', { nextRunAt: 10, createdAt: 2 }));
+    s.createSchedule(newSchedule('off', { nextRunAt: 5, enabled: false }));
+    s.createSchedule(newSchedule('null', { nextRunAt: null }));
+    s.createSchedule(newSchedule('future', { nextRunAt: 99 }));
+    assert.deepStrictEqual(s.listDueSchedules(20).map((x) => x.id), ['early', 'late']);
+  });
+
+  test('nextScheduledAt bỏ qua lịch tắt và null', () => {
+    const s = store();
+    assert.strictEqual(s.nextScheduledAt(), null);
+    s.createSchedule(newSchedule('off', { nextRunAt: 5, enabled: false }));
+    s.createSchedule(newSchedule('null', { nextRunAt: null }));
+    assert.strictEqual(s.nextScheduledAt(), null);
+    s.createSchedule(newSchedule('a', { nextRunAt: 30 }));
+    s.createSchedule(newSchedule('b', { nextRunAt: 12 }));
+    assert.strictEqual(s.nextScheduledAt(), 12);
+  });
+
+  test('recordScheduleRun ghi run missed không có kết quả', () => {
+    const s = store();
+    s.recordScheduleRun({ id: 'm1', scheduleId: 'sch-1', params: { kind: 'post', mode: 'page' }, at: 777, status: 'missed', reason: 'App tắt lúc đến giờ' });
+    const { run, results } = s.getRun('m1')!;
+    assert.deepStrictEqual([run.kind, run.mode, run.status, run.error, run.scheduleId, run.startedAt, run.finishedAt], ['post', 'page', 'missed', 'App tắt lúc đến giờ', 'sch-1', 777, 777]);
+    assert.deepStrictEqual(results, []);
+  });
+
+  test('listSchedules kèm lastRun và sắp xếp bật trước, sớm trước, null sau', () => {
+    const s = store();
+    s.recordScheduleRun({ id: 'm1', scheduleId: 'x', params: { mode: 'group' }, at: 9, status: 'missed', reason: 'lý do' });
+    s.createSchedule(newSchedule('off', { nextRunAt: 1, enabled: false }));
+    s.createSchedule(newSchedule('none', { nextRunAt: null }));
+    s.createSchedule(newSchedule('b', { nextRunAt: 50 }));
+    s.createSchedule(newSchedule('a', { nextRunAt: 40 }));
+    s.updateSchedule('a', { lastRunId: 'm1' }, 2);
+    const list = s.listSchedules();
+    assert.deepStrictEqual(list.map((x) => x.id), ['a', 'b', 'none', 'off']);
+    assert.deepStrictEqual(list[0].lastRun, { status: 'missed', startedAt: 9, error: 'lý do' });
+    assert.strictEqual(list[1].lastRun, null);
+  });
 });

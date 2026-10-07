@@ -1,16 +1,17 @@
 import type { StartParams } from './FacebookPosterService';
+import { dedupePaths, validateMediaSelection } from './mediaRules';
 import { normalizeTarget, parseFacebookUrl } from './targets';
 
 export interface StartParamsEnv {
     profileExists: (id: string) => boolean;
     fileExists: (path: string) => boolean;
+    fileSize: (path: string) => number;
 }
 
 const MAX_TEXT = 63206;
 const MAX_COMMENT = 8000;
 const MAX_TARGETS = 500;
 const MAX_DELAY_SEC = 86400;
-const MEDIA_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'mov', 'webm'];
 const BARE_TARGET = /^[A-Za-z0-9._-]+$/;
 const PAGE_TARGET = 'https://www.facebook.com/';
 
@@ -62,12 +63,13 @@ function normalizeGroupTarget(raw: unknown): string {
     }
 }
 
-function readMediaPath(value: unknown, env: StartParamsEnv): string | null {
-    if (typeof value !== 'string' || !value) return null;
-    if (!env.fileExists(value)) throw new Error('Không tìm thấy tệp ảnh/video');
-    const ext = value.split('.').pop()!.toLowerCase();
-    if (!MEDIA_EXTENSIONS.includes(ext)) throw new Error(`Chỉ hỗ trợ ảnh/video: ${MEDIA_EXTENSIONS.join(', ')}`);
-    return value;
+function readMediaPaths(p: Record<string, any>, env: StartParamsEnv): string[] {
+    const raw: unknown[] = Array.isArray(p.mediaPaths) ? p.mediaPaths : (typeof p.mediaPath === 'string' && p.mediaPath ? [p.mediaPath] : []);
+    const paths = dedupePaths(raw.filter((v): v is string => typeof v === 'string' && v.length > 0));
+    for (const path of paths) if (!env.fileExists(path)) throw new Error('Không tìm thấy tệp ảnh/video');
+    const problem = validateMediaSelection(paths.map((path) => ({ path, size: env.fileSize(path) })));
+    if (problem) throw new Error(problem);
+    return paths;
 }
 
 function validatePost(p: Record<string, any>, env: StartParamsEnv): StartParams {
@@ -96,7 +98,7 @@ function validatePost(p: Record<string, any>, env: StartParamsEnv): StartParams 
 
     return {
         kind: 'post', mode: p.mode, text,
-        mediaPath: readMediaPath(p.mediaPath, env),
+        mediaPaths: readMediaPaths(p, env),
         comment: rawComment.trim() ? rawComment : null,
         profiles: [...byProfile].map(([profileId, targets]) => ({ profileId, targets })),
         ...readDelays(p), concurrency: readConcurrency(p), ...readStagger(p),

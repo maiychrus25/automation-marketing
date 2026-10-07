@@ -544,6 +544,21 @@ export default function App() {
     }
   }, [activeAccountId, view]);
 
+  // ─── Facebook poster: missed scheduled runs (drained once on mount, then pushed as events) ──
+  useEffect(() => {
+    const show = (n: { name: string; reason: string; at: number }) => {
+      const d = new Date(n.at);
+      const p = (x: number) => String(x).padStart(2, '0');
+      useAppStore.getState().showNotification(
+        `Lịch "${n.name}" đã lỡ lúc ${p(d.getHours())}:${p(d.getMinutes())} ${p(d.getDate())}/${p(d.getMonth() + 1)}: ${n.reason}`,
+        'warning',
+      );
+    };
+    Promise.resolve(ipc.facebookPoster?.takeMissed?.()).then((res) => { if (res?.success) (res.notices || []).forEach(show); }).catch(() => {});
+    const off = ipc.on?.('facebookPoster:scheduleMissed', show);
+    return () => { off?.(); };
+  }, []);
+
   // ─── Workspace switch: reload all data when workspace changes ─────────────
   useEffect(() => {
     const unsub = window.electronAPI?.on('workspace:switched', async (data: any) => {

@@ -13,7 +13,7 @@ import { normalizeTarget } from './targets';
 export interface ProfileInfo { id: string; name: string; }
 
 export type StartParams =
-    | { kind: 'post'; mode: FbPosterMode; text: string; mediaPath: string | null; comment: string | null; profiles: { profileId: string; targets: string[] }[]; minDelaySec: number; maxDelaySec: number; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
+    | { kind: 'post'; mode: FbPosterMode; text: string; mediaPaths: string[]; comment: string | null; profiles: { profileId: string; targets: string[] }[]; minDelaySec: number; maxDelaySec: number; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
     | { kind: 'scan_groups'; profileIds: string[]; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
     | { kind: 'join'; profileId: string; keywords: string[]; limit: number; minDelaySec: number; maxDelaySec: number }
     | { kind: 'collect_comments'; profileId: string; postUrls: string[] };
@@ -33,7 +33,7 @@ export interface FacebookPosterServiceDeps {
     tasks?: Partial<{ postToTargets: typeof postToTargets; scanGroups: typeof scanGroups; searchAndJoinGroups: typeof searchAndJoinGroups; collectComments: typeof collectComments }>;
 }
 
-const BUSY_ERROR = 'Đang có việc chạy';
+export const BUSY_ERROR = 'Đang có việc chạy';
 const NOT_LOGGED_IN_ERROR = 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập';
 const STOPPED_REASON = 'Đã dừng';
 const POST_FAILED_DEFAULT = 'Không đăng được, xem nhật ký';
@@ -88,7 +88,7 @@ export class FacebookPosterService {
         this.tasks = { postToTargets, scanGroups, searchAndJoinGroups, collectComments, ...deps.tasks };
     }
 
-    start(params: StartParams): { runId: string } {
+    start(params: StartParams, scheduleId?: string): { runId: string } {
         if (this.active) throw new Error(BUSY_ERROR);
         const plans = this.plan(params);
         const run: FbPosterRun = {
@@ -100,8 +100,10 @@ export class FacebookPosterService {
             error: '',
             startedAt: this.now(),
             finishedAt: null,
+            scheduleId: scheduleId ?? null,
+            scheduleName: null,
         };
-        this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt });
+        this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt, scheduleId: run.scheduleId });
         this.stopping = false;
         this.storeError = null;
         const parallel = params.kind === 'post' || params.kind === 'scan_groups' ? params : null;
@@ -225,6 +227,8 @@ export class FacebookPosterService {
         // Called once by most tasks and twice by join; every call opens a new session.
         const launch = async (): Promise<LaunchedPage> => {
             try {
+                // A profile deleted after a schedule was saved fails only its own targets.
+                if (!this.deps.getProfile(profileId)) throw new Error('Không tìm thấy profile');
                 const session = await this.deps.openForAutomation(profileId);
                 sessions.push(session);
                 if (!loginChecked) {
@@ -278,7 +282,7 @@ export class FacebookPosterService {
                 await this.tasks.postToTargets(
                     {
                         text: params.text,
-                        mediaPath: params.mediaPath,
+                        mediaPaths: params.mediaPaths,
                         comment: params.comment,
                         targets: plan.targets.map((t) => t.url),
                         minDelay: params.minDelaySec,

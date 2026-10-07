@@ -1,7 +1,8 @@
-import { FB_POSTER_SCHEMA_SQL } from './schema';
+import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from './schema';
 import { keyOf, type CollectedComment } from './collectComments';
 import type {
     FbPosterComment, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
+    FbPosterSchedule, FbPosterScheduleView,
 } from '../../models/facebookPoster';
 
 /**
@@ -31,6 +32,25 @@ function mapRun(row: any): FbPosterRun {
         error: row.error,
         startedAt: row.started_at,
         finishedAt: row.finished_at ?? null,
+        scheduleId: row.schedule_id ?? null,
+        scheduleName: row.schedule_name ?? null,
+    };
+}
+
+function mapSchedule(row: any): FbPosterSchedule {
+    return {
+        id: row.id,
+        name: row.name,
+        kind: row.kind,
+        params: JSON.parse(row.params_json),
+        runAt: row.run_at ?? null,
+        days: row.days === '' ? [] : String(row.days).split(',').map(Number),
+        time: row.time,
+        enabled: row.enabled === 1,
+        nextRunAt: row.next_run_at ?? null,
+        lastRunId: row.last_run_id ?? null,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
     };
 }
 
@@ -70,14 +90,26 @@ export class FacebookPosterStore {
 
     ensureSchema(): void {
         this.db.exec(FB_POSTER_SCHEMA_SQL);
+        for (const sql of FB_POSTER_MIGRATIONS) {
+            try { this.db.exec(sql); } catch { /* cột đã có */ }
+        }
     }
 
     // ─── Runs ────────────────────────────────────────────────────────────────
 
-    createRun(run: { id: string; kind: FbPosterKind; mode: FbPosterMode | ''; params: Record<string, unknown>; startedAt: number }): void {
+    createRun(run: { id: string; kind: FbPosterKind; mode: FbPosterMode | ''; params: Record<string, unknown>; startedAt: number; scheduleId?: string | null }): void {
         this.db.run(
-            `INSERT INTO fb_poster_runs (id, kind, mode, params_json, status, started_at) VALUES (?, ?, ?, ?, 'running', ?)`,
-            [run.id, run.kind, run.mode, JSON.stringify(run.params), run.startedAt],
+            `INSERT INTO fb_poster_runs (id, kind, mode, params_json, status, started_at, schedule_id) VALUES (?, ?, ?, ?, 'running', ?, ?)`,
+            [run.id, run.kind, run.mode, JSON.stringify(run.params), run.startedAt, run.scheduleId ?? null],
+        );
+    }
+
+    /** Ghi một lượt của lịch không chạy được (lỡ giờ / lỗi trước khi chạy): run kind 'post', không có kết quả đích. */
+    recordScheduleRun(r: { id: string; scheduleId: string; params: Record<string, unknown>; at: number; status: 'missed' | 'failed'; reason: string }): void {
+        this.db.run(
+            `INSERT INTO fb_poster_runs (id, kind, mode, params_json, status, error, started_at, finished_at, schedule_id)
+             VALUES (?, 'post', ?, ?, ?, ?, ?, ?, ?)`,
+            [r.id, String(r.params.mode ?? ''), JSON.stringify(r.params), r.status, r.reason, r.at, r.at, r.scheduleId],
         );
     }
 
@@ -110,14 +142,15 @@ export class FacebookPosterStore {
         const where = opts.kind ? 'WHERE kind = ?' : '';
         const filter = opts.kind ? [opts.kind] : [];
         const rows = this.db.query<any>(
-            `SELECT * FROM fb_poster_runs ${where} ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?`,
+            `SELECT r.*, s.name AS schedule_name FROM fb_poster_runs r LEFT JOIN fb_poster_schedules s ON s.id = r.schedule_id
+             ${opts.kind ? 'WHERE r.kind = ?' : ''} ORDER BY r.started_at DESC, r.rowid DESC LIMIT ? OFFSET ?`,
             [...filter, opts.limit, opts.offset],
         );
         return { runs: rows.map(mapRun), total: this.count(`SELECT COUNT(*) AS n FROM fb_poster_runs ${where}`, filter) };
     }
 
     getRun(id: string): { run: FbPosterRun; results: FbPosterResult[] } | null {
-        const row = this.db.queryOne<any>('SELECT * FROM fb_poster_runs WHERE id = ?', [id]);
+        const row = this.db.queryOne<any>('SELECT r.*, s.name AS schedule_name FROM fb_poster_runs r LEFT JOIN fb_poster_schedules s ON s.id = r.schedule_id WHERE r.id = ?', [id]);
         if (!row) return null;
         const results = this.db.query<any>('SELECT * FROM fb_poster_results WHERE run_id = ? ORDER BY id', [id]);
         return { run: mapRun(row), results: results.map(mapResult) };
@@ -138,6 +171,72 @@ export class FacebookPosterStore {
             targetUrl: row.target_url,
             createdAt: row.created_at,
         }));
+    }
+
+    // ─── Schedules ───────────────────────────────────────────────────────────
+
+    createSchedule(s: Omit<FbPosterSchedule, 'lastRunId' | 'updatedAt'>): void {
+        this.db.run(
+            `INSERT INTO fb_poster_schedules
+                (id, name, kind, params_json, run_at, days, time, enabled, next_run_at, last_run_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+            [s.id, s.name, s.kind, JSON.stringify(s.params), s.runAt, s.days.join(','), s.time, s.enabled ? 1 : 0, s.nextRunAt, s.createdAt, s.createdAt],
+        );
+    }
+
+    getSchedule(id: string): FbPosterSchedule | null {
+        const row = this.db.queryOne<any>('SELECT * FROM fb_poster_schedules WHERE id = ?', [id]);
+        return row ? mapSchedule(row) : null;
+    }
+
+    listSchedules(): FbPosterScheduleView[] {
+        const rows = this.db.query<any>(
+            `SELECT s.*, r.status AS lr_status, r.started_at AS lr_started_at, r.error AS lr_error
+             FROM fb_poster_schedules s LEFT JOIN fb_poster_runs r ON r.id = s.last_run_id
+             ORDER BY s.enabled DESC, s.next_run_at IS NULL, s.next_run_at, s.created_at`,
+        );
+        return rows.map((row) => ({
+            ...mapSchedule(row),
+            lastRun: row.lr_status == null ? null : { status: row.lr_status, startedAt: row.lr_started_at, error: row.lr_error },
+        }));
+    }
+
+    updateSchedule(
+        id: string,
+        fields: Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId'>>,
+        updatedAt: number,
+    ): void {
+        const sets: string[] = [];
+        const values: any[] = [];
+        const set = (column: string, value: any) => { sets.push(`${column} = ?`); values.push(value); };
+        if (fields.name !== undefined) set('name', fields.name);
+        if (fields.enabled !== undefined) set('enabled', fields.enabled ? 1 : 0);
+        if (fields.runAt !== undefined) set('run_at', fields.runAt);
+        if (fields.days !== undefined) set('days', fields.days.join(','));
+        if (fields.time !== undefined) set('time', fields.time);
+        if (fields.nextRunAt !== undefined) set('next_run_at', fields.nextRunAt);
+        if (fields.lastRunId !== undefined) set('last_run_id', fields.lastRunId);
+        set('updated_at', updatedAt);
+        this.db.run(`UPDATE fb_poster_schedules SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
+    }
+
+    deleteSchedule(id: string): void {
+        this.db.run('DELETE FROM fb_poster_schedules WHERE id = ?', [id]);
+    }
+
+    countSchedules(): number {
+        return this.count('SELECT COUNT(*) AS n FROM fb_poster_schedules');
+    }
+
+    listDueSchedules(atOrBefore: number): FbPosterSchedule[] {
+        return this.db.query<any>(
+            'SELECT * FROM fb_poster_schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at, created_at',
+            [atOrBefore],
+        ).map(mapSchedule);
+    }
+
+    nextScheduledAt(): number | null {
+        return this.db.queryOne<{ t: number | null }>('SELECT MIN(next_run_at) AS t FROM fb_poster_schedules WHERE enabled = 1')?.t ?? null;
     }
 
     // ─── Groups ──────────────────────────────────────────────────────────────

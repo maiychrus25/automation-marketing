@@ -841,6 +841,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'facebookPoster:log',
       'facebookPoster:progress',
       'facebookPoster:runFinished',
+      'facebookPoster:scheduleMissed',
+      'facebookPoster:schedulesChanged',
     ];
     if (validChannels.includes(channel)) {
       const subscription = (_event: any, ...args: any[]) => callback(...args);
@@ -892,5 +894,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listPostedUrls: ()                            => ipcRenderer.invoke('facebookPoster:listPostedUrls'),
     pickMedia:      ()                            => ipcRenderer.invoke('facebookPoster:pickMedia'),
     exportRunCsv:   (runId: string)               => ipcRenderer.invoke('facebookPoster:exportRunCsv', { runId }),
+    scheduleCreate: (params: any)                 => ipcRenderer.invoke('facebookPoster:scheduleCreate', params),
+    scheduleList:   ()                            => ipcRenderer.invoke('facebookPoster:scheduleList'),
+    scheduleUpdate: (params: any)                 => ipcRenderer.invoke('facebookPoster:scheduleUpdate', params),
+    scheduleDelete: (id: string)                  => ipcRenderer.invoke('facebookPoster:scheduleDelete', { id }),
+    takeMissed:     ()                            => ipcRenderer.invoke('facebookPoster:takeMissed'),
   },
 });

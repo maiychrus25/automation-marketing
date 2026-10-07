@@ -8,7 +8,7 @@ import type { TelegramPeer } from '../../models/telegram';
 import { CHANNEL } from '../../ui/lib/channelHelper';
 import { getTelegramMessagePreview } from '../telegram/TelegramMessagePreview';
 import type { BrowserFingerprint, BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
-import { FB_POSTER_SCHEMA_SQL } from '../facebookPoster/schema';
+import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from '../facebookPoster/schema';
 
 // better-sqlite3: native SQLite - no WASM heap, memory-mapped I/O
 let db: BetterSqlite3.Database | null = null;
@@ -1134,6 +1134,7 @@ class DatabaseService {
 
         // ─── Facebook poster ─────────────────────────────────────────────────────
         this.exec(FB_POSTER_SCHEMA_SQL);
+        for (const sql of FB_POSTER_MIGRATIONS) { try { this.exec(sql); } catch { /* cột đã có */ } }
 
     }
 

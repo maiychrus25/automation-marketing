@@ -109,7 +109,7 @@ function harness(tasks: Record<string, any> = {}, over: Partial<FacebookPosterSe
 
 function postParams(over: Partial<Extract<StartParams, { kind: 'post' }>> = {}): StartParams {
   return {
-    kind: 'post', mode: 'group', text: 'xin chào', mediaPath: null, comment: null,
+    kind: 'post', mode: 'group', text: 'xin chào', mediaPaths: [], comment: null,
     profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/1/', 'https://www.facebook.com/groups/2/'] }],
     minDelaySec: 5, maxDelaySec: 9, concurrency: 3, staggerMinSec: 30, staggerMaxSec: 90, ...over,
   };
@@ -368,12 +368,12 @@ describe('FacebookPosterService', () => {
     const task = postAll();
     const h = harness({ postToTargets: task });
     h.service.start(postParams({
-      mode: 'page', text: 'nội dung', mediaPath: '/tmp/a.png', comment: 'bl', minDelaySec: 7, maxDelaySec: 11,
+      mode: 'page', text: 'nội dung', mediaPaths: ['/tmp/a.png'], comment: 'bl', minDelaySec: 7, maxDelaySec: 11,
       profiles: [{ profileId: 'p1', targets: [] }],
     }));
     await h.service.whenIdle();
     expect(task.mock.calls[0][0]).toEqual({
-      text: 'nội dung', mediaPath: '/tmp/a.png', comment: 'bl', targets: [HOME], minDelay: 7, maxDelay: 11,
+      text: 'nội dung', mediaPaths: ['/tmp/a.png'], comment: 'bl', targets: [HOME], minDelay: 7, maxDelay: 11,
     });
     const rows = h.results('run-1');
     expect(rows).toHaveLength(1);
@@ -386,6 +386,23 @@ describe('FacebookPosterService', () => {
     h.service.start(postParams({ profiles: [{ profileId: 'ghost', targets: ['https://www.facebook.com/groups/1/'] }] }));
     await h.service.whenIdle();
     expect(h.results('run-1')[0].profileName).toBe('ghost');
+  });
+
+  test('profile đã bị xóa: chỉ đích của nó failed "Không tìm thấy profile", profile khác vẫn đăng', async () => {
+    const h = harness({ postToTargets: postAll() });
+    h.service.start(postParams({
+      profiles: [
+        { profileId: 'p1', targets: ['https://www.facebook.com/groups/1/'] },
+        { profileId: 'ghost', targets: ['https://www.facebook.com/groups/2/', 'https://www.facebook.com/groups/3/'] },
+      ],
+    }));
+    await h.service.whenIdle();
+    const rows = h.results('run-1');
+    expect(rows.filter((r) => r.profileId === 'p1').map((r) => r.outcome)).toEqual(['posted']);
+    const ghost = rows.filter((r) => r.profileId === 'ghost');
+    expect(ghost.map((r) => r.outcome)).toEqual(['failed', 'failed']);
+    expect(ghost.every((r) => r.error === 'Không tìm thấy profile')).toBe(true);
+    expect(h.opened).toEqual(['p1']);
   });
 
   // 9
@@ -788,5 +805,17 @@ describe('FacebookPosterService', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('FacebookPosterService scheduleId', () => {
+  test('start(params, scheduleId) lưu scheduleId; start(params) lưu null', async () => {
+    const h = harness({ postToTargets: postAll() });
+    const first = h.service.start(postParams(), 'sch-1');
+    await h.service.whenIdle();
+    expect(h.run(first.runId).scheduleId).toBe('sch-1');
+    const second = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(h.run(second.runId).scheduleId).toBeNull();
   });
 });

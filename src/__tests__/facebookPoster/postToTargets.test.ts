@@ -6,6 +6,7 @@ import {
   isPublishLabel,
   markComposerInviteInPage,
   markPublishButtonInPage,
+  readUploadStateInPage,
   postToTargets,
   type PostTargetResult,
 } from '../../services/facebookPoster/postToTargets';
@@ -136,7 +137,7 @@ test('có media vẫn phải mở hộp soạn thảo trước, rồi mới tìm
   };
 
   const result = await runWithFakeTimers(() => postToTargets(
-    { text: 'a', mediaPath: '/tmp/x.jpg', targets: ['123'], minDelay: 0, maxDelay: 0 },
+    { text: 'a', mediaPaths: ['/tmp/x.jpg'], targets: ['123'], minDelay: 0, maxDelay: 0 },
     makeDeps(ctx, page),
   ));
 
@@ -960,4 +961,184 @@ test('markPublishButtonInPage uses the whole page on /post/create and clears the
   const found = withFakeDocument([stale], {}, '/post/create/', () => markPublishButtonInPage(PUBLISH_LABELS));
   assert.strictEqual(found, false);
   assert.strictEqual(stale.getAttribute('data-maihub-target'), null);
+});
+
+// --- Nhiều ảnh trong một bài ---------------------------------------------
+
+type FakeInput = { evaluate: () => Promise<boolean>; setInputFiles: (f: unknown) => Promise<void> };
+
+/** Trang giả đủ để chạy tới bước đăng; `$` trả ô tải tệp theo `inputs` (hết thì null). */
+function mediaPage(opts: {
+  multiple: boolean;
+  progress?: () => number;
+  inputsAvailable?: number;
+}) {
+  const calls: unknown[] = [];
+  const clicked: string[] = [];
+  const order: string[] = [];
+  let lookups = 0;
+  const makeInput = (): FakeInput => ({
+    evaluate: async () => opts.multiple,
+    setInputFiles: async f => { calls.push(f); },
+  });
+  const page = {
+    goto: async () => {},
+    on: () => {},
+    evaluate: async (fn: AnyFn) => {
+      order.push(fn.name);
+      if (fn.name === 'readUploadStateInPage') return { progress: opts.progress ? opts.progress() : 0, publishDisabled: true };
+      if (['composerIsOpenInPage', 'focusEditorInPage', 'markPublishButtonInPage'].includes(fn.name)) return true;
+      return false;
+    },
+    locator: fakeLocators(clicked),
+    $: async () => {
+      lookups += 1;
+      return opts.inputsAvailable === undefined || lookups <= opts.inputsAvailable ? makeInput() : null;
+    },
+    waitForSelector: async () => {},
+    keyboard: { type: async () => {} },
+  };
+  return { page, calls, clicked, order, lookups: () => lookups };
+}
+
+function runMedia(page: FakePage, mediaPaths: string[], logs: string[] = []) {
+  return runWithFakeTimers(() => postToTargets(
+    { text: 'a', mediaPaths, targets: ['123'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page, { sendLog: m => { logs.push(m); } }),
+  ));
+}
+
+test('ô tải tệp multiple: đúng một lần setInputFiles với đủ mảng theo thứ tự', async () => {
+  const m = mediaPage({ multiple: true });
+  await runMedia(m.page, ['/a.jpg', '/b.jpg', '/c.jpg']);
+  assert.deepStrictEqual(m.calls, [['/a.jpg', '/b.jpg', '/c.jpg']]);
+  assert.ok(m.order.includes('readUploadStateInPage'));
+});
+
+test('ô tải tệp không multiple: mỗi ảnh một lần, tìm lại ô trước mỗi ảnh từ ảnh thứ hai', async () => {
+  const m = mediaPage({ multiple: false });
+  await runMedia(m.page, ['/a.jpg', '/b.jpg', '/c.jpg']);
+  assert.deepStrictEqual(m.calls, ['/a.jpg', '/b.jpg', '/c.jpg']);
+  // 1 lần tìm ban đầu + 2 lần tìm lại (ảnh 2 và 3).
+  assert.strictEqual(m.lookups(), 3);
+});
+
+test('không multiple, ô biến mất trước ảnh thứ 3: đích failed, không bấm Đăng', async () => {
+  const m = mediaPage({ multiple: false, inputsAvailable: 2 });
+  const logs: string[] = [];
+  const result = await runMedia(m.page, ['/a.jpg', '/b.jpg', '/c.jpg'], logs);
+  assert.deepStrictEqual(m.calls, ['/a.jpg', '/b.jpg']);
+  assert.ok(logs.some(l => l.includes('Không đính kèm được ảnh thứ 3')));
+  assert.ok(!m.order.includes('markPublishButtonInPage'));
+  assert.ok(!m.clicked.includes('publish'));
+  assert.strictEqual(result.failed, 1);
+});
+
+test('thanh tải không bao giờ về 0: đích failed "Ảnh chưa tải lên xong", không bấm Đăng', async () => {
+  const m = mediaPage({ multiple: true, progress: () => 1 });
+  const logs: string[] = [];
+  const result = await runMedia(m.page, ['/a.jpg'], logs);
+  assert.ok(logs.some(l => l.includes('Ảnh chưa tải lên xong')));
+  assert.ok(!m.order.includes('markPublishButtonInPage'));
+  assert.ok(!m.clicked.includes('publish'));
+  assert.strictEqual(result.failed, 1);
+  // 15 + 5 × 1 = 20 lần đọc, không hơn.
+  assert.strictEqual(m.order.filter(n => n === 'readUploadStateInPage').length, 20);
+});
+
+test('thanh tải về 0 sau vài lần đọc thì đi tiếp tới bước đăng', async () => {
+  let reads = 0;
+  const m = mediaPage({ multiple: true, progress: () => (++reads < 3 ? 1 : 0) });
+  await runMedia(m.page, ['/a.jpg']);
+  assert.strictEqual(reads, 3);
+  assert.ok(m.order.includes('markPublishButtonInPage'));
+});
+
+test('mediaPaths rỗng: không tìm ô tải tệp, không đọc trạng thái tải', async () => {
+  const m = mediaPage({ multiple: true });
+  await runMedia(m.page, []);
+  assert.strictEqual(m.lookups(), 0);
+  assert.ok(!m.order.includes('readUploadStateInPage'));
+});
+
+test('filechooser: multiple nhận cả mảng; một tệp qua hộp không multiple vẫn được gắn', async () => {
+  for (const [multiple, files, expected] of [
+    [true, ['/a.jpg', '/b.jpg'], [['/a.jpg', '/b.jpg']]],
+    [false, ['/a.jpg'], ['/a.jpg']],
+  ] as const) {
+    const m = mediaPage({ multiple: true });
+    let handler: ((c: unknown) => Promise<void>) | undefined;
+    (m.page as FakePage).on = (ev: string, h: (c: unknown) => Promise<void>) => { if (ev === 'filechooser') handler = h; };
+    await runMedia(m.page, [...files]);
+    const set: unknown[] = [];
+    await handler!({ isMultiple: () => multiple, setFiles: async (f: unknown) => { set.push(f); } });
+    assert.deepStrictEqual(set, expected);
+  }
+});
+
+test('filechooser không multiple với nhiều ảnh: không gắn gì, đích thất bại "ảnh thứ 2", không đăng', async () => {
+  const m = mediaPage({ multiple: true });
+  let handler: ((c: unknown) => Promise<void>) | undefined;
+  (m.page as FakePage).on = (ev: string, h: (c: unknown) => Promise<void>) => { if (ev === 'filechooser') handler = h; };
+  const set: unknown[] = [];
+  const baseEvaluate = (m.page as FakePage).evaluate as unknown as (fn: AnyFn, arg?: unknown) => Promise<unknown>;
+  // Hộp chọn tệp gốc bật lên trong lúc ảnh đang tải.
+  (m.page as FakePage).evaluate = async (fn: AnyFn, arg?: unknown) => {
+    if (fn.name === 'readUploadStateInPage' && handler) {
+      await handler({ isMultiple: () => false, setFiles: async (f: unknown) => { set.push(f); } });
+    }
+    return baseEvaluate(fn, arg);
+  };
+  const logs: string[] = [];
+  const out = await runMedia(m.page, ['/a.jpg', '/b.jpg'], logs);
+  assert.deepStrictEqual(set, []);
+  assert.strictEqual(out.posted, 0);
+  assert.strictEqual(out.failed, 1);
+  assert.ok(logs.some(l => l.includes('Không đính kèm được ảnh thứ 2')));
+  assert.ok(!m.order.includes('markPublishButtonInPage'));
+});
+
+test('readUploadStateInPage counts progress bars only inside the composer dialog', () => {
+  const bar = fakeNode();
+  const publish = fakeNode({ attrs: { 'aria-label': 'Đăng', 'aria-disabled': 'true' } });
+  const composer = fakeNode({ children: {
+    'div[data-lexical-editor="true"]': [fakeNode()],
+    '[role="progressbar"]': [bar, bar],
+    'div[role="button"], button': [publish],
+  } });
+  const other = fakeNode({ children: { '[role="progressbar"]': [bar, bar, bar] } });
+  const arg = { editorSelectors: ['div[data-lexical-editor="true"]'], labels: PUBLISH_LABELS };
+  const state = withFakeDocument([], { 'div[role="dialog"]': [other, composer] }, '/groups/1/',
+    () => readUploadStateInPage(arg));
+  assert.deepStrictEqual(state, { progress: 2, publishDisabled: true });
+  // Không có gốc soạn bài nào: không có gì đang tải.
+  assert.deepStrictEqual(
+    withFakeDocument([], {}, '/groups/1/', () => readUploadStateInPage(arg)),
+    { progress: 0, publishDisabled: null },
+  );
+});
+
+test('first upload-state read happens only after the settle wait (4000 + 1000*(n-1) ms)', async () => {
+  for (const n of [1, 10]) {
+    const m = mediaPage({ multiple: true });
+    const paths = Array.from({ length: n }, (_, i) => `/${i}.jpg`);
+    const origEval = (m.page as FakePage).evaluate as (fn: AnyFn, arg?: unknown) => Promise<unknown>;
+    let start = 0;
+    let firstRead = -1;
+    (m.page as FakePage).on = () => {};
+    (m.page as FakePage).evaluate = async (fn: AnyFn, arg: unknown) => {
+      if (fn.name === 'readUploadStateInPage' && firstRead < 0) firstRead = Date.now() - start;
+      return origEval(fn, arg);
+    };
+    // Mốc tính từ lúc setInputFiles (sau đó chỉ còn settle wait trước lần đọc đầu).
+    const inputs = m.page.$;
+    (m.page as FakePage).$ = async () => {
+      const el = (await inputs()) as { setInputFiles: (f: unknown) => Promise<void> };
+      const orig = el.setInputFiles;
+      el.setInputFiles = async f => { start = Date.now(); return orig(f); };
+      return el;
+    };
+    await runMedia(m.page, paths);
+    assert.ok(firstRead >= 4000 + 1000 * (n - 1), `n=${n}: first read at ${firstRead} ms`);
+  }
 });

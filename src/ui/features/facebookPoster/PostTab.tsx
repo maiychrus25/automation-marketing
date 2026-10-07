@@ -2,7 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import ProfilePicker from './ProfilePicker';
+import ScheduleDialog from './ScheduleDialog';
+import MediaPicker from './MediaPicker';
 import { matchesKeywords } from './matchKeywords';
+import { validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
 import type { FbPosterGroup, FbPosterMode } from '../../../models/facebookPoster';
 
 const MAX_TEXT = 63206;
@@ -15,13 +18,12 @@ interface Props {
 }
 
 const splitLines = (value: string): string[] => value.split('\n').map((l) => l.trim()).filter(Boolean);
-const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 
 export default function PostTab({ busy, profileNames, onStarted }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [mode, setMode] = useState<FbPosterMode>('group');
   const [text, setText] = useState('');
-  const [mediaPath, setMediaPath] = useState('');
+  const [media, setMedia] = useState<MediaItem[]>([]);
   const [comment, setComment] = useState('');
   const [profileIds, setProfileIds] = useState<string[]>([]);
   const [keyword, setKeyword] = useState('');
@@ -36,6 +38,7 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
   const [staggerMinSec, setStaggerMinSec] = useState(30);
   const [staggerMaxSec, setStaggerMaxSec] = useState(90);
   const [starting, setStarting] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
 
   // Reload scanned groups when the selection changes and when a run ends (a scan may have just finished).
   const idsKey = profileIds.join(',');
@@ -80,34 +83,31 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
     return next;
   });
 
-  const pickMedia = async () => {
-    const res = await ipc.facebookPoster?.pickMedia();
-    if (!res?.success) showNotification(res?.error || 'Không chọn được tệp', 'error');
-    else if (res.path) setMediaPath(res.path);
-  };
-
   const rescan = async (id: string) => {
     const res = await ipc.facebookPoster?.start('scan_groups', { profileIds: [id], concurrency: 1 });
     if (!res?.success) showNotification(res?.error || 'Không quét được nhóm', 'error');
     else onStarted();
   };
 
-  const disabledReason = busy ? 'Đang có việc chạy. Đợi xong hoặc hủy việc đó.'
-    : profileIds.length === 0 ? 'Chọn ít nhất một profile.'
+  // Scheduling is allowed while a run is active, so the busy clause is only part of the Start reason.
+  const scheduleDisabledReason = profileIds.length === 0 ? 'Chọn ít nhất một profile.'
     : !text.trim() ? 'Nhập nội dung bài.'
     : mode === 'group' && targetCounts.some((n) => n === 0) ? 'Mỗi profile cần ít nhất một nhóm.'
-    : '';
+    : validateMediaSelection(media) ?? '';
+  const disabledReason = busy ? 'Đang có việc chạy. Đợi xong hoặc hủy việc đó.' : scheduleDisabledReason;
+
+  const postParams = () => ({
+    mode, text,
+    mediaPaths: media.map((m) => m.path),
+    comment,
+    profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group' ? targetsFor(profileId) : [] })),
+    minDelaySec, maxDelaySec, concurrency, staggerMinSec, staggerMaxSec,
+  });
 
   const handleStart = async () => {
     setStarting(true);
     try {
-      const res = await ipc.facebookPoster?.start('post', {
-        mode, text,
-        mediaPath: mediaPath || null,
-        comment,
-        profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group' ? targetsFor(profileId) : [] })),
-        minDelaySec, maxDelaySec, concurrency, staggerMinSec, staggerMaxSec,
-      });
+      const res = await ipc.facebookPoster?.start('post', postParams());
       if (!res?.success) showNotification(res?.error || 'Không bắt đầu được', 'error');
       else onStarted();
     } catch (err: any) {
@@ -142,15 +142,7 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
         <span className="block text-right mt-0.5">{text.length}/{MAX_TEXT}</span>
       </label>
 
-      <div className="flex flex-wrap items-center gap-2 min-w-0">
-        <button type="button" onClick={pickMedia} disabled={busy} className="px-3 py-1.5 rounded-lg text-sm border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-50">Chọn ảnh/video</button>
-        {mediaPath && (
-          <>
-            <span className="text-sm text-gray-200 truncate min-w-0 max-w-full" title={mediaPath}>{fileName(mediaPath)}</span>
-            <button type="button" onClick={() => setMediaPath('')} disabled={busy} className="text-xs text-gray-400 hover:text-white">Bỏ</button>
-          </>
-        )}
-      </div>
+      <MediaPicker items={media} onChange={setMedia} disabled={busy} />
 
       <label className="block text-xs text-gray-400">
         Bình luận đầu tiên (tuỳ chọn)
@@ -241,8 +233,12 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
         <button type="button" onClick={handleStart} disabled={!!disabledReason || starting} className="btn-primary text-sm px-4 py-2 text-white disabled:opacity-60">
           {starting ? 'Đang bắt đầu...' : 'Bắt đầu đăng'}
         </button>
+        <button type="button" onClick={() => setScheduling(true)} disabled={!!scheduleDisabledReason} className="px-4 py-2 rounded-lg text-sm border border-gray-600 text-gray-200 hover:border-gray-400 disabled:opacity-60">
+          Lên lịch
+        </button>
         {disabledReason && <span className="text-xs text-gray-400">{disabledReason}</span>}
       </div>
+      {scheduling && <ScheduleDialog onClose={() => setScheduling(false)} buildParams={postParams} defaultName={text.trim()} />}
     </div>
   );
 }

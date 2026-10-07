@@ -5,7 +5,7 @@ import { useAppStore } from '../store/appStore';
 import type { TelegramForumTopicContext } from '../../models/telegram';
 import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
 import type { UpdateState, ActionResult as UpdateActionResult } from '../../services/update/UpdateService';
-import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment } from '../../models/facebookPoster';
+import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView } from '../../models/facebookPoster';
 
 
 declare global {
@@ -677,8 +677,13 @@ declare global {
         getRun:         (runId: string) => Promise<{ success: boolean; run?: FbPosterRun; results?: FbPosterResult[]; error?: string }>;
         listComments:   (params?: { postUrl?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; comments?: FbPosterComment[]; total?: number; error?: string }>;
         listPostedUrls: () => Promise<{ success: boolean; posts?: { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number }[]; error?: string }>;
-        pickMedia:      () => Promise<{ success: boolean; path?: string | null; error?: string }>;
+        pickMedia:      () => Promise<{ success: boolean; items?: { path: string; size: number }[]; error?: string }>;
         exportRunCsv:   (runId: string) => Promise<{ success: boolean; path?: string | null; error?: string }>;
+        scheduleCreate: (params: { name?: string; kind: 'once' | 'recurring'; runAt?: number; days?: number[]; time?: string; params: Record<string, unknown> }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
+        scheduleList:   () => Promise<{ success: boolean; schedules?: FbPosterScheduleView[]; queuedIds?: string[]; error?: string }>;
+        scheduleUpdate: (params: { id: string; name?: string; enabled?: boolean; runAt?: number; days?: number[]; time?: string }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
+        scheduleDelete: (id: string) => Promise<{ success: boolean; error?: string }>;
+        takeMissed:     () => Promise<{ success: boolean; notices?: { scheduleId: string; name: string; reason: string; at: number }[]; error?: string }>;
       };
       erp: {
       projectList:         (params?: { archived?: boolean }) => Promise<{ success: boolean; projects: any[]; error?: string }>;
