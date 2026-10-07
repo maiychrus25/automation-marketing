@@ -13,7 +13,7 @@ import { normalizeTarget } from './targets';
 export interface ProfileInfo { id: string; name: string; }
 
 export type StartParams =
-    | { kind: 'post'; mode: FbPosterMode; text: string; mediaPath: string | null; comment: string | null; profiles: { profileId: string; targets: string[] }[]; minDelaySec: number; maxDelaySec: number; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
+    | { kind: 'post'; mode: FbPosterMode; text: string; mediaPaths: string[]; comment: string | null; profiles: { profileId: string; targets: string[] }[]; minDelaySec: number; maxDelaySec: number; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
     | { kind: 'scan_groups'; profileIds: string[]; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
     | { kind: 'join'; profileId: string; keywords: string[]; limit: number; minDelaySec: number; maxDelaySec: number }
     | { kind: 'collect_comments'; profileId: string; postUrls: string[] };
@@ -278,7 +278,7 @@ export class FacebookPosterService {
                 await this.tasks.postToTargets(
                     {
                         text: params.text,
-                        mediaPath: params.mediaPath,
+                        mediaPaths: params.mediaPaths,
                         comment: params.comment,
                         targets: plan.targets.map((t) => t.url),
                         minDelay: params.minDelaySec,

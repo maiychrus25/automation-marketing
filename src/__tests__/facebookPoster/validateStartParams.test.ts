@@ -3,6 +3,7 @@ import { validateStartParams } from '../../services/facebookPoster/validateStart
 const env = {
   profileExists: (id: string) => id === 'p1' || id === 'p2',
   fileExists: (p: string) => p !== '/missing.jpg',
+  fileSize: () => 1,
 };
 
 const post = (over: Record<string, unknown> = {}) => ({
@@ -23,7 +24,7 @@ describe('validateStartParams: common', () => {
 describe('validateStartParams: post', () => {
   test('valid group job gets defaults and normalized targets', () => {
     expect(validateStartParams(post(), env)).toEqual({
-      kind: 'post', mode: 'group', text: 'hello', mediaPath: null, comment: null,
+      kind: 'post', mode: 'group', text: 'hello', mediaPaths: [], comment: null,
       profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123/'] }],
       minDelaySec: 300, maxDelaySec: 900, concurrency: 3, staggerMinSec: 30, staggerMaxSec: 90,
     });
@@ -97,13 +98,31 @@ describe('validateStartParams: post', () => {
     ]);
   });
 
-  test('mediaPath: missing file and bad extension', () => {
-    fails(post({ mediaPath: '/missing.jpg' }), 'Không tìm thấy tệp ảnh/video');
-    fails(post({ mediaPath: '/a/doc.pdf' }), 'Chỉ hỗ trợ ảnh/video: jpg, jpeg, png, gif, webp, mp4, mov, webm');
+  test('mediaPaths: missing file and bad extension', () => {
+    fails(post({ mediaPaths: ['/missing.jpg'] }), 'Không tìm thấy tệp ảnh/video');
+    fails(post({ mediaPaths: ['/a/doc.pdf'] }), 'Chỉ hỗ trợ ảnh/video: jpg, jpeg, png, gif, webp, mp4, mov, webm');
     for (const ext of ['jpg', 'JPEG', 'png', 'gif', 'webp', 'mp4', 'mov', 'webm']) {
-      expect((validateStartParams(post({ mediaPath: `/a/f.${ext}` }), env) as any).mediaPath).toBe(`/a/f.${ext}`);
+      expect((validateStartParams(post({ mediaPaths: [`/a/f.${ext}`] }), env) as any).mediaPaths).toEqual([`/a/f.${ext}`]);
     }
-    expect((validateStartParams(post({ mediaPath: '' }), env) as any).mediaPath).toBeNull();
+  });
+
+  test('mediaPaths: 10 files pass, duplicates collapse, 11 fail', () => {
+    const ten = Array.from({ length: 10 }, (_, i) => `/a/${i}.jpg`);
+    expect((validateStartParams(post({ mediaPaths: ten }), env) as any).mediaPaths).toEqual(ten);
+    expect((validateStartParams(post({ mediaPaths: ['/a/1.jpg', '/a/1.jpg'] }), env) as any).mediaPaths).toEqual(['/a/1.jpg']);
+    fails(post({ mediaPaths: [...ten, '/a/10.jpg'] }), 'Tối đa 10 ảnh mỗi bài');
+  });
+
+  test('mediaPaths: sizes come from env.fileSize', () => {
+    const big = { ...env, fileSize: () => 21 * 1024 * 1024 };
+    expect(() => validateStartParams(post({ mediaPaths: ['/a/big.jpg'] }), big)).toThrow(new Error('Ảnh "big.jpg" lớn hơn 20 MB'));
+  });
+
+  test('legacy mediaPath becomes mediaPaths; null, empty and missing give []', () => {
+    expect((validateStartParams(post({ mediaPath: '/x.jpg' }), env) as any).mediaPaths).toEqual(['/x.jpg']);
+    expect((validateStartParams(post({ mediaPath: null }), env) as any).mediaPaths).toEqual([]);
+    expect((validateStartParams(post({ mediaPath: '' }), env) as any).mediaPaths).toEqual([]);
+    expect((validateStartParams(post(), env) as any).mediaPaths).toEqual([]);
   });
 
   test('delays', () => {

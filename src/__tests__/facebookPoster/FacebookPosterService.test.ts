@@ -109,7 +109,7 @@ function harness(tasks: Record<string, any> = {}, over: Partial<FacebookPosterSe
 
 function postParams(over: Partial<Extract<StartParams, { kind: 'post' }>> = {}): StartParams {
   return {
-    kind: 'post', mode: 'group', text: 'xin chào', mediaPath: null, comment: null,
+    kind: 'post', mode: 'group', text: 'xin chào', mediaPaths: [], comment: null,
     profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/1/', 'https://www.facebook.com/groups/2/'] }],
     minDelaySec: 5, maxDelaySec: 9, concurrency: 3, staggerMinSec: 30, staggerMaxSec: 90, ...over,
   };
@@ -368,12 +368,12 @@ describe('FacebookPosterService', () => {
     const task = postAll();
     const h = harness({ postToTargets: task });
     h.service.start(postParams({
-      mode: 'page', text: 'nội dung', mediaPath: '/tmp/a.png', comment: 'bl', minDelaySec: 7, maxDelaySec: 11,
+      mode: 'page', text: 'nội dung', mediaPaths: ['/tmp/a.png'], comment: 'bl', minDelaySec: 7, maxDelaySec: 11,
       profiles: [{ profileId: 'p1', targets: [] }],
     }));
     await h.service.whenIdle();
     expect(task.mock.calls[0][0]).toEqual({
-      text: 'nội dung', mediaPath: '/tmp/a.png', comment: 'bl', targets: [HOME], minDelay: 7, maxDelay: 11,
+      text: 'nội dung', mediaPaths: ['/tmp/a.png'], comment: 'bl', targets: [HOME], minDelay: 7, maxDelay: 11,
     });
     const rows = h.results('run-1');
     expect(rows).toHaveLength(1);

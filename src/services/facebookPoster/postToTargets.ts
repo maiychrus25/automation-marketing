@@ -615,6 +615,8 @@ export interface PostTargetResult {
 export interface PostInput {
   text: string;
   mediaPath?: string | null;
+  /** Tạm thời: Task 2 sẽ nạp đủ nhiều ảnh; hiện chỉ dùng ảnh đầu. */
+  mediaPaths?: string[];
   comment?: string | null;
   targets: string[];
   /** Giây nghỉ tối thiểu giữa hai đích. */
@@ -627,7 +629,8 @@ export async function postToTargets(
   input: PostInput,
   deps: TaskDeps & { onResult?: (result: PostTargetResult) => void },
 ): Promise<{ posted: number; failed: number; results: PostTargetResult[] }> {
-  const { text, mediaPath = null, comment = null, targets, minDelay = 30, maxDelay = 60 } = (input || {}) as Partial<PostInput>;
+  const { text, mediaPaths, comment = null, targets, minDelay = 30, maxDelay = 60 } = (input || {}) as Partial<PostInput>;
+  const mediaPath = (input as Partial<PostInput>)?.mediaPath ?? mediaPaths?.[0] ?? null;
   const { getIsStopping, sendLog, updateProgress, onResult } = deps;
 
   if (!text || !String(text).trim()) {

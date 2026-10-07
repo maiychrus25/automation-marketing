@@ -106,6 +106,7 @@ export function registerFacebookPosterIpc(): void {
         const startParams = validateStartParams(params, {
             profileExists: (id) => !!db().getBrowserProfileById(id),
             fileExists: (p) => fs.existsSync(p),
+            fileSize: (p) => fs.statSync(p).size,
         });
         if (!isBrowserEngineInstalled()) {
             throw new Error('Chưa cài trình duyệt. Hãy tải trình duyệt ở màn hình Trình duyệt.');
