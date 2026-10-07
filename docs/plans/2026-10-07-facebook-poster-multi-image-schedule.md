@@ -412,4 +412,22 @@ Steps:
 
 ## Verification log
 
-(Filled in during Task 10.)
+### Task 10 (07/10/2026, final build a22af0f)
+
+**Step 2: checks**
+- `npx jest` → 34 suites, 648 tests pass. `npx tsc -p tsconfig.electron.json --noEmit` → exit 0. `NODE_OPTIONS=--max-old-space-size=8192 npx tsc -p tsconfig.json --noEmit` → exit 0.
+- `npm run production` → exit 0, `[strip-console] Done: 11/178 files modified`, `MaiHub-26.13.0.AppImage` and `maihub_26.13.0_amd64.deb` built. Then `npm rebuild better-sqlite3` and `npx jest` → 648/648 pass.
+- No linter configured.
+
+**Step 3: real-page dry runs — NOT VERIFIED.** The FB Poster profiles (`profile`, `profile-page`) are reached through the proxy in `.env`. Every `page.goto` failed with `net::ERR_TUNNEL_CONNECTION_FAILED`. The proxy was not bypassed, because that would log the accounts in from a new IP. The group composer and the Page `/post/create` composer therefore remain unmeasured with several files. The non-`multiple` fallback (Task 2) is covered only by unit tests. Owner action before release: post a 2–3 image test post to a test group and a Page, or restore the proxy so the dry run can be repeated.
+
+**Steps 4–5: packaged app (`linux-unpacked/maihub`), isolated `XDG_*` dirs, driven over CDP**
+- UI rounds on the final build, two full rounds × {1440×900, 375×812} × {light, dark}. Each round covered all 5 tabs, the schedule dialog (Một lần and Lặp lại), and the Lịch đăng tab with rows. Results: `scrollWidth <= clientWidth` everywhere (Lịch đăng at 375: 375/375), 0 overlapping text pairs, `data-theme` matches, 0 page or console errors.
+- An earlier round found that Lịch đăng with rows overflowed the page at 375 px (581/375). Cause: the sr-only header escaped a non-positioned `overflow-x-auto` container. Fixed in a22af0f, together with the last-run chip, which now links to Lịch sử (spec 7.3).
+- MediaPicker checks passed: 10 tiles (72×72, numbered 1–10), Lên/Xuống/Bỏ with the end buttons disabled, summary `10/10 ảnh · 0.1 MB`. An 11th image shows the alert `Tối đa 10 ảnh mỗi bài` and disables "Bắt đầu đăng" and "Lên lịch".
+- Scheduler, one-time: a schedule 2 min ahead started at the due minute and failed with `Chưa cài trình duyệt. Hãy tải trình duyệt ở màn hình Trình duyệt.` (the isolated dirs have no engine). History shows "Theo lịch", and the Lịch đăng chip shows `Lỗi`.
+- Scheduler, missed run: the app was closed before the due time and reopened 5 min later. The warning toast read `Lịch "lich-C" đã lỡ lúc 10:32 07/10: App tắt lúc đến giờ`. History shows "Theo lịch / Đã lỡ".
+- Delete via the confirm dialog removes the row and the schedule's media folder. The Bật/Tạm dừng switch toggles `aria-checked`, and the next run clears to `—` and comes back.
+- Regression: Tổng quan, Trình duyệt and Cài đặt load at 1440 and 375 with no horizontal scroll and 0 console errors. Cài đặt shows v26.13.0 at the top.
+- NOT VERIFIED: the native "Chọn ảnh/video" dialog. It is an xdg-desktop-portal window that could not be automated, so the picker was exercised through its `onChange`. The "not logged in" failure text was also not seen, because no engine was installed in the isolated dirs.
+- Evidence (outside the repo): `/tmp/claude-1000/-home-maiychrus-Auto-Reup-Facebook/62ac0103-910e-433e-a7dd-c8f0b2bebce7/scratchpad/verify/` (`shots/`, `round1–4.json`).
