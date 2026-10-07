@@ -10,7 +10,7 @@ export interface StartParamsEnv {
 
 const MAX_TEXT = 63206;
 const MAX_COMMENT = 8000;
-const MAX_TARGETS = 500;
+const MAX_TARGETS = 10000;
 const MAX_DELAY_SEC = 86400;
 const BARE_TARGET = /^[A-Za-z0-9._-]+$/;
 const PAGE_TARGET = 'https://www.facebook.com/';
