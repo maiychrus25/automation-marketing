@@ -88,7 +88,7 @@ export class FacebookPosterService {
         this.tasks = { postToTargets, scanGroups, searchAndJoinGroups, collectComments, ...deps.tasks };
     }
 
-    start(params: StartParams): { runId: string } {
+    start(params: StartParams, scheduleId?: string): { runId: string } {
         if (this.active) throw new Error(BUSY_ERROR);
         const plans = this.plan(params);
         const run: FbPosterRun = {
@@ -100,8 +100,9 @@ export class FacebookPosterService {
             error: '',
             startedAt: this.now(),
             finishedAt: null,
+            scheduleId: scheduleId ?? null,
         };
-        this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt });
+        this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt, scheduleId: run.scheduleId });
         this.stopping = false;
         this.storeError = null;
         const parallel = params.kind === 'post' || params.kind === 'scan_groups' ? params : null;

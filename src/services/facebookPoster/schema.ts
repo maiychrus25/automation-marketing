@@ -47,4 +47,25 @@ CREATE TABLE IF NOT EXISTS fb_poster_comments (
     collected_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fb_poster_comments_post ON fb_poster_comments(post_url);
+
+CREATE TABLE IF NOT EXISTS fb_poster_schedules (
+    id            TEXT PRIMARY KEY,          -- uuid
+    name          TEXT NOT NULL,             -- người dùng đặt, mặc định 40 ký tự đầu nội dung
+    kind          TEXT NOT NULL,             -- 'once' | 'recurring'
+    params_json   TEXT NOT NULL,             -- StartParams kiểu 'post'; mediaPaths là tên tệp trong thư mục media của lịch
+    run_at        INTEGER DEFAULT NULL,      -- 'once': mốc giờ chạy (ms)
+    days          TEXT NOT NULL DEFAULT '',  -- 'recurring': danh sách thứ "1,3,5" (0 = Chủ nhật)
+    time          TEXT NOT NULL DEFAULT '',  -- 'recurring': "HH:mm"
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    next_run_at   INTEGER DEFAULT NULL,      -- null khi đã xong ('once') hoặc tạm dừng
+    last_run_id   TEXT DEFAULT NULL,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_schedules_next ON fb_poster_schedules(enabled, next_run_at);
 `;
+
+// Chạy sau FB_POSTER_SCHEMA_SQL, từng câu trong try/catch (cột đã có thì ALTER ném lỗi, bỏ qua).
+export const FB_POSTER_MIGRATIONS: string[] = [
+    'ALTER TABLE fb_poster_runs ADD COLUMN schedule_id TEXT DEFAULT NULL',
+];

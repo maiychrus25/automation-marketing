@@ -790,3 +790,15 @@ describe('FacebookPosterService', () => {
     }
   });
 });
+
+describe('FacebookPosterService scheduleId', () => {
+  test('start(params, scheduleId) lưu scheduleId; start(params) lưu null', async () => {
+    const h = harness({ postToTargets: postAll() });
+    const first = h.service.start(postParams(), 'sch-1');
+    await h.service.whenIdle();
+    expect(h.run(first.runId).scheduleId).toBe('sch-1');
+    const second = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(h.run(second.runId).scheduleId).toBeNull();
+  });
+});

@@ -1,6 +1,6 @@
 export type FbPosterKind = 'post' | 'join' | 'scan_groups' | 'collect_comments';
 export type FbPosterMode = 'group' | 'page';
-export type FbPosterRunStatus = 'running' | 'done' | 'cancelled' | 'failed';
+export type FbPosterRunStatus = 'running' | 'done' | 'cancelled' | 'failed' | 'missed';
 
 export interface FbPosterRun {
     id: string;
@@ -11,6 +11,26 @@ export interface FbPosterRun {
     error: string;
     startedAt: number;
     finishedAt: number | null;
+    scheduleId: string | null;
+}
+
+export interface FbPosterSchedule {
+    id: string;
+    name: string;
+    kind: 'once' | 'recurring';
+    params: Record<string, unknown>; // StartParams kiểu 'post'; mediaPaths là tên tệp đã lưu
+    runAt: number | null;
+    days: number[];
+    time: string;
+    enabled: boolean;
+    nextRunAt: number | null;
+    lastRunId: string | null;
+    createdAt: number;
+    updatedAt: number;
+}
+
+export interface FbPosterScheduleView extends FbPosterSchedule {
+    lastRun: { status: FbPosterRunStatus; startedAt: number; error: string } | null;
 }
 
 export interface FbPosterResult {
