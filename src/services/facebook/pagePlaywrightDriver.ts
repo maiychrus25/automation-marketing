@@ -14,7 +14,7 @@
 import { chromium, BrowserContext, Page } from 'playwright-core';
 import path from 'path';
 import fs from 'fs';
-import { FacebookPageBrowserSender, PageInboxDriver } from './FacebookPageBrowserSender';
+import { FacebookPageBrowserSender, PageInboxDriver, PageStickerThumb } from './FacebookPageBrowserSender';
 import { PAGE_BIZ_SUITE } from './pageBusinessSuiteSelectors';
 import { buildThreadUrl, isSendableThreadId } from './pageSendHelpers';
 
@@ -22,6 +22,8 @@ const OPEN_TIMEOUT_MS = 25000;
 const STAGE_TIMEOUT_MS = 30000; // chờ đính kèm hiện lên khung
 const ATTACH_SETTLE_MS = 7000;  // chờ upload đính kèm xong trước khi Enter (Enter sớm làm rớt ảnh)
 const IDLE_CLOSE_MS = 5 * 60 * 1000;
+// Vùng lưới sticker trong bảng chọn (popover trên composer), để loại sticker nằm trong khung chat.
+const STICKER_PANEL = { minY: 520, maxY: 815, minX: 660, maxX: 965 };
 
 function resolveEngineExecutable(): string {
   if (process.env.FB_PAGE_BROWSER_ENGINE) return process.env.FB_PAGE_BROWSER_ENGINE;
@@ -142,7 +144,7 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     await composer.press('Enter');
   }
 
-  async readIncomingMedia(_threadId: string, max: number): Promise<{ type: 'image' | 'video'; url: string }[]> {
+  async readIncomingMedia(_threadId: string, max: number): Promise<{ type: 'image' | 'video' | 'sticker'; url: string }[]> {
     // openThread đã do caller (doRead) gọi. Cuộn đáy rồi lấy media-tin ĐẾN (khách gửi).
     try {
       await this.page.evaluate(() => {
@@ -154,7 +156,7 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     } catch { /* ignore */ }
     return this.page.evaluate((limit) => {
       const W = window.innerWidth;
-      const out: { type: 'image' | 'video'; url: string; y: number }[] = [];
+      const out: { type: 'image' | 'video' | 'sticker'; url: string; y: number }[] = [];
       // ảnh đến: hugs trái, đủ lớn (bỏ avatar/emoji), cột phải (bỏ danh sách)
       document.querySelectorAll('img').forEach((im) => {
         const el = im as HTMLImageElement; const r = el.getBoundingClientRect(); const src = el.src || '';
@@ -171,9 +173,18 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
         if ((r.x + r.width) >= (W - 150)) return;
         out.push({ type: 'video', url: src, y: r.y });
       });
+      // sticker đến: div[role=img][aria-label$=" sticker"], hugs trái, ảnh qua background-image
+      document.querySelectorAll('div[role="img"][aria-label$=" sticker"]').forEach((el) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        if (r.width < 50 || r.x < 480) return;
+        if ((r.x + r.width) >= (W - 150)) return;          // hugs phải = đi → bỏ
+        const bg = getComputedStyle(el as HTMLElement).backgroundImage || '';
+        const m = bg.match(/url\(["']?(.*?)["']?\)/);
+        if (m && /fbcdn|scontent/.test(m[1])) out.push({ type: 'sticker', url: m[1], y: r.y });
+      });
       out.sort((a, b) => b.y - a.y);                       // mới (dưới) → cũ
       const seen = new Set<string>();
-      const res: { type: 'image' | 'video'; url: string }[] = [];
+      const res: { type: 'image' | 'video' | 'sticker'; url: string }[] = [];
       for (const o of out) { if (!seen.has(o.url)) { seen.add(o.url); res.push({ type: o.type, url: o.url }); } if (res.length >= limit) break; }
       return res;
     }, max);
@@ -189,6 +200,72 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
       await this.page.waitForTimeout(400);
     }
     throw new Error('quá hạn chờ xác nhận đã gửi');
+  }
+
+  /** Mở bảng chọn sticker và gõ keyword; trả về khi lưới kết quả đã render (hoặc hết chờ). */
+  private async openStickerSearch(keyword: string): Promise<void> {
+    await this.page.locator(PAGE_BIZ_SUITE.stickerButton).first().click({ timeout: 8000 });
+    await this.page.waitForTimeout(1500);
+    const search = this.page.locator(PAGE_BIZ_SUITE.stickerSearch).first();
+    await search.click({ timeout: 6000 });
+    await search.fill('');
+    if (keyword) await search.type(keyword, { delay: 30 });
+    await this.page.waitForTimeout(2500); // chờ lưới sticker load
+  }
+
+  /** Các ô sticker TRONG panel (loại sticker trong khung chat), thứ tự y→x. */
+  private async panelStickerCells(): Promise<{ cx: number; cy: number; label: string; thumbUrl: string }[]> {
+    return this.page.evaluate((P) => {
+      const out: { cx: number; cy: number; label: string; thumbUrl: string }[] = [];
+      document.querySelectorAll('div[role="img"][aria-label$=" sticker"]').forEach((el) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        if (r.y < P.minY || r.y > P.maxY || r.x < P.minX || r.x > P.maxX || r.width < 40) return;
+        const bg = getComputedStyle(el as HTMLElement).backgroundImage || '';
+        const m = bg.match(/url\(["']?(.*?)["']?\)/);
+        out.push({ cx: Math.round(r.x + r.width / 2), cy: Math.round(r.y + r.height / 2),
+          label: (el.getAttribute('aria-label') || '').slice(0, 80), thumbUrl: m ? m[1] : '' });
+      });
+      out.sort((a, b) => a.cy - b.cy || a.cx - b.cx);
+      return out;
+    }, STICKER_PANEL);
+  }
+
+  /** Số sticker ĐI (hugs phải) trong khung — mốc xác nhận gửi sticker. */
+  private async outgoingStickerCount(): Promise<number> {
+    return this.page.evaluate(() => {
+      const W = window.innerWidth, H = window.innerHeight; let n = 0;
+      document.querySelectorAll('div[role="img"][aria-label$=" sticker"]').forEach((el) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        if (r.width < 50 || r.x < 480 || r.y > H - 130) return;
+        if ((r.x + r.width) < (W - 220)) return; // hugs phải = đi
+        n++;
+      });
+      return n;
+    });
+  }
+
+  async listStickers(_threadId: string, keyword: string, max: number): Promise<PageStickerThumb[]> {
+    await this.openStickerSearch(keyword);
+    const cells = await this.panelStickerCells();
+    return cells.slice(0, max).map((c) => ({ label: c.label, thumbUrl: c.thumbUrl }));
+  }
+
+  async sendSticker(_threadId: string, keyword: string, index: number): Promise<void> {
+    const before = await this.outgoingStickerCount();
+    await this.openStickerSearch(keyword);
+    const cells = await this.panelStickerCells();
+    const cell = cells[index] || cells[0];
+    if (!cell) throw new Error('không tìm thấy sticker để gửi');
+    await this.page.mouse.move(cell.cx, cell.cy);
+    await this.page.waitForTimeout(200);
+    await this.page.mouse.down(); await this.page.waitForTimeout(70); await this.page.mouse.up();
+    // xác nhận dương: sticker ĐI mới xuất hiện
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      if ((await this.outgoingStickerCount()) > before) return;
+      await this.page.waitForTimeout(400);
+    }
+    throw new Error('quá hạn chờ xác nhận gửi sticker');
   }
 }
 
