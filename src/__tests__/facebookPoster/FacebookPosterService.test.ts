@@ -388,6 +388,23 @@ describe('FacebookPosterService', () => {
     expect(h.results('run-1')[0].profileName).toBe('ghost');
   });
 
+  test('profile đã bị xóa: chỉ đích của nó failed "Không tìm thấy profile", profile khác vẫn đăng', async () => {
+    const h = harness({ postToTargets: postAll() });
+    h.service.start(postParams({
+      profiles: [
+        { profileId: 'p1', targets: ['https://www.facebook.com/groups/1/'] },
+        { profileId: 'ghost', targets: ['https://www.facebook.com/groups/2/', 'https://www.facebook.com/groups/3/'] },
+      ],
+    }));
+    await h.service.whenIdle();
+    const rows = h.results('run-1');
+    expect(rows.filter((r) => r.profileId === 'p1').map((r) => r.outcome)).toEqual(['posted']);
+    const ghost = rows.filter((r) => r.profileId === 'ghost');
+    expect(ghost.map((r) => r.outcome)).toEqual(['failed', 'failed']);
+    expect(ghost.every((r) => r.error === 'Không tìm thấy profile')).toBe(true);
+    expect(h.opened).toEqual(['p1']);
+  });
+
   // 9
   test('cửa sổ đóng giữa chừng: đích đầu chưa có kết quả failed với lỗi, phần còn lại skipped "Đã dừng"', async () => {
     const h = harness({

@@ -127,7 +127,7 @@ export function startFacebookPosterScheduler(): void {
         resolveParams: (s) => {
             const names = Array.isArray(s.params.mediaPaths) ? (s.params.mediaPaths as string[]) : [];
             const params = { ...s.params, mediaPaths: resolveScheduleMedia(scheduleBaseDir(), s.id, names) };
-            const startParams = validateStartParams({ kind: 'post', params }, startEnv);
+            const startParams = validateStartParams({ kind: 'post', params }, { ...startEnv, profileExists: () => true });
             if (!isBrowserEngineInstalled()) throw new Error(ENGINE_MISSING_ERROR);
             return startParams;
         },

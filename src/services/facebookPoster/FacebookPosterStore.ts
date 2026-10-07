@@ -33,6 +33,7 @@ function mapRun(row: any): FbPosterRun {
         startedAt: row.started_at,
         finishedAt: row.finished_at ?? null,
         scheduleId: row.schedule_id ?? null,
+        scheduleName: row.schedule_name ?? null,
     };
 }
 
@@ -141,14 +142,15 @@ export class FacebookPosterStore {
         const where = opts.kind ? 'WHERE kind = ?' : '';
         const filter = opts.kind ? [opts.kind] : [];
         const rows = this.db.query<any>(
-            `SELECT * FROM fb_poster_runs ${where} ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?`,
+            `SELECT r.*, s.name AS schedule_name FROM fb_poster_runs r LEFT JOIN fb_poster_schedules s ON s.id = r.schedule_id
+             ${opts.kind ? 'WHERE r.kind = ?' : ''} ORDER BY r.started_at DESC, r.rowid DESC LIMIT ? OFFSET ?`,
             [...filter, opts.limit, opts.offset],
         );
         return { runs: rows.map(mapRun), total: this.count(`SELECT COUNT(*) AS n FROM fb_poster_runs ${where}`, filter) };
     }
 
     getRun(id: string): { run: FbPosterRun; results: FbPosterResult[] } | null {
-        const row = this.db.queryOne<any>('SELECT * FROM fb_poster_runs WHERE id = ?', [id]);
+        const row = this.db.queryOne<any>('SELECT r.*, s.name AS schedule_name FROM fb_poster_runs r LEFT JOIN fb_poster_schedules s ON s.id = r.schedule_id WHERE r.id = ?', [id]);
         if (!row) return null;
         const results = this.db.query<any>('SELECT * FROM fb_poster_results WHERE run_id = ? ORDER BY id', [id]);
         return { run: mapRun(row), results: results.map(mapResult) };

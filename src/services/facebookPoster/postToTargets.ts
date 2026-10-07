@@ -391,7 +391,7 @@ async function postToSingleTarget(
   ctx: BrowserContext,
   target: { url: string; kind: 'group' | 'page' },
   { text, mediaPaths, comment }: { text: string; mediaPaths: string[]; comment: string | null },
-  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog'>,
+  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog'> & { attachShortfall?: () => boolean },
 ): Promise<SingleTargetOutcome> {
   const { url, kind } = target;
   const { getIsStopping, sendLog } = deps;
@@ -510,6 +510,11 @@ async function postToSingleTarget(
       sendLog(`[${kind}] [ERROR] Ảnh chưa tải lên xong: ${url}`, 'error');
       return failed();
     }
+  }
+  // Hộp chọn tệp gốc không nhận nhiều tệp: không đăng bài thiếu ảnh.
+  if (deps.attachShortfall?.()) {
+    sendLog(`[${kind}] [ERROR] Không đính kèm được ảnh thứ 2: ${url}`, 'error');
+    return failed();
   }
   if (getIsStopping()) return failed();
   await delayRandom(500, 1000);
@@ -715,6 +720,7 @@ export async function postToTargets(
       throw new Error('Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập');
     }
 
+    let chooserShortfall = false;
     if (files.length) {
       page.on('filechooser', async chooser => {
         try {
@@ -722,8 +728,13 @@ export async function postToTargets(
           if (chooser.isMultiple()) {
             await chooser.setFiles(files);
           } else {
-            if (files.length > 1) sendLog('Hộp chọn tệp gốc không nhận nhiều tệp: chỉ đính kèm được ảnh đầu tiên.', 'warning');
-            await chooser.setFiles(files[0]);
+            if (files.length > 1) {
+              // Ảnh thứ 2 là ảnh đầu tiên không đính kèm được; không đính kèm gì để khỏi đăng thiếu ảnh.
+              chooserShortfall = true;
+              sendLog('Hộp chọn tệp gốc không nhận nhiều tệp: không đính kèm được ảnh thứ 2.', 'warning');
+            } else {
+              await chooser.setFiles(files[0]);
+            }
           }
         } catch (err) {
           sendLog(`Lỗi nạp tệp qua filechooser: ${(err as Error).message}`, 'warning');
@@ -747,9 +758,10 @@ export async function postToTargets(
       // để báo, và lịch sử không được ghi thành "hỏng".
       let commentStatus: CommentStatus = 'not_requested';
       let identity = '';
+      chooserShortfall = false;
       try {
         const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment },
-          { getIsStopping, sendLog });
+          { getIsStopping, sendLog, attachShortfall: () => chooserShortfall });
         // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
         // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
         ok = single.ok;

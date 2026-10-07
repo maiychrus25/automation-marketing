@@ -12,6 +12,7 @@ export interface FbPosterRun {
     startedAt: number;
     finishedAt: number | null;
     scheduleId: string | null;
+    scheduleName: string | null; // null khi lịch đã bị xóa
 }
 
 export interface FbPosterSchedule {

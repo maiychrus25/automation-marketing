@@ -24,7 +24,13 @@ export default function MediaPicker({ items, onChange, disabled }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
 
   const pick = async () => {
-    const res = await ipc.facebookPoster?.pickMedia();
+    let res;
+    try {
+      res = await ipc.facebookPoster?.pickMedia();
+    } catch (err: any) {
+      showNotification(err?.message || 'Không mở được hộp chọn tệp', 'error');
+      return;
+    }
     if (!res?.success) { showNotification(res?.error || 'Không chọn được tệp', 'error'); return; }
     const known = new Set(items.map((i) => i.path));
     const added: MediaItem[] = [];

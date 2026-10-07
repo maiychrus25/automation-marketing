@@ -1061,18 +1061,41 @@ test('mediaPaths rỗng: không tìm ô tải tệp, không đọc trạng thái
   assert.ok(!m.order.includes('readUploadStateInPage'));
 });
 
-test('filechooser: multiple nhận cả mảng; không multiple chỉ ảnh đầu và cảnh báo', async () => {
-  for (const multiple of [true, false]) {
+test('filechooser: multiple nhận cả mảng; một tệp qua hộp không multiple vẫn được gắn', async () => {
+  for (const [multiple, files, expected] of [
+    [true, ['/a.jpg', '/b.jpg'], [['/a.jpg', '/b.jpg']]],
+    [false, ['/a.jpg'], ['/a.jpg']],
+  ] as const) {
     const m = mediaPage({ multiple: true });
     let handler: ((c: unknown) => Promise<void>) | undefined;
     (m.page as FakePage).on = (ev: string, h: (c: unknown) => Promise<void>) => { if (ev === 'filechooser') handler = h; };
-    const logs: string[] = [];
-    await runMedia(m.page, ['/a.jpg', '/b.jpg'], logs);
+    await runMedia(m.page, [...files]);
     const set: unknown[] = [];
     await handler!({ isMultiple: () => multiple, setFiles: async (f: unknown) => { set.push(f); } });
-    assert.deepStrictEqual(set, multiple ? [['/a.jpg', '/b.jpg']] : ['/a.jpg']);
-    assert.strictEqual(logs.some(l => l.includes('chỉ đính kèm được ảnh đầu tiên')), !multiple);
+    assert.deepStrictEqual(set, expected);
   }
+});
+
+test('filechooser không multiple với nhiều ảnh: không gắn gì, đích thất bại "ảnh thứ 2", không đăng', async () => {
+  const m = mediaPage({ multiple: true });
+  let handler: ((c: unknown) => Promise<void>) | undefined;
+  (m.page as FakePage).on = (ev: string, h: (c: unknown) => Promise<void>) => { if (ev === 'filechooser') handler = h; };
+  const set: unknown[] = [];
+  const baseEvaluate = (m.page as FakePage).evaluate as unknown as (fn: AnyFn, arg?: unknown) => Promise<unknown>;
+  // Hộp chọn tệp gốc bật lên trong lúc ảnh đang tải.
+  (m.page as FakePage).evaluate = async (fn: AnyFn, arg?: unknown) => {
+    if (fn.name === 'readUploadStateInPage' && handler) {
+      await handler({ isMultiple: () => false, setFiles: async (f: unknown) => { set.push(f); } });
+    }
+    return baseEvaluate(fn, arg);
+  };
+  const logs: string[] = [];
+  const out = await runMedia(m.page, ['/a.jpg', '/b.jpg'], logs);
+  assert.deepStrictEqual(set, []);
+  assert.strictEqual(out.posted, 0);
+  assert.strictEqual(out.failed, 1);
+  assert.ok(logs.some(l => l.includes('Không đính kèm được ảnh thứ 2')));
+  assert.ok(!m.order.includes('markPublishButtonInPage'));
 });
 
 test('readUploadStateInPage counts progress bars only inside the composer dialog', () => {

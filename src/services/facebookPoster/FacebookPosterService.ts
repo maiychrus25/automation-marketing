@@ -101,6 +101,7 @@ export class FacebookPosterService {
             startedAt: this.now(),
             finishedAt: null,
             scheduleId: scheduleId ?? null,
+            scheduleName: null,
         };
         this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt, scheduleId: run.scheduleId });
         this.stopping = false;
@@ -226,6 +227,8 @@ export class FacebookPosterService {
         // Called once by most tasks and twice by join; every call opens a new session.
         const launch = async (): Promise<LaunchedPage> => {
             try {
+                // A profile deleted after a schedule was saved fails only its own targets.
+                if (!this.deps.getProfile(profileId)) throw new Error('Không tìm thấy profile');
                 const session = await this.deps.openForAutomation(profileId);
                 sessions.push(session);
                 if (!loginChecked) {

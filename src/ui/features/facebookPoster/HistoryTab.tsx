@@ -124,7 +124,11 @@ export default function HistoryTab() {
                   className="flex-1 min-w-[12rem] text-left text-sm text-gray-200">
                   {open ? '▾' : '▸'} {formatTime(run.startedAt)} · {KIND_LABEL[run.kind] || run.kind}{run.mode ? ` · ${MODE_LABEL[run.mode] || run.mode}` : ''}
                 </button>
-                {run.scheduleId && <span className="text-xs text-gray-400 whitespace-nowrap">Theo lịch</span>}
+                {run.scheduleId && (
+                  <span className="text-xs text-gray-400 max-w-[14rem] truncate" title={run.scheduleName ? `Theo lịch: ${run.scheduleName}` : undefined}>
+                    {run.scheduleName ? `Theo lịch: ${run.scheduleName}` : 'Theo lịch'}
+                  </span>
+                )}
                 <Chip map={STATUS_LABEL} value={run.status} />
                 <button type="button" onClick={() => exportCsv(run.id)} className="px-2.5 py-1 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400">Xuất CSV</button>
               </div>

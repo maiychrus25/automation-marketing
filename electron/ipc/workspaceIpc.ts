@@ -164,9 +164,13 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                     try { stopFacebookPosterScheduler(); } catch {}
                     try { await cancelAndWaitFacebookPosterJobs(); } catch {}
                 try { closeAllBrowserProfiles(); } catch {}
-                    await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
+                    try {
+                        await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
+                    } finally {
+                        // Also runs after a rolled-back switch: the previous DB is active again
+                        try { startFacebookPosterScheduler(); } catch {}
+                    }
                     FileStorageService.resetBaseDir();
-                    try { startFacebookPosterScheduler(); } catch {}
 
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         mainWindow.webContents.send('workspace:switched', {
@@ -206,11 +210,15 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                 try { stopFacebookPosterScheduler(); } catch {}
                 try { await cancelAndWaitFacebookPosterJobs(); } catch {}
                 try { closeAllBrowserProfiles(); } catch {}
-                await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
+                try {
+                    await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
+                } finally {
+                    // Also runs after a rolled-back switch: the previous DB is active again
+                    try { startFacebookPosterScheduler(); } catch {}
+                }
 
                 // Reset FileStorageService cache so media resolves to the new workspace's folder
                 FileStorageService.resetBaseDir();
-                try { startFacebookPosterScheduler(); } catch {}
 
                 // Re-hook HttpRelayService into EventBroadcaster (clearBeforeSendHooks removed them)
                 try {

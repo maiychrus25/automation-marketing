@@ -30,7 +30,7 @@ test('createRun rồi getRun trả lại params JSON và trạng thái running',
   const got = s.getRun('r1')!;
   assert.deepStrictEqual(got.run, {
     id: 'r1', kind: 'post', mode: 'group', params: { text: 'xin chào', n: 2 },
-    status: 'running', error: '', startedAt: 100, finishedAt: null, scheduleId: null,
+    status: 'running', error: '', startedAt: 100, finishedAt: null, scheduleId: null, scheduleName: null,
   });
   assert.deepStrictEqual(got.results, []);
   assert.strictEqual(s.getRun('nope'), null);
@@ -210,6 +210,20 @@ describe('schedules', () => {
     s.createRun(newRun('r2', 2));
     assert.strictEqual(s.getRun('r1')!.run.scheduleId, 'sch-1');
     assert.strictEqual(s.getRun('r2')!.run.scheduleId, null);
+  });
+
+  test('listRuns trả scheduleName qua LEFT JOIN: có lịch thì có tên, lịch đã xóa hoặc chạy tay thì null', () => {
+    const s = store();
+    s.createSchedule(newSchedule('a'));
+    s.createSchedule(newSchedule('b'));
+    s.createRun({ ...newRun('r1', 1), scheduleId: 'a' });
+    s.createRun({ ...newRun('r2', 2), scheduleId: 'b' });
+    s.createRun(newRun('r3', 3));
+    s.deleteSchedule('b');
+    const names = Object.fromEntries(s.listRuns({ limit: 10, offset: 0 }).runs.map(r => [r.id, r.scheduleName]));
+    assert.deepStrictEqual(names, { r1: 'Lịch a', r2: null, r3: null });
+    assert.deepStrictEqual(s.listRuns({ limit: 10, offset: 0, kind: 'post' }).runs.map(r => r.id), ['r3', 'r2', 'r1']);
+    assert.strictEqual(s.getRun('r1')!.run.scheduleName, 'Lịch a');
   });
 
   test('create/get/update/delete schedule khứ hồi', () => {
