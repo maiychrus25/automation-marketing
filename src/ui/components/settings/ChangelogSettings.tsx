@@ -15,6 +15,28 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.13.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🎨 Gửi nhãn dán (sticker) với vai Page Facebook',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Gửi nhãn dán (sticker) với vai Page — tìm theo từ khoá rồi chọn gửi',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Nhận ảnh vào Page hiển thị đúng ảnh khách gửi (trước đây đôi khi hiện nhầm ảnh khác)',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.12.0',
     date: '10/2026',
     type: 'minor',
