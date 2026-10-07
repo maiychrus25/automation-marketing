@@ -72,7 +72,7 @@
 - Tìm `input[type=file]` trong hộp soạn như hiện nay (kể cả bước bấm "Ảnh/video" khi chưa có).
 - Ô có `multiple` → `setInputFiles(mediaPaths)` một lần.
 - Ô không có `multiple` → đưa lần lượt từng tệp; sau mỗi lần, tìm lại ô chọn tệp trong cùng gốc (Facebook có thể dựng lại ô). Không tìm thấy ô cho tệp thứ k thì đích đó `failed` với `Không đính kèm được ảnh thứ k`.
-- Đợi tải xong: lặp mỗi 1 giây, tối đa `15 s + 5 s × số tệp`, cho tới khi trong hộp soạn không còn `[role=progressbar]` **và** nút Đăng không `aria-disabled`. Quá hạn thì đích `failed` với `Ảnh chưa tải lên xong`.
+- Đợi tải xong: lặp mỗi 1 giây, tối đa `15 s + 5 s × số tệp`, cho tới khi trong hộp soạn không còn `[role=progressbar]`. Không chờ nút Đăng bật ở bước này vì ảnh được gắn **trước** khi gõ chữ, và nút Đăng tắt cho tới khi có chữ (đo được). Quá hạn thì đích `failed` với `Ảnh chưa tải lên xong`.
 - Các bước sau (gõ nội dung, bấm Đăng, bằng chứng dương, bình luận đầu tiên) không đổi.
 
 ### 4.3 Giao diện tab Đăng bài
@@ -128,7 +128,7 @@ Lớp thuần trong `src/services/facebookPoster/FacebookPosterScheduler.ts`, ph
 
 | Sự kiện | Hành vi |
 |---|---|
-| `start()` (mở app, đổi sang workspace này) | **Dò lượt đã lỡ:** mọi lịch bật có `next_run_at < now − 60 s` → ghi run `missed` (`App tắt lúc đến giờ`), báo, tính lại `next_run_at` từ `now` (`once` → tắt). Rồi hẹn giờ cho lịch gần nhất. |
+| `start()` (mở app, đổi sang workspace này) | **Dò lượt đã lỡ:** mọi lịch bật có `next_run_at < now − 60 s` → ghi run `missed` (`App tắt lúc đến giờ`), báo, tính lại `next_run_at` từ `now` (`once` → `next_run_at = null`, lịch vẫn còn để xem lại). Rồi hẹn giờ cho lịch gần nhất. |
 | Hẹn giờ nổ | Mọi lịch bật có `next_run_at ≤ now` vào hàng chờ (kèm thời điểm vào hàng), tính lại `next_run_at` ngay (để lượt kế tiếp không bị mất nếu lượt này chờ lâu), rồi chạy hàng. |
 | Chạy hàng | Không bận → lấy mục cũ nhất, đọc lại lịch từ DB (đã xoá hoặc tắt thì bỏ), gọi `startRun`. Bận → chờ sự kiện `runFinished`. Mục chờ quá 2 giờ → run `missed` (`Chờ quá 2 giờ vì đang có việc khác`) và báo. |
 | `runFinished` của bất kỳ run nào | Chạy hàng. |
@@ -155,6 +155,7 @@ Hẹn giờ dùng `setTimeout` một lần cho lịch gần nhất (tối đa 24
 | `facebookPoster:scheduleList` | — | `{ schedules[] }` gồm `nextRunAt`, `lastRun` (trạng thái, giờ) |
 | `facebookPoster:scheduleUpdate` | `{ id, name?, enabled?, runAt?, days?, time? }` | `{ schedule }` |
 | `facebookPoster:scheduleDelete` | `{ id }` | — |
+| `facebookPoster:takeMissed` | — | `{ notices[] }`: các lượt đã lỡ phát hiện lúc giao diện chưa sẵn sàng (vd. lúc khởi động); lấy xong thì xoá |
 
 Kiểm tra: `params` qua đúng `validateStartParams` kiểu `post`; `once` cần `runAt` sau `now + 60 s`; `recurring` cần ít nhất một thứ và `time` dạng `HH:mm` hợp lệ; tên tối đa 100 ký tự; tối đa 200 lịch mỗi workspace.
 
@@ -171,7 +172,7 @@ Kiểm tra: `params` qua đúng `validateStartParams` kiểu `post`; `once` cầ
 
 ### 7.4 Báo lượt đã lỡ
 
-- `FacebookPosterView` (và một lắng nghe ở gốc app để báo cả khi người dùng ở màn khác) hiện `showNotification('Lịch "<tên>" đã lỡ lúc <giờ>: <lý do>', 'warning')`.
+- Một bộ lắng nghe duy nhất ở gốc app (`App.tsx`), để báo cả khi người dùng ở màn khác và không bị trùng: lúc mở app gọi `takeMissed`, sau đó nghe `facebookPoster:scheduleMissed`; hiện `showNotification('Lịch "<tên>" đã lỡ lúc <giờ>: <lý do>', 'warning')`.
 - Lịch sử hiện nhãn "Đã lỡ" cho run `missed`, kèm tên lịch.
 
 ## 8. Xử lý lỗi
