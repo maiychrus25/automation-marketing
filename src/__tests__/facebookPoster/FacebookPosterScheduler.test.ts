@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
 import {
   FacebookPosterScheduler, GRACE_MS, QUEUE_MAX_WAIT_MS, MAX_TIMER_MS,
-  MISSED_APP_CLOSED, MISSED_QUEUE_TIMEOUT, MISSED_APP_QUIT, type MissedNotice,
+  MISSED_APP_CLOSED, MISSED_QUEUE_TIMEOUT, MISSED_APP_QUIT, ERROR_RETRY_MS, type MissedNotice,
 } from '../../services/facebookPoster/FacebookPosterScheduler';
 import type { StartParams } from '../../services/facebookPoster/FacebookPosterService';
 import type { FbPosterSchedule } from '../../models/facebookPoster';
@@ -233,5 +233,31 @@ describe('FacebookPosterScheduler', () => {
     sched.start();
     assert.deepStrictEqual(env.started, ['a']);
     assert.strictEqual(store.listRuns({ limit: 10, offset: 0 }).total, 0);
+  });
+
+  test('16. a persistent store fault re-arms at ERROR_RETRY_MS, then recovers', () => {
+    const { store, env, sched, add, live } = setup();
+    add('a');
+    add('b', { runAt: T0 + 10 * MIN, nextRunAt: T0 + 10 * MIN, createdAt: 2 });
+    const real = store.listDueSchedules.bind(store);
+    store.listDueSchedules = () => { throw new Error('db down'); };
+    sched.start();
+    assert.deepStrictEqual(live().map((x) => x.ms), [ERROR_RETRY_MS]);
+    env.t += ERROR_RETRY_MS;
+    live()[0].fn();
+    assert.deepStrictEqual(live().map((x) => x.ms), [ERROR_RETRY_MS]);
+    store.listDueSchedules = real;
+    env.t += ERROR_RETRY_MS;
+    live()[0].fn();
+    assert.deepStrictEqual(env.started, ['a']);
+    assert.deepStrictEqual(live().map((x) => x.ms), [T0 + 10 * MIN - env.t]);
+  });
+
+  test('17. nextScheduledAt throwing in arm() still arms a retry timer', () => {
+    const { store, sched, add, live } = setup();
+    add('a', { runAt: T0 + 10 * MIN, nextRunAt: T0 + 10 * MIN });
+    store.nextScheduledAt = () => { throw new Error('db down'); };
+    sched.start();
+    assert.deepStrictEqual(live().map((x) => x.ms), [ERROR_RETRY_MS]);
   });
 });

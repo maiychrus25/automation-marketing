@@ -7,6 +7,8 @@ import Logger from '../../utils/Logger';
 export const GRACE_MS = 60 * 1000;
 export const QUEUE_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
 export const MAX_TIMER_MS = 24 * 60 * 60 * 1000;
+/** Minimum re-arm delay after a store error, so a persistent fault cannot spin the timer. */
+export const ERROR_RETRY_MS = 30 * 1000;
 export const MISSED_APP_CLOSED = 'App tắt lúc đến giờ';
 export const MISSED_QUEUE_TIMEOUT = 'Chờ quá 2 giờ vì đang có việc khác';
 export const MISSED_APP_QUIT = 'App đóng khi lượt đang chờ';
@@ -34,6 +36,7 @@ export class FacebookPosterScheduler {
     private queue: QueueItem[] = [];
     private timer: unknown = null;
     private stopped = false;
+    private lastRunFailed = false;
 
     constructor(private readonly deps: SchedulerDeps) {}
 
@@ -66,6 +69,7 @@ export class FacebookPosterScheduler {
 
     private fire(): void {
         if (this.stopped) return;
+        this.lastRunFailed = false;
         try {
             const { store, now } = this.deps;
             const t = now();
@@ -79,6 +83,7 @@ export class FacebookPosterScheduler {
             }
             this.pump();
         } catch (err) {
+            this.lastRunFailed = true;
             Logger.error(`[FacebookPosterScheduler] fire failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
             this.arm();
@@ -87,9 +92,11 @@ export class FacebookPosterScheduler {
     }
 
     private pump(): void {
+        this.lastRunFailed = false;
         try {
             this.pumpQueue();
         } catch (err) {
+            this.lastRunFailed = true;
             Logger.error(`[FacebookPosterScheduler] pump failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
             this.arm();
@@ -130,13 +137,20 @@ export class FacebookPosterScheduler {
 
     private arm(): void {
         this.clear();
-        const { store, now } = this.deps;
-        const candidates: number[] = [];
-        const next = store.nextScheduledAt();
-        if (next !== null) candidates.push(next);
-        if (this.queue.length > 0) candidates.push(this.queue[0].enqueuedAt + QUEUE_MAX_WAIT_MS);
-        if (candidates.length === 0) return;
-        const delay = Math.min(Math.max(0, Math.min(...candidates) - now()), MAX_TIMER_MS);
+        let delay: number;
+        try {
+            const { store, now } = this.deps;
+            const candidates: number[] = [];
+            const next = store.nextScheduledAt();
+            if (next !== null) candidates.push(next);
+            if (this.queue.length > 0) candidates.push(this.queue[0].enqueuedAt + QUEUE_MAX_WAIT_MS);
+            if (candidates.length === 0 && !this.lastRunFailed) return;
+            delay = candidates.length === 0 ? 0 : Math.min(Math.max(0, Math.min(...candidates) - now()), MAX_TIMER_MS);
+            if (this.lastRunFailed) delay = Math.max(delay, ERROR_RETRY_MS);
+        } catch (err) {
+            Logger.error(`[FacebookPosterScheduler] arm failed: ${err instanceof Error ? err.message : String(err)}`);
+            delay = ERROR_RETRY_MS;
+        }
         this.timer = this.deps.setTimer(() => this.fire(), delay);
     }
 
