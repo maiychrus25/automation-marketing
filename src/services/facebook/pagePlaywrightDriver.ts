@@ -204,13 +204,23 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
 
   /** Mở bảng chọn sticker và gõ keyword; trả về khi lưới kết quả đã render (hoặc hết chờ). */
   private async openStickerSearch(keyword: string): Promise<void> {
-    await this.page.locator(PAGE_BIZ_SUITE.stickerButton).first().click({ timeout: 8000 });
-    await this.page.waitForTimeout(1500);
     const search = this.page.locator(PAGE_BIZ_SUITE.stickerSearch).first();
+    // Nút sticker là TOGGLE: chỉ click MỞ khi picker chưa mở (ô search chưa có),
+    // tránh click khi đang mở (list để mở sẵn) làm ĐÓNG picker rồi gửi hụt.
+    if ((await search.count()) === 0) {
+      await this.page.locator(PAGE_BIZ_SUITE.stickerButton).first().click({ timeout: 8000 });
+      await this.page.waitForTimeout(1500);
+    }
     await search.click({ timeout: 6000 });
     await search.fill('');
     if (keyword) await search.type(keyword, { delay: 30 });
-    await this.page.waitForTimeout(2500); // chờ lưới sticker load
+    // Chờ lưới sticker thật render (poll thay vì sleep cố định — cold-load render chậm,
+    // sleep cố định hay trả rỗng ở lần đầu). Hết hạn vẫn trả (keyword có thể không có kết quả).
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      if ((await this.panelStickerCells()).length > 0) return;
+      await this.page.waitForTimeout(400);
+    }
   }
 
   /** Các ô sticker TRONG panel (loại sticker trong khung chat), thứ tự y→x. */
@@ -230,20 +240,6 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     }, STICKER_PANEL);
   }
 
-  /** Số sticker ĐI (hugs phải) trong khung — mốc xác nhận gửi sticker. */
-  private async outgoingStickerCount(): Promise<number> {
-    return this.page.evaluate(() => {
-      const W = window.innerWidth, H = window.innerHeight; let n = 0;
-      document.querySelectorAll('div[role="img"][aria-label$=" sticker"]').forEach((el) => {
-        const r = (el as HTMLElement).getBoundingClientRect();
-        if (r.width < 50 || r.x < 480 || r.y > H - 130) return;
-        if ((r.x + r.width) < (W - 220)) return; // hugs phải = đi
-        n++;
-      });
-      return n;
-    });
-  }
-
   async listStickers(_threadId: string, keyword: string, max: number): Promise<PageStickerThumb[]> {
     await this.openStickerSearch(keyword);
     const cells = await this.panelStickerCells();
@@ -251,7 +247,6 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
   }
 
   async sendSticker(_threadId: string, keyword: string, index: number): Promise<void> {
-    const before = await this.outgoingStickerCount();
     await this.openStickerSearch(keyword);
     const cells = await this.panelStickerCells();
     const cell = cells[index] || cells[0];
@@ -259,11 +254,14 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
     await this.page.mouse.move(cell.cx, cell.cy);
     await this.page.waitForTimeout(200);
     await this.page.mouse.down(); await this.page.waitForTimeout(70); await this.page.mouse.up();
-    // xác nhận dương: sticker ĐI mới xuất hiện
-    const deadline = Date.now() + 20000;
+    // Xác nhận gửi (độc lập vị trí bong bóng): click ô sticker hợp lệ → Business Suite ĐÓNG
+    // bảng chọn (ô search biến mất). Pane hội thoại không full-width nên không đếm "hugs phải"
+    // được; picker-đóng là tín hiệu dương tin cậy (đã kiểm: searchOpen→false sau khi gửi).
+    const search = this.page.locator(PAGE_BIZ_SUITE.stickerSearch);
+    const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
-      if ((await this.outgoingStickerCount()) > before) return;
-      await this.page.waitForTimeout(400);
+      if ((await search.count()) === 0) return; // picker đóng = đã gửi
+      await this.page.waitForTimeout(300);
     }
     throw new Error('quá hạn chờ xác nhận gửi sticker');
   }
