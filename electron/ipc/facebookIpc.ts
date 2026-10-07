@@ -916,6 +916,44 @@ export function registerFacebookIpc(): void {
   /**
    * Gửi nhiều ảnh/file cùng 1 request (batch attachments)
    */
+  ipcMain.handle('fb:listPageStickers', async (_event, params: { accountId: string; threadId: string; keyword: string }) => {
+    try {
+      const internalId = resolveInternalId(params.accountId);
+      const service = await getFBServiceOrReconnect(internalId);
+      if (!service || !service.isPage()) return { success: false, stickers: [] };
+      const stickers = await service.listPageStickers(params.threadId, params.keyword);
+      return { success: true, stickers };
+    } catch (e: any) { return { success: false, stickers: [], error: e?.message }; }
+  });
+
+  ipcMain.handle('fb:sendPageSticker', async (_event, params: { accountId: string; threadId: string; keyword: string; index: number; thumbUrl?: string }) => {
+    try {
+      const internalId = resolveInternalId(params.accountId);
+      const service = await getFBServiceOrReconnect(internalId);
+      if (!service || !service.isPage()) return { success: false, error: 'Tài khoản không phải Page.' };
+      const r = await service.sendPageSticker(params.threadId, params.keyword, params.index);
+      if (!r.success || !r.messageId) return { success: false, error: r.error || 'Gửi sticker thất bại' };
+      // Lưu + hiển thị như ảnh gửi (đứng tên Page). Tải thumbUrl về làm ảnh local.
+      try {
+        const { FacebookSendService } = require('../../src/services/facebook/FacebookSendService');
+        const fbId = resolveRealFacebookId(internalId, service);
+        let localRelPath: string | undefined;
+        if (params.thumbUrl) {
+          const abs = await FileStorageService.downloadImage(fbId, params.thumbUrl, `sticker_${r.messageId.slice(-8)}_${Date.now()}.webp`, '', undefined, 'https://business.facebook.com/');
+          if (abs) localRelPath = FileStorageService.toRelativePath(abs);
+        }
+        await FacebookSendService.persistSentMessage({
+          accountId: internalId, threadId: params.threadId, messageId: r.messageId,
+          body: null, fbSenderId: fbId, timestamp: r.timestamp || Date.now(),
+          type: 'image', isUserMessage: true,
+          attachments: JSON.stringify([{ type: 'image', name: 'sticker.webp', ...(localRelPath ? { localPath: localRelPath } : {}) }]),
+          ...(localRelPath ? { localPath: localRelPath } : {}),
+        });
+      } catch (e: any) { Logger.warn(`[facebookIpc] sticker persist error: ${e.message}`); }
+      return { success: true, messageId: r.messageId };
+    } catch (e: any) { return { success: false, error: e?.message }; }
+  });
+
   ipcMain.handle('fb:sendAttachments', async (_event, params: {
     accountId: string; threadId: string; filePaths: string[]; body?: string; typeChat?: 'user' | null;
     replyToMessageId?: string;

@@ -543,10 +543,8 @@ export class FacebookService {
 
     // Thông báo Page chỉ mang body chữ; media thì body là "Đã gửi một ảnh / tin nhắn video"
     // (không kèm nội dung). Lấy media thật từ Business Suite qua trình duyệt Page rồi lưu đúng type.
-    const wantType: 'image' | 'video' | null =
-      /đã gửi.*ảnh|sent .*photo/i.test(n.body || '') ? 'image'
-      : /tin nhắn video|đã gửi.*video|sent .*video/i.test(n.body || '') ? 'video'
-      : null;
+    const { classifyPageNotification } = require('./pageSendHelpers');
+    const wantType: 'image' | 'video' | 'sticker' | null = classifyPageNotification(n.body || '');
     if (wantType) {
       const okMedia = await this.saveIncomingPageMedia(page, n, senderName, ts, wantType).catch((e) => {
         Logger.warn(`[FacebookService:${this.accountId}] Page media receive failed: ${e?.message}`); return false;
@@ -601,7 +599,7 @@ export class FacebookService {
     n: { pageId: string; messageId: string; senderId: string; senderAvatarUrl: string },
     senderName: string,
     ts: number,
-    wantType: 'image' | 'video',
+    wantType: 'image' | 'video' | 'sticker',
   ): Promise<boolean> {
     const { getPageBrowserSender } = require('./pagePlaywrightDriver');
     const { resolveFBCookie } = require('./FacebookAccountCookie');
@@ -613,7 +611,8 @@ export class FacebookService {
     const hit = media.find((m) => m.type === wantType) || media[0];
     if (!hit) return false;
 
-    const type = hit.type;
+    // sticker lưu & hiển thị như ảnh (webp/png) → đi chung đường ảnh đã chạy
+    const type: 'image' | 'video' = hit.type === 'video' ? 'video' : 'image';
     const ext = type === 'video' ? '.mp4' : '.jpg';
     const filename = `page_${n.messageId.slice(-8)}_${Date.now()}${ext}`;
     const localPath = type === 'video'
@@ -2386,6 +2385,28 @@ export class FacebookService {
       text: body,
       files: [{ path: filePath, type: classifyFile(filePath) }],
     });
+    if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
+    return result;
+  }
+
+  /** Liệt kê sticker FB theo keyword (vai Page, qua Business Suite). */
+  public async listPageStickers(threadId: string, keyword: string): Promise<{ label: string; thumbUrl: string }[]> {
+    if (!this._isPage) return [];
+    const { getPageBrowserSender } = require('./pagePlaywrightDriver');
+    const sender = await getPageBrowserSender(this.accountId, {
+      getCookie: () => this.cookie, delegatePageId: this._delegatePageId || '',
+    });
+    return sender.listStickers(threadId, keyword, 24);
+  }
+
+  /** Gửi sticker FB thứ `index` (kết quả search `keyword`) vai Page. */
+  public async sendPageSticker(threadId: string, keyword: string, index: number): Promise<FBSendResult> {
+    if (!this._isPage) return { success: false, error: 'Chỉ Page mới gửi sticker qua Business Suite' };
+    const { getPageBrowserSender } = require('./pagePlaywrightDriver');
+    const sender = await getPageBrowserSender(this.accountId, {
+      getCookie: () => this.cookie, delegatePageId: this._delegatePageId || '',
+    });
+    const result = await sender.sendSticker(threadId, keyword, index);
     if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
     return result;
   }
