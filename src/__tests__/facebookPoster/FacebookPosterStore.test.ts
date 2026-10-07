@@ -1,21 +1,8 @@
-import Database from 'better-sqlite3';
 import assert from 'node:assert';
-import { FacebookPosterStore, type SqlDatabase } from '../../services/facebookPoster/FacebookPosterStore';
+import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
+import { memoryDb } from './helpers';
 import { keyOf, type CollectedComment } from '../../services/facebookPoster/collectComments';
 
-function memoryDb(): SqlDatabase {
-  const db = new Database(':memory:');
-  return {
-    exec: (sql) => { db.exec(sql); },
-    run: (sql, p = []) => { db.prepare(sql).run(...p); },
-    runInsert: (sql, p = []) => Number(db.prepare(sql).run(...p).lastInsertRowid),
-    transaction: (fn) => db.transaction(fn)(),
-    // Spread: .all() trả mảng của realm Node; jest chạy test trong realm khác nên deepStrictEqual sẽ báo lệch prototype.
-    query: (sql, p = []) => [...db.prepare(sql).all(...p)] as any,
-    // Giống DatabaseService.queryOne: không có dòng thì trả undefined.
-    queryOne: (sql, p = []) => db.prepare(sql).get(...p) as any,
-  };
-}
 function store() { const s = new FacebookPosterStore(memoryDb()); s.ensureSchema(); return s; }
 
 function newRun(id: string, startedAt: number, kind: 'post' | 'join' = 'post') {

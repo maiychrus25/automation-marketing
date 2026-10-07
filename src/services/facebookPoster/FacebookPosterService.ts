@@ -33,7 +33,7 @@ export interface FacebookPosterServiceDeps {
     tasks?: Partial<{ postToTargets: typeof postToTargets; scanGroups: typeof scanGroups; searchAndJoinGroups: typeof searchAndJoinGroups; collectComments: typeof collectComments }>;
 }
 
-const BUSY_ERROR = 'Đang có việc chạy';
+export const BUSY_ERROR = 'Đang có việc chạy';
 const NOT_LOGGED_IN_ERROR = 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập';
 const STOPPED_REASON = 'Đã dừng';
 const POST_FAILED_DEFAULT = 'Không đăng được, xem nhật ký';
