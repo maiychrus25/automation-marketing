@@ -8,7 +8,7 @@ import ScheduleDialog, { formatShort } from './ScheduleDialog';
 import { STATUS_LABEL } from './HistoryTab';
 import type { FbPosterScheduleView } from '../../../models/facebookPoster';
 
-export default function ScheduleTab() {
+export default function ScheduleTab({ onOpenHistory }: { onOpenHistory: () => void }) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [schedules, setSchedules] = useState<FbPosterScheduleView[]>([]);
   const [queued, setQueued] = useState<Set<string>>(new Set());
@@ -59,7 +59,7 @@ export default function ScheduleTab() {
 
   return (
     <div className="min-w-0">
-      <div className="overflow-x-auto">
+      <div className="relative overflow-x-auto">
         <table className="w-full text-sm text-left">
           <thead className="text-xs text-gray-400">
             <tr>
@@ -83,7 +83,9 @@ export default function ScheduleTab() {
                     {queued.has(s.id) && <span className="ml-2 px-1.5 py-0.5 rounded text-xs bg-blue-600/20 text-blue-400">Đang chờ</span>}
                   </td>
                   <td className="py-2 pr-3 whitespace-nowrap">
-                    {s.lastRun && chip ? <><span className={`text-xs ${chip.cls}`}>{chip.label}</span> <span className="text-xs text-gray-400">{formatShort(s.lastRun.startedAt)}</span></> : <span className="text-gray-400">—</span>}
+                    {s.lastRun && chip ? <button type="button" onClick={onOpenHistory} aria-label="Xem lần chạy trong Lịch sử" className="text-left hover:underline focus-visible:ring-2 focus-visible:ring-blue-500 rounded">
+                        <span className={`text-xs ${chip.cls}`}>{chip.label}</span> <span className="text-xs text-blue-400">{formatShort(s.lastRun.startedAt)}</span>
+                      </button> : <span className="text-gray-400">—</span>}
                   </td>
                   <td className="py-2 pr-3 whitespace-nowrap">
                     <button type="button" role="switch" aria-checked={s.enabled} aria-label={`Lịch ${s.name}`} onClick={() => toggle(s)}

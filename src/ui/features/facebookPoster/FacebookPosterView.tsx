@@ -94,7 +94,7 @@ export default function FacebookPosterView() {
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
         <div id="fb-tabpanel" role="tabpanel" aria-labelledby={`fb-tab-${tab}`} className="min-w-0 p-4 lg:flex-1 lg:overflow-y-auto">
           {tab === 0 && <PostTab busy={busy} profileNames={profileNames} onStarted={onStarted} />}
-          {tab === 1 && <ScheduleTab />}
+          {tab === 1 && <ScheduleTab onOpenHistory={() => setTab(TABS.indexOf('Lịch sử'))} />}
           {tab === 2 && <JoinTab busy={busy} onStarted={onStarted} />}
           {tab === 3 && <CommentsTab busy={busy} onStarted={onStarted} />}
           {tab === 4 && <HistoryTab />}

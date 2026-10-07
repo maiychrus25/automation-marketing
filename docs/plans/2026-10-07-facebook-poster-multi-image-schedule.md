@@ -364,7 +364,7 @@ Steps:
 - [ ] **Step 5: History** — `STATUS_LABEL.missed = { label: 'Đã lỡ', cls: 'text-orange-400' }`; runs with `scheduleId` show a small "Theo lịch" marker.
 - [ ] **Step 6: App root listener** — in `App.tsx`, one effect: on mount `ipc.facebookPoster?.takeMissed?.()` and show each notice; subscribe to `facebookPoster:scheduleMissed`; message `Lịch "<name>" đã lỡ lúc <HH:mm dd/MM>: <reason>`, type `warning`. Unsubscribe on unmount.
 - [ ] **Step 7:** renderer tsc 0; `npm run build:renderer` 0; jest all pass.
-- Note (as built): "Sửa giờ" reuses `ScheduleDialog` via a `schedule` prop (no separate dialog file; edit sends only changed fields); `STATUS_LABEL` is exported from `HistoryTab` and reused by `ScheduleTab`; missed notices are shown from both `takeMissed` and the event with no client dedupe (main never sends both); the dialogs do not close on backdrop click (form input would be lost).
+- Note (as built): "Sửa giờ" reuses `ScheduleDialog` via a `schedule` prop (no separate dialog file; edit sends only changed fields); `STATUS_LABEL` is exported from `HistoryTab` and reused by `ScheduleTab`; missed notices are shown from both `takeMissed` and the event with no client dedupe (main never sends both); the dialogs do not close on backdrop click (form input would be lost); the last-run chip in `ScheduleTab` is a button (prop `onOpenHistory`) that opens the Lịch sử tab.
 - [ ] **Step 8: commit** `feat(facebook-poster): schedule dialog, schedules tab and missed-run notices`.
 
 ---
