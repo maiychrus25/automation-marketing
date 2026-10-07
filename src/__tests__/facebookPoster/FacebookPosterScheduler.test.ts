@@ -210,4 +210,28 @@ describe('FacebookPosterScheduler', () => {
     assert.deepStrictEqual(env.started, []);
     assert.strictEqual(live().length, 0);
   });
+
+  test('14. a store exception in fire() still leaves a timer armed', () => {
+    const { store, sched, add, live } = setup();
+    add('a', { runAt: T0 + 10 * MIN, nextRunAt: T0 + 10 * MIN });
+    const real = store.listDueSchedules.bind(store);
+    let thrown = false;
+    store.listDueSchedules = (at: number) => { if (!thrown) { thrown = true; throw new Error('db down'); } return real(at); };
+    sched.start();
+    assert.ok(thrown);
+    assert.deepStrictEqual(live().map((x) => x.ms), [600000]);
+  });
+
+  test('15. a failing lastRunId write does not record a failed run', () => {
+    const { store, env, sched, add } = setup();
+    add('a');
+    const real = store.updateSchedule.bind(store);
+    store.updateSchedule = (id, fields, at) => {
+      if ('lastRunId' in fields) throw new Error('write failed');
+      return real(id, fields, at);
+    };
+    sched.start();
+    assert.deepStrictEqual(env.started, ['a']);
+    assert.strictEqual(store.listRuns({ limit: 10, offset: 0 }).total, 0);
+  });
 });

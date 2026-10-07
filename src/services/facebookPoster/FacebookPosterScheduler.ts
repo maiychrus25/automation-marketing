@@ -2,6 +2,7 @@ import type { FbPosterSchedule } from '../../models/facebookPoster';
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import { BUSY_ERROR, type StartParams } from './FacebookPosterService';
 import { computeNextRun } from './scheduleTime';
+import Logger from '../../utils/Logger';
 
 export const GRACE_MS = 60 * 1000;
 export const QUEUE_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
@@ -65,22 +66,37 @@ export class FacebookPosterScheduler {
 
     private fire(): void {
         if (this.stopped) return;
-        const { store, now } = this.deps;
-        const t = now();
-        for (const s of store.listDueSchedules(t)) {
-            if (s.nextRunAt !== null && s.nextRunAt < t - GRACE_MS) {
-                this.recordMissed(s.id, MISSED_APP_CLOSED, s.nextRunAt, s);
-            } else if (!this.queue.some((q) => q.scheduleId === s.id)) {
-                this.queue.push({ scheduleId: s.id, enqueuedAt: t });
+        try {
+            const { store, now } = this.deps;
+            const t = now();
+            for (const s of store.listDueSchedules(t)) {
+                if (s.nextRunAt !== null && s.nextRunAt < t - GRACE_MS) {
+                    this.recordMissed(s.id, MISSED_APP_CLOSED, s.nextRunAt, s);
+                } else if (!this.queue.some((q) => q.scheduleId === s.id)) {
+                    this.queue.push({ scheduleId: s.id, enqueuedAt: t });
+                }
+                store.updateSchedule(s.id, { nextRunAt: computeNextRun(s, t) }, t);
             }
-            store.updateSchedule(s.id, { nextRunAt: computeNextRun(s, t) }, t);
+            this.pump();
+        } catch (err) {
+            Logger.error(`[FacebookPosterScheduler] fire failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+            this.arm();
+            this.deps.onChanged();
         }
-        this.pump();
-        this.arm();
-        this.deps.onChanged();
     }
 
     private pump(): void {
+        try {
+            this.pumpQueue();
+        } catch (err) {
+            Logger.error(`[FacebookPosterScheduler] pump failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+            this.arm();
+        }
+    }
+
+    private pumpQueue(): void {
         const { store, now } = this.deps;
         const t = now();
         this.queue = this.queue.filter((item) => {
@@ -92,18 +108,24 @@ export class FacebookPosterScheduler {
             const item = this.queue.shift()!;
             const s = store.getSchedule(item.scheduleId);
             if (!s || !s.enabled) continue;
+            let runId: string;
             try {
-                const { runId } = this.deps.startRun(this.deps.resolveParams(s), s.id);
-                store.updateSchedule(s.id, { lastRunId: runId }, now());
+                runId = this.deps.startRun(this.deps.resolveParams(s), s.id).runId;
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
                 if (message === BUSY_ERROR) { this.queue.unshift(item); break; }
                 const id = this.deps.newId();
                 store.recordScheduleRun({ id, scheduleId: s.id, params: s.params, at: now(), status: 'failed', reason: message });
                 store.updateSchedule(s.id, { lastRunId: id }, now());
+                continue;
+            }
+            // The job is already running: a failed bookkeeping write must not turn it into a failed run.
+            try {
+                store.updateSchedule(s.id, { lastRunId: runId }, now());
+            } catch (err) {
+                Logger.error(`[FacebookPosterScheduler] could not save lastRunId: ${err instanceof Error ? err.message : String(err)}`);
             }
         }
-        this.arm();
     }
 
     private arm(): void {
