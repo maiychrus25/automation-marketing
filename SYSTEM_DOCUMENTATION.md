@@ -273,15 +273,20 @@ Nguồn: `src/services/browser/`, `electron/ipc/browserProfileIpc.ts`, `src/ui/f
 
 ### 4.10 Đăng Facebook (từ 26.10.0)
 
-- Đăng một bài (kèm ảnh/video và bình luận đầu tiên tuỳ chọn) lên nhóm hoặc Page bằng nhiều browser profile cùng lúc; kèm quét nhóm đã tham gia, tìm và xin vào nhóm theo từ khoá, thu bình luận của bài đã đăng, lịch sử và xuất CSV.
+- Đăng một bài (kèm 1–10 ảnh hoặc 1 video, xem bên dưới và bình luận đầu tiên tuỳ chọn) lên nhóm hoặc Page bằng nhiều browser profile cùng lúc; kèm quét nhóm đã tham gia, tìm và xin vào nhóm theo từ khoá, thu bình luận của bài đã đăng, lịch sử và xuất CSV.
 - Khi chạy việc, `BrowserProfileService.openForAutomation` cho `playwright-core` khởi chạy nhân trình duyệt của profile qua `--remote-debugging-pipe`, cùng bộ tham số như khi mở tay; **không mở cổng TCP**. Profile đang mở tay thì không nhận việc.
 - Một việc tại một thời điểm; tối đa 10 profile song song (mặc định 3). Các profile bắt đầu cách nhau một khoảng ngẫu nhiên do người dùng đặt (`staggerMinSec`–`staggerMaxSec`, mặc định 30–90 giây, 0–0 là bật đồng loạt); mỗi đích ghi kết quả ngay khi xong.
 - Chỉ nhận link `https://` thuộc `facebook.com` hoặc tên miền con của nó.
-- Dữ liệu ở bốn bảng `fb_poster_runs`, `fb_poster_results`, `fb_poster_groups`, `fb_poster_comments` trong DB của workspace. Run còn `running` khi app tắt đột ngột được đổi thành `failed` ở lần mở sau.
-- Chỉ dùng được ở chế độ Boss/Standalone. Chuyển workspace thì huỷ việc và chờ tối đa 10 giây cho việc dừng trước khi đổi DB.
+- Dữ liệu ở năm bảng `fb_poster_runs`, `fb_poster_results`, `fb_poster_groups`, `fb_poster_comments`, `fb_poster_schedules` trong DB của workspace; `fb_poster_runs` có thêm cột `schedule_id` (lượt chạy từ lịch nào) và trạng thái `missed`. Run còn `running` khi app tắt đột ngột được đổi thành `failed` ở lần mở sau.
+- Nhiều ảnh (từ 26.13.0): 1–10 ảnh `jpg/jpeg/png/gif/webp` hoặc đúng 1 video `mp4/mov/webm`, không trộn; mỗi ảnh ≤ 20 MB, tổng ≤ 100 MB. `StartParams.mediaPaths` thay `mediaPath` (giá trị cũ vẫn được nhận). Ô chọn tệp có `multiple` thì đưa cả mảng một lần, không thì đưa lần lượt từng tệp; sau đó đợi hết thanh tải.
+- Lên lịch (từ 26.13.0): bảng `fb_poster_schedules`; lịch `once` (ngày giờ, phải sau lúc lưu ít nhất 60 giây) hoặc `recurring` (các thứ trong tuần + `HH:mm`, giờ của máy, tối đa một lượt/ngày). Tối đa 200 lịch mỗi workspace, tên ≤ 100 ký tự. Ảnh của lịch được chép vào `<thư mục DB của workspace>/facebook-poster-media/<scheduleId>/` lúc lưu và xoá cùng lịch.
+- Bộ hẹn giờ `FacebookPosterScheduler` chạy trong tiến trình chính, một `setTimeout` cho lịch gần nhất (tối đa 24 giờ một lần). Quá giờ hơn 60 giây khi app tắt/máy ngủ: ghi run `missed` (`App tắt lúc đến giờ`), không đăng bù. Đang có việc khác thì xếp hàng, chạy khi việc trước xong; chờ quá 2 giờ thì `missed` (`Chờ quá 2 giờ vì đang có việc khác`); thoát app hoặc đổi workspace khi còn mục đang chờ thì `missed` (`App đóng khi lượt đang chờ`). Vẫn một việc tại một thời điểm.
+- Sửa lịch chỉ đổi tên và thời gian (nội dung và ảnh giữ nguyên). Xoá lịch bị từ chối khi lượt của lịch đó đang chạy.
+- IPC mới (qua `handle()`, chế độ nhân viên bị từ chối): `facebookPoster:scheduleCreate`, `scheduleList`, `scheduleUpdate`, `scheduleDelete`, `takeMissed` (lấy các thông báo đã lỡ lúc giao diện chưa sẵn sàng, chỉ lần đầu). Sự kiện: `facebookPoster:scheduleMissed` `{ scheduleId, name, reason, at }` và `facebookPoster:schedulesChanged`.
+- Chỉ dùng được ở chế độ Boss/Standalone (chưa hỗ trợ nhân viên đặt lịch). Chuyển workspace thì huỷ việc và chờ tối đa 10 giây cho việc dừng trước khi đổi DB.
 - Chưa được kiểm chứng bằng tài khoản Facebook thật và trên Windows tại thời điểm phát hành 26.10.0.
 
-Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`. (Kế hoạch triển khai của tính năng này chưa được đưa vào repo; cần bổ sung vào `docs/plans/`.)
+Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`, `docs/specs/2026-10-07-facebook-poster-multi-image-schedule.md`, `docs/plans/2026-10-07-facebook-poster-multi-image-schedule.md`. (Kế hoạch triển khai của tính năng này chưa được đưa vào repo; cần bổ sung vào `docs/plans/`.)
 
 ### 4.11 Hộp thư Page Facebook (đang thiết kế)
 
@@ -309,6 +314,7 @@ SQLite được bật WAL trong `DatabaseService`. Thay vì liệt kê mọi c�
 | Account và chat | `accounts`, `messages`, `contacts`, `friends`, `friend_requests`, `links` | Account sở hữu conversation/contact/message theo kênh |
 | Telegram | `telegram_peers`, `telegram_update_state`, `telegram_channel_pts`, `telegram_bot_cursor` | Theo dõi peer và cursor/update state |
 | Facebook | `fb_accounts`, `fb_threads`, `fb_messages`, `fb_crm_contacts` | Account Facebook liên kết thread/message/contact |
+| Đăng Facebook | `fb_poster_runs`, `fb_poster_results`, `fb_poster_groups`, `fb_poster_comments`, `fb_poster_schedules` | Run có nhiều kết quả đích; `fb_poster_runs.schedule_id` trỏ tới lịch đã sinh ra run |
 | Chat tiện ích | `message_drafts`, `pinned_messages`, `local_pinned_conversations`, `local_quick_messages`, labels/stickers | Metadata cục bộ gắn account/thread/message |
 | CRM | `crm_tags`, `crm_contact_tags`, `crm_notes`, `crm_campaigns`, `crm_campaign_contacts`, `crm_send_log` | Campaign có nhiều contact; log ghi kết quả gửi |
 | Employee | `employees`, `employee_groups`, `employee_permissions`, `employee_account_access`, `employee_sessions`, `employee_message_log` | Employee thuộc group, có module permission và account assignment |

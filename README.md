@@ -29,6 +29,13 @@ phép **MIT**. Bản quyền của tác giả gốc được giữ nguyên trong
 [LICENSE](./LICENSE). Danh sách đầy đủ những thay đổi so với bản gốc nằm ở
 [NOTICE.md](./NOTICE.md).
 
+## Đăng Facebook: nhiều ảnh và lên lịch
+
+- Một bài có 1–10 ảnh (`jpg`, `jpeg`, `png`, `gif`, `webp`; mỗi ảnh tối đa 20 MB, tổng tối đa 100 MB) hoặc đúng 1 video; không trộn ảnh với video. Ảnh lên bài theo thứ tự đã sắp.
+- Lên lịch một lần hoặc lặp lại theo thứ trong tuần và giờ cố định (giờ của máy, tối đa một lượt mỗi ngày mỗi lịch); tối đa 200 lịch mỗi workspace. Ảnh của lịch được chép vào `<thư mục DB của workspace>/facebook-poster-media/<scheduleId>/` và xoá cùng lịch.
+- Lịch chỉ chạy khi app đang mở và máy thức. Quá giờ hẹn hơn 60 giây mà app chưa chạy thì lượt đó bị bỏ, ghi "Đã lỡ" vào Lịch sử và báo khi mở app; không đăng bù. Đang có việc khác thì lượt xếp hàng chờ tối đa 2 giờ.
+- Sửa lịch chỉ đổi được tên và thời gian; muốn đổi nội dung hoặc ảnh thì xoá và lên lịch lại. Không xoá được lịch khi lượt của lịch đó đang chạy. Chế độ nhân viên chưa hỗ trợ.
+
 ## Giới hạn đang áp dụng
 
 | Hạng mục | Trạng thái |
