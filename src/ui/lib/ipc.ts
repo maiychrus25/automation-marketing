@@ -675,7 +675,7 @@ declare global {
         getRun:         (runId: string) => Promise<{ success: boolean; run?: FbPosterRun; results?: FbPosterResult[]; error?: string }>;
         listComments:   (params?: { postUrl?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; comments?: FbPosterComment[]; total?: number; error?: string }>;
         listPostedUrls: () => Promise<{ success: boolean; posts?: { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number }[]; error?: string }>;
-        pickMedia:      () => Promise<{ success: boolean; path?: string | null; error?: string }>;
+        pickMedia:      () => Promise<{ success: boolean; items?: { path: string; size: number }[]; error?: string }>;
         exportRunCsv:   (runId: string) => Promise<{ success: boolean; path?: string | null; error?: string }>;
       };
       erp: {

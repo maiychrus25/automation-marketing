@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import ProfilePicker from './ProfilePicker';
+import MediaPicker from './MediaPicker';
 import { matchesKeywords } from './matchKeywords';
+import { validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
 import type { FbPosterGroup, FbPosterMode } from '../../../models/facebookPoster';
 
 const MAX_TEXT = 63206;
@@ -15,13 +17,12 @@ interface Props {
 }
 
 const splitLines = (value: string): string[] => value.split('\n').map((l) => l.trim()).filter(Boolean);
-const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 
 export default function PostTab({ busy, profileNames, onStarted }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [mode, setMode] = useState<FbPosterMode>('group');
   const [text, setText] = useState('');
-  const [mediaPath, setMediaPath] = useState('');
+  const [media, setMedia] = useState<MediaItem[]>([]);
   const [comment, setComment] = useState('');
   const [profileIds, setProfileIds] = useState<string[]>([]);
   const [keyword, setKeyword] = useState('');
@@ -80,12 +81,6 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
     return next;
   });
 
-  const pickMedia = async () => {
-    const res = await ipc.facebookPoster?.pickMedia();
-    if (!res?.success) showNotification(res?.error || 'Không chọn được tệp', 'error');
-    else if (res.path) setMediaPath(res.path);
-  };
-
   const rescan = async (id: string) => {
     const res = await ipc.facebookPoster?.start('scan_groups', { profileIds: [id], concurrency: 1 });
     if (!res?.success) showNotification(res?.error || 'Không quét được nhóm', 'error');
@@ -96,18 +91,20 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
     : profileIds.length === 0 ? 'Chọn ít nhất một profile.'
     : !text.trim() ? 'Nhập nội dung bài.'
     : mode === 'group' && targetCounts.some((n) => n === 0) ? 'Mỗi profile cần ít nhất một nhóm.'
-    : '';
+    : validateMediaSelection(media) ?? '';
+
+  const postParams = () => ({
+    mode, text,
+    mediaPaths: media.map((m) => m.path),
+    comment,
+    profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group' ? targetsFor(profileId) : [] })),
+    minDelaySec, maxDelaySec, concurrency, staggerMinSec, staggerMaxSec,
+  });
 
   const handleStart = async () => {
     setStarting(true);
     try {
-      const res = await ipc.facebookPoster?.start('post', {
-        mode, text,
-        mediaPath: mediaPath || null,
-        comment,
-        profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group' ? targetsFor(profileId) : [] })),
-        minDelaySec, maxDelaySec, concurrency, staggerMinSec, staggerMaxSec,
-      });
+      const res = await ipc.facebookPoster?.start('post', postParams());
       if (!res?.success) showNotification(res?.error || 'Không bắt đầu được', 'error');
       else onStarted();
     } catch (err: any) {
@@ -142,15 +139,7 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
         <span className="block text-right mt-0.5">{text.length}/{MAX_TEXT}</span>
       </label>
 
-      <div className="flex flex-wrap items-center gap-2 min-w-0">
-        <button type="button" onClick={pickMedia} disabled={busy} className="px-3 py-1.5 rounded-lg text-sm border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-50">Chọn ảnh/video</button>
-        {mediaPath && (
-          <>
-            <span className="text-sm text-gray-200 truncate min-w-0 max-w-full" title={mediaPath}>{fileName(mediaPath)}</span>
-            <button type="button" onClick={() => setMediaPath('')} disabled={busy} className="text-xs text-gray-400 hover:text-white">Bỏ</button>
-          </>
-        )}
-      </div>
+      <MediaPicker items={media} onChange={setMedia} disabled={busy} />
 
       <label className="block text-xs text-gray-400">
         Bình luận đầu tiên (tuỳ chọn)

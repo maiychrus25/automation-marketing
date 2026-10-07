@@ -7,10 +7,10 @@ import Logger from '../../src/utils/Logger';
 import { FacebookPosterService } from '../../src/services/facebookPoster/FacebookPosterService';
 import { FacebookPosterStore } from '../../src/services/facebookPoster/FacebookPosterStore';
 import { buildRunCsv } from '../../src/services/facebookPoster/runCsv';
+import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from '../../src/services/facebookPoster/mediaRules';
 import { validateStartParams } from '../../src/services/facebookPoster/validateStartParams';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
 
-const MEDIA_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'mov', 'webm'];
 
 let service: FacebookPosterService | null = null;
 let lastDbPath: string | null = null;
@@ -148,10 +148,11 @@ export function registerFacebookPosterIpc(): void {
 
     handle('facebookPoster:pickMedia', async () => {
         const result = await dialog.showOpenDialog({
-            properties: ['openFile'],
-            filters: [{ name: 'Ảnh/video', extensions: MEDIA_EXTENSIONS }],
+            properties: ['openFile', 'multiSelections'],
+            filters: [{ name: 'Ảnh/video', extensions: [...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS] }],
         });
-        return { path: result.canceled || !result.filePaths.length ? null : result.filePaths[0] };
+        if (result.canceled) return { items: [] };
+        return { items: result.filePaths.map((path) => ({ path, size: fs.statSync(path).size })) };
     });
 
     handle('facebookPoster:exportRunCsv', async (params) => {
