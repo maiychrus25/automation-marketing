@@ -257,6 +257,8 @@ Sanitize: `path.basename` then replace `[^A-Za-z0-9._-]` with `_`; empty → `fi
 - [ ] **Step 2:** FAIL. **Step 3:** implement with `fs.mkdirSync(recursive)`, `fs.copyFileSync`, `fs.rmSync(recursive, force)`. **Step 4:** PASS.
 - [ ] **Step 5: commit** `feat(facebook-poster): keep a copy of each schedule's images`.
 
+**Clarifications:** `resolveScheduleMedia` also validates `scheduleId` (same error) and applies `path.basename` to each stored name; `removeScheduleMedia` with an invalid id is a no-op (never throws, no rm); NN is `String(i + 1).padStart(2, '0')`; module imports only `fs` and `path`.
+
 ---
 
 ### Task 7: `FacebookPosterScheduler`
