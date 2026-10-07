@@ -607,7 +607,7 @@ export class FacebookService {
     const pageRow = db.getFBAccount(page.id) as any;
     const cookie = resolveFBCookie(pageRow) || '';
     const sender = await getPageBrowserSender(page.id, { getCookie: () => cookie, delegatePageId: n.pageId });
-    const media: { type: 'image' | 'video'; url: string }[] = await sender.readIncomingMedia(n.senderId, 3);
+    const media: { type: 'image' | 'video' | 'sticker'; url: string }[] = await sender.readIncomingMedia(n.senderId, 3);
     const hit = media.find((m) => m.type === wantType) || media[0];
     if (!hit) return false;
 

@@ -155,29 +155,40 @@ class PlaywrightPageInboxDriver implements PageInboxDriver {
       await this.page.waitForTimeout(1200);
     } catch { /* ignore */ }
     return this.page.evaluate((limit) => {
-      const W = window.innerWidth;
+      // Cột chat KHÔNG full-width (có sidebar phải). Dùng mép của composer làm biên cột,
+      // phân biệt tin ĐẾN (tâm lệch trái cột) / tin ĐI (lệch phải) theo MID của cột này —
+      // không dùng window.innerWidth (sai vì bỏ qua sidebar → tin ĐI bị tính nhầm là ĐẾN).
+      const composer = document.querySelector('div[contenteditable="true"][role="textbox"]');
+      const cr = composer ? (composer as HTMLElement).getBoundingClientRect() : null;
+      const paneLeft = cr ? cr.left : 480;
+      const paneRight = cr ? cr.right : (window.innerWidth - 150);
+      const paneMid = (paneLeft + paneRight) / 2;
+      const isIncoming = (r: DOMRect): boolean => {
+        if (r.left < paneLeft - 20) return false;          // avatar/danh sách bên trái cột
+        return (r.left + r.width / 2) < paneMid;           // tâm lệch trái = tin ĐẾN
+      };
       const out: { type: 'image' | 'video' | 'sticker'; url: string; y: number }[] = [];
-      // ảnh đến: hugs trái, đủ lớn (bỏ avatar/emoji), cột phải (bỏ danh sách)
+      // ảnh đến
       document.querySelectorAll('img').forEach((im) => {
         const el = im as HTMLImageElement; const r = el.getBoundingClientRect(); const src = el.src || '';
         if (!/fbcdn|scontent/.test(src)) return;
-        if (r.width < 60 || r.height < 60 || r.x < 480) return;
-        if ((r.x + r.width) >= (W - 150)) return;          // hugs phải = ảnh đi
+        if (r.width < 60 || r.height < 60) return;
+        if (!isIncoming(r)) return;
         out.push({ type: 'image', url: src, y: r.y });
       });
-      // video đến: <video src=fbcdn>, hugs trái
+      // video đến
       document.querySelectorAll('video').forEach((v) => {
         const el = v as HTMLVideoElement; const r = el.getBoundingClientRect();
         const src = el.src || el.currentSrc || '';
-        if (!/fbcdn|scontent/.test(src) || r.x < 480) return;
-        if ((r.x + r.width) >= (W - 150)) return;
+        if (!/fbcdn|scontent/.test(src)) return;
+        if (!isIncoming(r)) return;
         out.push({ type: 'video', url: src, y: r.y });
       });
-      // sticker đến: div[role=img][aria-label$=" sticker"], hugs trái, ảnh qua background-image
+      // sticker đến: div[role=img][aria-label$=" sticker"], ảnh qua background-image
       document.querySelectorAll('div[role="img"][aria-label$=" sticker"]').forEach((el) => {
         const r = (el as HTMLElement).getBoundingClientRect();
-        if (r.width < 50 || r.x < 480) return;
-        if ((r.x + r.width) >= (W - 150)) return;          // hugs phải = đi → bỏ
+        if (r.width < 50) return;
+        if (!isIncoming(r)) return;
         const bg = getComputedStyle(el as HTMLElement).backgroundImage || '';
         const m = bg.match(/url\(["']?(.*?)["']?\)/);
         if (m && /fbcdn|scontent/.test(m[1])) out.push({ type: 'sticker', url: m[1], y: r.y });
