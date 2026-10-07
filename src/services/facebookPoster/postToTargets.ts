@@ -475,9 +475,10 @@ async function postToSingleTarget(
     // nên ô không multiple thì đưa từng tệp, tìm lại ô sau mỗi lần.
     const multiple = await input.evaluate(el => (el as HTMLInputElement).multiple).catch(() => false);
     if (multiple) {
+      sendLog(`[Đăng Bài] Gắn ${mediaPaths.length} tệp một lần (ô chọn tệp nhận nhiều tệp).`, 'info');
       await input.setInputFiles(mediaPaths);
-      await delayRandom(1500, 2500);
     } else {
+      sendLog(`[Đăng Bài] Gắn ${mediaPaths.length} tệp lần lượt từng tệp (ô chọn tệp không nhận nhiều tệp).`, 'info');
       for (let k = 1; k <= mediaPaths.length; k++) {
         const slot = k === 1 ? input : await page.$(FILE_INPUT_SELECTOR).catch(() => null);
         if (!slot) {
@@ -488,6 +489,11 @@ async function postToSingleTarget(
         await delayRandom(1500, 2500);
       }
     }
+    // ĐO ĐƯỢC 07/10/2026: hộp soạn KHÔNG hiện [role=progressbar] khi tải 10 ảnh,
+    // nên đọc thanh tải ngay sẽ thấy "xong" quá sớm. Chờ cố định (4-6 s như
+    // trước, cộng 1 s mỗi tệp thêm) rồi mới dò.
+    const extra = 1000 * (mediaPaths.length - 1);
+    await delayRandom(4000 + extra, 6000 + extra);
     // Đợi thanh tải biến mất: 1 giây một lần, tối đa 15 s + 5 s mỗi tệp.
     const maxPolls = 15 + 5 * mediaPaths.length;
     let uploaded = false;

@@ -132,13 +132,13 @@
 
 **Interfaces:**
 - Consumes: `mediaPaths` from Task 1.
-- Produces: `PostInput.mediaPaths?: string[]` (remove `mediaPath` and the Task 1 shim); exported named in-page function `readUploadStateInPage({ rootSelector })` returning `{ progress: number; publishDisabled: boolean | null }`.
+- Produces: `PostInput.mediaPaths?: string[]` (remove `mediaPath` and the Task 1 shim); exported named in-page function `readUploadStateInPage({ editorSelectors, labels })` (same root selection as the module's other in-page functions) returning `{ progress: number; publishDisabled: boolean | null }`.
 
 Behaviour (spec §4.2):
 1. Find the file input exactly as now (including the "Ảnh/video" button step). Read `multiple` via `input.evaluate((el) => (el as HTMLInputElement).multiple)`.
 2. `multiple` → `await input.setInputFiles(mediaPaths)` once.
 3. Not `multiple` → for k = 1..n: re-query `FILE_INPUT_SELECTOR`; missing → log and fail the target with `Không đính kèm được ảnh thứ ${k}`; else `setInputFiles(mediaPaths[k-1])`, then `delayRandom(1500, 2500)`.
-4. Wait for upload: poll every 1000 ms up to `15000 + 5000 * n` ms; done when `readUploadStateInPage` reports `progress === 0` and `publishDisabled !== true` **or** the editor is still empty (`publishDisabled` may stay true until text is typed — so use only `progress === 0` as the stop condition, and record `publishDisabled` only for logging). Timeout → fail the target with `Ảnh chưa tải lên xong`.
+4. Wait for upload: settle wait `delayRandom(4000 + 1000 * (n - 1), 6000 + 1000 * (n - 1))` after attaching (once after the `multiple` call, or once after the one-by-one loop), then poll every 1000 ms up to `15000 + 5000 * n` ms until the composer root has no `[role=progressbar]` (Đăng stays disabled until text is typed, so it is not a stop condition; it is only logged). Timeout → fail the target with `Ảnh chưa tải lên xong`.
 5. The `filechooser` fallback (`page.on('filechooser', …)`) calls `chooser.setFiles(mediaPaths)` when `chooser.isMultiple()`, else `chooser.setFiles(mediaPaths[0])` and logs a warning that only the first image could be attached through the native chooser.
 
 - [ ] **Step 1: failing tests** (fake page dispatches `evaluate` by `fn.name`; fake input element object with `evaluate` and `setInputFiles` recorders):

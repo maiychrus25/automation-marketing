@@ -1094,3 +1094,28 @@ test('readUploadStateInPage counts progress bars only inside the composer dialog
     { progress: 0, publishDisabled: null },
   );
 });
+
+test('first upload-state read happens only after the settle wait (4000 + 1000*(n-1) ms)', async () => {
+  for (const n of [1, 10]) {
+    const m = mediaPage({ multiple: true });
+    const paths = Array.from({ length: n }, (_, i) => `/${i}.jpg`);
+    const origEval = (m.page as FakePage).evaluate as (fn: AnyFn, arg?: unknown) => Promise<unknown>;
+    let start = 0;
+    let firstRead = -1;
+    (m.page as FakePage).on = () => {};
+    (m.page as FakePage).evaluate = async (fn: AnyFn, arg: unknown) => {
+      if (fn.name === 'readUploadStateInPage' && firstRead < 0) firstRead = Date.now() - start;
+      return origEval(fn, arg);
+    };
+    // Mốc tính từ lúc setInputFiles (sau đó chỉ còn settle wait trước lần đọc đầu).
+    const inputs = m.page.$;
+    (m.page as FakePage).$ = async () => {
+      const el = (await inputs()) as { setInputFiles: (f: unknown) => Promise<void> };
+      const orig = el.setInputFiles;
+      el.setInputFiles = async f => { start = Date.now(); return orig(f); };
+      return el;
+    };
+    await runMedia(m.page, paths);
+    assert.ok(firstRead >= 4000 + 1000 * (n - 1), `n=${n}: first read at ${firstRead} ms`);
+  }
+});
