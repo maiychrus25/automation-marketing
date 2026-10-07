@@ -554,7 +554,7 @@ export default function App() {
         'warning',
       );
     };
-    ipc.facebookPoster?.takeMissed?.().then((res) => { if (res?.success) (res.notices || []).forEach(show); }).catch(() => {});
+    Promise.resolve(ipc.facebookPoster?.takeMissed?.()).then((res) => { if (res?.success) (res.notices || []).forEach(show); }).catch(() => {});
     const off = ipc.on?.('facebookPoster:scheduleMissed', show);
     return () => { off?.(); };
   }, []);

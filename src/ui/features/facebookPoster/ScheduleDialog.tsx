@@ -98,7 +98,7 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
       <div role="dialog" aria-modal="true" aria-labelledby="schedule-dialog-title"
         className="w-full max-w-md max-h-full overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3 min-w-0">
         <h2 id="schedule-dialog-title" className="text-base font-semibold text-white">{edit ? 'Sửa giờ' : 'Lên lịch đăng'}</h2>
