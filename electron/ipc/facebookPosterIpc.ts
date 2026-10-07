@@ -12,9 +12,9 @@ import { buildRunCsv } from '../../src/services/facebookPoster/runCsv';
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from '../../src/services/facebookPoster/mediaRules';
 import { validateStartParams, type StartParamsEnv } from '../../src/services/facebookPoster/validateStartParams';
 import { FacebookPosterScheduler, type MissedNotice } from '../../src/services/facebookPoster/FacebookPosterScheduler';
-import { TIME_RE, computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
+import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
+import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
-import type { FbPosterSchedule } from '../../src/models/facebookPoster';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
 
 
@@ -29,9 +29,7 @@ let uiReady = false;
 
 const MAX_PENDING_MISSED = 50;
 const MAX_SCHEDULES = 200;
-const MAX_NAME = 100;
-const MIN_LEAD_MS = 60 * 1000;
-const LEAD_ERROR = 'Giờ đăng phải sau thời điểm hiện tại ít nhất 1 phút';
+const ENGINE_MISSING_ERROR = 'Chưa cài trình duyệt. Hãy tải trình duyệt ở màn hình Trình duyệt.';
 
 const startEnv: StartParamsEnv = {
     profileExists: (id) => !!db().getBrowserProfileById(id),
@@ -129,7 +127,9 @@ export function startFacebookPosterScheduler(): void {
         resolveParams: (s) => {
             const names = Array.isArray(s.params.mediaPaths) ? (s.params.mediaPaths as string[]) : [];
             const params = { ...s.params, mediaPaths: resolveScheduleMedia(scheduleBaseDir(), s.id, names) };
-            return validateStartParams({ kind: 'post', params }, startEnv);
+            const startParams = validateStartParams({ kind: 'post', params }, startEnv);
+            if (!isBrowserEngineInstalled()) throw new Error(ENGINE_MISSING_ERROR);
+            return startParams;
         },
         startRun: (params, scheduleId) => getService().start(params, scheduleId),
         newId: randomUUID,
@@ -150,27 +150,6 @@ export function stopFacebookPosterScheduler(): void {
     scheduler = null;
     schedulerDbPath = null;
     current?.stop();
-}
-
-/** Validates the timing fields of a schedule; returns the normalized values. */
-function readTiming(kind: string, input: { runAt?: unknown; days?: unknown; time?: unknown }, now: number): Pick<FbPosterSchedule, 'runAt' | 'days' | 'time'> {
-    if (kind === 'once') {
-        const runAt = input.runAt;
-        if (typeof runAt !== 'number' || !Number.isInteger(runAt) || runAt < now + MIN_LEAD_MS) throw new Error(LEAD_ERROR);
-        return { runAt, days: [], time: '' };
-    }
-    const days = Array.isArray(input.days) ? [...new Set(input.days)] : [];
-    if (days.length === 0 || !days.every((d) => typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= 6)) {
-        throw new Error('Chọn ít nhất một ngày trong tuần');
-    }
-    if (typeof input.time !== 'string' || !TIME_RE.test(input.time)) throw new Error('Giờ không hợp lệ');
-    return { runAt: null, days: (days as number[]).sort((a, b) => a - b), time: input.time };
-}
-
-function readName(value: unknown): string {
-    const name = typeof value === 'string' ? value.trim() : '';
-    if (name.length > MAX_NAME) throw new Error('Tên lịch tối đa 100 ký tự');
-    return name;
 }
 
 function clampLimit(value: any, fallback: number, max: number): number {
@@ -203,7 +182,7 @@ export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:start', (params) => {
         const startParams = validateStartParams(params, startEnv);
         if (!isBrowserEngineInstalled()) {
-            throw new Error('Chưa cài trình duyệt. Hãy tải trình duyệt ở màn hình Trình duyệt.');
+            throw new Error(ENGINE_MISSING_ERROR);
         }
         return getService().start(startParams);
     });
@@ -249,24 +228,7 @@ export function registerFacebookPosterIpc(): void {
         const theStore = store();
         const current = typeof params.id === 'string' ? theStore.getSchedule(params.id) : null;
         if (!current) throw new Error('Không tìm thấy lịch');
-        const fields: Parameters<FacebookPosterStore['updateSchedule']>[1] = {};
-        if (params.name !== undefined) {
-            const name = readName(params.name);
-            if (!name) throw new Error('Tên lịch không được để trống');
-            fields.name = name;
-        }
-        if (params.enabled !== undefined) fields.enabled = !!params.enabled;
-        if (current.kind === 'once') {
-            if (params.runAt !== undefined) fields.runAt = readTiming('once', params, now).runAt;
-        } else if (params.days !== undefined || params.time !== undefined) {
-            const timing = readTiming('recurring', { days: params.days ?? current.days, time: params.time ?? current.time }, now);
-            fields.days = timing.days;
-            fields.time = timing.time;
-        }
-        const merged = { ...current, ...fields };
-        const nextRunAt = merged.enabled ? computeNextRun(merged, now) : null;
-        if (merged.enabled && nextRunAt === null) throw new Error(LEAD_ERROR);
-        theStore.updateSchedule(current.id, { ...fields, nextRunAt }, now);
+        theStore.updateSchedule(current.id, planScheduleUpdate(current, params, now), now);
         scheduler?.reschedule();
         emitSchedulesChanged();
         return { schedule: theStore.getSchedule(current.id) };
