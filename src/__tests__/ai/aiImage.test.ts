@@ -45,7 +45,7 @@ describe('aiImage', () => {
     const download = jest.fn();
     const saveBuffer = jest.fn(async () => '/abs/media/fb-poster-ai/a1/gen_1.jpg');
     const r = await runImageGeneration(
-      { getApiKey: () => 'k', model: 'cx/gpt-5.5-image', post, download, saveBuffer, bucket: 'fb-poster-ai/a1' },
+      { getApiKey: () => 'k', model: 'cx/gpt-5.5-image', post, download, saveBuffer, bucket: 'fb-poster-ai/a1', sleep: async () => {} },
       { prompt: 'p' },
     );
     expect(r.localPath).toBe('/abs/media/fb-poster-ai/a1/gen_1.jpg'); // tuyệt đối, khớp MediaPicker
@@ -59,7 +59,7 @@ describe('aiImage', () => {
     const download = jest.fn(async () => Buffer.from('downloaded'));
     const saveBuffer = jest.fn(async () => '/abs/media/b/gen.jpg');
     const r = await runImageGeneration(
-      { getApiKey: () => 'k', model: 'm', post, download, saveBuffer, bucket: 'b' },
+      { getApiKey: () => 'k', model: 'm', post, download, saveBuffer, bucket: 'b', sleep: async () => {} },
       { prompt: 'p' },
     );
     expect((download.mock.calls[0] as any[])[0]).toBe('https://x/i.jpg');
@@ -67,13 +67,27 @@ describe('aiImage', () => {
     expect(r.size).toBe(Buffer.from('downloaded').length);
   });
 
-  it('runImageGeneration: response không có ảnh → throw, không lưu', async () => {
+  it('runImageGeneration: lỗi transient lần đầu → retry → thành công', async () => {
+    const b64 = Buffer.from('ok').toString('base64');
+    let call = 0;
+    const post = jest.fn(async () => { call++; if (call === 1) throw new Error('reset after 30s'); return { data: { data: [{ b64_json: b64 }] } }; });
+    const saveBuffer = jest.fn(async () => '/abs/media/b/gen.jpg');
+    const r = await runImageGeneration(
+      { getApiKey: () => 'k', model: 'm', post, download: jest.fn(), saveBuffer, bucket: 'b', sleep: async () => {} },
+      { prompt: 'p' },
+    );
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(r.localPath).toBe('/abs/media/b/gen.jpg');
+  });
+
+  it('runImageGeneration: lỗi hết số lần → throw, không lưu', async () => {
     const post = jest.fn(async () => ({ data: { data: [] } }));
     const saveBuffer = jest.fn();
     await expect(runImageGeneration(
-      { getApiKey: () => 'k', model: 'm', post, download: jest.fn(), saveBuffer, bucket: 'b' },
+      { getApiKey: () => 'k', model: 'm', post, download: jest.fn(), saveBuffer, bucket: 'b', sleep: async () => {}, retries: 2 },
       { prompt: 'p' },
     )).rejects.toThrow('no image');
+    expect(post).toHaveBeenCalledTimes(3);
     expect(saveBuffer).not.toHaveBeenCalled();
   });
 });

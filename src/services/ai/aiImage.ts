@@ -59,6 +59,8 @@ export interface ImageGenDeps {
   download: (url: string) => Promise<Buffer>;
   saveBuffer: (bucket: string, buf: Buffer, name: string) => Promise<string>;
   bucket: string;
+  sleep?: (ms: number) => Promise<void>; // injectable để test
+  retries?: number;                      // số lần thử LẠI (mặc định 2 → tối đa 3 lần)
 }
 
 export async function runImageGeneration(
@@ -66,11 +68,24 @@ export async function runImageGeneration(
   input: { prompt: string; baseImages?: string[]; size?: string; quality?: string },
 ): Promise<{ localPath: string; size: number }> {
   const req = buildImageRequest({ apiKey: deps.getApiKey(), model: deps.model, prompt: input.prompt, baseImages: input.baseImages, size: input.size, quality: input.quality });
-  const res = await deps.post(req.url, req.body, { headers: req.headers, timeout: 180000 });
-  const parsed = parseImageResponse(res.data);
-  const buffer = parsed.buffer ?? (await deps.download(parsed.url!));
-  // Trả ABSOLUTE path (saveBuffer trả tuyệt đối) để khớp mediaPaths của poster (MediaPicker dùng tuyệt đối,
-  // validateStartParams fs.existsSync không resolve). KHÔNG toRelativePath.
-  const abs = await deps.saveBuffer(deps.bucket, buffer, `gen_${Date.now()}.jpg`);
-  return { localPath: abs, size: buffer.length };
+  const attempts = (deps.retries ?? 2) + 1;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let lastErr: any;
+  // Backend ảnh ahvchat (codex) chập chờn: lúc ra ảnh, lúc lỗi transient ("reset after Ns",
+  // oauth/entitlement). Thử lại vài lần để vượt qua lần hỏng.
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await deps.post(req.url, req.body, { headers: req.headers, timeout: 180000 });
+      const parsed = parseImageResponse(res.data);
+      const buffer = parsed.buffer ?? (await deps.download(parsed.url!));
+      // ABSOLUTE path (saveBuffer trả tuyệt đối) để khớp mediaPaths của poster (MediaPicker tuyệt đối,
+      // validateStartParams fs.existsSync không resolve).
+      const abs = await deps.saveBuffer(deps.bucket, buffer, `gen_${Date.now()}.jpg`);
+      return { localPath: abs, size: buffer.length };
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await sleep(6000);
+    }
+  }
+  throw lastErr;
 }
