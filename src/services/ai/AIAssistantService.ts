@@ -564,7 +564,7 @@ YÊU CẦU BẮT BUỘC:
     if (!assistant) throw new Error('Không tìm thấy trợ lý AI');
     if (!assistant.apiKey) throw new Error('Trợ lý chưa có API key');
     const { runImageGeneration } = require('./aiImage');
-    const { FileStorageService } = require('../file/FileStorageService');
+    const FileStorageService = require('../file/FileStorageService').default;
     Logger.info(`[AIAssistant] generateImage → assistant=${assistant.id} base=${input.baseImages?.length || 0}`);
     return runImageGeneration(
       {

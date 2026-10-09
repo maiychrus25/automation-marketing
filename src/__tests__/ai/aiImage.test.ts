@@ -29,8 +29,8 @@ describe('aiImage', () => {
     );
     expect(r.localPath).toBe('media/fb-poster-ai/a1/gen_1.png');
     expect(r.size).toBe(Buffer.from('imgbytes').length);
-    expect(post.mock.calls[0][0]).toContain('/v1/images/generations');
-    expect(saveBuffer.mock.calls[0][0]).toBe('fb-poster-ai/a1');
+    expect((post.mock.calls[0] as any[])[0]).toContain('/v1/images/generations');
+    expect((saveBuffer.mock.calls[0] as any[])[0]).toBe('fb-poster-ai/a1');
   });
 
   it('runImageGeneration: response không có ảnh → throw, không lưu', async () => {

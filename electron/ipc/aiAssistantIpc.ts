@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import AIAssistantService from '../../src/services/ai/AIAssistantService';
 import DatabaseService from '../../src/services/database/DatabaseService';
+import FileStorageService from '../../src/services/file/FileStorageService';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import { proxyToBoss } from './proxyHelper';
 import Logger from '../../src/utils/Logger';
@@ -238,6 +239,45 @@ export function registerAIAssistantIpc(): void {
       Logger.error(`[AIAssistantIpc] chat: status=${status}, message=${e.message}, responseData=${JSON.stringify(errData)?.substring(0, 500)}`);
       return { success: false, error: e.message };
     }
+  });
+
+  // ─── Gen ảnh + template thiệp (Facebook Poster) ────────────────────────────
+  ipcMain.handle('ai:generateImage', async (_e, { assistantId, prompt, baseImages, size }: { assistantId: string; prompt: string; baseImages?: string[]; size?: string }) => {
+    try {
+      if (isEmployeeMode()) return { success: false, error: 'Gen ảnh AI chưa hỗ trợ ở chế độ nhân viên' };
+      const r = await AIAssistantService.getInstance().generateImage({ assistantId, prompt, baseImages, size });
+      return { success: true, ...r };
+    } catch (e: any) {
+      Logger.error(`[AIAssistantIpc] generateImage: ${e.message}`);
+      return { success: false, error: e.response?.data?.error?.message || e.message };
+    }
+  });
+
+  ipcMain.handle('ai:listPosterTemplates', async () => {
+    try {
+      const { listTemplates } = require('../../src/services/facebookPoster/posterTemplates');
+      return { success: true, templates: listTemplates(DatabaseService.getInstance()) };
+    } catch (e: any) { return { success: false, error: e.message, templates: [] }; }
+  });
+
+  ipcMain.handle('ai:addPosterTemplate', async (_e, { name, filePath }: { name: string; filePath: string }) => {
+    try {
+      if (!fs.existsSync(filePath)) return { success: false, error: 'File không tồn tại' };
+      const buffer = fs.readFileSync(filePath);
+      const abs = await FileStorageService.saveBuffer('fb-poster-templates', buffer, `${Date.now()}_${path.basename(filePath)}`);
+      const store = { saveBufferSync: () => abs, toRelativePath: (p: string) => FileStorageService.toRelativePath(p) };
+      const { addTemplate } = require('../../src/services/facebookPoster/posterTemplates');
+      const entry = addTemplate(DatabaseService.getInstance(), store, name, filePath);
+      return { success: true, template: entry };
+    } catch (e: any) { return { success: false, error: e.message }; }
+  });
+
+  ipcMain.handle('ai:removePosterTemplate', async (_e, { id }: { id: string }) => {
+    try {
+      const { removeTemplate } = require('../../src/services/facebookPoster/posterTemplates');
+      removeTemplate(DatabaseService.getInstance(), id);
+      return { success: true };
+    } catch (e: any) { return { success: false, error: e.message }; }
   });
 
   // ─── Per-account assistant assignment ──────────────────────────────────────
