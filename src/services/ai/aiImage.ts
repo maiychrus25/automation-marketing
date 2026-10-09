@@ -32,3 +32,24 @@ export function parseImageResponse(data: any): Buffer {
   if (b64) return Buffer.from(b64, 'base64');
   throw new Error('no image in response');
 }
+
+/** Deps injected để test không cần electron/sqlite (AIAssistantService.generateImage là wrapper mỏng). */
+export interface ImageGenDeps {
+  getApiKey: () => string;
+  model: string;
+  post: (url: string, body: any, config: any) => Promise<{ data: any }>;
+  saveBuffer: (bucket: string, buf: Buffer, name: string) => Promise<string>;
+  toRelativePath: (abs: string) => string;
+  bucket: string;
+}
+
+export async function runImageGeneration(
+  deps: ImageGenDeps,
+  input: { prompt: string; baseImages?: string[]; size?: string },
+): Promise<{ localPath: string; size: number }> {
+  const req = buildImageRequest({ apiKey: deps.getApiKey(), model: deps.model, prompt: input.prompt, baseImages: input.baseImages, size: input.size });
+  const res = await deps.post(req.url, req.body, { headers: req.headers, timeout: 120000 });
+  const buffer = parseImageResponse(res.data);
+  const abs = await deps.saveBuffer(deps.bucket, buffer, `gen_${Date.now()}.png`);
+  return { localPath: deps.toRelativePath(abs), size: buffer.length };
+}
