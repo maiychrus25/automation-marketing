@@ -19,14 +19,42 @@ export default function AIAssistPanel({ text, setText, setMedia, disabled }: {
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
 
+  const reloadTemplates = () => ipc.ai?.listPosterTemplates().then((r: any) => setTemplates(r?.templates || [])).catch(() => {});
+
   useEffect(() => {
     ipc.ai?.listAssistants().then((r: any) => {
       const list = (r?.assistants || r || []) as any[];
       setAssistants(list);
       if (list[0]) setAssistantId(list[0].id);
     }).catch(() => {});
-    ipc.ai?.listPosterTemplates().then((r: any) => setTemplates(r?.templates || [])).catch(() => {});
+    reloadTemplates();
   }, []);
+
+  const addTemplate = async () => {
+    setErr('');
+    try {
+      const res: any = await (ipc as any).file?.openDialog({
+        title: 'Chọn ảnh template thiệp',
+        filters: [{ name: 'Ảnh', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
+        properties: ['openFile'],
+      });
+      const fp = res?.filePaths?.[0];
+      if (!fp) return;
+      const name = (window.prompt('Tên template:', fp.split(/[\\/]/).pop() || 'Thiệp') || '').trim();
+      if (!name) return;
+      setBusy('tpl');
+      const r = await ipc.ai?.addPosterTemplate(name, fp);
+      if (r?.success && r.template) { await reloadTemplates(); setTplId(r.template.id); }
+      else setErr(r?.error || 'Thêm template lỗi');
+    } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
+  };
+
+  const removeTemplate = async () => {
+    if (!tplId) return;
+    setBusy('tpl');
+    try { await ipc.ai?.removePosterTemplate(tplId); setTplId(''); await reloadTemplates(); }
+    catch (e: any) { setErr(e.message); } finally { setBusy(''); }
+  };
 
   const run = async (mode: 'write' | 'polish') => {
     setErr('');
@@ -76,6 +104,8 @@ export default function AIAssistPanel({ text, setText, setMedia, disabled }: {
           <option value="">Ảnh minh hoạ (gen tự do)</option>
           {templates.map(t => <option key={t.id} value={t.id}>Thiệp: {t.name}</option>)}
         </select>
+        <button type="button" disabled={!!busy} onClick={addTemplate} title="Thêm template thiệp" className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600">＋</button>
+        {tplId && <button type="button" disabled={!!busy} onClick={removeTemplate} title="Xoá template" className="rounded border border-gray-300 px-2 py-1 text-xs text-red-500 disabled:opacity-50 dark:border-gray-600">✕</button>}
         <input value={imgPrompt} onChange={e => setImgPrompt(e.target.value)} placeholder="Mô tả ảnh (bỏ trống = theo nội dung bài)"
           className="min-w-[150px] flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100" />
         <button type="button" disabled={d} onClick={genImage} className="rounded bg-emerald-600 px-3 py-1 text-xs text-white disabled:opacity-50">{busy === 'img' ? 'Đang tạo ảnh…' : 'Tạo ảnh AI'}</button>
