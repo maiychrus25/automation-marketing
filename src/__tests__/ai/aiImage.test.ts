@@ -19,6 +19,14 @@ describe('aiImage', () => {
     expect(r.body.image).toBe('https://x/a.jpg');
     expect(r.body.image_detail).toBe('high');
   });
+  it('edit mode (file local): đọc file → data URL đúng mime theo đuôi', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const png = path.join(os.tmpdir(), `tpl_${Date.now()}.png`);
+    fs.writeFileSync(png, Buffer.from('x'));
+    const r = buildImageRequest({ apiKey: 'k', model: 'm', prompt: 'p', baseImages: [png] });
+    expect(r.body.image.startsWith('data:image/png;base64,')).toBe(true);
+    fs.unlinkSync(png);
+  });
   it('parse: b64_json → buffer', () => {
     const b64 = Buffer.from('hello').toString('base64');
     const r = parseImageResponse({ data: [{ b64_json: b64 }] });
@@ -31,31 +39,31 @@ describe('aiImage', () => {
     expect(() => parseImageResponse({ data: [] })).toThrow('no image');
   });
 
-  it('runImageGeneration: b64 response → lưu buffer, trả rel path + size', async () => {
+  it('runImageGeneration: b64 response → lưu buffer, trả ABSOLUTE path + size', async () => {
     const b64 = Buffer.from('imgbytes').toString('base64');
     const post = jest.fn(async () => ({ data: { data: [{ b64_json: b64 }] } }));
     const download = jest.fn();
     const saveBuffer = jest.fn(async () => '/abs/media/fb-poster-ai/a1/gen_1.jpg');
-    const toRelativePath = jest.fn((p: string) => p.replace('/abs/media/', 'media/'));
     const r = await runImageGeneration(
-      { getApiKey: () => 'k', model: 'cx/gpt-5.5-image', post, download, saveBuffer, toRelativePath, bucket: 'fb-poster-ai/a1' },
+      { getApiKey: () => 'k', model: 'cx/gpt-5.5-image', post, download, saveBuffer, bucket: 'fb-poster-ai/a1' },
       { prompt: 'p' },
     );
-    expect(r.localPath).toBe('media/fb-poster-ai/a1/gen_1.jpg');
+    expect(r.localPath).toBe('/abs/media/fb-poster-ai/a1/gen_1.jpg'); // tuyệt đối, khớp MediaPicker
     expect(r.size).toBe(Buffer.from('imgbytes').length);
     expect((post.mock.calls[0] as any[])[0]).toContain('/v1/images/generations');
     expect(download).not.toHaveBeenCalled();
   });
 
-  it('runImageGeneration: url response → download rồi lưu', async () => {
+  it('runImageGeneration: url response → download rồi lưu (abs path)', async () => {
     const post = jest.fn(async () => ({ data: { data: [{ url: 'https://x/i.jpg' }] } }));
     const download = jest.fn(async () => Buffer.from('downloaded'));
     const saveBuffer = jest.fn(async () => '/abs/media/b/gen.jpg');
     const r = await runImageGeneration(
-      { getApiKey: () => 'k', model: 'm', post, download, saveBuffer, toRelativePath: (p: string) => p, bucket: 'b' },
+      { getApiKey: () => 'k', model: 'm', post, download, saveBuffer, bucket: 'b' },
       { prompt: 'p' },
     );
     expect((download.mock.calls[0] as any[])[0]).toBe('https://x/i.jpg');
+    expect(r.localPath).toBe('/abs/media/b/gen.jpg');
     expect(r.size).toBe(Buffer.from('downloaded').length);
   });
 
@@ -63,7 +71,7 @@ describe('aiImage', () => {
     const post = jest.fn(async () => ({ data: { data: [] } }));
     const saveBuffer = jest.fn();
     await expect(runImageGeneration(
-      { getApiKey: () => 'k', model: 'm', post, download: jest.fn(), saveBuffer, toRelativePath: (p: string) => p, bucket: 'b' },
+      { getApiKey: () => 'k', model: 'm', post, download: jest.fn(), saveBuffer, bucket: 'b' },
       { prompt: 'p' },
     )).rejects.toThrow('no image');
     expect(saveBuffer).not.toHaveBeenCalled();

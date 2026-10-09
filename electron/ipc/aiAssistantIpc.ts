@@ -265,7 +265,7 @@ export function registerAIAssistantIpc(): void {
       if (!fs.existsSync(filePath)) return { success: false, error: 'File không tồn tại' };
       const buffer = fs.readFileSync(filePath);
       const abs = await FileStorageService.saveBuffer('fb-poster-templates', buffer, `${Date.now()}_${path.basename(filePath)}`);
-      const store = { saveBufferSync: () => abs, toRelativePath: (p: string) => FileStorageService.toRelativePath(p) };
+      const store = { saveBufferSync: () => abs };
       const { addTemplate } = require('../../src/services/facebookPoster/posterTemplates');
       const entry = addTemplate(DatabaseService.getInstance(), store, name, filePath);
       return { success: true, template: entry };

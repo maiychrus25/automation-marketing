@@ -20,7 +20,9 @@ export interface ImageRequestOpts {
 
 function toImageRef(p: string): string {
   if (p.startsWith('http') || p.startsWith('data:')) return p;
-  return `data:image/jpeg;base64,${fs.readFileSync(p).toString('base64')}`;
+  const ext = (p.toLowerCase().split('.').pop() || '');
+  const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+  return `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`;
 }
 
 export function buildImageRequest(opts: ImageRequestOpts): { url: string; headers: Record<string, string>; body: any } {
@@ -56,7 +58,6 @@ export interface ImageGenDeps {
   post: (url: string, body: any, config: any) => Promise<{ data: any }>;
   download: (url: string) => Promise<Buffer>;
   saveBuffer: (bucket: string, buf: Buffer, name: string) => Promise<string>;
-  toRelativePath: (abs: string) => string;
   bucket: string;
 }
 
@@ -68,6 +69,8 @@ export async function runImageGeneration(
   const res = await deps.post(req.url, req.body, { headers: req.headers, timeout: 180000 });
   const parsed = parseImageResponse(res.data);
   const buffer = parsed.buffer ?? (await deps.download(parsed.url!));
+  // Trả ABSOLUTE path (saveBuffer trả tuyệt đối) để khớp mediaPaths của poster (MediaPicker dùng tuyệt đối,
+  // validateStartParams fs.existsSync không resolve). KHÔNG toRelativePath.
   const abs = await deps.saveBuffer(deps.bucket, buffer, `gen_${Date.now()}.jpg`);
-  return { localPath: deps.toRelativePath(abs), size: buffer.length };
+  return { localPath: abs, size: buffer.length };
 }

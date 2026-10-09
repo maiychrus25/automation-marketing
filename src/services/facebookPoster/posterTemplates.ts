@@ -7,7 +7,7 @@ const KEY = 'fb_poster_templates';
 
 export interface PosterTemplate { id: string; name: string; path: string; }
 type Db = { getSetting(k: string): string | null; setSetting(k: string, v: string): void };
-type FileStore = { saveBufferSync(name: string, srcPath: string): string; toRelativePath(p: string): string };
+type FileStore = { saveBufferSync(name: string, srcPath: string): string };
 
 export function listTemplates(db: Db): PosterTemplate[] {
   try {
@@ -21,8 +21,9 @@ export function listTemplates(db: Db): PosterTemplate[] {
 export function addTemplate(db: Db, store: FileStore, name: string, srcPath: string): PosterTemplate {
   const id = `tpl_${Date.now()}`;
   const safeName = (name || 'tpl').replace(/[^\w.-]+/g, '_');
+  // Lưu ABSOLUTE path: edit-mode đọc template qua fs.readFileSync; poster cũng dùng path tuyệt đối.
   const abs = store.saveBufferSync(`${id}_${safeName}.img`, srcPath);
-  const entry: PosterTemplate = { id, name: name || 'Template', path: store.toRelativePath(abs) };
+  const entry: PosterTemplate = { id, name: name || 'Template', path: abs };
   db.setSetting(KEY, JSON.stringify([...listTemplates(db), entry]));
   return entry;
 }

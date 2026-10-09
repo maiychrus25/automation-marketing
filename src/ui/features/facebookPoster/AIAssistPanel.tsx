@@ -25,7 +25,9 @@ export default function AIAssistPanel({ text, setText, setMedia, disabled }: {
     ipc.ai?.listAssistants().then((r: any) => {
       const list = (r?.assistants || r || []) as any[];
       setAssistants(list);
-      if (list[0]) setAssistantId(list[0].id);
+      // Ưu tiên trợ lý ahvchat (gen ảnh gọi endpoint ahvchat; key assistant khác sẽ 401).
+      const ahv = list.find((a: any) => a.platform === 'ahvchat') || list[0];
+      if (ahv) setAssistantId(ahv.id);
     }).catch(() => {});
     reloadTemplates();
   }, []);

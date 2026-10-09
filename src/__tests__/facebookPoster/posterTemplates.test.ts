@@ -1,7 +1,7 @@
 import { listTemplates, addTemplate, removeTemplate } from '../../services/facebookPoster/posterTemplates';
 
 function fakeDb() { const store: any = {}; return { getSetting: (k: string) => store[k] ?? null, setSetting: (k: string, v: string) => { store[k] = v; } }; }
-const fakeFs = { saveBufferSync: (name: string, _src: string) => `/abs/media/tpl/${name}`, toRelativePath: (p: string) => p.replace('/abs/media/', 'media/') } as any;
+const fakeFs = { saveBufferSync: (name: string, _src: string) => `/abs/media/tpl/${name}` } as any;
 
 describe('posterTemplates', () => {
   it('rỗng ban đầu', () => { expect(listTemplates(fakeDb())).toEqual([]); });
@@ -13,7 +13,7 @@ describe('posterTemplates', () => {
     const db = fakeDb();
     const e = addTemplate(db, fakeFs, 'Tuyển dụng', '/src/a.jpg');
     expect(e.name).toBe('Tuyển dụng');
-    expect(e.path).toContain('media/');
+    expect(e.path.startsWith('/abs/media/tpl/')).toBe(true); // tuyệt đối để fs.readFileSync đọc được khi edit
     expect(listTemplates(db)).toHaveLength(1);
     removeTemplate(db, e.id);
     expect(listTemplates(db)).toEqual([]);

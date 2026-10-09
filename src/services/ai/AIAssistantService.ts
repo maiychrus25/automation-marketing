@@ -574,7 +574,6 @@ YÊU CẦU BẮT BUỘC:
         post: (url: string, body: any, config: any) => axios.post(url, body, config),
         download: async (url: string) => Buffer.from((await axios.get(url, { responseType: 'arraybuffer', timeout: 120000 })).data),
         saveBuffer: (bucket: string, buf: Buffer, name: string) => FileStorageService.saveBuffer(bucket, buf, name),
-        toRelativePath: (abs: string) => FileStorageService.toRelativePath(abs),
         bucket: `fb-poster-ai/${input.assistantId}`,
       },
       { prompt: input.prompt, baseImages: input.baseImages, size: input.size },
