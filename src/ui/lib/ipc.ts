@@ -312,6 +312,7 @@ declare global {
       };
       file: {
         openDialog: (options?: any) => Promise<any>;
+        getDroppedPath: (file: File) => string;
         saveImage: (params: any) => Promise<any>;
         getAppDataPath: () => Promise<any>;
         openPath: (filePath: string) => Promise<any>;

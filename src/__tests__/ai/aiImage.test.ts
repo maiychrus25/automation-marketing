@@ -13,11 +13,15 @@ describe('aiImage', () => {
     expect(r.body.background).toBe('auto');
     expect(r.body.image).toBeUndefined();
   });
-  it('edit mode (có base URL): cùng endpoint generations, field image = URL', () => {
+  it('edit mode (1 base URL): image = string', () => {
     const r = buildImageRequest({ apiKey: 'k', model: 'm', prompt: 'p', baseImages: ['https://x/a.jpg'] });
     expect(r.url).toContain('/v1/images/generations');
     expect(r.body.image).toBe('https://x/a.jpg');
     expect(r.body.image_detail).toBe('high');
+  });
+  it('nhiều base URL: image = MẢNG', () => {
+    const r = buildImageRequest({ apiKey: 'k', model: 'm', prompt: 'p', baseImages: ['https://x/a.jpg', 'https://x/b.jpg'] });
+    expect(r.body.image).toEqual(['https://x/a.jpg', 'https://x/b.jpg']);
   });
   it('edit mode (file local): đọc file → data URL đúng mime theo đuôi', () => {
     const fs = require('fs'); const os = require('os'); const path = require('path');

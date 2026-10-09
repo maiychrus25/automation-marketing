@@ -141,7 +141,7 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
 
       <label className="block text-xs text-gray-400">
         Nội dung bài
-        <textarea className="input-field text-sm w-full mt-1 min-h-[110px]" maxLength={MAX_TEXT} value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
+        <textarea className="input-field text-sm w-full mt-1 min-h-[220px] max-h-[60vh] resize-y leading-relaxed" maxLength={MAX_TEXT} value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
         <span className="block text-right mt-0.5">{text.length}/{MAX_TEXT}</span>
       </label>
 

@@ -23,6 +23,19 @@ export function dedupePaths(paths: string[]): string[] {
     return [...new Set(paths)];
 }
 
+/** Lọc tệp kéo-thả: chỉ ảnh/video hợp lệ, bỏ path rỗng + trùng (với danh sách hiện có và trùng nhau). Trả các item MỚI để thêm. */
+export function acceptDroppedMedia(dropped: MediaItem[], existing: MediaItem[]): MediaItem[] {
+    const supported = [...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS];
+    const seen = new Set(existing.map((i) => i.path));
+    const out: MediaItem[] = [];
+    for (const d of dropped) {
+        if (!d.path || seen.has(d.path) || !supported.includes(extensionOf(d.path))) continue;
+        seen.add(d.path);
+        out.push({ path: d.path, size: d.size });
+    }
+    return out;
+}
+
 /** null khi hợp lệ, ngược lại là thông báo tiếng Việt. Thứ tự kiểm tra: đuôi tệp, trộn video, số lượng, dung lượng từng ảnh, tổng dung lượng. */
 export function validateMediaSelection(items: MediaItem[]): string | null {
     const supported = [...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS];

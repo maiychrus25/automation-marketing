@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ipc from '@/lib/ipc';
 import { toLocalMediaUrl } from '@/lib/localMedia';
 import { useAppStore } from '@/store/appStore';
-import { MAX_IMAGES, isVideo, validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
+import { MAX_IMAGES, isVideo, validateMediaSelection, acceptDroppedMedia, type MediaItem } from '../../../services/facebookPoster/mediaRules';
 
 interface Props {
   items: MediaItem[];
@@ -22,6 +22,23 @@ function summary(items: MediaItem[]): string {
 
 export default function MediaPicker({ items, onChange, disabled }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
+  const [dragOver, setDragOver] = useState(false);
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (disabled) return;
+    const dropped: MediaItem[] = [];
+    for (const f of Array.from(e.dataTransfer.files)) {
+      try {
+        const path = ipc.file?.getDroppedPath(f) || (f as any).path || '';
+        if (path) dropped.push({ path, size: f.size });
+      } catch { /* bỏ file không lấy được path */ }
+    }
+    const added = acceptDroppedMedia(dropped, items);
+    if (added.length) onChange([...items, ...added]);
+    else if (dropped.length) showNotification('Chỉ hỗ trợ ảnh/video, hoặc tệp đã có', 'warning');
+  };
 
   const pick = async () => {
     let res;
@@ -49,9 +66,15 @@ export default function MediaPicker({ items, onChange, disabled }: Props) {
   const error = validateMediaSelection(items);
 
   return (
-    <div className="space-y-2 min-w-0">
+    <div
+      className={`space-y-2 min-w-0 rounded-lg border border-dashed p-2 transition-colors ${dragOver ? 'border-blue-500 bg-blue-500/10' : 'border-transparent'}`}
+      onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={onDrop}
+    >
       <div className="flex flex-wrap items-center gap-2 min-w-0">
         <button type="button" onClick={pick} disabled={disabled} className="px-3 py-1.5 rounded-lg text-sm border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-50">Chọn ảnh/video</button>
+        <span className="text-xs text-gray-500">hoặc kéo-thả vào đây</span>
         {items.length > 0 && <span className="text-xs text-gray-400">{summary(items)}</span>}
       </div>
       {items.length > 0 && (

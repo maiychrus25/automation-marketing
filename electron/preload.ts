@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { TelegramForumTopicContext } from '../src/models/telegram';
 
 // Expose typed API to renderer
@@ -284,6 +284,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ─── File ────────────────────────────────────────────────────────
   file: {
     openDialog: (options: any) => ipcRenderer.invoke('file:openDialog', options),
+    getDroppedPath: (file: File) => webUtils.getPathForFile(file),
     saveImage: (params: any) => ipcRenderer.invoke('file:saveImage', params),
     getAppDataPath: () => ipcRenderer.invoke('file:getAppDataPath'),
     openPath: (filePath: string) => ipcRenderer.invoke('file:openPath', filePath),

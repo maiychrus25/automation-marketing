@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import ipc from '@/lib/ipc';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 import { buildWriteMessages, buildPolishMessages } from '../../../services/ai/fbContentPrompt';
 import type { MediaItem } from '../../../services/facebookPoster/mediaRules';
 
@@ -16,6 +17,7 @@ export default function AIAssistPanel({ text, setText, setMedia, disabled }: {
   const [brief, setBrief] = useState('');
   const [imgPrompt, setImgPrompt] = useState('');
   const [tplId, setTplId] = useState('');
+  const [refImages, setRefImages] = useState<string[]>([]);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
 
@@ -69,15 +71,28 @@ export default function AIAssistPanel({ text, setText, setMedia, disabled }: {
     } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
   };
 
+  const addRef = async () => {
+    try {
+      const res: any = await (ipc as any).file?.openDialog({
+        title: 'Chọn ảnh tham chiếu để AI ghép vào',
+        filters: [{ name: 'Ảnh', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
+        properties: ['openFile', 'multiSelections'],
+      });
+      const paths: string[] = res?.filePaths || [];
+      if (paths.length) setRefImages(prev => [...prev, ...paths.filter(p => !prev.includes(p))]);
+    } catch (e: any) { setErr(e.message); }
+  };
+
   const genImage = async () => {
     setErr(''); setBusy('img');
     try {
       const base = tplId ? templates.find(t => t.id === tplId) : null;
+      const baseImages = [...(base ? [base.path] : []), ...refImages];
       const r = await ipc.ai?.generateImage({
         assistantId,
         prompt: imgPrompt.trim() || text.slice(0, 500),
-        baseImages: base ? [base.path] : undefined,
-        size: base ? '1024x1536' : '1024x1024',
+        baseImages: baseImages.length ? baseImages : undefined,
+        size: (base || refImages.length) ? '1024x1536' : '1024x1024',
       });
       if (r?.success && r.localPath) setMedia(prev => [...prev, { path: r.localPath!, size: r.size || 0 }]);
       else setErr(r?.error || 'Gen ảnh lỗi');
@@ -108,10 +123,23 @@ export default function AIAssistPanel({ text, setText, setMedia, disabled }: {
         </select>
         <button type="button" disabled={!!busy} onClick={addTemplate} title="Thêm template thiệp" className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600">＋</button>
         {tplId && <button type="button" disabled={!!busy} onClick={removeTemplate} title="Xoá template" className="rounded border border-gray-300 px-2 py-1 text-xs text-red-500 disabled:opacity-50 dark:border-gray-600">✕</button>}
+        <button type="button" disabled={!!busy} onClick={addRef} title="Đính ảnh tham chiếu để AI ghép vào" className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600">📎 Ảnh</button>
         <input value={imgPrompt} onChange={e => setImgPrompt(e.target.value)} placeholder="Mô tả ảnh (bỏ trống = theo nội dung bài)"
           className="min-w-[150px] flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100" />
         <button type="button" disabled={d} onClick={genImage} className="rounded bg-emerald-600 px-3 py-1 text-xs text-white disabled:opacity-50">{busy === 'img' ? 'Đang tạo ảnh…' : 'Tạo ảnh AI'}</button>
       </div>
+      {refImages.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {refImages.map((p, i) => (
+            <div key={p} className="relative h-12 w-12 overflow-hidden rounded border border-gray-300 dark:border-gray-600">
+              <img src={toLocalMediaUrl(p)} alt="ref" className="h-full w-full object-cover" />
+              <button type="button" onClick={() => setRefImages(prev => prev.filter((_, j) => j !== i))}
+                className="absolute right-0 top-0 bg-black/70 px-1 text-[10px] leading-none text-white" title="Bỏ ảnh tham chiếu">✕</button>
+            </div>
+          ))}
+          <span className="self-center text-[11px] text-gray-500">ảnh tham chiếu — mô tả cách ghép ở ô trên</span>
+        </div>
+      )}
       {err && <div className="mt-2 text-xs text-red-500">{err}</div>}
     </div>
   );

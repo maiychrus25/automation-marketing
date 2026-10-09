@@ -38,7 +38,10 @@ export function buildImageRequest(opts: ImageRequestOpts): { url: string; header
     image_detail: hasBase ? 'high' : 'low',
     output_format: 'jpeg',
   };
-  if (hasBase) body.image = toImageRef(opts.baseImages![0]);
+  if (hasBase) {
+    const refs = opts.baseImages!.map(toImageRef);
+    body.image = refs.length === 1 ? refs[0] : refs; // ahvchat nhận string (1 ảnh) hoặc mảng (nhiều ảnh)
+  }
   return { url: `${AHV_BASE}/images/generations`, headers, body };
 }
 
