@@ -43,6 +43,14 @@ export function buildImageRequest(opts: ImageRequestOpts): { url: string; header
 }
 
 /** Lấy ảnh từ response: b64_json → Buffer ngay; chỉ có url → trả url để tải. */
+/** Lấy thời gian chờ retry từ lỗi: backend ahvchat báo "reset after Ns" → đợi đúng N giây (cap 35s). */
+export function retryDelayMs(err: any): number {
+  const msg = err?.response?.data?.error?.message || err?.response?.data?.error || err?.message || '';
+  const m = /reset after (\d+)\s*s/i.exec(String(msg));
+  if (m) return Math.min(parseInt(m[1], 10) * 1000 + 2000, 35000);
+  return 6000;
+}
+
 export function parseImageResponse(data: any): { buffer?: Buffer; url?: string } {
   const d0 = data?.data?.[0];
   if (d0?.b64_json) return { buffer: Buffer.from(d0.b64_json, 'base64') };
@@ -84,7 +92,7 @@ export async function runImageGeneration(
       return { localPath: abs, size: buffer.length };
     } catch (e) {
       lastErr = e;
-      if (i < attempts - 1) await sleep(6000);
+      if (i < attempts - 1) await sleep(retryDelayMs(e));
     }
   }
   throw lastErr;

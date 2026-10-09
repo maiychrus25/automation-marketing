@@ -1,4 +1,4 @@
-import { buildImageRequest, parseImageResponse, runImageGeneration } from '../../services/ai/aiImage';
+import { buildImageRequest, parseImageResponse, runImageGeneration, retryDelayMs } from '../../services/ai/aiImage';
 
 describe('aiImage', () => {
   it('gen mode (không base): endpoint generations + đủ param contract', () => {
@@ -67,16 +67,24 @@ describe('aiImage', () => {
     expect(r.size).toBe(Buffer.from('downloaded').length);
   });
 
-  it('runImageGeneration: lỗi transient lần đầu → retry → thành công', async () => {
+  it('retryDelayMs: đọc "reset after Ns" → N+2 giây (cap 35s), mặc định 6s', () => {
+    expect(retryDelayMs(new Error('usage limit (reset after 17s)'))).toBe(19000);
+    expect(retryDelayMs({ response: { data: { error: { message: 'x reset after 50s' } } } })).toBe(35000);
+    expect(retryDelayMs(new Error('lỗi khác'))).toBe(6000);
+  });
+
+  it('runImageGeneration: lỗi transient lần đầu → retry (đợi theo reset) → thành công', async () => {
     const b64 = Buffer.from('ok').toString('base64');
     let call = 0;
-    const post = jest.fn(async () => { call++; if (call === 1) throw new Error('reset after 30s'); return { data: { data: [{ b64_json: b64 }] } }; });
+    const post = jest.fn(async () => { call++; if (call === 1) throw new Error('reset after 10s'); return { data: { data: [{ b64_json: b64 }] } }; });
     const saveBuffer = jest.fn(async () => '/abs/media/b/gen.jpg');
+    const slept: number[] = [];
     const r = await runImageGeneration(
-      { getApiKey: () => 'k', model: 'm', post, download: jest.fn(), saveBuffer, bucket: 'b', sleep: async () => {} },
+      { getApiKey: () => 'k', model: 'm', post, download: jest.fn(), saveBuffer, bucket: 'b', sleep: async (ms: number) => { slept.push(ms); } },
       { prompt: 'p' },
     );
     expect(post).toHaveBeenCalledTimes(2);
+    expect(slept).toEqual([12000]); // 10s + 2s
     expect(r.localPath).toBe('/abs/media/b/gen.jpg');
   });
 
