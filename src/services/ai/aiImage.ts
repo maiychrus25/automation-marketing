@@ -1,7 +1,9 @@
 /**
  * aiImage.ts
- * Dựng request + parse response cho gen/edit ảnh qua ahvchat (OpenAI-compatible images API).
- * Contract mặc định OpenAI-images (xác nhận live ở Task 8); chỉnh ở đây nếu ahvchat dùng chat-multimodal.
+ * Dựng request + xử lý response cho gen/edit ảnh qua ahvchat.
+ * Contract (xác nhận từ doc ahvchat): POST /v1/images/generations với
+ *   { model, prompt, n, size, quality, background, image_detail, output_format, image? }
+ * Field `image` (URL hoặc data URL) = ảnh base/template → EDIT mode; không có → GEN mode.
  */
 import fs from 'fs';
 
@@ -11,25 +13,39 @@ export interface ImageRequestOpts {
   apiKey: string;
   model: string;
   prompt: string;
-  baseImages?: string[]; // local paths — có → EDIT mode; rỗng → GEN mode
+  baseImages?: string[]; // local path / URL / data URL — có → edit mode
   size?: string;
+  quality?: string;      // 'low' | 'medium' | 'high'
+}
+
+function toImageRef(p: string): string {
+  if (p.startsWith('http') || p.startsWith('data:')) return p;
+  return `data:image/jpeg;base64,${fs.readFileSync(p).toString('base64')}`;
 }
 
 export function buildImageRequest(opts: ImageRequestOpts): { url: string; headers: Record<string, string>; body: any } {
   const headers = { Authorization: `Bearer ${opts.apiKey}`, 'Content-Type': 'application/json' };
-  const size = opts.size || '1024x1024';
   const hasBase = !!(opts.baseImages && opts.baseImages.length);
-  if (hasBase) {
-    // EDIT mode: gửi ảnh base dạng data URL base64 (điều chỉnh theo contract live nếu khác)
-    const image = opts.baseImages!.map((p) => `data:image/jpeg;base64,${fs.readFileSync(p).toString('base64')}`);
-    return { url: `${AHV_BASE}/images/edits`, headers, body: { model: opts.model, prompt: opts.prompt, image, size } };
-  }
-  return { url: `${AHV_BASE}/images/generations`, headers, body: { model: opts.model, prompt: opts.prompt, size } };
+  const body: any = {
+    model: opts.model,
+    prompt: opts.prompt,
+    n: 1,
+    size: opts.size || '1024x1024',
+    quality: opts.quality || 'high',
+    background: 'auto',
+    image_detail: hasBase ? 'high' : 'low',
+    output_format: 'jpeg',
+  };
+  if (hasBase) body.image = toImageRef(opts.baseImages![0]);
+  return { url: `${AHV_BASE}/images/generations`, headers, body };
 }
 
-export function parseImageResponse(data: any): Buffer {
-  const b64 = data?.data?.[0]?.b64_json;
-  if (b64) return Buffer.from(b64, 'base64');
+/** Lấy ảnh từ response: b64_json → Buffer ngay; chỉ có url → trả url để tải. */
+export function parseImageResponse(data: any): { buffer?: Buffer; url?: string } {
+  const d0 = data?.data?.[0];
+  if (d0?.b64_json) return { buffer: Buffer.from(d0.b64_json, 'base64') };
+  if (d0?.url) return { url: d0.url };
+  // một số gateway trả ảnh trong chat-style content — chưa gặp; bổ sung nếu doc đổi
   throw new Error('no image in response');
 }
 
@@ -38,6 +54,7 @@ export interface ImageGenDeps {
   getApiKey: () => string;
   model: string;
   post: (url: string, body: any, config: any) => Promise<{ data: any }>;
+  download: (url: string) => Promise<Buffer>;
   saveBuffer: (bucket: string, buf: Buffer, name: string) => Promise<string>;
   toRelativePath: (abs: string) => string;
   bucket: string;
@@ -45,11 +62,12 @@ export interface ImageGenDeps {
 
 export async function runImageGeneration(
   deps: ImageGenDeps,
-  input: { prompt: string; baseImages?: string[]; size?: string },
+  input: { prompt: string; baseImages?: string[]; size?: string; quality?: string },
 ): Promise<{ localPath: string; size: number }> {
-  const req = buildImageRequest({ apiKey: deps.getApiKey(), model: deps.model, prompt: input.prompt, baseImages: input.baseImages, size: input.size });
-  const res = await deps.post(req.url, req.body, { headers: req.headers, timeout: 120000 });
-  const buffer = parseImageResponse(res.data);
-  const abs = await deps.saveBuffer(deps.bucket, buffer, `gen_${Date.now()}.png`);
+  const req = buildImageRequest({ apiKey: deps.getApiKey(), model: deps.model, prompt: input.prompt, baseImages: input.baseImages, size: input.size, quality: input.quality });
+  const res = await deps.post(req.url, req.body, { headers: req.headers, timeout: 180000 });
+  const parsed = parseImageResponse(res.data);
+  const buffer = parsed.buffer ?? (await deps.download(parsed.url!));
+  const abs = await deps.saveBuffer(deps.bucket, buffer, `gen_${Date.now()}.jpg`);
   return { localPath: deps.toRelativePath(abs), size: buffer.length };
 }

@@ -572,6 +572,7 @@ YÊU CẦU BẮT BUỘC:
         // Model ẢNH cố định (assistant.model là model TEXT, không dùng cho ảnh).
         model: 'cx/gpt-5.5-image',
         post: (url: string, body: any, config: any) => axios.post(url, body, config),
+        download: async (url: string) => Buffer.from((await axios.get(url, { responseType: 'arraybuffer', timeout: 120000 })).data),
         saveBuffer: (bucket: string, buf: Buffer, name: string) => FileStorageService.saveBuffer(bucket, buf, name),
         toRelativePath: (abs: string) => FileStorageService.toRelativePath(abs),
         bucket: `fb-poster-ai/${input.assistantId}`,
