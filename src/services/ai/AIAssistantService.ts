@@ -556,6 +556,31 @@ YÊU CẦU BẮT BUỘC:
   }
 
   /**
+   * Gen ảnh qua ahvchat (model ảnh, mặc định cx/gpt-5.5-image). Wrapper mỏng quanh runImageGeneration
+   * (logic + test ở aiImage.ts). baseImages (template/tham chiếu) có → edit mode; không có → gen mode.
+   */
+  public async generateImage(input: { assistantId: string; prompt: string; baseImages?: string[]; size?: string }): Promise<{ localPath: string; size: number }> {
+    const assistant = this.getAssistant(input.assistantId);
+    if (!assistant) throw new Error('Không tìm thấy trợ lý AI');
+    if (!assistant.apiKey) throw new Error('Trợ lý chưa có API key');
+    const { runImageGeneration } = require('./aiImage');
+    const FileStorageService = require('../file/FileStorageService').default;
+    Logger.info(`[AIAssistant] generateImage → assistant=${assistant.id} base=${input.baseImages?.length || 0}`);
+    return runImageGeneration(
+      {
+        getApiKey: () => assistant.apiKey,
+        // Model ẢNH cố định (assistant.model là model TEXT, không dùng cho ảnh).
+        model: 'cx/gpt-5.5-image',
+        post: (url: string, body: any, config: any) => axios.post(url, body, config),
+        download: async (url: string) => Buffer.from((await axios.get(url, { responseType: 'arraybuffer', timeout: 120000 })).data),
+        saveBuffer: (bucket: string, buf: Buffer, name: string) => FileStorageService.saveBuffer(bucket, buf, name),
+        bucket: `fb-poster-ai/${input.assistantId}`,
+      },
+      { prompt: input.prompt, baseImages: input.baseImages, size: input.size },
+    );
+  }
+
+  /**
    * Chat with AI assistant for workflow auto-reply.
    * Uses structured JSON output format (text/image segments) + natural conversational tone.
    */

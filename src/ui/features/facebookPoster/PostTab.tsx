@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/appStore';
 import ProfilePicker from './ProfilePicker';
 import ScheduleDialog from './ScheduleDialog';
 import MediaPicker from './MediaPicker';
+import AIAssistPanel from './AIAssistPanel';
 import { matchesKeywords } from './matchKeywords';
 import { validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
 import type { FbPosterGroup, FbPosterMode } from '../../../models/facebookPoster';
@@ -135,6 +136,8 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
           </button>
         ))}
       </div>
+
+      <AIAssistPanel text={text} setText={setText} setMedia={setMedia} disabled={busy} />
 
       <label className="block text-xs text-gray-400">
         Nội dung bài
