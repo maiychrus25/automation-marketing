@@ -15,6 +15,25 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.15.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🤖 Trợ Lý AI viết content + tạo ảnh cho bài đăng Facebook',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Viết bài từ brief ngắn hoặc trau chuốt nháp theo giọng brand (tuyển dụng, marketing, ra mắt sản phẩm, sự kiện, thông báo...)',
+          'Tạo ảnh cho bài: gen tự do theo mô tả, hoặc sửa từ template có sẵn (giữ nguyên bố cục/logo, chỉ đổi nội dung) — chữ tiếng Việt chính xác',
+          'Thêm/xoá template thiệp ngay trong khối Trợ Lý AI; ảnh tạo ra tự thêm vào danh sách ảnh của bài',
+          'Tự thử lại khi dịch vụ ảnh báo giới hạn lượt (chờ đúng thời gian reset)',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.14.0',
     date: '10/2026',
     type: 'minor',
