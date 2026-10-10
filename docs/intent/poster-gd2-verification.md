@@ -8,14 +8,14 @@ Ngày: 2026-10-10 · Nhánh: `feat/poster-postiz-ui` · Spec: `docs/specs/2026-1
 |---|---|
 | `npx tsc -p tsconfig.electron.json --noEmit` | exit 0 |
 | `npx tsc -p tsconfig.json --noEmit` | exit 0 |
-| `npx jest` (trừ 4 suite SQLite) | 36 suite / 623 test pass |
+| `npx jest` (trừ 4 suite SQLite) | 36 suite / 627 test pass |
 | 4 suite SQLite (Store, Scheduler, Service, drafts) chạy bằng `ELECTRON_RUN_AS_NODE=1 electron jest` | 4 suite / 93 test pass |
 | `npx vite build` | exit 0 |
 
 Ghi chú: 3 suite Store/Scheduler/Service trước đây "đỏ" với `npx jest` chỉ vì `better-sqlite3` build cho ABI Electron;
 chạy bằng runtime Electron thì xanh. Không phải lỗi code.
 
-## Kiểm thử trên app thật (CDP, 2 vòng, mỗi vòng 14 mục)
+## Kiểm thử trên app thật (CDP, 2 vòng, mỗi vòng 17 mục)
 
 | # | Mục | Vòng 1 | Vòng 2 |
 |---|---|---|---|
@@ -29,6 +29,9 @@ chạy bằng runtime Electron thì xanh. Không phải lỗi code.
 | 6b | `scheduleUpdate({enabled:true})` trên nháp bị từ chối | Đạt | Đạt |
 | 7 | Đăng ngay → hộp xác nhận → Hủy → nháp còn nguyên | Đạt (sau sửa) | Đạt |
 | 8 | Bỏ chọn kênh → nháp chưa có profile vẫn hiện | Đạt | Đạt |
+| 10 | Sửa nháp chỉ có "Lưu nháp", không có Đăng ngay/Hẹn giờ | Đạt (sau sửa) | Đạt |
+| 11 | Mở lại cùng nháp → nạp lại bản đã lưu, bỏ chỉnh sửa dở | Đạt (sau sửa) | Đạt |
+| 12 | Mở rồi lưu lại nháp có đích → đích giữ nguyên | Đạt | Đạt |
 | 9 | 1440 / 390 px × dark / light: không tràn ngang | Đạt ×4 | Đạt ×4 |
 
 Không có lỗi JS trên console ở mọi lần chạy. Chạy thêm 2 lần sau vòng 2: không mục nào trượt.
@@ -39,6 +42,15 @@ Không có lỗi JS trên console ở mọi lần chạy. Chạy thêm 2 lần s
   phần còn lại inert); hộp xác nhận là `div` thường nên nằm dưới. Sửa như nút "Xoá lịch" có sẵn: đóng hộp chi tiết
   trước rồi mới hỏi; lỗi báo bằng toast. Mục 7 đỏ trước khi sửa, xanh sau khi sửa.
 - **Nháp chưa chọn profile hiện "Profile đã xoá"** trên thẻ lịch — đổi thành "Chưa chọn profile".
+
+### Sửa sau review toàn nhánh
+
+| Lỗi | Sửa | Kiểm |
+|---|---|---|
+| Modal sửa nháp còn "Đăng ngay"/"Hẹn giờ" → đăng bản sao, nháp vẫn trên lịch, dễ đăng trùng | Ẩn hai nút khi sửa nháp; duyệt ở lịch | Mục 10 đỏ → xanh |
+| Lưu nháp khi nhóm chưa tải xong (đang có việc chạy / tải lỗi) → mất đích | `targetsToSave`: chưa áp đích thì giữ đích gốc | Unit test đỏ → xanh; mục 12 hồi quy |
+| Mở lại cùng nháp dùng lại composer cũ (nội dung/ảnh cũ) | Key composer đổi mỗi lần mở nháp | Mục 11 đỏ → xanh |
+| Thay ảnh nháp: xoá thư mục cũ trước khi rename → rename lỗi (Windows EPERM) là mất ảnh | Đổi chỗ có hoàn tác (cũ → `-old`, lỗi thì trả lại) | Unit test giả lập EPERM đỏ → xanh |
 
 ### An toàn dữ liệu khi kiểm thử
 

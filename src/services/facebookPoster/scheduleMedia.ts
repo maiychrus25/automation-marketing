@@ -57,7 +57,18 @@ export function replaceScheduleMedia(baseDir: string, scheduleId: string, source
   removeScheduleMedia(baseDir, stagingId);
   const names = copyScheduleMedia(baseDir, stagingId, sources);
   const dir = scheduleMediaDir(baseDir, scheduleId);
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.renameSync(scheduleMediaDir(baseDir, stagingId), dir);
+  // Đổi chỗ có hoàn tác: rename có thể bị chặn (EPERM/EBUSY trên Windows) — khi đó trả ảnh cũ về, không mất ảnh.
+  const oldId = `${scheduleId}-old`;
+  removeScheduleMedia(baseDir, oldId);
+  const hadOld = fs.existsSync(dir);
+  if (hadOld) fs.renameSync(dir, scheduleMediaDir(baseDir, oldId));
+  try {
+    fs.renameSync(scheduleMediaDir(baseDir, stagingId), dir);
+  } catch (err) {
+    if (hadOld) fs.renameSync(scheduleMediaDir(baseDir, oldId), dir);
+    removeScheduleMedia(baseDir, stagingId);
+    throw err;
+  }
+  removeScheduleMedia(baseDir, oldId);
   return names;
 }

@@ -10,3 +10,12 @@ export function hydrateTargets(targets: string[], scannedUrls: string[]): { unch
     extraLinks: targets.filter((url) => !scanned.has(url)).join('\n'),
   };
 }
+
+/**
+ * Đích lưu cho một profile. Khi nhóm chưa tải xong (đang có việc chạy, tải chậm/lỗi) thì đích của nháp chưa được áp
+ * vào form; lưu lúc đó phải giữ đích gốc, không lưu thành rỗng. `pending` = null khi đã áp xong.
+ */
+export function targetsToSave(profileId: string, formTargets: string[], pending: { profileId: string; targets?: string[] }[] | null): string[] {
+  const original = pending?.find((p) => p.profileId === profileId);
+  return original ? original.targets ?? [] : formTargets;
+}

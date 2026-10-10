@@ -35,6 +35,8 @@ export default function FacebookPosterView() {
   const [composerMounted, setComposerMounted] = useState(false);
   const [composeAt, setComposeAt] = useState<number | undefined>();
   const [editingDraft, setEditingDraft] = useState<{ schedule: FbPosterSchedule; media: { path: string; size: number }[] } | null>(null);
+  // Mỗi lần mở nháp là một composer mới (nạp lại từ DB), kể cả mở lại cùng nháp.
+  const [draftOpenSeq, setDraftOpenSeq] = useState(0);
   const showNotification = useAppStore(s => s.showNotification);
   const [showProgress, setShowProgress] = useState(false);
   const setView = useAppStore(s => s.setView);
@@ -66,6 +68,7 @@ export default function FacebookPosterView() {
     if (!res?.success || !res.draft) { showNotification(res?.error || 'Không mở được bản nháp', 'error'); return; }
     setChannelsOpen(false);
     setEditingDraft({ schedule: res.draft, media: res.media ?? [] });
+    setDraftOpenSeq((n) => n + 1);
     setComposeAt(undefined);
     setComposerMounted(true);
     setComposerOpen(true);
@@ -146,7 +149,7 @@ export default function FacebookPosterView() {
         </div>
         {showProgress && <aside aria-label="Tiến độ" className="poster-run-panel"><RunPanel run={run} progress={progress} logs={logs} profileNames={profileNames} /></aside>}
       </div>
-      {composerMounted && <PostTab key={editingDraft?.schedule.id ?? 'new'} draft={editingDraft ?? undefined} open={composerOpen} onClose={() => setComposerOpen(false)} initialProfileIds={selectedChannels ?? []} initialRunAt={composeAt}
+      {composerMounted && <PostTab key={editingDraft ? `${editingDraft.schedule.id}:${draftOpenSeq}` : 'new'} draft={editingDraft ?? undefined} open={composerOpen} onClose={() => setComposerOpen(false)} initialProfileIds={selectedChannels ?? []} initialRunAt={composeAt}
         busy={busy} profileNames={profileNames} onStarted={onStarted} />}
     </div>
   );

@@ -6,7 +6,7 @@ import ScheduleDialog from './ScheduleDialog';
 import MediaPicker from './MediaPicker';
 import PostPreview from './PostPreview';
 import { matchesKeywords } from './matchKeywords';
-import { hydrateTargets } from './draftForm';
+import { hydrateTargets, targetsToSave } from './draftForm';
 import { validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
 import type { FbPosterGroup, FbPosterMode, FbPosterSchedule } from '../../../models/facebookPoster';
 
@@ -142,7 +142,8 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
     mode, text,
     mediaPaths: media.map((m) => m.path),
     comment,
-    profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group' ? targetsFor(profileId) : [] })),
+    profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group'
+      ? targetsToSave(profileId, targetsFor(profileId), hydrated.current ? null : dp?.profiles ?? null) : [] })),
     minDelaySec, maxDelaySec, concurrency, staggerMinSec, staggerMaxSec,
   });
 
@@ -301,17 +302,20 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
 
       <div className="poster-composer-footer flex flex-wrap items-center gap-3">
         {operationError && <p role="alert" className="w-full text-sm text-red-400 break-words">{operationError}</p>}
+        {/* Sửa nháp chỉ lưu: đăng/hẹn giờ từ đây tạo bản sao trong khi nháp vẫn nằm trên lịch → dễ đăng trùng. Duyệt ở lịch. */}
+        {!draft && <>
         <button type="button" onClick={handleStart} disabled={!!disabledReason || starting} className="btn-primary text-sm px-4 py-2 text-white disabled:opacity-60">
           {starting ? 'Đang bắt đầu...' : 'Đăng ngay'}
         </button>
         <button type="button" onClick={() => setScheduling(true)} disabled={!!scheduleDisabledReason} className="px-4 py-2 rounded-lg text-sm border border-gray-600 text-gray-200 hover:border-gray-400 disabled:opacity-60">
           Hẹn giờ
         </button>
+        </>}
         <button type="button" onClick={handleSaveDraft} disabled={!!draftDisabledReason || savingDraft}
           className="px-4 py-2 rounded-lg text-sm border border-gray-600 text-gray-200 hover:border-gray-400 disabled:opacity-60">
           {savingDraft ? 'Đang lưu...' : 'Lưu nháp'}
         </button>
-        {disabledReason && <span className="text-xs text-gray-400">{disabledReason}</span>}
+        {(draft ? draftDisabledReason : disabledReason) && <span className="text-xs text-gray-400">{draft ? draftDisabledReason : disabledReason}</span>}
       </div>
       </div>
       <aside className="poster-composer-preview"><div className="flex items-center justify-between mb-5"><h3 className="font-semibold">Xem trước</h3><span className="poster-muted text-xs">Facebook</span></div>

@@ -88,4 +88,25 @@ describe('scheduleMedia', () => {
     assert.strictEqual(fs.readFileSync(path.join(dir, '01-src-b.jpg'), 'utf8'), 'B');
     assert.strictEqual(fs.existsSync(scheduleMediaDir(base, 's1-staging')), false);
   });
+
+  it('replaceScheduleMedia: rename staging → thư mục lịch thất bại (EPERM trên Windows) thì ảnh cũ còn nguyên, không sót staging', () => {
+    copyScheduleMedia(base, 's1', [makeSource('a.jpg', 'A')]);
+    const realRename = fs.renameSync.bind(fs);
+    let call = 0;
+    const spy = jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      call++;
+      if (String(from).endsWith('s1-staging')) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      return realRename(from, to);
+    });
+    try {
+      assert.throws(() => replaceScheduleMedia(base, 's1', [makeSource('b.jpg', 'B')]), /EPERM/);
+    } finally {
+      spy.mockRestore();
+    }
+    const dir = scheduleMediaDir(base, 's1');
+    assert.deepStrictEqual([...fs.readdirSync(dir)], ['01-src-a.jpg']);
+    assert.strictEqual(fs.readFileSync(path.join(dir, '01-src-a.jpg'), 'utf8'), 'A');
+    assert.strictEqual(fs.existsSync(scheduleMediaDir(base, 's1-staging')), false);
+    assert.ok(call >= 1);
+  });
 });
