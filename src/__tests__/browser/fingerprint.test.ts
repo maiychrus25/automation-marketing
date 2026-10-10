@@ -86,4 +86,14 @@ describe('buildLaunchArgs', () => {
         const args = buildLaunchArgs({ userDataDir: '/d', fingerprint: { ...fingerprint, language: 'en' }, persona: 'linux', proxyPort: null });
         expect(args).toContain('--accept-lang=en');
     });
+
+    it('adds --no-sandbox when noSandbox is set (Ubuntu userns chặn → thiếu cờ này chromium abort "No usable sandbox")', () => {
+        const args = buildLaunchArgs({ userDataDir: '/d', fingerprint, persona: 'linux', proxyPort: null, noSandbox: true });
+        expect(args).toContain('--no-sandbox');
+    });
+
+    it('omits --no-sandbox by default', () => {
+        const args = buildLaunchArgs({ userDataDir: '/d', fingerprint, persona: 'linux', proxyPort: null });
+        expect(args).not.toContain('--no-sandbox');
+    });
 });

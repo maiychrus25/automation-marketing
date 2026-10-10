@@ -46,6 +46,13 @@ export interface LaunchOptions {
     persona: Persona;
     /** Port of the local ProxyForwarder, or null when the profile has no proxy. */
     proxyPort: number | null;
+    /**
+     * Tắt sandbox của Chromium. Cần trên Linux đã chặn unprivileged user
+     * namespaces (Ubuntu 23.10+/AppArmor): không có cờ này chromium abort ngay
+     * với "FATAL: No usable sandbox" nên profile không mở được. Host quyết định
+     * (persona có thể bị giả lập nên không dùng để suy ra OS thật).
+     */
+    noSandbox?: boolean;
 }
 
 export function buildLaunchArgs(options: LaunchOptions): string[] {
@@ -64,6 +71,7 @@ export function buildLaunchArgs(options: LaunchOptions): string[] {
         '--no-first-run',
         '--no-default-browser-check',
     ];
+    if (options.noSandbox) args.push('--no-sandbox');
     if (proxyPort !== null) {
         args.push(`--proxy-server=http://127.0.0.1:${proxyPort}`, '--disable-non-proxied-udp');
     }

@@ -148,7 +148,7 @@ export class BrowserProfileService {
             fs.mkdirSync(userDataDir, { recursive: true });
             const child = this.spawnBrowser(
                 executable,
-                buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort }),
+                buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort, noSandbox: this.platform === 'linux' }),
             );
             await new Promise<void>((resolve, reject) => {
                 child.once('spawn', () => resolve());
@@ -192,7 +192,7 @@ export class BrowserProfileService {
             }
             const userDataDir = this.getProfileDir(id);
             fs.mkdirSync(userDataDir, { recursive: true });
-            const args = ['--remote-debugging-pipe', ...buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort })];
+            const args = ['--remote-debugging-pipe', ...buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort, noSandbox: this.platform === 'linux' })];
             context = await this.launchAutomation(executable, userDataDir, args);
             if (this.running.get(id) !== entry) {
                 await context.close().catch(() => undefined);
