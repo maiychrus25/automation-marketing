@@ -1,6 +1,6 @@
 # GĐ2 — Bản nháp và luồng duyệt cho Đăng Facebook
 
-Status: draft · Intent: [docs/intent/intent.md](../intent/intent.md) · Nhánh: `feat/poster-postiz-ui` (sau GĐ1 `e6d9a5b`)
+Status: approved (2026-10-10) · Intent: [docs/intent/intent.md](../intent/intent.md) · Nhánh: `feat/poster-postiz-ui` (sau GĐ1 `e6d9a5b`)
 
 ## Mục tiêu
 
@@ -53,7 +53,7 @@ Không bài nào tự chạy khi chưa được duyệt — đây là cổng "du
   *Đăng ngay* (hỏi xác nhận) · *Xoá* (hỏi xác nhận).
 - Nhãn chữ tiếng Việt, mã định danh tiếng Anh, theo token màu Postiz của GĐ1, dark/light, mobile.
 
-### Mức kiểm tra nội dung nháp (cần anh chốt)
+### Mức kiểm tra nội dung nháp (đã chốt: phương án đề xuất)
 
 - **Đề xuất:** nháp chỉ bắt buộc **nội dung**; profile/nhóm/ảnh được phép thiếu. Khi **duyệt** mới kiểm
   đầy đủ như đăng bài hiện tại (`validateStartParams`). Lý do: nháp là chỗ chuẩn bị dần, và luồng tự động
