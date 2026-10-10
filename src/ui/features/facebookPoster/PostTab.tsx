@@ -34,6 +34,7 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
   const [text, setText] = useState<string>(typeof dp?.text === 'string' ? dp.text : '');
   const [media, setMedia] = useState<MediaItem[]>(draft?.media ?? []);
   const [comment, setComment] = useState<string>(typeof dp?.comment === 'string' ? dp.comment : '');
+  const [commentDelayMin, setCommentDelayMin] = useState<number>(Number.isInteger(dp?.commentDelayMin) ? dp!.commentDelayMin : 0);
   const [profileIds, setProfileIds] = useState<string[]>(
     dp ? ((dp.profiles ?? []) as { profileId: string }[]).map((p) => p.profileId) : initialProfileIds);
   const [keyword, setKeyword] = useState('');
@@ -142,6 +143,7 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
     mode, text,
     mediaPaths: media.map((m) => m.path),
     comment,
+    commentDelayMin,
     profiles: profileIds.map((profileId) => ({ profileId, targets: mode === 'group'
       ? targetsToSave(profileId, targetsFor(profileId), hydrated.current ? null : dp?.profiles ?? null) : [] })),
     minDelaySec, maxDelaySec, concurrency, staggerMinSec, staggerMaxSec,
@@ -215,6 +217,12 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
       <label className="block text-xs text-gray-400">
         Bình luận đầu tiên (tuỳ chọn)
         <textarea className="input-field text-sm w-full mt-1 min-h-[60px]" maxLength={MAX_COMMENT} value={comment} disabled={busy} onChange={(e) => setComment(e.target.value)} />
+      </label>
+      <label className="flex flex-wrap items-center gap-2 text-xs text-gray-400 -mt-2">
+        Bình luận sau
+        <input type="number" className="input-field text-sm w-20" min={0} max={60} step={1} value={commentDelayMin}
+          disabled={busy || !comment.trim()} onChange={(e) => setCommentDelayMin(Math.min(60, Math.max(0, Math.trunc(Number(e.target.value)) || 0)))} />
+        phút kể từ lúc bài lên (0 = ngay).
       </label>
 
       <section>

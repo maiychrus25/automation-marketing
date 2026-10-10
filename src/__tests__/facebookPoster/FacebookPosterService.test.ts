@@ -368,12 +368,12 @@ describe('FacebookPosterService', () => {
     const task = postAll();
     const h = harness({ postToTargets: task });
     h.service.start(postParams({
-      mode: 'page', text: 'nội dung', mediaPaths: ['/tmp/a.png'], comment: 'bl', minDelaySec: 7, maxDelaySec: 11,
+      mode: 'page', text: 'nội dung', mediaPaths: ['/tmp/a.png'], comment: 'bl', commentDelayMin: 5, minDelaySec: 7, maxDelaySec: 11,
       profiles: [{ profileId: 'p1', targets: [] }],
     }));
     await h.service.whenIdle();
     expect(task.mock.calls[0][0]).toEqual({
-      text: 'nội dung', mediaPaths: ['/tmp/a.png'], comment: 'bl', targets: [HOME], minDelay: 7, maxDelay: 11,
+      text: 'nội dung', mediaPaths: ['/tmp/a.png'], comment: 'bl', commentDelayMin: 5, targets: [HOME], minDelay: 7, maxDelay: 11,
     });
     const rows = h.results('run-1');
     expect(rows).toHaveLength(1);

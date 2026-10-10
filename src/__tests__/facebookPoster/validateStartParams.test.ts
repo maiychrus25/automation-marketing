@@ -24,7 +24,7 @@ describe('validateStartParams: common', () => {
 describe('validateStartParams: post', () => {
   test('valid group job gets defaults and normalized targets', () => {
     expect(validateStartParams(post(), env)).toEqual({
-      kind: 'post', mode: 'group', text: 'hello', mediaPaths: [], comment: null,
+      kind: 'post', mode: 'group', text: 'hello', mediaPaths: [], comment: null, commentDelayMin: 0,
       profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123/'] }],
       minDelaySec: 300, maxDelaySec: 900, concurrency: 3, staggerMinSec: 30, staggerMaxSec: 90,
     });
@@ -41,6 +41,15 @@ describe('validateStartParams: post', () => {
   test('text length limit 63206', () => {
     expect(() => validateStartParams(post({ text: 'a'.repeat(63206) }), env)).not.toThrow();
     fails(post({ text: 'a'.repeat(63207) }), 'Nội dung bài tối đa 63206 ký tự');
+  });
+
+  test('commentDelayMin: integer minutes 0–60, default 0', () => {
+    expect((validateStartParams(post({ commentDelayMin: 15 }), env) as any).commentDelayMin).toBe(15);
+    expect((validateStartParams(post({ commentDelayMin: 60 }), env) as any).commentDelayMin).toBe(60);
+    fails(post({ commentDelayMin: 61 }), 'Bình luận sau 0–60 phút');
+    fails(post({ commentDelayMin: -1 }), 'Bình luận sau 0–60 phút');
+    fails(post({ commentDelayMin: 2.5 }), 'Bình luận sau 0–60 phút');
+    fails(post({ commentDelayMin: '5' }), 'Bình luận sau 0–60 phút');
   });
 
   test('comment limit 8000 and whitespace-only becomes null', () => {

@@ -36,6 +36,13 @@ function readDelays(p: Record<string, any>): { minDelaySec: number; maxDelaySec:
 
 const MAX_STAGGER_SEC = 3600;
 
+/** Bình luận sau X phút kể từ lúc bài lên (0 = ngay). */
+function readCommentDelay(p: Record<string, any>): number {
+    const v = p.commentDelayMin ?? 0;
+    if (!Number.isInteger(v) || v < 0 || v > 60) throw new Error('Bình luận sau 0–60 phút');
+    return v;
+}
+
 /** Gap between consecutive profile starts; 0-0 starts every runner at once. */
 function readStagger(p: Record<string, any>): { staggerMinSec: number; staggerMaxSec: number } {
     const staggerMinSec = p.staggerMinSec ?? 30;
@@ -100,6 +107,7 @@ function validatePost(p: Record<string, any>, env: StartParamsEnv): StartParams 
         kind: 'post', mode: p.mode, text,
         mediaPaths: readMediaPaths(p, env),
         comment: rawComment.trim() ? rawComment : null,
+        commentDelayMin: readCommentDelay(p),
         profiles: [...byProfile].map(([profileId, targets]) => ({ profileId, targets })),
         ...readDelays(p), concurrency: readConcurrency(p), ...readStagger(p),
     };

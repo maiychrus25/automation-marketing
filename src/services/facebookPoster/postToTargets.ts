@@ -369,6 +369,8 @@ interface SingleTargetOutcome {
   commentStatus?: CommentStatus;
   /** Danh tính đọc được từ lời mời soạn bài ('' nếu không đọc được). */
   identity: string;
+  /** Thời gian đã chờ trước khi bình luận (ms), để trừ vào khoảng nghỉ kế tiếp. */
+  waitedMs?: number;
 }
 
 /**
@@ -402,7 +404,7 @@ async function postToSingleTarget(
   page: Page,
   ctx: BrowserContext,
   target: { url: string; kind: 'group' | 'page' },
-  { text, mediaPaths, comment }: { text: string; mediaPaths: string[]; comment: string | null },
+  { text, mediaPaths, comment, commentDelayMin = 0 }: { text: string; mediaPaths: string[]; comment: string | null; commentDelayMin?: number },
   deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog'> & { attachShortfall?: () => boolean },
 ): Promise<SingleTargetOutcome> {
   const { url, kind } = target;
@@ -679,12 +681,26 @@ async function postToSingleTarget(
   // Bình luận SAU khi bài đã lên, và KHÔNG bao giờ làm hỏng kết quả đăng: bài
   // đã nằm trên nhóm rồi, báo hỏng ở đây sẽ khiến người dùng đăng lại và thành
   // hai bài trùng. postFirstComment tự nuốt mọi lỗi và trả trạng thái.
+  // Bình luận sau X phút: chờ ở đây (kiểm Huỷ từng giây); nơi gọi trừ thời gian này vào khoảng nghỉ kế tiếp.
+  let waitedMs = 0;
+  if (commentDelayMin > 0 && postUrl && String(comment ?? '').trim()) {
+    sendLog(`[${kind}] Chờ ${commentDelayMin} phút rồi bình luận...`, 'info');
+    const total = commentDelayMin * 60_000;
+    while (waitedMs < total && !getIsStopping()) {
+      const step = Math.min(1000, total - waitedMs);
+      await delayRandom(step, step);
+      waitedMs += step;
+    }
+    if (getIsStopping()) {
+      return { ok: true, postUrl, commentStatus: 'failed', identity, waitedMs };
+    }
+  }
   const outcome = await postFirstComment(page, { postUrl, comment, text }, { sendLog, getIsStopping });
   if (outcome.status !== 'not_requested' && outcome.status !== 'posted') {
     sendLog(`[${kind}] Bình luận chưa vào được (${url}): ${outcome.reason}`, 'warning');
   }
 
-  return { ok: true, postUrl, commentStatus: outcome.status, identity };
+  return { ok: true, postUrl, commentStatus: outcome.status, identity, waitedMs };
 }
 
 export interface PostTargetResult {
@@ -702,6 +718,8 @@ export interface PostInput {
   /** Rỗng/thiếu = không đính kèm. Thứ tự là thứ tự ảnh trong bài. */
   mediaPaths?: string[];
   comment?: string | null;
+  /** Bình luận sau X phút kể từ lúc bài lên (0 = ngay). */
+  commentDelayMin?: number;
   targets: string[];
   /** Giây nghỉ tối thiểu giữa hai đích. */
   minDelay?: number;
@@ -713,7 +731,7 @@ export async function postToTargets(
   input: PostInput,
   deps: TaskDeps & { onResult?: (result: PostTargetResult) => void },
 ): Promise<{ posted: number; failed: number; results: PostTargetResult[] }> {
-  const { text, mediaPaths, comment = null, targets, minDelay = 30, maxDelay = 60 } = (input || {}) as Partial<PostInput>;
+  const { text, mediaPaths, comment = null, commentDelayMin = 0, targets, minDelay = 30, maxDelay = 60 } = (input || {}) as Partial<PostInput>;
   const files = Array.isArray(mediaPaths) ? mediaPaths : [];
   const { getIsStopping, sendLog, updateProgress, onResult } = deps;
 
@@ -773,15 +791,17 @@ export async function postToTargets(
       // để báo, và lịch sử không được ghi thành "hỏng".
       let commentStatus: CommentStatus = 'not_requested';
       let identity = '';
+      let waitedMs = 0;
       chooserShortfall = false;
       try {
-        const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment },
+        const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment, commentDelayMin },
           { getIsStopping, sendLog, attachShortfall: () => chooserShortfall });
         // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
         // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
         ok = single.ok;
         postUrl = single.postUrl;
         identity = single.identity;
+        waitedMs = single.waitedMs ?? 0;
         if (single.commentStatus) commentStatus = single.commentStatus;
       } catch (err) {
         error = (err as Error).message;
@@ -799,7 +819,8 @@ export async function postToTargets(
       }
 
       if (current < normalized.length && !getIsStopping()) {
-        const secs = pickDelaySeconds(minDelay, maxDelay);
+        // Thời gian đã chờ để bình luận tính luôn vào khoảng nghỉ.
+        const secs = Math.max(0, pickDelaySeconds(minDelay, maxDelay) - Math.round(waitedMs / 1000));
         sendLog(`Nghỉ ${secs} giây trước bài viết tiếp theo...`, 'info');
         await delayRandom(secs * 1000, secs * 1000);
       }

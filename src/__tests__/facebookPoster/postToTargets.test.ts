@@ -1171,3 +1171,43 @@ test('first upload-state read happens only after the settle wait (4000 + 1000*(n
     assert.ok(firstRead >= 4000 + 1000 * (n - 1), `n=${n}: first read at ${firstRead} ms`);
   }
 });
+
+// Bình luận sau X phút (phương án A, duyệt 2026-10-10): đăng xong chờ X phút mới bình luận; thời gian chờ trừ vào
+// khoảng nghỉ trước đích kế tiếp để lần chạy không dài thêm.
+const GROUP_POST_BODY = '{"data":{"story_create":{"story":{"post_id":"123456","id":"abc"}}}}';
+function timedLogs() {
+  const logs: { at: number; msg: string }[] = [];
+  return { logs, sendLog: (msg: string) => { logs.push({ at: Date.now(), msg }); } };
+}
+
+test('commentDelayMin: chờ đủ X phút sau khi đăng rồi mới bình luận, và trừ vào khoảng nghỉ', async () => {
+  const ctx = loggedInCtx([]);
+  const page = pageSuccessful({ graphqlBody: GROUP_POST_BODY });
+  const { logs, sendLog } = timedLogs();
+  await runWithFakeTimers(() => postToTargets(
+    { text: 'nội dung', comment: 'cmt', commentDelayMin: 5, targets: ['https://www.facebook.com/groups/777/', 'https://www.facebook.com/groups/888/'], minDelay: 600, maxDelay: 600 },
+    makeDeps(ctx, page, { sendLog }),
+  ));
+  const posted = logs.find((l) => l.msg.includes('[SUCCESS]'))!;
+  const commented = logs.find((l) => l.msg.startsWith('[Bình luận]'))!;
+  assert.ok(logs.some((l) => l.msg.includes('Chờ 5 phút rồi bình luận')), 'phải báo đang chờ');
+  assert.ok(commented && commented.at - posted.at >= 5 * 60_000, `bình luận sau ${(commented?.at - posted.at) / 1000}s, cần ≥ 300s`);
+  assert.ok(logs.some((l) => l.msg.includes('Nghỉ 300 giây trước bài viết tiếp theo')), 'khoảng nghỉ 600s phải trừ 300s đã chờ');
+});
+
+test('commentDelayMin: bấm Huỷ trong lúc chờ thì không bình luận', async () => {
+  const ctx = loggedInCtx([]);
+  const page = pageSuccessful({ graphqlBody: GROUP_POST_BODY });
+  const { logs, sendLog } = timedLogs();
+  let stopping = false;
+  const ra = await runWithFakeTimers(() => postToTargets(
+    { text: 'nội dung', comment: 'cmt', commentDelayMin: 10, targets: ['https://www.facebook.com/groups/777/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(ctx, page, {
+      sendLog: (msg: string) => { sendLog(msg); if (msg.includes('Chờ 10 phút')) setTimeout(() => { stopping = true; }, 60_000); },
+      getIsStopping: () => stopping,
+    }),
+  ));
+  assert.strictEqual(ra.results[0].ok, true, 'bài đã đăng thì vẫn là thành công');
+  assert.strictEqual(ra.results[0].commentStatus, 'failed');
+  assert.ok(!logs.some((l) => l.msg.startsWith('[Bình luận]')), 'không được mở bài để bình luận sau khi huỷ');
+});
