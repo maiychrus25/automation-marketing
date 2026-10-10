@@ -1,4 +1,4 @@
-import { validateStartParams } from '../../services/facebookPoster/validateStartParams';
+import { validateStartParams, validateDraftParams } from '../../services/facebookPoster/validateStartParams';
 
 const env = {
   profileExists: (id: string) => id === 'p1' || id === 'p2',
@@ -239,5 +239,20 @@ describe('validateStartParams: collect_comments', () => {
       fails(collect({ postUrls: [bad] }), `Link bài không hợp lệ: ${bad}`);
     }
     expect((validateStartParams(collect({ postUrls: ['https://m.facebook.com/p/1'] }), env) as any).postUrls).toEqual(['https://m.facebook.com/p/1']);
+  });
+});
+
+describe('validateDraftParams', () => {
+  test('chỉ bắt buộc nội dung; profile, nhóm, ảnh được thiếu', () => {
+    expect(validateDraftParams({ mode: 'group', text: 'hi' }, env)).toMatchObject({ mode: 'group', text: 'hi', mediaPaths: [], profiles: [] });
+  });
+  test('giữ profile và đích thô để duyệt sau, bỏ mục không hợp lệ và dòng trống', () => {
+    const out = validateDraftParams({ mode: 'group', text: 'hi', profiles: [{ profileId: 'p1', targets: ['123', '  '] }, { nope: 1 }] }, env);
+    expect(out.profiles).toEqual([{ profileId: 'p1', targets: ['123'] }]);
+  });
+  test('vẫn chặn nội dung rỗng, chế độ sai, ảnh không tồn tại', () => {
+    expect(() => validateDraftParams({ mode: 'group', text: ' ' }, env)).toThrow('Nội dung bài không được để trống');
+    expect(() => validateDraftParams({ mode: 'x', text: 'hi' }, env)).toThrow('Chế độ đăng không hợp lệ');
+    expect(() => validateDraftParams({ mode: 'group', text: 'hi', mediaPaths: ['/missing.jpg'] }, env)).toThrow('Không tìm thấy tệp ảnh/video');
   });
 });
