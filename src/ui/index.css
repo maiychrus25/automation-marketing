@@ -1160,6 +1160,8 @@ html[data-theme="light"] .hover\:bg-white\/20:hover  { background-color: rgba(24
   --poster-primary: #612bd3;
   --poster-primary-hover: #5421bf;
   --poster-highlight: #ab24b0;
+  --poster-draft: #b45309;
+  --poster-on-draft: #ffffff;
   --poster-focus-bg: #ebe8ff;
   --poster-focus-text: #3900b2;
   --poster-hover: #f4f6f8;
@@ -1177,6 +1179,8 @@ html[data-theme="dark"] {
   --poster-text: #ffffff;
   --poster-muted: #9c9c9c;
   --poster-highlight: #fc69ff;
+  --poster-draft: #f5a524;
+  --poster-on-draft: #0e0e0e;
   --poster-focus-bg: #ffffff;
   --poster-focus-text: #1a1919;
   --poster-hover: #201f1f;
@@ -1283,6 +1287,10 @@ html[data-theme="dark"] :is(.poster-workspace, .poster-dialog) {
 .poster-calendar-post:hover { border-color: var(--poster-primary); }
 .poster-post-time { width: 100%; padding: 3px 6px; font-size: 10px; background: var(--poster-primary); color: var(--poster-on-primary); }
 .poster-calendar-post.is-paused .poster-post-time { background: var(--poster-comment); color: var(--poster-muted); }
+.poster-calendar-post.is-draft { border-style: dashed; border-color: var(--poster-draft); }
+.poster-calendar-post.is-draft .poster-post-time { background: var(--poster-draft); color: var(--poster-on-draft); }
+.poster-draft-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 20px; }
+.poster-draft-strip .poster-calendar-post { width: auto; max-width: 220px; }
 .poster-post-title { font-size: 12px; padding: 6px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .poster-post-channel { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--poster-muted); padding: 0 6px 6px; min-width: 0; }
 .poster-mini-avatar { width: 20px; height: 20px; display: flex; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 6px; background: var(--poster-comment); }

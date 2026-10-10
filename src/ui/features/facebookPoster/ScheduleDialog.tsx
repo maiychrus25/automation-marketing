@@ -31,9 +31,11 @@ interface Props {
   schedule?: FbPosterScheduleView;
   onSaved?: () => void;
   initialRunAt?: number;
+  /** Duyệt nháp: lưu bằng draftApprove thay vì tạo/sửa lịch. */
+  approveDraftId?: string;
 }
 
-export default function ScheduleDialog({ onClose, buildParams, defaultName = '', schedule, onSaved, initialRunAt }: Props) {
+export default function ScheduleDialog({ onClose, buildParams, defaultName = '', schedule, onSaved, initialRunAt, approveDraftId }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const edit = !!schedule;
   const [name, setName] = useState(schedule?.name ?? '');
@@ -63,7 +65,12 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
     setError('');
     try {
       let res;
-      if (schedule) {
+      if (approveDraftId) {
+        res = await ipc.facebookPoster?.draftApprove({
+          id: approveDraftId, when: 'schedule', kind,
+          ...(kind === 'once' ? { runAt: runAt as number } : { days, time }),
+        });
+      } else if (schedule) {
         // Send only what changed, so a rename never recomputes the next run.
         const patch: { id: string; name?: string; runAt?: number; days?: number[]; time?: string } = { id: schedule.id };
         if (name.trim() !== schedule.name) patch.name = name.trim();
@@ -101,13 +108,15 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
 
   return (
       <dialog ref={dialogRef} aria-labelledby="schedule-dialog-title" className="poster-dialog poster-schedule-dialog space-y-3" onCancel={e => { e.preventDefault(); e.stopPropagation(); onClose(); }}>
-        <h2 id="schedule-dialog-title" className="text-base font-semibold text-white">{edit ? 'Sửa giờ' : 'Lên lịch đăng'}</h2>
+        <h2 id="schedule-dialog-title" className="text-base font-semibold text-white">{approveDraftId ? 'Duyệt & hẹn giờ' : edit ? 'Sửa giờ' : 'Lên lịch đăng'}</h2>
 
-        <label className="block text-xs text-gray-400">
-          Tên lịch
-          <input ref={nameRef} className="input-field text-sm w-full mt-1 focus-visible:ring-2 focus-visible:ring-blue-500" maxLength={100} value={name}
-            placeholder={defaultName.slice(0, 40)} onChange={(e) => setName(e.target.value)} />
-        </label>
+        {!approveDraftId && (
+          <label className="block text-xs text-gray-400">
+            Tên lịch
+            <input ref={nameRef} className="input-field text-sm w-full mt-1 focus-visible:ring-2 focus-visible:ring-blue-500" maxLength={100} value={name}
+              placeholder={defaultName.slice(0, 40)} onChange={(e) => setName(e.target.value)} />
+          </label>
+        )}
 
         {!edit && (
           <div role="radiogroup" aria-label="Kiểu lịch" className="flex gap-4">

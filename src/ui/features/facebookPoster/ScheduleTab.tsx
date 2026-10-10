@@ -7,7 +7,7 @@ import { describeRecurrence } from '../../../services/facebookPoster/scheduleTim
 import ScheduleDialog, { formatShort } from './ScheduleDialog';
 import PostPreview from './PostPreview';
 import { STATUS_LABEL } from './HistoryTab';
-import { buildMovePatch, canDragSchedule, getCalendarDays, getScheduleOccurrences, type CalendarView, type ScheduleOccurrence } from './calendarModel';
+import { buildMovePatch, canDragSchedule, getCalendarDays, getScheduleOccurrences, getUnscheduledDrafts, matchesChannels, type CalendarView, type ScheduleOccurrence } from './calendarModel';
 import type { FbPosterScheduleView } from '../../../models/facebookPoster';
 
 interface Props {
@@ -20,7 +20,7 @@ interface Props {
 const dayKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 const dateLabel = (date: Date) => date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
 const clock = (at: number) => new Date(at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
-const LABELS: Record<string, string> = { scheduled: 'Đã hẹn', paused: 'Tạm dừng', queued: 'Đang chờ', ...Object.fromEntries(Object.entries(STATUS_LABEL).map(([key, value]) => [key, value.label])) };
+const LABELS: Record<string, string> = { draft: 'Nháp', scheduled: 'Đã hẹn', paused: 'Tạm dừng', queued: 'Đang chờ', ...Object.fromEntries(Object.entries(STATUS_LABEL).map(([key, value]) => [key, value.label])) };
 
 export default function ScheduleTab({ selectedChannels, profileNames, onCompose, onOpenHistory, onEditDraft }: Props) {
   const showNotification = useAppStore(s => s.showNotification);
@@ -29,6 +29,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<FbPosterScheduleView | null>(null);
+  const [approving, setApproving] = useState<FbPosterScheduleView | null>(null);
   const [detail, setDetail] = useState<ScheduleOccurrence | null>(null);
   const [view, setView] = useState<CalendarView>('week');
   const [anchor, setAnchor] = useState(new Date());
@@ -76,7 +77,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
 
   const days = useMemo(() => getCalendarDays(anchor, view), [anchor, view]);
   const entries = useMemo(() => getScheduleOccurrences(schedules, days, selectedChannels, now, queued), [schedules, days, selectedChannels, now, queued]);
-  const status = (entry: ScheduleOccurrence) => entry.historical ? entry.schedule.lastRun?.status || 'done'
+  const status = (entry: ScheduleOccurrence) => entry.schedule.draft ? 'draft' : entry.historical ? entry.schedule.lastRun?.status || 'done'
     : !entry.schedule.enabled ? 'paused' : entry.queued ? 'queued' : 'scheduled';
   const shownEntries = entries.filter(entry => stateFilter === 'all' || status(entry) === stateFilter);
   const entriesBySlot = new Map<string, ScheduleOccurrence[]>();
@@ -109,6 +110,23 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
       setDetail(null);
     } catch (error) { showNotification(error instanceof Error ? error.message : 'Không xoá được lịch', 'error'); }
     finally { setSaving(false); load(); }
+  };
+  const approveNow = async (schedule: FbPosterScheduleView) => {
+    const ok = await showConfirm({ title: 'Đăng ngay bản nháp?', message: `Bài "${schedule.name}" sẽ được đăng ngay khi không còn việc nào đang chạy.`, confirmText: 'Đăng ngay' });
+    if (!ok) return;
+    setSaving(true);
+    setOperationError('');
+    try {
+      const res = await ipc.facebookPoster?.draftApprove({ id: schedule.id, when: 'now' });
+      if (!res?.success) throw new Error(res?.error || 'Không duyệt được nháp');
+      showNotification('Đã duyệt — bài sẽ được đăng ngay', 'success');
+      closeDetail();
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Không duyệt được nháp');
+    } finally {
+      setSaving(false);
+      load();
+    }
   };
   const closeDetail = () => { detailRef.current?.close(); setDetail(null); };
   const move = async (date: Date, hour?: number) => {
@@ -148,11 +166,11 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
         {(entriesBySlot.get(key) || []).map(entry => {
           const profiles = (entry.schedule.params.profiles || []) as { profileId: string; targets: string[] }[];
           const state = status(entry);
-          const draggable = !saving && !entry.historical && canDragSchedule(entry.schedule) && entry.schedule.enabled && entry.at >= now + 60_000 && !entry.queued;
+          const draggable = !saving && !entry.historical && canDragSchedule(entry.schedule) && (entry.schedule.enabled || entry.schedule.draft) && entry.at >= now + 60_000 && !entry.queued;
           return <button key={`${entry.schedule.id}:${entry.at}`} type="button" className={`poster-calendar-post is-${state}`} draggable={draggable}
             onDragStart={event => { dragging.current = entry; event.dataTransfer.setData('text/plain', entry.schedule.id); event.dataTransfer.effectAllowed = 'move'; }} onDragEnd={() => { dragging.current = null; }}
             onClick={() => { setOperationError(''); setDetail(entry); }} aria-label={`${entry.schedule.name}, ${formatShort(entry.at)}, ${LABELS[state]}`}>
-            <span className="poster-post-time">{clock(entry.at)} · {LABELS[state]}</span>
+            <span className="poster-post-time">{clock(entry.at)} · {entry.schedule.draft && entry.at < now ? 'Quá giờ dự kiến' : LABELS[state]}</span>
             <span className="poster-post-title">{entry.schedule.name}</span>
             <span className="poster-post-channel"><span className="poster-mini-avatar" aria-hidden="true">{(profileNames.get(profiles[0]?.profileId) || '?').slice(0, 1)}</span>
               <span className="truncate">{profileNames.get(profiles[0]?.profileId) || 'Profile đã xoá'}{profiles.length > 1 ? ` +${profiles.length - 1}` : ''}</span>
@@ -166,10 +184,11 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
   };
 
   const visibleSchedules = schedules.filter(schedule => {
-    const channelMatches = selectedChannels === null || ((schedule.params.profiles || []) as { profileId: string }[]).some(profile => selectedChannels.includes(profile.profileId));
+    const channelMatches = matchesChannels(schedule, selectedChannels);
     const state = status({ schedule, at: schedule.runAt ?? now, historical: schedule.kind === 'once' && !!schedule.lastRun && schedule.nextRunAt === null && !queued.has(schedule.id), queued: queued.has(schedule.id) });
     return channelMatches && (stateFilter === 'all' || stateFilter === state);
   });
+  const unscheduledDrafts = getUnscheduledDrafts(schedules, selectedChannels).filter(() => stateFilter === 'all' || stateFilter === 'draft');
   return (
     <section className="poster-calendar" aria-label="Lịch đăng bài">
       <div className="poster-calendar-filters">
@@ -178,7 +197,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
           <button className="poster-icon-button" aria-label="Khoảng tiếp theo" onClick={() => navigate(1)}>›</button></div>
         <button className="poster-button" onClick={() => setAnchor(new Date())}>Hôm nay</button>
         <select className="poster-input poster-state-filter" aria-label="Lọc trạng thái lịch" value={stateFilter} onChange={event => setStateFilter(event.target.value)}>
-          <option value="all">Tất cả trạng thái</option>{['scheduled', 'queued', 'paused', 'done', 'failed', 'missed', 'cancelled', 'running'].map(state => <option key={state} value={state}>{LABELS[state]}</option>)}
+          <option value="all">Tất cả trạng thái</option>{['draft', 'scheduled', 'queued', 'paused', 'done', 'failed', 'missed', 'cancelled', 'running'].map(state => <option key={state} value={state}>{LABELS[state]}</option>)}
         </select>
         <div className="poster-view-switch" aria-label="Chế độ lịch">{(['day', 'week', 'month'] as const).map(value => <button key={value} aria-pressed={!listView && view === value} onClick={() => { setView(value); setListView(false); }}>{value === 'day' ? 'Ngày' : value === 'week' ? 'Tuần' : 'Tháng'}</button>)}</div>
         <button className="poster-button" aria-pressed={listView} onClick={() => setListView(value => !value)}>Danh sách</button>
@@ -188,12 +207,23 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
         : listView ? <div className="poster-schedule-list">
           {visibleSchedules.length === 0 && <p className="poster-empty">Chưa có lịch đăng phù hợp. Bấm Soạn bài để hẹn giờ.</p>}
           {visibleSchedules.map(schedule => <article key={schedule.id} className="poster-schedule-row">
-            <div className="min-w-0 flex-1"><h3 className="font-semibold truncate" title={schedule.name}>{schedule.name}</h3><p className="poster-muted text-xs mt-1">{schedule.kind === 'once' ? 'Một lần' : describeRecurrence(schedule.days, schedule.time)} · {schedule.nextRunAt ? formatShort(schedule.nextRunAt) : 'Không có lần chạy tới'}{queued.has(schedule.id) ? ' · Đang chờ' : ''}</p>
+            <div className="min-w-0 flex-1"><h3 className="font-semibold truncate" title={schedule.name}>{schedule.name}</h3><p className="poster-muted text-xs mt-1">{schedule.draft ? `Nháp · ${schedule.runAt ? 'Dự kiến ' + formatShort(schedule.runAt) : 'Chưa xếp lịch'}` : <>{schedule.kind === 'once' ? 'Một lần' : describeRecurrence(schedule.days, schedule.time)} · {schedule.nextRunAt ? formatShort(schedule.nextRunAt) : 'Không có lần chạy tới'}{queued.has(schedule.id) ? ' · Đang chờ' : ''}</>}</p>
               {schedule.lastRun && <button onClick={onOpenHistory} className="poster-link text-xs mt-1">Lần gần nhất: {STATUS_LABEL[schedule.lastRun.status]?.label} · {formatShort(schedule.lastRun.startedAt)}</button>}</div>
-            <div className="flex flex-wrap gap-2 items-center"><button className="poster-button" aria-label={`${schedule.enabled ? 'Tạm dừng' : 'Bật lại'} lịch ${schedule.name}`} disabled={saving} onClick={() => toggle(schedule)}>{schedule.enabled ? 'Tạm dừng' : 'Bật lại'}</button>
-              <button className="poster-button" onClick={() => setEditing(schedule)}>Sửa giờ</button><button className="poster-button text-red-400" disabled={saving} onClick={() => remove(schedule)}>Xoá</button></div>
+            {schedule.draft ? <div className="flex flex-wrap gap-2 items-center">
+              <button className="poster-button" onClick={() => onEditDraft(schedule.id)}>Sửa</button>
+              <button className="poster-primary" disabled={saving} onClick={() => setApproving(schedule)}>Duyệt & hẹn giờ</button>
+              <button className="poster-button text-red-400" disabled={saving} onClick={() => remove(schedule)}>Xoá</button>
+            </div> : <div className="flex flex-wrap gap-2 items-center"><button className="poster-button" aria-label={`${schedule.enabled ? 'Tạm dừng' : 'Bật lại'} lịch ${schedule.name}`} disabled={saving} onClick={() => toggle(schedule)}>{schedule.enabled ? 'Tạm dừng' : 'Bật lại'}</button>
+              <button className="poster-button" onClick={() => setEditing(schedule)}>Sửa giờ</button><button className="poster-button text-red-400" disabled={saving} onClick={() => remove(schedule)}>Xoá</button></div>}
           </article>)}
         </div> : <>
+          {unscheduledDrafts.length > 0 && <div className="poster-draft-strip" aria-label="Nháp chưa xếp lịch">
+            <span className="poster-muted text-xs">Nháp chưa xếp lịch</span>
+            {unscheduledDrafts.map(s => <button key={s.id} type="button" className="poster-calendar-post is-draft"
+              onClick={() => { setOperationError(''); setDetail({ schedule: s, at: now, historical: false }); }} aria-label={`${s.name}, nháp chưa xếp lịch`}>
+              <span className="poster-post-time">Nháp</span><span className="poster-post-title">{s.name}</span>
+            </button>)}
+          </div>}
           <div ref={scrollRef} className="poster-calendar-scroll" tabIndex={0} aria-label="Lưới lịch có thể cuộn">
             <div className={`poster-calendar-grid is-${view}`}>
               {view !== 'month' && <div className="poster-day-header poster-muted">Giờ</div>}
@@ -207,15 +237,21 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
         </>}
       {saving && <p className="poster-muted text-xs px-5 py-2" role="status">Đang cập nhật lịch…</p>}
       {editing && <ScheduleDialog schedule={editing} onClose={() => setEditing(null)} onSaved={load} />}
+      {approving && <ScheduleDialog approveDraftId={approving.id} defaultName={approving.name} initialRunAt={approving.runAt ?? undefined} onClose={() => setApproving(null)} onSaved={load} />}
       {detail && <dialog ref={detailRef} className="poster-dialog poster-detail-dialog" aria-labelledby="poster-detail-title" onCancel={event => { event.preventDefault(); closeDetail(); }}>
         <header className="poster-dialog-header"><h2 id="poster-detail-title" className="break-words min-w-0">{detail.schedule.name}</h2><button className="poster-icon-button shrink-0" aria-label="Đóng chi tiết bài" onClick={closeDetail}>✕</button></header>
-        <div className="p-5 space-y-4"><p className="poster-muted">{formatShort(detail.at)} · {LABELS[status(detail)]}</p>
+        <div className="p-5 space-y-4"><p className="poster-muted">{detail.schedule.draft && detail.schedule.runAt === null ? 'Chưa xếp lịch' : formatShort(detail.at)} · {LABELS[status(detail)]}</p>
           {(operationError || error) && <p role="alert" className="text-red-400 text-sm break-words">{operationError || error}</p>}
           <PostPreview text={String(detail.schedule.params.text || '')} comment={String(detail.schedule.params.comment || '')} mediaPaths={[]} mode={detail.schedule.params.mode === 'page' ? 'page' : 'group'} names={((detail.schedule.params.profiles || []) as { profileId: string }[]).map(profile => profileNames.get(profile.profileId) || profile.profileId)} />
           {Array.isArray(detail.schedule.params.mediaPaths) && detail.schedule.params.mediaPaths.length > 0 && <p className="poster-muted text-xs break-words">Tệp đính kèm đã lưu: {detail.schedule.params.mediaPaths.join(', ')}</p>}
-          <div className="flex flex-wrap gap-2"><button className="poster-button" disabled={saving} onClick={() => toggle(detail.schedule)}>{detail.schedule.enabled ? 'Tạm dừng lịch' : 'Bật lịch'}</button>
+          {detail.schedule.draft ? <div className="flex flex-wrap gap-2">
+            <button className="poster-button" onClick={() => { const id = detail.schedule.id; closeDetail(); onEditDraft(id); }}>Sửa</button>
+            <button className="poster-primary" disabled={saving} onClick={() => { setApproving(detail.schedule); closeDetail(); }}>Duyệt & hẹn giờ</button>
+            <button className="poster-button" disabled={saving} onClick={() => void approveNow(detail.schedule)}>Đăng ngay</button>
+            <button className="poster-button text-red-400" disabled={saving} onClick={() => { const schedule = detail.schedule; closeDetail(); void remove(schedule); }}>Xoá</button>
+          </div> : <div className="flex flex-wrap gap-2"><button className="poster-button" disabled={saving} onClick={() => toggle(detail.schedule)}>{detail.schedule.enabled ? 'Tạm dừng lịch' : 'Bật lịch'}</button>
             <button className="poster-primary" onClick={() => { setEditing(detail.schedule); closeDetail(); }}>Sửa giờ</button><button className="poster-button" onClick={() => { closeDetail(); onOpenHistory(); }}>Lịch sử</button>
-            <button className="poster-button text-red-400" disabled={saving} onClick={() => { const schedule = detail.schedule; closeDetail(); void remove(schedule); }}>Xoá lịch</button></div>
+            <button className="poster-button text-red-400" disabled={saving} onClick={() => { const schedule = detail.schedule; closeDetail(); void remove(schedule); }}>Xoá lịch</button></div>}
         </div>
       </dialog>}
     </section>
