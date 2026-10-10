@@ -1,5 +1,5 @@
 process.env.TZ = 'Asia/Ho_Chi_Minh';
-import { getCalendarDays, getScheduleOccurrences, buildMovePatch, canDragSchedule } from '../../ui/features/facebookPoster/calendarModel';
+import { getCalendarDays, getScheduleOccurrences, buildMovePatch, canDragSchedule, matchesChannels, getUnscheduledDrafts } from '../../ui/features/facebookPoster/calendarModel';
 import type { FbPosterScheduleView } from '../../models/facebookPoster';
 
 const at = (day: number, hour = 0, minute = 0) => new Date(2026, 9, day, hour, minute).getTime();
@@ -71,5 +71,16 @@ describe('poster calendar', () => {
     const future = getScheduleOccurrences([s], getCalendarDays(new Date(at(19)), 'week'), null, at(12, 9, 1), new Set(['s1']));
     expect(future).toHaveLength(1);
     expect(future[0].queued).toBeFalsy();
+  });
+
+  it('drafts without a profile stay visible under a channel filter; unscheduled drafts are listed separately', () => {
+    const planned = schedule({ id: 'p', draft: true, enabled: false, nextRunAt: null, runAt: at(13, 9), params: { profiles: [] } });
+    const loose = schedule({ id: 'u', draft: true, enabled: false, nextRunAt: null, runAt: null, params: { profiles: [] } });
+    const other = schedule({ id: 'o', params: { profiles: [{ profileId: 'pX', targets: [] }] } });
+    const days = getCalendarDays(new Date(at(13)), 'week');
+    expect(getScheduleOccurrences([planned, loose, other], days, ['p1'], at(12)).map((e) => e.schedule.id)).toEqual(['p']);
+    expect(getUnscheduledDrafts([planned, loose, other], ['p1']).map((s) => s.id)).toEqual(['u']);
+    expect(matchesChannels(other, ['p1'])).toBe(false);
+    expect(matchesChannels(other, null)).toBe(true);
   });
 });

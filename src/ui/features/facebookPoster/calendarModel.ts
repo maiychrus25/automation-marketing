@@ -13,6 +13,19 @@ export function getCalendarDays(anchor: Date, view: CalendarView): Date[] {
   return days;
 }
 
+/** Kênh khớp bộ lọc. Nháp chưa chọn profile hiện ở mọi bộ lọc kênh, để không "biến mất" khỏi lịch. */
+export function matchesChannels(schedule: FbPosterScheduleView, selected: string[] | null): boolean {
+  if (selected === null) return true;
+  const profiles = (schedule.params.profiles ?? []) as { profileId: string }[];
+  if (schedule.draft && profiles.length === 0) return true;
+  return profiles.some((p) => selected.includes(p.profileId));
+}
+
+/** Nháp chưa có giờ dự kiến — hiện ở dải "Nháp chưa xếp lịch". */
+export function getUnscheduledDrafts(schedules: FbPosterScheduleView[], selected: string[] | null): FbPosterScheduleView[] {
+  return schedules.filter((s) => s.draft && s.runAt === null && matchesChannels(s, selected));
+}
+
 export function getScheduleOccurrences(
   schedules: FbPosterScheduleView[], days: Date[], selected: string[] | null, now: number, queued: ReadonlySet<string> = new Set(),
 ): ScheduleOccurrence[] {
@@ -25,8 +38,7 @@ export function getScheduleOccurrences(
     if (at !== null && at >= start && at < end.getTime()) entries.push({ schedule, at, historical, queued: pending });
   };
   for (const schedule of schedules) {
-    const profiles = (schedule.params.profiles ?? []) as { profileId: string }[];
-    if (selected !== null && !profiles.some(p => selected.includes(p.profileId))) continue;
+    if (!matchesChannels(schedule, selected)) continue;
     if (schedule.kind === 'once') {
       add(schedule, schedule.runAt, !!schedule.lastRun && schedule.nextRunAt === null && !queued.has(schedule.id), queued.has(schedule.id));
       continue;
