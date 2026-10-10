@@ -15,6 +15,41 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.16.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🗓️ Trang Đăng Facebook làm lại theo kiểu Postiz: lịch là trung tâm, bản nháp và luồng duyệt',
+      '💬 Bình luận đầu chạy được cho cả Trang và nhóm, hẹn được "bình luận sau X phút"',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Lịch đăng ngày/tuần/tháng: kéo-thả để dời giờ, bấm ＋ ở ô giờ để soạn bài, vạch "bây giờ" chạy ngang lưới',
+          'Lịch đăng, Tham gia nhóm, Thu bình luận, Lịch sử thành mục con của "Đăng Facebook" ở thanh bên',
+          'Soạn bài có xem trước kiểu Facebook, kéo-thả ảnh/video vào ô soạn',
+          'Bản nháp: lưu nháp chỉ cần nội dung, nháp không bao giờ tự chạy; Duyệt & hẹn giờ hoặc Đăng ngay (có xác nhận) mới thành lịch thật',
+          'Bình luận sau 0–60 phút kể từ lúc bài lên; thời gian chờ tính vào khoảng nghỉ giữa các nhóm',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Đăng Trang từ trang chủ: lấy được link bài và bình luận đầu vào được (trước đây bỏ qua vì không có link)',
+          'Bài trong nhóm mở dạng "Bài viết của …": bình luận đầu không còn bị các nút của khung bình luận chặn',
+          'Linux: profile trình duyệt mở được trên Ubuntu mới (lỗi "No usable sandbox")',
+        ],
+      },
+      {
+        category: 'removed',
+        items: [
+          'Bỏ Trợ Lý AI (viết bài, trau chuốt, tạo ảnh, template thiệp) khỏi trang đăng bài',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.15.0',
     date: '10/2026',
     type: 'minor',
