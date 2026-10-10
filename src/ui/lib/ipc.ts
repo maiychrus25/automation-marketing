@@ -688,6 +688,9 @@ declare global {
         scheduleList:   () => Promise<{ success: boolean; schedules?: FbPosterScheduleView[]; queuedIds?: string[]; error?: string }>;
         scheduleUpdate: (params: { id: string; name?: string; enabled?: boolean; runAt?: number; days?: number[]; time?: string }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
         scheduleDelete: (id: string) => Promise<{ success: boolean; error?: string }>;
+        draftSave: (params: { id?: string; name?: string; plannedAt?: number | null; params: Record<string, unknown> }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
+        draftGet: (id: string) => Promise<{ success: boolean; draft?: FbPosterSchedule; media?: { path: string; size: number }[]; error?: string }>;
+        draftApprove: (params: { id: string; when: 'now' } | { id: string; when: 'schedule'; kind: 'once' | 'recurring'; runAt?: number; days?: number[]; time?: string }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
         takeMissed:     () => Promise<{ success: boolean; notices?: { scheduleId: string; name: string; reason: string; at: number }[]; error?: string }>;
       };
       erp: {
