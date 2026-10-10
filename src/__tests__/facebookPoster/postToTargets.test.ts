@@ -423,6 +423,35 @@ test('đích là Trang thì ghép link dạng /<slug>/posts/<id>', async () => {
   assert.strictEqual(ra.results[0].postUrl, 'https://www.facebook.com/cuahangabc/posts/999');
 });
 
+// Đo thật 2026-10-10: chế độ Trang đăng từ trang chủ (đích "https://www.facebook.com/", không có slug).
+// Facebook trả story.id base64 "S:_I<id người/Trang đăng>:<id bài>" — đủ ghép link; trước đây trả null nên
+// bình luận đầu bị bỏ (comment_status = no_post_url).
+test('đích là trang chủ: ghép link từ story.id base64 (id người đăng + id bài)', async () => {
+  const ctx = loggedInCtx([]);
+  const page = pageSuccessful({
+    graphqlBody: '{"data":{"story_create":{"story_id":null,"post_id":null,"publishing_flow":"FALLBACK","story":{"id":"UzpfSTYxNTkxNDAyOTc4NzI0OjEyMjEzNTgxOTUyMzM4MDA5OQ==","post_id":"122135819523380099"}}}}',
+  });
+  const ra = await runWithFakeTimers(() => postToTargets(
+    { text: 'nội dung', targets: ['https://www.facebook.com/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(ctx, page),
+  ));
+  assert.strictEqual(ra.results[0].ok, true);
+  assert.strictEqual(ra.results[0].postUrl, 'https://www.facebook.com/61591402978724/posts/122135819523380099');
+});
+
+// Đo thật 2026-10-10 14:48: đăng dưới danh tính Trang thì Facebook trả "story_id" base64 và "story":null.
+test('đích là trang chủ, đăng dưới tên Trang: ghép link từ "story_id" base64', async () => {
+  const ctx = loggedInCtx([]);
+  const page = pageSuccessful({
+    graphqlBody: '{"data":{"story_create":{"story_id":"UzpfSTEyNTQ3NDQwNDEwNTM5NTU6MTIyMTMxNDM1ODIxNDEzNzQz","post_id":"122131435821413743","publishing_flow":"ASYNC_SILENT","story":null,"feed_story_edge":null}}}',
+  });
+  const ra = await runWithFakeTimers(() => postToTargets(
+    { text: 'nội dung', targets: ['https://www.facebook.com/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(ctx, page),
+  ));
+  assert.strictEqual(ra.results[0].postUrl, 'https://www.facebook.com/1254744041053955/posts/122131435821413743');
+});
+
 // Đích profile.php: id nằm ở query (?id=...), bị cắt mất bởi split(/[?#]/)[0]
 // khi ghép slug. Ghép mù sẽ ra "facebook.com/profile.php/posts/N" — một URL
 // không tồn tại, nguồn gây quét nhầm bảng tin (xem test "bị chuyển hướng

@@ -65,8 +65,20 @@ function extractPostIdFromBody(text: unknown): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * story.id (hoặc story_id khi đăng dưới tên Trang) của mutation tạo bài là base64 "S:_I<id người/Trang đăng>:<id bài>". Cần khi đích không có slug
+ * (chế độ Trang đăng từ trang chủ "https://www.facebook.com/") — đo thật 2026-10-10.
+ */
+function extractStoryOwnerFromBody(text: unknown): { ownerId: string; postId: string } | null {
+  for (const m of String(text || '').matchAll(/"(?:id|story_id)":"([A-Za-z0-9+/]{16,}={0,2})"/g)) {
+    const story = Buffer.from(m[1], 'base64').toString('utf8').match(/^S:_I(\d+):(\d+)$/);
+    if (story) return { ownerId: story[1], postId: story[2] };
+  }
+  return null;
+}
+
 /** Ghép id bài thành link đầy đủ theo kiểu đích. */
-function buildPostUrl(target: { url: string }, postId: string | null): string | null {
+function buildPostUrl(target: { url: string }, postId: string | null, ownerId: string | null = null): string | null {
   if (!postId) return null;
   const g = String(target.url || '').match(/\/groups\/(\d+)/);
   if (g) return `https://www.facebook.com/groups/${g[1]}/posts/${postId}/`;
@@ -74,7 +86,7 @@ function buildPostUrl(target: { url: string }, postId: string | null): string | 
   // "profile.php" không phải slug thật — id nằm ở query (?id=...), bị cắt mất
   // ở dòng trên. Ghép ra "facebook.com/profile.php/posts/N" là một URL không
   // tồn tại, sẽ bị Facebook chuyển hướng đi nơi khác khi quét bình luận.
-  if (!slug || slug === 'profile.php') return null;
+  if (!slug || slug === 'profile.php') return ownerId ? `https://www.facebook.com/${ownerId}/posts/${postId}` : null;
   return `https://www.facebook.com/${slug}/posts/${postId}`;
 }
 
@@ -553,6 +565,7 @@ async function postToSingleTarget(
   // Nghe trong đúng cửa sổ từ lúc bấm Đăng đến lúc dialog đóng, rồi gỡ ngay
   // trong finally — để sống qua bài sau sẽ gán nhầm link của bài trước.
   let capturedId: string | null = null;
+  let capturedOwner: string | null = null;
   const listenToResponse = (response: Response) => {
     if (capturedId) return;
     if (!/\/api\/graphql/i.test(response.url())) return;
@@ -565,7 +578,9 @@ async function postToSingleTarget(
         // khác. Chỉ nhận phản hồi của mutation tạo bài — thà không có link
         // còn hơn lưu nhầm link bài người lạ rồi đi quét bình luận của họ.
         if (!/story_create|StoryCreate|create_story|"__typename":"Story"/i.test(body)) return;
-        capturedId = capturedId || extractPostIdFromBody(body);
+        const story = extractStoryOwnerFromBody(body);
+        capturedOwner = capturedOwner || story?.ownerId || null;
+        capturedId = capturedId || extractPostIdFromBody(body) || story?.postId || null;
       })
       .catch(() => {});
   };
@@ -650,7 +665,7 @@ async function postToSingleTarget(
   // gỡ (page.off) ở nhánh finally phía trên trước khi tới đây.
   await delayRandom(1500, 2500);
 
-  let postUrl = buildPostUrl({ url }, capturedId);
+  let postUrl = buildPostUrl({ url }, capturedId, capturedOwner);
   if (!postUrl) {
     postUrl = await findOwnPostUrl(page, ctx);
   }

@@ -6,6 +6,7 @@ import {
   postFirstComment,
   evaluatePostState,
   markCommentSendButtonInPage,
+  readPostStateInPage,
 } from '../../services/facebookPoster/firstComment';
 import { fakeLocators, runWithFakeTimers } from './helpers';
 
@@ -151,4 +152,33 @@ test('markCommentSendButtonInPage clears a stale mark even when no send button i
     assert.strictEqual(markCommentSendButtonInPage({ mark: 'data-maihub-comment-box', labels: ['Gửi'] }), false);
   } finally { g.document = old; }
   assert.ok(!('data-maihub-target' in stale.attrs), 'dấu cũ phải bị gỡ');
+});
+
+// Đo thật 2026-10-10: bài của Trang/cá nhân mở dạng hộp "Bài viết của …" — chữ bài CÓ trên trang nhưng không nằm
+// trong div[role="article"] nào (log: articles=2, inBody=true). Trước đây báo post_not_found và bỏ bình luận.
+function withFakePage(href: string, bodyText: string, commentTexts: string[], fn: () => void) {
+  const g = global as unknown as { document: unknown; location: unknown };
+  const old = { document: g.document, location: g.location };
+  const comments = commentTexts.map((t) => ({ innerText: t, getAttribute: () => 'Bình luận của Ai đó' }));
+  g.location = { href };
+  g.document = { body: { innerText: bodyText }, querySelectorAll: () => comments };
+  try { fn(); } finally { g.document = old.document; g.location = old.location; }
+}
+
+test('readPostStateInPage: bài Trang/cá nhân không nằm trong article nhưng có trên trang bài thì coi là thấy', () => {
+  withFakePage('https://www.facebook.com/61592412314280/posts/122131437117413743/', 'Bài viết của Media Soec\nhehe\nThích', [], () => {
+    assert.strictEqual(readPostStateInPage({ snippet: 'hehe', markers: [] }).found, true);
+  });
+});
+
+test('readPostStateInPage: chữ chỉ nằm trong bình luận trích lại thì KHÔNG coi là thấy bài', () => {
+  withFakePage('https://www.facebook.com/1/posts/2/', 'Bài viết\nAi đó: hehe', ['Ai đó: hehe'], () => {
+    assert.strictEqual(readPostStateInPage({ snippet: 'hehe', markers: [] }).found, false);
+  });
+});
+
+test('readPostStateInPage: bị chuyển hướng khỏi trang bài (về bảng tin) thì KHÔNG coi là thấy bài', () => {
+  withFakePage('https://www.facebook.com/', 'Bảng tin\nhehe', [], () => {
+    assert.strictEqual(readPostStateInPage({ snippet: 'hehe', markers: [] }).found, false);
+  });
 });

@@ -146,7 +146,7 @@ function commentTextVisibleInPage(snippet: string): boolean {
  * Trả về việc CÓ NHÌN THẤY nội dung bài hay không, và chữ trên trang có dấu
  * hiệu chờ duyệt hay không.
  */
-function readPostStateInPage({ snippet, markers }: { snippet: string; markers: string[] }): { found: boolean; pendingMarker: string | null } {
+export function readPostStateInPage({ snippet, markers }: { snippet: string; markers: string[] }): { found: boolean; pendingMarker: string | null } {
   const pageText = String((document.body && document.body.innerText) || '').toLowerCase();
   let found = false;
   if (snippet) {
@@ -157,6 +157,19 @@ function readPostStateInPage({ snippet, markers }: { snippet: string; markers: s
       if (/^(Bình luận|Phản hồi|Comment|Reply)/i.test(label)) continue;
       if (String((el as HTMLElement).innerText || '').includes(snippet)) { found = true; break; }
     }
+  }
+  // Bài của Trang/cá nhân mở dạng hộp "Bài viết của …": chữ bài có trên trang nhưng không nằm trong
+  // div[role="article"] nào (đo thật 2026-10-10). Chỉ nhận khi còn đứng ở trang bài (không bị chuyển về
+  // bảng tin) và chữ xuất hiện nhiều hơn số lần bị bình luận trích lại.
+  if (!found && snippet && /\/posts\/|story_fbid=|\/permalink|\/photo/.test(String(location.href))) {
+    const count = (t: string) => t.split(snippet).length - 1;
+    let inComments = 0;
+    for (const el of Array.from(document.querySelectorAll('div[role="article"]'))) {
+      if (/^(Bình luận|Phản hồi|Comment|Reply)/i.test(el.getAttribute('aria-label') || '')) {
+        inComments += count(String((el as HTMLElement).innerText || ''));
+      }
+    }
+    found = count(String((document.body && document.body.innerText) || '')) > inComments;
   }
   const pendingMarker = (markers || []).find(t => pageText.includes(String(t).toLowerCase())) || null;
   return { found, pendingMarker };
