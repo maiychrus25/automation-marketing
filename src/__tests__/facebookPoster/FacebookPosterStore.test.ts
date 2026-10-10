@@ -288,4 +288,34 @@ describe('schedules', () => {
     assert.deepStrictEqual(list[0].lastRun, { status: 'missed', startedAt: 9, error: 'lý do' });
     assert.strictEqual(list[1].lastRun, null);
   });
+  test('draft: mặc định false, ghi/đọc được; updateSchedule đổi kind/draft/params', () => {
+    const s = store();
+    s.createSchedule(newSchedule('a'));
+    assert.strictEqual(s.getSchedule('a')!.draft, false);
+    s.createSchedule(newSchedule('d', { kind: 'once', days: [], time: '', runAt: null, enabled: false, nextRunAt: null, draft: true }));
+    assert.strictEqual(s.getSchedule('d')!.draft, true);
+    s.updateSchedule('d', { draft: false, kind: 'recurring', params: { kind: 'post', text: 'mới' } }, 5);
+    const d = s.getSchedule('d')!;
+    assert.deepStrictEqual([d.draft, d.kind, d.params], [false, 'recurring', { kind: 'post', text: 'mới' }]);
+  });
+
+  test('listDueSchedules/nextScheduledAt bỏ qua nháp kể cả khi dữ liệu lệch (enabled = 1)', () => {
+    const s = store();
+    s.createSchedule(newSchedule('d', { nextRunAt: 10, draft: true }));
+    s.createSchedule(newSchedule('a', { nextRunAt: 20 }));
+    assert.deepStrictEqual(s.listDueSchedules(100).map((x) => x.id), ['a']);
+    assert.strictEqual(s.nextScheduledAt(), 20);
+  });
+
+  test('migration thêm cột draft cho bảng cũ chưa có cột', () => {
+    const db = memoryDb();
+    db.exec(`CREATE TABLE fb_poster_schedules (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+      params_json TEXT NOT NULL, run_at INTEGER DEFAULT NULL, days TEXT NOT NULL DEFAULT '', time TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1, next_run_at INTEGER DEFAULT NULL, last_run_id TEXT DEFAULT NULL,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+    db.run(`INSERT INTO fb_poster_schedules (id, name, kind, params_json, created_at, updated_at) VALUES ('old', 'x', 'once', '{}', 1, 1)`);
+    const s = new FacebookPosterStore(db);
+    s.ensureSchema();
+    assert.strictEqual(s.getSchedule('old')!.draft, false);
+  });
 });

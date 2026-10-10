@@ -114,7 +114,7 @@ export class FacebookPosterScheduler {
         while (this.queue.length > 0 && !this.deps.isBusy()) {
             const item = this.queue.shift()!;
             const s = store.getSchedule(item.scheduleId);
-            if (!s || !s.enabled) continue;
+            if (!s || !s.enabled || s.draft) continue;
             let runId: string;
             try {
                 runId = this.deps.startRun(this.deps.resolveParams(s), s.id).runId;

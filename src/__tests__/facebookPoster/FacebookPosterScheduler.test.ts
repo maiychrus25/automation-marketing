@@ -260,4 +260,23 @@ describe('FacebookPosterScheduler', () => {
     sched.start();
     assert.deepStrictEqual(live().map((x) => x.ms), [ERROR_RETRY_MS]);
   });
+
+  test('draft schedules never start, even with inconsistent enabled/nextRunAt', () => {
+    const { env, sched, add } = setup();
+    add('d', { draft: true }); // add() mặc định enabled: true, nextRunAt: T0 — dữ liệu lệch có chủ đích
+    sched.start();
+    assert.deepStrictEqual(env.started, []);
+  });
+
+  test('a schedule due now (draft approved "now") waits while busy and starts after the run finishes', () => {
+    const { env, sched, add } = setup();
+    env.busy = true;
+    add('n', { runAt: T0, nextRunAt: T0 });
+    sched.start();
+    assert.deepStrictEqual(env.started, []);
+    assert.deepStrictEqual(sched.queuedIds(), ['n']);
+    env.busy = false;
+    sched.onRunFinished();
+    assert.deepStrictEqual(env.started, ['n']);
+  });
 });

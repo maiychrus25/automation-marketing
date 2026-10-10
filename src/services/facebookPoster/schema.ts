@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS fb_poster_schedules (
     days          TEXT NOT NULL DEFAULT '',  -- 'recurring': danh sách thứ "1,3,5" (0 = Chủ nhật)
     time          TEXT NOT NULL DEFAULT '',  -- 'recurring': "HH:mm"
     enabled       INTEGER NOT NULL DEFAULT 1,
+    draft         INTEGER NOT NULL DEFAULT 0, -- 1 = bản nháp: luôn enabled = 0, next_run_at = NULL, không bao giờ tự chạy
     next_run_at   INTEGER DEFAULT NULL,      -- null khi đã xong ('once') hoặc tạm dừng
     last_run_id   TEXT DEFAULT NULL,
     created_at    INTEGER NOT NULL,
@@ -68,4 +69,5 @@ CREATE INDEX IF NOT EXISTS idx_fb_poster_schedules_next ON fb_poster_schedules(e
 // Chạy sau FB_POSTER_SCHEMA_SQL, từng câu trong try/catch (cột đã có thì ALTER ném lỗi, bỏ qua).
 export const FB_POSTER_MIGRATIONS: string[] = [
     'ALTER TABLE fb_poster_runs ADD COLUMN schedule_id TEXT DEFAULT NULL',
+    'ALTER TABLE fb_poster_schedules ADD COLUMN draft INTEGER NOT NULL DEFAULT 0',
 ];

@@ -24,6 +24,8 @@ export interface FbPosterSchedule {
     days: number[];
     time: string;
     enabled: boolean;
+    /** Bản nháp: luôn enabled = false, nextRunAt = null; chỉ thành lịch thật khi được duyệt. */
+    draft: boolean;
     nextRunAt: number | null;
     lastRunId: string | null;
     createdAt: number;

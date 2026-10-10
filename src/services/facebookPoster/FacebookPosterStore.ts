@@ -47,6 +47,7 @@ function mapSchedule(row: any): FbPosterSchedule {
         days: row.days === '' ? [] : String(row.days).split(',').map(Number),
         time: row.time,
         enabled: row.enabled === 1,
+        draft: row.draft === 1,
         nextRunAt: row.next_run_at ?? null,
         lastRunId: row.last_run_id ?? null,
         createdAt: row.created_at,
@@ -175,12 +176,12 @@ export class FacebookPosterStore {
 
     // ─── Schedules ───────────────────────────────────────────────────────────
 
-    createSchedule(s: Omit<FbPosterSchedule, 'lastRunId' | 'updatedAt'>): void {
+    createSchedule(s: Omit<FbPosterSchedule, 'lastRunId' | 'updatedAt' | 'draft'> & { draft?: boolean }): void {
         this.db.run(
             `INSERT INTO fb_poster_schedules
-                (id, name, kind, params_json, run_at, days, time, enabled, next_run_at, last_run_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-            [s.id, s.name, s.kind, JSON.stringify(s.params), s.runAt, s.days.join(','), s.time, s.enabled ? 1 : 0, s.nextRunAt, s.createdAt, s.createdAt],
+                (id, name, kind, params_json, run_at, days, time, enabled, draft, next_run_at, last_run_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+            [s.id, s.name, s.kind, JSON.stringify(s.params), s.runAt, s.days.join(','), s.time, s.enabled ? 1 : 0, s.draft ? 1 : 0, s.nextRunAt, s.createdAt, s.createdAt],
         );
     }
 
@@ -203,7 +204,7 @@ export class FacebookPosterStore {
 
     updateSchedule(
         id: string,
-        fields: Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId'>>,
+        fields: Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId' | 'kind' | 'draft' | 'params'>>,
         updatedAt: number,
     ): void {
         const sets: string[] = [];
@@ -216,6 +217,9 @@ export class FacebookPosterStore {
         if (fields.time !== undefined) set('time', fields.time);
         if (fields.nextRunAt !== undefined) set('next_run_at', fields.nextRunAt);
         if (fields.lastRunId !== undefined) set('last_run_id', fields.lastRunId);
+        if (fields.kind !== undefined) set('kind', fields.kind);
+        if (fields.draft !== undefined) set('draft', fields.draft ? 1 : 0);
+        if (fields.params !== undefined) set('params_json', JSON.stringify(fields.params));
         set('updated_at', updatedAt);
         this.db.run(`UPDATE fb_poster_schedules SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
     }
@@ -230,13 +234,13 @@ export class FacebookPosterStore {
 
     listDueSchedules(atOrBefore: number): FbPosterSchedule[] {
         return this.db.query<any>(
-            'SELECT * FROM fb_poster_schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at, created_at',
+            'SELECT * FROM fb_poster_schedules WHERE enabled = 1 AND draft = 0 AND next_run_at <= ? ORDER BY next_run_at, created_at',
             [atOrBefore],
         ).map(mapSchedule);
     }
 
     nextScheduledAt(): number | null {
-        return this.db.queryOne<{ t: number | null }>('SELECT MIN(next_run_at) AS t FROM fb_poster_schedules WHERE enabled = 1')?.t ?? null;
+        return this.db.queryOne<{ t: number | null }>('SELECT MIN(next_run_at) AS t FROM fb_poster_schedules WHERE enabled = 1 AND draft = 0')?.t ?? null;
     }
 
     // ─── Groups ──────────────────────────────────────────────────────────────
