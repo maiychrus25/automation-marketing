@@ -92,6 +92,31 @@ function markCommentBoxInPage({ mark }: { mark: string }): boolean {
 }
 
 /**
+ * Điểm trên ô nhập mà ô (hoặc phần tử con của nó) đứng trên cùng — bấm vào đó không bị lớp khác chặn.
+ * Dò từ trái sang phải (đầu ô là chỗ con trỏ chữ), giữa ô trước rồi sát mép. null = cả ô bị che.
+ * CHẠY TRONG TRÌNH DUYỆT.
+ */
+export function freePointOnBoxInPage(mark: string): { x: number; y: number } | null {
+  const box = document.querySelector(`[${mark}]`);
+  if (!box) return null;
+  const r = box.getBoundingClientRect();
+  const step = Math.max(8, r.width / 24);
+  for (const y of [r.top + r.height / 2, r.top + 3, r.bottom - 3]) {
+    for (let x = r.left + 6; x <= r.right - 6; x += step) {
+      const hit = document.elementFromPoint(x, y);
+      if (hit && (hit === box || box.contains(hit))) return { x: Math.round(x), y: Math.round(y) };
+    }
+  }
+  return null;
+}
+
+/** Ô nhập đã đánh dấu có chứa đoạn chữ vừa gõ chưa. CHẠY TRONG TRÌNH DUYỆT. */
+export function commentTypedInPage({ mark, snippet }: { mark: string; snippet: string }): boolean {
+  const box = document.querySelector(`[${mark}]`) as HTMLElement | null;
+  return !!box && !!snippet && String(box.innerText || '').includes(snippet);
+}
+
+/**
  * Tìm nút gửi NẰM TRONG cùng khối với ô nhập rồi ĐÁNH DẤU (bên Node bấm bằng
  * locator, click tin cậy). CHẠY TRONG TRÌNH DUYỆT.
  * Trèo lên tổ tiên vì nút gửi là anh em của ô nhập, không lồng bên trong nó.
@@ -299,7 +324,11 @@ export async function postFirstComment(
 
     try {
       const box = page.locator(`[${COMMENT_BOX_MARK}]`);
-      await box.click();
+      // Khung bình luận của hộp "Bài viết của …" có các lớp đè lên ô nhập (đo thật 2026-10-10, nhóm): bấm vào điểm
+      // mà ô thật sự nhận chuột; cả ô bị che thì focus bằng Playwright. Chữ có vào ô hay không được kiểm ngay dưới.
+      const free = await page.evaluate(freePointOnBoxInPage, COMMENT_BOX_MARK).catch(() => null);
+      if (free) await page.mouse.click(free.x, free.y);
+      else await box.focus();
       // Gõ từng đoạn, Enter giữa các đoạn: ô này là trình soạn thảo giàu định
       // dạng, nhét cả "\n" một lần là mất hết xuống dòng.
       const parts = body.split(/\r?\n/);
@@ -309,11 +338,18 @@ export async function postFirstComment(
         await page.keyboard.type(parts[i]);
       }
       await sleep(1200);
+      // Focus có thể không giữ được tới lúc gõ (ghi chú ở markCommentBoxInPage): chữ không vào ô thì báo, không gửi.
+      if (!(await page.evaluate(commentTypedInPage, { mark: COMMENT_BOX_MARK, snippet: matchSnippet(body) }))) {
+        return { status: 'failed', reason: 'Không gõ được chữ vào ô bình luận (ô bị che hoặc mất tiêu điểm). Chưa gửi.' };
+      }
 
       if (!(await page.evaluate(markCommentSendButtonInPage, { mark: COMMENT_BOX_MARK, labels: SEND_COMMENT_LABELS }))) {
         return { status: 'failed', reason: 'Không thấy nút gửi bình luận cạnh ô nhập.' };
       }
-      await page.locator('[data-maihub-target="comment-send"]').first().click({ timeout: 10000 });
+      // Nút gửi có thể bị nút nhãn dán đè (đo thật 2026-10-10, nhóm). Bị chặn thì Playwright không bấm gì; con trỏ
+      // vẫn trong ô vừa gõ nên nhấn Enter — Facebook gửi bình luận bằng Enter (xuống dòng là Shift+Enter, xem trên).
+      const sent = await page.locator('[data-maihub-target="comment-send"]').first().click({ timeout: 5000 }).then(() => true, () => false);
+      if (!sent) await page.keyboard.press('Enter');
     } finally {
       await page.evaluate(function clearCommentBoxMark(mark: string) {
         for (const e of Array.from(document.querySelectorAll(`[${mark}]`))) e.removeAttribute(mark);

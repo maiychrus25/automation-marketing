@@ -7,6 +7,8 @@ import {
   evaluatePostState,
   markCommentSendButtonInPage,
   readPostStateInPage,
+  freePointOnBoxInPage,
+  commentTypedInPage,
 } from '../../services/facebookPoster/firstComment';
 import { fakeLocators, runWithFakeTimers } from './helpers';
 
@@ -118,6 +120,7 @@ test('send button is clicked through a trusted locator, not element.click()', as
     countCommentBlocksInPage: () => counts.shift(),
     openCommentBoxInPage: () => true,
     markCommentBoxInPage: () => true,
+    commentTypedInPage: () => true,
     markCommentSendButtonInPage: () => true,
     commentTextVisibleInPage: () => true,
   };
@@ -128,7 +131,7 @@ test('send button is clicked through a trusted locator, not element.click()', as
     // The comment box locator is clicked directly; the send button goes through .first().click().
     locator: (selector: string) => (/data-maihub-target/.test(selector)
       ? targetLocator(selector)
-      : { click: async () => undefined }),
+      : { click: async () => undefined, focus: async () => undefined }),
     keyboard: { type: async () => undefined, press: async () => undefined },
   } as unknown as Page;
   const out = await runWithFakeTimers(() => postFirstComment(page, {
@@ -181,4 +184,136 @@ test('readPostStateInPage: bị chuyển hướng khỏi trang bài (về bảng
   withFakePage('https://www.facebook.com/', 'Bảng tin\nhehe', [], () => {
     assert.strictEqual(readPostStateInPage({ snippet: 'hehe', markers: [] }).found, false);
   });
+});
+
+// Đo thật 2026-10-10 (nhóm, bài đăng dưới tên Trang): điểm giữa ô "Bình luận dưới tên …" bị chính hàng biểu tượng
+// của khung bình luận đè lên, locator.click() thử 30 giây rồi bỏ. Phải tìm điểm trên ô mà ô thật sự nhận chuột.
+test('freePointOnBoxInPage: điểm giữa bị che thì chọn điểm khác trên ô mà ô nhận chuột', () => {
+  const box: any = { getBoundingClientRect: () => ({ left: 160, top: 739, width: 450, height: 20, right: 610, bottom: 759 }) };
+  box.contains = (e: unknown) => e === box;
+  const toolbar = {};
+  const g = global as unknown as { document: unknown };
+  const old = g.document;
+  g.document = {
+    querySelector: () => box,
+    // Hàng biểu tượng che từ x ≥ 200 trở đi; phần đầu ô (chỗ con trỏ chữ) còn trống.
+    elementFromPoint: (x: number) => (x < 200 ? box : toolbar),
+  };
+  try {
+    const pt = freePointOnBoxInPage('data-maihub-comment-box');
+    assert.ok(pt, 'phải tìm được điểm trống');
+    assert.ok(pt!.x < 200 && pt!.y >= 739 && pt!.y <= 759, JSON.stringify(pt));
+  } finally { g.document = old; }
+});
+
+test('freePointOnBoxInPage: cả ô bị che thì trả null (để quay về cách bấm cũ)', () => {
+  const box: any = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 20, right: 100, bottom: 20 }), contains: () => false };
+  const g = global as unknown as { document: unknown };
+  const old = g.document;
+  g.document = { querySelector: () => box, elementFromPoint: () => ({}) };
+  try { assert.strictEqual(freePointOnBoxInPage('data-maihub-comment-box'), null); } finally { g.document = old; }
+});
+
+test('postFirstComment: có điểm trống thì bấm chuột thật vào đúng toạ độ đó', async () => {
+  const mouse: [number, number][] = [];
+  const counts = [3, 4];
+  const byName: Record<string, () => unknown> = {
+    readPostStateInPage: () => ({ found: true, pendingMarker: null }),
+    countCommentBlocksInPage: () => counts.shift(),
+    openCommentBoxInPage: () => true,
+    markCommentBoxInPage: () => true,
+    freePointOnBoxInPage: () => ({ x: 170, y: 749 }),
+    commentTypedInPage: () => true,
+    markCommentSendButtonInPage: () => true,
+    commentTextVisibleInPage: () => true,
+  };
+  const page = {
+    goto: async () => undefined,
+    url: () => 'https://www.facebook.com/groups/1/posts/2/',
+    evaluate: async (fn: { name: string }) => (byName[fn.name] ? byName[fn.name]() : undefined),
+    mouse: { click: async (x: number, y: number) => { mouse.push([x, y]); } },
+    locator: () => ({ click: async () => { throw new Error('không được bấm locator ô nhập khi đã có điểm trống'); }, first: () => ({ click: async () => undefined }) }),
+    keyboard: { type: async () => undefined, press: async () => undefined },
+  } as unknown as Page;
+  const out = await runWithFakeTimers(() => postFirstComment(page, { postUrl: 'https://www.facebook.com/groups/1/posts/2/', comment: 'hi', text: 'Bài' }));
+  assert.strictEqual(out.status, 'posted', JSON.stringify(out));
+  assert.deepStrictEqual(mouse, [[170, 749]]);
+});
+
+// Đo thật 2026-10-10 15:36 (nhóm): cả ô nhập bị các lớp của khung bình luận đè — không có điểm nào bấm được.
+function commentPage(over: Record<string, () => unknown>, calls: string[]) {
+  const counts = [3, 4];
+  const byName: Record<string, () => unknown> = {
+    readPostStateInPage: () => ({ found: true, pendingMarker: null }),
+    countCommentBlocksInPage: () => counts.shift(),
+    openCommentBoxInPage: () => true,
+    markCommentBoxInPage: () => true,
+    freePointOnBoxInPage: () => null,
+    commentTypedInPage: () => true,
+    markCommentSendButtonInPage: () => true,
+    commentTextVisibleInPage: () => true,
+    ...over,
+  };
+  return {
+    goto: async () => undefined,
+    url: () => 'https://www.facebook.com/groups/1/posts/2/',
+    evaluate: async (fn: { name: string }) => (byName[fn.name] ? byName[fn.name]() : undefined),
+    mouse: { click: async () => { calls.push('mouse'); } },
+    locator: (sel: string) => ({
+      click: async () => { calls.push(/data-maihub-target/.test(sel) ? 'send' : 'box-click'); throw new Error('intercepts pointer events'); },
+      focus: async () => { calls.push('box-focus'); },
+      first: () => ({ click: async () => { calls.push('send'); } }),
+    }),
+    keyboard: { type: async () => { calls.push('type'); }, press: async () => undefined },
+  } as unknown as Page;
+}
+
+test('postFirstComment: cả ô bị che thì focus bằng Playwright rồi gõ, không bấm ô', async () => {
+  const calls: string[] = [];
+  const out = await runWithFakeTimers(() => postFirstComment(commentPage({}, calls), { postUrl: 'https://www.facebook.com/groups/1/posts/2/', comment: 'hi', text: 'Bài' }));
+  assert.strictEqual(out.status, 'posted', JSON.stringify(out));
+  assert.deepStrictEqual(calls, ['box-focus', 'type', 'send']);
+});
+
+test('postFirstComment: gõ xong mà ô vẫn trống thì báo hỏng và KHÔNG bấm gửi', async () => {
+  const calls: string[] = [];
+  const out = await runWithFakeTimers(() => postFirstComment(commentPage({ commentTypedInPage: () => false }, calls), { postUrl: 'https://www.facebook.com/groups/1/posts/2/', comment: 'hi', text: 'Bài' }));
+  assert.strictEqual(out.status, 'failed');
+  assert.match(out.reason, /Không gõ được/);
+  assert.ok(!calls.includes('send'), JSON.stringify(calls));
+});
+
+test('commentTypedInPage: ô có đoạn chữ vừa gõ thì true, trống thì false', () => {
+  const g = global as unknown as { document: unknown };
+  const old = g.document;
+  try {
+    g.document = { querySelector: () => ({ innerText: 'Liên hệ 0900' }) };
+    assert.strictEqual(commentTypedInPage({ mark: 'm', snippet: 'Liên hệ' }), true);
+    g.document = { querySelector: () => ({ innerText: '' }) };
+    assert.strictEqual(commentTypedInPage({ mark: 'm', snippet: 'Liên hệ' }), false);
+  } finally { g.document = old; }
+});
+
+// Đo thật 2026-10-10 15:51 (nhóm): chữ đã vào ô nhưng nút "Đăng bình luận" bị nút "Bình luận bằng nhãn dán" đè.
+test('postFirstComment: nút gửi bị che thì nhấn Enter trong ô (Facebook gửi bình luận bằng Enter)', async () => {
+  const calls: string[] = [];
+  const page = commentPage({}, calls) as unknown as Record<string, any>;
+  page.locator = (sel: string) => ({
+    click: async () => { throw new Error('intercepts pointer events'); },
+    focus: async () => { calls.push('box-focus'); },
+    first: () => ({ click: async () => { calls.push('send-blocked'); throw new Error('Bình luận bằng nhãn dán intercepts pointer events'); } }),
+  });
+  page.keyboard = { type: async () => { calls.push('type'); }, press: async (k: string) => { calls.push(`press:${k}`); } };
+  const out = await runWithFakeTimers(() => postFirstComment(page as unknown as Page, { postUrl: 'https://www.facebook.com/groups/1/posts/2/', comment: 'hi', text: 'Bài' }));
+  assert.strictEqual(out.status, 'posted', JSON.stringify(out));
+  assert.deepStrictEqual(calls, ['box-focus', 'type', 'send-blocked', 'press:Enter']);
+});
+
+test('postFirstComment: bấm được nút gửi thì KHÔNG nhấn thêm Enter', async () => {
+  const calls: string[] = [];
+  const page = commentPage({}, calls) as unknown as Record<string, any>;
+  page.keyboard = { type: async () => { calls.push('type'); }, press: async (k: string) => { calls.push(`press:${k}`); } };
+  const out = await runWithFakeTimers(() => postFirstComment(page as unknown as Page, { postUrl: 'https://www.facebook.com/groups/1/posts/2/', comment: 'hi', text: 'Bài' }));
+  assert.strictEqual(out.status, 'posted', JSON.stringify(out));
+  assert.ok(!calls.includes('press:Enter'), JSON.stringify(calls));
 });
