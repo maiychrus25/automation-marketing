@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import AIAssistantService from '../../src/services/ai/AIAssistantService';
 import DatabaseService from '../../src/services/database/DatabaseService';
-import FileStorageService from '../../src/services/file/FileStorageService';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import { proxyToBoss } from './proxyHelper';
 import Logger from '../../src/utils/Logger';
@@ -251,33 +250,6 @@ export function registerAIAssistantIpc(): void {
       Logger.error(`[AIAssistantIpc] generateImage: ${e.message}`);
       return { success: false, error: e.response?.data?.error?.message || e.message };
     }
-  });
-
-  ipcMain.handle('ai:listPosterTemplates', async () => {
-    try {
-      const { listTemplates } = require('../../src/services/facebookPoster/posterTemplates');
-      return { success: true, templates: listTemplates(DatabaseService.getInstance()) };
-    } catch (e: any) { return { success: false, error: e.message, templates: [] }; }
-  });
-
-  ipcMain.handle('ai:addPosterTemplate', async (_e, { name, filePath }: { name: string; filePath: string }) => {
-    try {
-      if (!fs.existsSync(filePath)) return { success: false, error: 'File không tồn tại' };
-      const buffer = fs.readFileSync(filePath);
-      const abs = await FileStorageService.saveBuffer('fb-poster-templates', buffer, `${Date.now()}_${path.basename(filePath)}`);
-      const store = { saveBufferSync: () => abs };
-      const { addTemplate } = require('../../src/services/facebookPoster/posterTemplates');
-      const entry = addTemplate(DatabaseService.getInstance(), store, name, filePath);
-      return { success: true, template: entry };
-    } catch (e: any) { return { success: false, error: e.message }; }
-  });
-
-  ipcMain.handle('ai:removePosterTemplate', async (_e, { id }: { id: string }) => {
-    try {
-      const { removeTemplate } = require('../../src/services/facebookPoster/posterTemplates');
-      removeTemplate(DatabaseService.getInstance(), id);
-      return { success: true };
-    } catch (e: any) { return { success: false, error: e.message }; }
   });
 
   // ─── Per-account assistant assignment ──────────────────────────────────────

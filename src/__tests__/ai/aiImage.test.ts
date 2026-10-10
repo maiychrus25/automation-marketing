@@ -17,7 +17,7 @@ describe('aiImage', () => {
     const r = buildImageRequest({ apiKey: 'k', model: 'm', prompt: 'p', baseImages: ['https://x/a.jpg'] });
     expect(r.url).toContain('/v1/images/generations');
     expect(r.body.image).toBe('https://x/a.jpg');
-    expect(r.body.image_detail).toBe('high');
+    expect(r.body.image_detail).toBe('low');
   });
   it('nhiều base URL: image = MẢNG', () => {
     const r = buildImageRequest({ apiKey: 'k', model: 'm', prompt: 'p', baseImages: ['https://x/a.jpg', 'https://x/b.jpg'] });

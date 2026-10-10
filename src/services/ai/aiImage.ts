@@ -33,9 +33,9 @@ export function buildImageRequest(opts: ImageRequestOpts): { url: string; header
     prompt: opts.prompt,
     n: 1,
     size: opts.size || '1024x1024',
-    quality: opts.quality || 'high',
+    quality: opts.quality || 'low',
     background: 'auto',
-    image_detail: hasBase ? 'high' : 'low',
+    image_detail: 'low',
     output_format: 'jpeg',
   };
   if (hasBase) {
