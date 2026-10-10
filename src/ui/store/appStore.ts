@@ -6,6 +6,8 @@ import { type AppTheme, type ThemePreference, THEME_STORAGE_KEY, parseThemePrefe
 
 type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser' | 'facebookPoster';
 export type { AppTheme, ThemePreference };
+/** Màn con của Đăng Facebook, chọn từ sub-nav ở sidebar chính. */
+export type FacebookPosterSection = 'schedule' | 'join' | 'comments' | 'history';
 
 export interface GroupMember {
   userId: string;
@@ -73,6 +75,7 @@ export interface PinnedIntegrationShortcut {
 
 interface AppStore {
   view: AppView;
+  facebookPosterSection: FacebookPosterSection;
   isLoading: boolean;
   notification: { message: string; type: 'success' | 'error' | 'info' | 'warning' } | null;
   erpPermissionDialog: { title: string; message: string; details?: string } | null;
@@ -138,6 +141,7 @@ interface AppStore {
   setFontSizeScale: (scale: number) => void;
 
   setView: (view: AppView) => void;
+  openFacebookPoster: (section: FacebookPosterSection) => void;
   setLoading: (loading: boolean) => void;
   showNotification: (message: string, type?: 'success' | 'error' | 'info' | 'warning') => void;
   hideNotification: () => void;
@@ -363,6 +367,7 @@ function persistFlag(zaloId: string, contactId: string, flags: { is_muted?: numb
 
 export const useAppStore = create<AppStore>((set, get) => ({
   view: 'dashboard',
+  facebookPosterSection: 'schedule',
   isLoading: false,
   notification: null,
   erpPermissionDialog: null,
@@ -427,6 +432,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   closeQuickChat: () => set({ quickChatOpen: false, quickChatTarget: null, quickChatZaloId: null }),
 
   setView: (view) => set({ view }),
+  openFacebookPoster: (facebookPosterSection) => set({ view: 'facebookPoster', facebookPosterSection }),
   setLoading: (isLoading) => set({ isLoading }),
   showNotification: (message, type = 'info') => {
     set({ notification: { message, type } });

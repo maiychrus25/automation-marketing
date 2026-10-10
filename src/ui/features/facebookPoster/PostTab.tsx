@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import ProfilePicker from './ProfilePicker';
 import ScheduleDialog from './ScheduleDialog';
 import MediaPicker from './MediaPicker';
-import AIAssistPanel from './AIAssistPanel';
+import PostPreview from './PostPreview';
 import { matchesKeywords } from './matchKeywords';
 import { validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
 import type { FbPosterGroup, FbPosterMode } from '../../../models/facebookPoster';
@@ -16,17 +16,21 @@ interface Props {
   busy: boolean;
   profileNames: Map<string, string>;
   onStarted: () => void;
+  open: boolean;
+  onClose: () => void;
+  initialProfileIds: string[];
+  initialRunAt?: number;
 }
 
 const splitLines = (value: string): string[] => value.split('\n').map((l) => l.trim()).filter(Boolean);
 
-export default function PostTab({ busy, profileNames, onStarted }: Props) {
+export default function PostTab({ busy, profileNames, onStarted, open, onClose, initialProfileIds, initialRunAt }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [mode, setMode] = useState<FbPosterMode>('group');
   const [text, setText] = useState('');
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [comment, setComment] = useState('');
-  const [profileIds, setProfileIds] = useState<string[]>([]);
+  const [profileIds, setProfileIds] = useState<string[]>(initialProfileIds);
   const [keyword, setKeyword] = useState('');
   const [groupsByProfile, setGroupsByProfile] = useState<Record<string, FbPosterGroup[]>>({});
   const [groupsLoading, setGroupsLoading] = useState(false);
@@ -40,6 +44,15 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
   const [staggerMaxSec, setStaggerMaxSec] = useState(90);
   const [starting, setStarting] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  const [operationError, setOperationError] = useState('');
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (open && !dialog?.open) dialog?.showModal();
+    if (!open && dialog?.open) dialog.close();
+  }, [open]);
+  const reportError = (message: string) => { setOperationError(message); showNotification(message, 'error'); };
 
   // Reload scanned groups when the selection changes and when a run ends (a scan may have just finished).
   const idsKey = profileIds.join(',');
@@ -47,11 +60,13 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
     if (mode !== 'group' || profileIds.length === 0 || busy) return;
     let cancelled = false;
     setGroupsLoading(true);
+    setOperationError('');
     ipc.facebookPoster?.listGroups(profileIds).then((res) => {
       if (cancelled) return;
       if (res?.success) setGroupsByProfile(res.groups || {});
-      else showNotification(res?.error || 'Không tải được danh sách nhóm', 'error');
-    }).finally(() => { if (!cancelled) setGroupsLoading(false); });
+      else reportError(res?.error || 'Không tải được danh sách nhóm');
+    }).catch(() => { if (!cancelled) reportError('Không tải được danh sách nhóm'); })
+      .finally(() => { if (!cancelled) setGroupsLoading(false); });
     return () => { cancelled = true; setGroupsLoading(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsKey, mode, busy]);
@@ -85,9 +100,12 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
   });
 
   const rescan = async (id: string) => {
-    const res = await ipc.facebookPoster?.start('scan_groups', { profileIds: [id], concurrency: 1 });
-    if (!res?.success) showNotification(res?.error || 'Không quét được nhóm', 'error');
-    else onStarted();
+    setOperationError('');
+    try {
+      const res = await ipc.facebookPoster?.start('scan_groups', { profileIds: [id], concurrency: 1 });
+      if (!res?.success) reportError(res?.error || 'Không quét được nhóm');
+      else { onStarted(); onClose(); }
+    } catch (error) { reportError(error instanceof Error ? error.message : 'Không quét được nhóm'); }
   };
 
   // Scheduling is allowed while a run is active, so the busy clause is only part of the Start reason.
@@ -107,12 +125,13 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
 
   const handleStart = async () => {
     setStarting(true);
+    setOperationError('');
     try {
       const res = await ipc.facebookPoster?.start('post', postParams());
-      if (!res?.success) showNotification(res?.error || 'Không bắt đầu được', 'error');
-      else onStarted();
+      if (!res?.success) reportError(res?.error || 'Không bắt đầu được');
+      else { onStarted(); onClose(); }
     } catch (err: any) {
-      showNotification(err?.message || 'Không bắt đầu được', 'error');
+      reportError(err?.message || 'Không bắt đầu được');
     } finally {
       setStarting(false);
     }
@@ -127,17 +146,20 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
   );
 
   return (
-    <div className="space-y-4 min-w-0">
+    <dialog ref={dialogRef} className="poster-dialog poster-composer" aria-labelledby="poster-composer-title" onCancel={e => { e.preventDefault(); onClose(); }}>
+      <header className="poster-dialog-header"><div><h2 id="poster-composer-title">Soạn bài</h2><p className="poster-muted text-sm mt-1">Chọn kênh, viết nội dung và xem trước bài đăng.</p></div>
+        <button type="button" className="poster-icon-button" aria-label="Đóng trình soạn bài" onClick={onClose}>✕</button>
+      </header>
+      <div className="poster-composer-grid">
+      <div className="poster-editor space-y-4 min-w-0">
       <div role="group" aria-label="Chế độ đăng" className="inline-flex rounded-lg border border-gray-600 overflow-hidden">
         {(['group', 'page'] as const).map((m) => (
           <button key={m} type="button" aria-pressed={mode === m} onClick={() => setMode(m)} disabled={busy}
             className={`px-4 py-1.5 text-sm ${mode === m ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
-            {m === 'group' ? 'Nhóm' : 'Page'}
+            {m === 'group' ? 'Nhóm' : 'Trang'}
           </button>
         ))}
       </div>
-
-      <AIAssistPanel text={text} setText={setText} setMedia={setMedia} disabled={busy} />
 
       <label className="block text-xs text-gray-400">
         Nội dung bài
@@ -219,7 +241,9 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
         </section>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <details className="poster-advanced">
+      <summary className="cursor-pointer poster-muted text-sm">Tuỳ chọn vận hành</summary>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
         {numberInput('Nghỉ tối thiểu (giây)', minDelaySec, setMinDelaySec, 0, 86400)}
         {numberInput('Nghỉ tối đa (giây)', maxDelaySec, setMaxDelaySec, 0, 86400)}
         {numberInput('Số profile song song (1–10)', concurrency, setConcurrency, 1, 10)}
@@ -231,17 +255,25 @@ export default function PostTab({ busy, profileNames, onStarted }: Props) {
           Profile sau bắt đầu cách profile trước một khoảng ngẫu nhiên trong giới hạn này. Đặt 0–0 để bật đồng loạt; giãn cách giúp các tài khoản không khởi động cùng một lúc.
         </p>
       </div>
+      </details>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="poster-composer-footer flex flex-wrap items-center gap-3">
+        {operationError && <p role="alert" className="w-full text-sm text-red-400 break-words">{operationError}</p>}
         <button type="button" onClick={handleStart} disabled={!!disabledReason || starting} className="btn-primary text-sm px-4 py-2 text-white disabled:opacity-60">
-          {starting ? 'Đang bắt đầu...' : 'Bắt đầu đăng'}
+          {starting ? 'Đang bắt đầu...' : 'Đăng ngay'}
         </button>
         <button type="button" onClick={() => setScheduling(true)} disabled={!!scheduleDisabledReason} className="px-4 py-2 rounded-lg text-sm border border-gray-600 text-gray-200 hover:border-gray-400 disabled:opacity-60">
-          Lên lịch
+          Hẹn giờ
         </button>
         {disabledReason && <span className="text-xs text-gray-400">{disabledReason}</span>}
       </div>
-      {scheduling && <ScheduleDialog onClose={() => setScheduling(false)} buildParams={postParams} defaultName={text.trim()} />}
-    </div>
+      </div>
+      <aside className="poster-composer-preview"><div className="flex items-center justify-between mb-5"><h3 className="font-semibold">Xem trước</h3><span className="poster-muted text-xs">Facebook</span></div>
+        <PostPreview text={text} comment={comment} mediaPaths={media.map(item => item.path)} mode={mode} names={profileIds.map(id => profileNames.get(id) || id)}
+          targetName={filteredGroups(profileIds[0]).find(group => isChecked(profileIds[0], group))?.name} />
+      </aside>
+      </div>
+      {scheduling && <ScheduleDialog onClose={() => setScheduling(false)} buildParams={postParams} defaultName={text.trim()} initialRunAt={initialRunAt} onSaved={onClose} />}
+    </dialog>
   );
 }

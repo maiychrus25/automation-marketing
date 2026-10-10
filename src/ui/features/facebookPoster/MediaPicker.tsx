@@ -23,32 +23,37 @@ function summary(items: MediaItem[]): string {
 export default function MediaPicker({ items, onChange, disabled }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [dragOver, setDragOver] = useState(false);
+  const [pickError, setPickError] = useState('');
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     if (disabled) return;
+    setPickError('');
     const dropped: MediaItem[] = [];
     for (const f of Array.from(e.dataTransfer.files)) {
       try {
         const path = ipc.file?.getDroppedPath(f) || (f as any).path || '';
         if (path) dropped.push({ path, size: f.size });
-      } catch { /* bỏ file không lấy được path */ }
+      } catch { /* Ignore files without an accessible local path. */ }
     }
     const added = acceptDroppedMedia(dropped, items);
     if (added.length) onChange([...items, ...added]);
-    else if (dropped.length) showNotification('Chỉ hỗ trợ ảnh/video, hoặc tệp đã có', 'warning');
+    else if (dropped.length) { const message = 'Chỉ hỗ trợ ảnh/video, hoặc tệp đã có'; setPickError(message); showNotification(message, 'warning'); }
   };
 
   const pick = async () => {
+    setPickError('');
     let res;
     try {
       res = await ipc.facebookPoster?.pickMedia();
     } catch (err: any) {
-      showNotification(err?.message || 'Không mở được hộp chọn tệp', 'error');
+      const message = err?.message || 'Không mở được hộp chọn tệp';
+      setPickError(message);
+      showNotification(message, 'error');
       return;
     }
-    if (!res?.success) { showNotification(res?.error || 'Không chọn được tệp', 'error'); return; }
+    if (!res?.success) { const message = res?.error || 'Không chọn được tệp'; setPickError(message); showNotification(message, 'error'); return; }
     const known = new Set(items.map((i) => i.path));
     const added: MediaItem[] = [];
     for (const item of res.items ?? []) {
@@ -67,7 +72,7 @@ export default function MediaPicker({ items, onChange, disabled }: Props) {
 
   return (
     <div
-      className={`space-y-2 min-w-0 rounded-lg border border-dashed p-2 transition-colors ${dragOver ? 'border-blue-500 bg-blue-500/10' : 'border-transparent'}`}
+      className={`poster-media-picker space-y-2 min-w-0 rounded-lg transition-colors ${dragOver ? 'border-blue-500 bg-blue-500/10' : ''}`}
       onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={onDrop}
@@ -100,6 +105,7 @@ export default function MediaPicker({ items, onChange, disabled }: Props) {
         </ul>
       )}
       {error && <p role="alert" className="text-xs text-red-500">{error}</p>}
+      {pickError && <p role="alert" className="text-xs text-red-500">{pickError}</p>}
     </div>
   );
 }

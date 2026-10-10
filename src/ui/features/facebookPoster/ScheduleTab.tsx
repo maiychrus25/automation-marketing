@@ -1,114 +1,222 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import { showConfirm } from '@/components/common/ConfirmDialog';
 import { describeRecurrence } from '../../../services/facebookPoster/scheduleTime';
 import ScheduleDialog, { formatShort } from './ScheduleDialog';
+import PostPreview from './PostPreview';
 import { STATUS_LABEL } from './HistoryTab';
+import { buildMovePatch, canDragSchedule, getCalendarDays, getScheduleOccurrences, type CalendarView, type ScheduleOccurrence } from './calendarModel';
 import type { FbPosterScheduleView } from '../../../models/facebookPoster';
 
-export default function ScheduleTab({ onOpenHistory }: { onOpenHistory: () => void }) {
-  const showNotification = useAppStore((s) => s.showNotification);
+interface Props {
+  selectedChannels: string[] | null;
+  profileNames: Map<string, string>;
+  onCompose: (at?: number) => void;
+  onOpenHistory: () => void;
+}
+const dayKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+const dateLabel = (date: Date) => date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+const clock = (at: number) => new Date(at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
+const LABELS: Record<string, string> = { scheduled: 'Đã hẹn', paused: 'Tạm dừng', queued: 'Đang chờ', ...Object.fromEntries(Object.entries(STATUS_LABEL).map(([key, value]) => [key, value.label])) };
+
+export default function ScheduleTab({ selectedChannels, profileNames, onCompose, onOpenHistory }: Props) {
+  const showNotification = useAppStore(s => s.showNotification);
   const [schedules, setSchedules] = useState<FbPosterScheduleView[]>([]);
   const [queued, setQueued] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<FbPosterScheduleView | null>(null);
+  const [detail, setDetail] = useState<ScheduleOccurrence | null>(null);
+  const [view, setView] = useState<CalendarView>('week');
+  const [anchor, setAnchor] = useState(new Date());
+  const [listView, setListView] = useState(false);
+  const [stateFilter, setStateFilter] = useState('all');
+  const [now, setNow] = useState(Date.now());
+  const [saving, setSaving] = useState(false);
+  const [operationError, setOperationError] = useState('');
+  const dragging = useRef<ScheduleOccurrence | null>(null);
+  const detailRef = useRef<HTMLDialogElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  const load = useCallback(() => {
-    if (!ipc.facebookPoster) { setLoading(false); return; }
-    return ipc.facebookPoster.scheduleList().then((res) => {
-      if (res?.success) { setSchedules(res.schedules || []); setQueued(new Set(res.queuedIds || [])); setError(''); }
-      else setError(res?.error || 'Không tải được danh sách lịch');
-    }).catch(() => setError('Không tải được danh sách lịch')).finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    try {
+      const res = await ipc.facebookPoster?.scheduleList();
+      if (!res?.success) throw new Error(res?.error || 'Không tải được danh sách lịch');
+      setSchedules(res.schedules || []);
+      setDetail(previous => {
+        if (!previous) return null;
+        const schedule = res.schedules?.find(item => item.id === previous.schedule.id);
+        if (!schedule) return null;
+        return getScheduleOccurrences([schedule], getCalendarDays(new Date(previous.at), 'day'), null, Date.now(), new Set(res.queuedIds || []))
+          .find(entry => entry.at === previous.at) || null;
+      });
+      setQueued(new Set(res.queuedIds || []));
+      setError('');
+    } catch (error) { setError(error instanceof Error ? error.message : 'Không tải được danh sách lịch'); }
+    finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
     load();
     const offChanged = ipc.on?.('facebookPoster:schedulesChanged', () => { load(); });
     const offFinished = ipc.on?.('facebookPoster:runFinished', () => { load(); });
-    return () => { offChanged?.(); offFinished?.(); };
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => { offChanged?.(); offFinished?.(); window.clearInterval(timer); };
   }, [load]);
+  useEffect(() => {
+    const dialog = detailRef.current;
+    if (detail && dialog && !dialog.open) dialog.showModal();
+  }, [detail]);
+  useEffect(() => {
+    if (!loading && !listView && view !== 'month' && scrollRef.current) scrollRef.current.scrollTop = 8 * 84;
+  }, [loading, listView, view]);
 
-  const toggle = async (s: FbPosterScheduleView) => {
+  const days = useMemo(() => getCalendarDays(anchor, view), [anchor, view]);
+  const entries = useMemo(() => getScheduleOccurrences(schedules, days, selectedChannels, now, queued), [schedules, days, selectedChannels, now, queued]);
+  const status = (entry: ScheduleOccurrence) => entry.historical ? entry.schedule.lastRun?.status || 'done'
+    : !entry.schedule.enabled ? 'paused' : entry.queued ? 'queued' : 'scheduled';
+  const shownEntries = entries.filter(entry => stateFilter === 'all' || status(entry) === stateFilter);
+  const entriesBySlot = new Map<string, ScheduleOccurrence[]>();
+  for (const entry of shownEntries) {
+    const date = new Date(entry.at);
+    const key = `${dayKey(date)}:${view === 'month' ? '' : date.getHours()}`;
+    entriesBySlot.set(key, [...(entriesBySlot.get(key) || []), entry]);
+  }
+
+  const toggle = async (schedule: FbPosterScheduleView) => {
+    setSaving(true);
+    setOperationError('');
     try {
-      const res = await ipc.facebookPoster?.scheduleUpdate({ id: s.id, enabled: !s.enabled });
-      if (!res?.success) showNotification(res?.error || 'Không cập nhật được lịch', 'error');
-    } catch (err: any) {
-      showNotification(err?.message || 'Không cập nhật được lịch', 'error');
+      const res = await ipc.facebookPoster?.scheduleUpdate({ id: schedule.id, enabled: !schedule.enabled });
+      if (!res?.success) throw new Error(res?.error || 'Không cập nhật được lịch');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không cập nhật được lịch';
+      setOperationError(message);
+      showNotification(message, 'error');
     }
-    load();
+    finally { setSaving(false); load(); }
   };
-
-  const remove = async (s: FbPosterScheduleView) => {
+  const remove = async (schedule: FbPosterScheduleView) => {
+    const ok = await showConfirm({ title: 'Xoá lịch đăng?', message: `Lịch "${schedule.name}" sẽ bị xoá cùng nội dung đã lưu.`, confirmText: 'Xoá', variant: 'danger' });
+    if (!ok) return;
+    setSaving(true);
     try {
-      const ok = await showConfirm({ title: 'Xoá lịch đăng?', message: `Lịch "${s.name}" sẽ bị xoá cùng nội dung đã lưu.`, confirmText: 'Xoá', variant: 'danger' });
-      if (!ok) return;
-      const res = await ipc.facebookPoster?.scheduleDelete(s.id);
-      if (!res?.success) showNotification(res?.error || 'Không xoá được lịch', 'error');
-    } catch (err: any) {
-      showNotification(err?.message || 'Không xoá được lịch', 'error');
-    }
-    load();
+      const res = await ipc.facebookPoster?.scheduleDelete(schedule.id);
+      if (!res?.success) throw new Error(res?.error || 'Không xoá được lịch');
+      setDetail(null);
+    } catch (error) { showNotification(error instanceof Error ? error.message : 'Không xoá được lịch', 'error'); }
+    finally { setSaving(false); load(); }
   };
-
-  if (loading) return <div className="flex justify-center py-10"><Spinner size={5} /></div>;
-  if (error) return <p role="alert" className="text-sm text-red-400 text-center py-10">{error}</p>;
-  if (schedules.length === 0) return <p className="text-sm text-gray-400 text-center py-10">Chưa có lịch đăng nào. Soạn bài ở tab Đăng bài rồi bấm Lên lịch.</p>;
-
-  return (
-    <div className="min-w-0">
-      <div className="relative overflow-x-auto">
-        <table className="w-full text-sm text-left">
-          <thead className="text-xs text-gray-400">
-            <tr>
-              <th className="py-2 pr-3 font-medium">Tên</th>
-              <th className="py-2 pr-3 font-medium">Kiểu</th>
-              <th className="py-2 pr-3 font-medium">Lần chạy tới</th>
-              <th className="py-2 pr-3 font-medium">Lần gần nhất</th>
-              <th className="py-2 pr-3 font-medium">Trạng thái</th>
-              <th className="py-2 font-medium"><span className="sr-only">Thao tác</span></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-800">
-            {schedules.map((s) => {
-              const chip = s.lastRun ? (STATUS_LABEL[s.lastRun.status] || { label: s.lastRun.status, cls: 'text-gray-400' }) : null;
-              return (
-                <tr key={s.id} className="align-top">
-                  <td className="py-2 pr-3 text-gray-200 max-w-[14rem] truncate" title={s.name}>{s.name}</td>
-                  <td className="py-2 pr-3 text-gray-300 whitespace-nowrap">{s.kind === 'once' ? 'Một lần' : describeRecurrence(s.days, s.time)}</td>
-                  <td className="py-2 pr-3 whitespace-nowrap text-gray-300">
-                    {s.nextRunAt ? formatShort(s.nextRunAt) : '—'}
-                    {queued.has(s.id) && <span className="ml-2 px-1.5 py-0.5 rounded text-xs bg-blue-600/20 text-blue-400">Đang chờ</span>}
-                  </td>
-                  <td className="py-2 pr-3 whitespace-nowrap">
-                    {s.lastRun && chip ? <button type="button" onClick={onOpenHistory} aria-label="Xem lần chạy trong Lịch sử" className="text-left hover:underline focus-visible:ring-2 focus-visible:ring-blue-500 rounded">
-                        <span className={`text-xs ${chip.cls}`}>{chip.label}</span> <span className="text-xs text-blue-400">{formatShort(s.lastRun.startedAt)}</span>
-                      </button> : <span className="text-gray-400">—</span>}
-                  </td>
-                  <td className="py-2 pr-3 whitespace-nowrap">
-                    <button type="button" role="switch" aria-checked={s.enabled} aria-label={`Lịch ${s.name}`} onClick={() => toggle(s)}
-                      className="inline-flex items-center gap-2 text-xs text-gray-300 focus-visible:ring-2 focus-visible:ring-blue-500 rounded">
-                      <span className={`relative inline-block w-9 h-5 rounded-full ${s.enabled ? 'bg-blue-600' : 'bg-gray-600'}`}>
-                        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${s.enabled ? 'translate-x-4' : ''}`} />
-                      </span>
-                      {s.enabled ? 'Bật' : 'Tạm dừng'}
-                    </button>
-                  </td>
-                  <td className="py-2 whitespace-nowrap">
-                    <div className="flex gap-2">
-                      <button type="button" onClick={() => setEditing(s)} className="px-2.5 py-1 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 focus-visible:ring-2 focus-visible:ring-blue-500">Sửa giờ</button>
-                      <button type="button" onClick={() => remove(s)} className="px-2.5 py-1 rounded-lg text-xs border border-gray-600 text-red-400 hover:border-red-400 focus-visible:ring-2 focus-visible:ring-blue-500">Xoá</button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+  const closeDetail = () => { detailRef.current?.close(); setDetail(null); };
+  const move = async (date: Date, hour?: number) => {
+    const entry = dragging.current;
+    dragging.current = null;
+    if (!entry || saving || entry.historical || entry.queued || !canDragSchedule(entry.schedule)) return;
+    const target = new Date(date);
+    const original = new Date(entry.at);
+    target.setHours(hour ?? original.getHours(), original.getMinutes(), 0, 0);
+    if (target.getTime() < Date.now() + 60_000) { showNotification('Giờ đăng phải sau thời điểm hiện tại ít nhất 1 phút', 'error'); return; }
+    if (target.getTime() === entry.at) return;
+    setSaving(true);
+    try {
+      const res = await ipc.facebookPoster?.scheduleUpdate(buildMovePatch(entry.schedule, target.getTime()));
+      if (!res?.success) throw new Error(res?.error || 'Không dời được lịch');
+      showNotification('Đã dời lịch đăng', 'success');
+    } catch (error) { showNotification(error instanceof Error ? error.message : 'Không dời được lịch', 'error'); }
+    finally { setSaving(false); load(); }
+  };
+  const navigate = (step: number) => {
+    const date = new Date(anchor);
+    if (view === 'month') { date.setDate(1); date.setMonth(date.getMonth() + step); }
+    else date.setDate(date.getDate() + step * (view === 'week' ? 7 : 1));
+    setAnchor(date);
+  };
+  const slot = (date: Date, hour?: number) => {
+    const key = `${dayKey(date)}:${hour ?? ''}`;
+    const currentHour = hour !== undefined && dayKey(date) === dayKey(new Date(now)) && hour === new Date(now).getHours();
+    const draftAt = new Date(date);
+    draftAt.setHours(hour ?? 9, 0, 0, 0);
+    const future = draftAt.getTime() >= now + 60_000;
+    return <div key={key} className={`poster-calendar-slot ${hour === undefined ? 'is-month' : ''} ${date.getMonth() !== anchor.getMonth() && view === 'month' ? 'is-outside' : ''}`} data-hour={hour}
+      onDragOver={event => { if (dragging.current) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={event => { event.preventDefault(); void move(date, hour); }}>
+      {hour === undefined && <span className={`poster-month-date ${dayKey(date) === dayKey(new Date(now)) ? 'is-today' : ''}`}>{date.getDate()}</span>}
+      <button type="button" className="poster-slot-add" aria-label={`Soạn bài lúc ${hour ?? 9}:00 ${dateLabel(date)}`} disabled={!future || saving} onClick={() => onCompose(draftAt.getTime())}><span aria-hidden="true">＋</span></button>
+      <div className="poster-slot-posts">
+        {(entriesBySlot.get(key) || []).map(entry => {
+          const profiles = (entry.schedule.params.profiles || []) as { profileId: string; targets: string[] }[];
+          const state = status(entry);
+          const draggable = !saving && !entry.historical && canDragSchedule(entry.schedule) && entry.schedule.enabled && entry.at >= now + 60_000 && !entry.queued;
+          return <button key={`${entry.schedule.id}:${entry.at}`} type="button" className={`poster-calendar-post is-${state}`} draggable={draggable}
+            onDragStart={event => { dragging.current = entry; event.dataTransfer.setData('text/plain', entry.schedule.id); event.dataTransfer.effectAllowed = 'move'; }} onDragEnd={() => { dragging.current = null; }}
+            onClick={() => { setOperationError(''); setDetail(entry); }} aria-label={`${entry.schedule.name}, ${formatShort(entry.at)}, ${LABELS[state]}`}>
+            <span className="poster-post-time">{clock(entry.at)} · {LABELS[state]}</span>
+            <span className="poster-post-title">{entry.schedule.name}</span>
+            <span className="poster-post-channel"><span className="poster-mini-avatar" aria-hidden="true">{(profileNames.get(profiles[0]?.profileId) || '?').slice(0, 1)}</span>
+              <span className="truncate">{profileNames.get(profiles[0]?.profileId) || 'Profile đã xoá'}{profiles.length > 1 ? ` +${profiles.length - 1}` : ''}</span>
+              {entry.schedule.kind === 'recurring' && <span title="Lịch lặp lại">↻</span>}
+            </span>
+          </button>;
+        })}
       </div>
+      {currentHour && <div className="poster-now-line" aria-label={`Giờ hiện tại ${clock(now)}`} style={{ top: `${new Date(now).getMinutes() / 60 * 100}%` }}><span>{clock(now)}</span></div>}
+    </div>;
+  };
+
+  const visibleSchedules = schedules.filter(schedule => {
+    const channelMatches = selectedChannels === null || ((schedule.params.profiles || []) as { profileId: string }[]).some(profile => selectedChannels.includes(profile.profileId));
+    const state = status({ schedule, at: schedule.runAt ?? now, historical: schedule.kind === 'once' && !!schedule.lastRun && schedule.nextRunAt === null && !queued.has(schedule.id), queued: queued.has(schedule.id) });
+    return channelMatches && (stateFilter === 'all' || stateFilter === state);
+  });
+  return (
+    <section className="poster-calendar" aria-label="Lịch đăng bài">
+      <div className="poster-calendar-filters">
+        <div className="poster-date-navigation"><button className="poster-icon-button" aria-label="Khoảng trước" onClick={() => navigate(-1)}>‹</button>
+          <span>{view === 'month' ? anchor.toLocaleDateString('vi-VN', { month: 'long', year: 'numeric' }) : view === 'day' ? `${dateLabel(days[0])}/${days[0].getFullYear()}` : `${dateLabel(days[0])} – ${dateLabel(days[6])}/${days[6].getFullYear()}`}</span>
+          <button className="poster-icon-button" aria-label="Khoảng tiếp theo" onClick={() => navigate(1)}>›</button></div>
+        <button className="poster-button" onClick={() => setAnchor(new Date())}>Hôm nay</button>
+        <select className="poster-input poster-state-filter" aria-label="Lọc trạng thái lịch" value={stateFilter} onChange={event => setStateFilter(event.target.value)}>
+          <option value="all">Tất cả trạng thái</option>{['scheduled', 'queued', 'paused', 'done', 'failed', 'missed', 'cancelled', 'running'].map(state => <option key={state} value={state}>{LABELS[state]}</option>)}
+        </select>
+        <div className="poster-view-switch" aria-label="Chế độ lịch">{(['day', 'week', 'month'] as const).map(value => <button key={value} aria-pressed={!listView && view === value} onClick={() => { setView(value); setListView(false); }}>{value === 'day' ? 'Ngày' : value === 'week' ? 'Tuần' : 'Tháng'}</button>)}</div>
+        <button className="poster-button" aria-pressed={listView} onClick={() => setListView(value => !value)}>Danh sách</button>
+      </div>
+      {loading ? <div className="flex justify-center py-10" role="status" aria-label="Đang tải lịch"><Spinner size={5} /></div>
+        : error ? <div role="alert" className="poster-empty"><p>{error}</p><button className="poster-button mt-3" onClick={() => { setLoading(true); load(); }}>Thử lại</button></div>
+        : listView ? <div className="poster-schedule-list">
+          {visibleSchedules.length === 0 && <p className="poster-empty">Chưa có lịch đăng phù hợp. Bấm Soạn bài để hẹn giờ.</p>}
+          {visibleSchedules.map(schedule => <article key={schedule.id} className="poster-schedule-row">
+            <div className="min-w-0 flex-1"><h3 className="font-semibold truncate" title={schedule.name}>{schedule.name}</h3><p className="poster-muted text-xs mt-1">{schedule.kind === 'once' ? 'Một lần' : describeRecurrence(schedule.days, schedule.time)} · {schedule.nextRunAt ? formatShort(schedule.nextRunAt) : 'Không có lần chạy tới'}{queued.has(schedule.id) ? ' · Đang chờ' : ''}</p>
+              {schedule.lastRun && <button onClick={onOpenHistory} className="poster-link text-xs mt-1">Lần gần nhất: {STATUS_LABEL[schedule.lastRun.status]?.label} · {formatShort(schedule.lastRun.startedAt)}</button>}</div>
+            <div className="flex flex-wrap gap-2 items-center"><button className="poster-button" aria-label={`${schedule.enabled ? 'Tạm dừng' : 'Bật lại'} lịch ${schedule.name}`} disabled={saving} onClick={() => toggle(schedule)}>{schedule.enabled ? 'Tạm dừng' : 'Bật lại'}</button>
+              <button className="poster-button" onClick={() => setEditing(schedule)}>Sửa giờ</button><button className="poster-button text-red-400" disabled={saving} onClick={() => remove(schedule)}>Xoá</button></div>
+          </article>)}
+        </div> : <>
+          <div ref={scrollRef} className="poster-calendar-scroll" tabIndex={0} aria-label="Lưới lịch có thể cuộn">
+            <div className={`poster-calendar-grid is-${view}`}>
+              {view !== 'month' && <div className="poster-day-header poster-muted">Giờ</div>}
+              {(view === 'month' ? days.slice(0, 7) : days).map(date => <div key={dayKey(date)} className={`poster-day-header ${dayKey(date) === dayKey(new Date(now)) ? 'is-today' : ''}`}>
+                <span className="poster-muted">{date.toLocaleDateString('vi-VN', { weekday: 'short' })}</span>{view !== 'month' && <strong>{dateLabel(date)}</strong>}
+              </div>)}
+              {view === 'month' ? days.map(date => slot(date)) : Array.from({ length: 24 }, (_, hour) => <React.Fragment key={hour}><div className="poster-hour-label">{String(hour).padStart(2, '0')}:00</div>{days.map(date => slot(date, hour))}</React.Fragment>)}
+            </div>
+          </div>
+          <div className="poster-calendar-footer"><span>{shownEntries.length ? `${shownEntries.length} bài trong khoảng đang xem` : 'Chưa có bài trong khoảng đang xem. Bấm ＋ để soạn bài.'}</span><span>Giờ địa phương · {Intl.DateTimeFormat().resolvedOptions().timeZone}</span></div>
+        </>}
+      {saving && <p className="poster-muted text-xs px-5 py-2" role="status">Đang cập nhật lịch…</p>}
       {editing && <ScheduleDialog schedule={editing} onClose={() => setEditing(null)} onSaved={load} />}
-    </div>
+      {detail && <dialog ref={detailRef} className="poster-dialog poster-detail-dialog" aria-labelledby="poster-detail-title" onCancel={event => { event.preventDefault(); closeDetail(); }}>
+        <header className="poster-dialog-header"><h2 id="poster-detail-title" className="break-words min-w-0">{detail.schedule.name}</h2><button className="poster-icon-button shrink-0" aria-label="Đóng chi tiết bài" onClick={closeDetail}>✕</button></header>
+        <div className="p-5 space-y-4"><p className="poster-muted">{formatShort(detail.at)} · {LABELS[status(detail)]}</p>
+          {(operationError || error) && <p role="alert" className="text-red-400 text-sm break-words">{operationError || error}</p>}
+          <PostPreview text={String(detail.schedule.params.text || '')} comment={String(detail.schedule.params.comment || '')} mediaPaths={[]} mode={detail.schedule.params.mode === 'page' ? 'page' : 'group'} names={((detail.schedule.params.profiles || []) as { profileId: string }[]).map(profile => profileNames.get(profile.profileId) || profile.profileId)} />
+          {Array.isArray(detail.schedule.params.mediaPaths) && detail.schedule.params.mediaPaths.length > 0 && <p className="poster-muted text-xs break-words">Tệp đính kèm đã lưu: {detail.schedule.params.mediaPaths.join(', ')}</p>}
+          <div className="flex flex-wrap gap-2"><button className="poster-button" disabled={saving} onClick={() => toggle(detail.schedule)}>{detail.schedule.enabled ? 'Tạm dừng lịch' : 'Bật lịch'}</button>
+            <button className="poster-primary" onClick={() => { setEditing(detail.schedule); closeDetail(); }}>Sửa giờ</button><button className="poster-button" onClick={() => { closeDetail(); onOpenHistory(); }}>Lịch sử</button>
+            <button className="poster-button text-red-400" disabled={saving} onClick={() => { const schedule = detail.schedule; closeDetail(); void remove(schedule); }}>Xoá lịch</button></div>
+        </div>
+      </dialog>}
+    </section>
   );
 }
