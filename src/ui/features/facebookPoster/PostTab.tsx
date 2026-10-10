@@ -6,8 +6,9 @@ import ScheduleDialog from './ScheduleDialog';
 import MediaPicker from './MediaPicker';
 import PostPreview from './PostPreview';
 import { matchesKeywords } from './matchKeywords';
+import { hydrateTargets } from './draftForm';
 import { validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
-import type { FbPosterGroup, FbPosterMode } from '../../../models/facebookPoster';
+import type { FbPosterGroup, FbPosterMode, FbPosterSchedule } from '../../../models/facebookPoster';
 
 const MAX_TEXT = 63206;
 const MAX_COMMENT = 8000;
@@ -20,28 +21,34 @@ interface Props {
   onClose: () => void;
   initialProfileIds: string[];
   initialRunAt?: number;
+  /** Mở lại một bản nháp để sửa: nội dung, ảnh (đường dẫn tuyệt đối), profile, nhóm. */
+  draft?: { schedule: FbPosterSchedule; media: { path: string; size: number }[] };
 }
 
 const splitLines = (value: string): string[] => value.split('\n').map((l) => l.trim()).filter(Boolean);
 
-export default function PostTab({ busy, profileNames, onStarted, open, onClose, initialProfileIds, initialRunAt }: Props) {
+export default function PostTab({ busy, profileNames, onStarted, open, onClose, initialProfileIds, initialRunAt, draft }: Props) {
+  const dp = draft?.schedule.params as Record<string, any> | undefined;
   const showNotification = useAppStore((s) => s.showNotification);
-  const [mode, setMode] = useState<FbPosterMode>('group');
-  const [text, setText] = useState('');
-  const [media, setMedia] = useState<MediaItem[]>([]);
-  const [comment, setComment] = useState('');
-  const [profileIds, setProfileIds] = useState<string[]>(initialProfileIds);
+  const [mode, setMode] = useState<FbPosterMode>(dp?.mode === 'page' ? 'page' : 'group');
+  const [text, setText] = useState<string>(typeof dp?.text === 'string' ? dp.text : '');
+  const [media, setMedia] = useState<MediaItem[]>(draft?.media ?? []);
+  const [comment, setComment] = useState<string>(typeof dp?.comment === 'string' ? dp.comment : '');
+  const [profileIds, setProfileIds] = useState<string[]>(
+    dp ? ((dp.profiles ?? []) as { profileId: string }[]).map((p) => p.profileId) : initialProfileIds);
   const [keyword, setKeyword] = useState('');
   const [groupsByProfile, setGroupsByProfile] = useState<Record<string, FbPosterGroup[]>>({});
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
   const [extraLinks, setExtraLinks] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [minDelaySec, setMinDelaySec] = useState(300);
-  const [maxDelaySec, setMaxDelaySec] = useState(900);
-  const [concurrency, setConcurrency] = useState(3);
-  const [staggerMinSec, setStaggerMinSec] = useState(30);
-  const [staggerMaxSec, setStaggerMaxSec] = useState(90);
+  const [minDelaySec, setMinDelaySec] = useState<number>(dp?.minDelaySec ?? 300);
+  const [maxDelaySec, setMaxDelaySec] = useState<number>(dp?.maxDelaySec ?? 900);
+  const [concurrency, setConcurrency] = useState<number>(dp?.concurrency ?? 3);
+  const [staggerMinSec, setStaggerMinSec] = useState<number>(dp?.staggerMinSec ?? 30);
+  const [staggerMaxSec, setStaggerMaxSec] = useState<number>(dp?.staggerMaxSec ?? 90);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const hydrated = useRef(!dp);
   const [starting, setStarting] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [operationError, setOperationError] = useState('');
@@ -63,7 +70,23 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
     setOperationError('');
     ipc.facebookPoster?.listGroups(profileIds).then((res) => {
       if (cancelled) return;
-      if (res?.success) setGroupsByProfile(res.groups || {});
+      if (res?.success) {
+        const groups: Record<string, FbPosterGroup[]> = res.groups || {};
+        setGroupsByProfile(groups);
+        // Áp đích của nháp một lần, ngay khi danh sách nhóm tải xong (lần render đầu chưa có nhóm).
+        if (!hydrated.current) {
+          hydrated.current = true;
+          const nextUnchecked = new Set<string>();
+          const links: Record<string, string> = {};
+          for (const entry of (dp?.profiles ?? []) as { profileId: string; targets: string[] }[]) {
+            const h = hydrateTargets(entry.targets ?? [], (groups[entry.profileId] || []).map((g) => g.url));
+            for (const url of h.uncheckedUrls) nextUnchecked.add(`${entry.profileId}|${url}`);
+            if (h.extraLinks) links[entry.profileId] = h.extraLinks;
+          }
+          setUnchecked(nextUnchecked);
+          setExtraLinks(links);
+        }
+      }
       else reportError(res?.error || 'Không tải được danh sách nhóm');
     }).catch(() => { if (!cancelled) reportError('Không tải được danh sách nhóm'); })
       .finally(() => { if (!cancelled) setGroupsLoading(false); });
@@ -137,6 +160,25 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
     }
   };
 
+  const draftDisabledReason = !text.trim() ? 'Nhập nội dung bài.' : validateMediaSelection(media) ?? '';
+  const handleSaveDraft = async () => {
+    setSavingDraft(true);
+    setOperationError('');
+    try {
+      const res = await ipc.facebookPoster?.draftSave({
+        id: draft?.schedule.id,
+        plannedAt: draft ? draft.schedule.runAt : initialRunAt ?? null,
+        params: postParams(),
+      });
+      if (!res?.success) reportError(res?.error || 'Không lưu được nháp');
+      else { showNotification('Đã lưu nháp', 'success'); onClose(); }
+    } catch (err: any) {
+      reportError(err?.message || 'Không lưu được nháp');
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
   const numberInput = (label: string, value: number, set: (n: number) => void, min: number, max?: number) => (
     <label className="block text-xs text-gray-400">
       {label}
@@ -147,7 +189,7 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
 
   return (
     <dialog ref={dialogRef} className="poster-dialog poster-composer" aria-labelledby="poster-composer-title" onCancel={e => { e.preventDefault(); onClose(); }}>
-      <header className="poster-dialog-header"><div><h2 id="poster-composer-title">Soạn bài</h2><p className="poster-muted text-sm mt-1">Chọn kênh, viết nội dung và xem trước bài đăng.</p></div>
+      <header className="poster-dialog-header"><div><h2 id="poster-composer-title">{draft ? 'Sửa bản nháp' : 'Soạn bài'}</h2><p className="poster-muted text-sm mt-1">Chọn kênh, viết nội dung và xem trước bài đăng.</p></div>
         <button type="button" className="poster-icon-button" aria-label="Đóng trình soạn bài" onClick={onClose}>✕</button>
       </header>
       <div className="poster-composer-grid">
@@ -264,6 +306,10 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
         </button>
         <button type="button" onClick={() => setScheduling(true)} disabled={!!scheduleDisabledReason} className="px-4 py-2 rounded-lg text-sm border border-gray-600 text-gray-200 hover:border-gray-400 disabled:opacity-60">
           Hẹn giờ
+        </button>
+        <button type="button" onClick={handleSaveDraft} disabled={!!draftDisabledReason || savingDraft}
+          className="px-4 py-2 rounded-lg text-sm border border-gray-600 text-gray-200 hover:border-gray-400 disabled:opacity-60">
+          {savingDraft ? 'Đang lưu...' : 'Lưu nháp'}
         </button>
         {disabledReason && <span className="text-xs text-gray-400">{disabledReason}</span>}
       </div>

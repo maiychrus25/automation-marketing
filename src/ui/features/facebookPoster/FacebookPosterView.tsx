@@ -8,7 +8,7 @@ import ScheduleTab from './ScheduleTab';
 import HistoryTab from './HistoryTab';
 import RunPanel, { PosterLog, PosterProgress } from './RunPanel';
 import ChannelsPanel, { type PosterChannel } from './ChannelsPanel';
-import type { FbPosterRun } from '../../../models/facebookPoster';
+import type { FbPosterRun, FbPosterSchedule } from '../../../models/facebookPoster';
 
 const MAX_LOGS = 500;
 const SECTIONS: Record<FacebookPosterSection, { label: string; description?: string }> = {
@@ -34,6 +34,8 @@ export default function FacebookPosterView() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerMounted, setComposerMounted] = useState(false);
   const [composeAt, setComposeAt] = useState<number | undefined>();
+  const [editingDraft, setEditingDraft] = useState<{ schedule: FbPosterSchedule; media: { path: string; size: number }[] } | null>(null);
+  const showNotification = useAppStore(s => s.showNotification);
   const [showProgress, setShowProgress] = useState(false);
   const setView = useAppStore(s => s.setView);
   const runIdRef = useRef<string | null>(null);
@@ -53,8 +55,18 @@ export default function FacebookPosterView() {
   }, []);
 
   const compose = (at?: number) => {
+    setEditingDraft(null);
     setChannelsOpen(false);
     setComposeAt(at);
+    setComposerMounted(true);
+    setComposerOpen(true);
+  };
+  const editDraft = async (id: string) => {
+    const res = await ipc.facebookPoster?.draftGet(id);
+    if (!res?.success || !res.draft) { showNotification(res?.error || 'Không mở được bản nháp', 'error'); return; }
+    setChannelsOpen(false);
+    setEditingDraft({ schedule: res.draft, media: res.media ?? [] });
+    setComposeAt(undefined);
     setComposerMounted(true);
     setComposerOpen(true);
   };
@@ -123,7 +135,7 @@ export default function FacebookPosterView() {
           <ChannelsPanel channels={channels} selected={selectedChannels} onChange={setSelectedChannels} onCompose={() => compose()}
             onAdd={() => setView('browser')} loading={channelsLoading} error={channelsError} onRetry={loadChannels} />
           <main className="poster-content" aria-label={SECTIONS[section].label}>
-            {section === 'schedule' && <ScheduleTab selectedChannels={selectedChannels} profileNames={profileNames} onCompose={compose} onOpenHistory={() => openFacebookPoster('history')} />}
+            {section === 'schedule' && <ScheduleTab selectedChannels={selectedChannels} profileNames={profileNames} onCompose={compose} onEditDraft={editDraft} onOpenHistory={() => openFacebookPoster('history')} />}
             {section !== 'schedule' && <div className="poster-task-page">
               <p className="poster-muted mb-6">{SECTIONS[section].description}</p>
               {section === 'join' && <JoinTab busy={busy} onStarted={onStarted} />}
@@ -134,7 +146,7 @@ export default function FacebookPosterView() {
         </div>
         {showProgress && <aside aria-label="Tiến độ" className="poster-run-panel"><RunPanel run={run} progress={progress} logs={logs} profileNames={profileNames} /></aside>}
       </div>
-      {composerMounted && <PostTab open={composerOpen} onClose={() => setComposerOpen(false)} initialProfileIds={selectedChannels ?? []} initialRunAt={composeAt}
+      {composerMounted && <PostTab key={editingDraft?.schedule.id ?? 'new'} draft={editingDraft ?? undefined} open={composerOpen} onClose={() => setComposerOpen(false)} initialProfileIds={selectedChannels ?? []} initialRunAt={composeAt}
         busy={busy} profileNames={profileNames} onStarted={onStarted} />}
     </div>
   );

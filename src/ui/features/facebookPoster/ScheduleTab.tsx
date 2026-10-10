@@ -15,13 +15,14 @@ interface Props {
   profileNames: Map<string, string>;
   onCompose: (at?: number) => void;
   onOpenHistory: () => void;
+  onEditDraft: (id: string) => void;
 }
 const dayKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 const dateLabel = (date: Date) => date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
 const clock = (at: number) => new Date(at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
 const LABELS: Record<string, string> = { scheduled: 'Đã hẹn', paused: 'Tạm dừng', queued: 'Đang chờ', ...Object.fromEntries(Object.entries(STATUS_LABEL).map(([key, value]) => [key, value.label])) };
 
-export default function ScheduleTab({ selectedChannels, profileNames, onCompose, onOpenHistory }: Props) {
+export default function ScheduleTab({ selectedChannels, profileNames, onCompose, onOpenHistory, onEditDraft }: Props) {
   const showNotification = useAppStore(s => s.showNotification);
   const [schedules, setSchedules] = useState<FbPosterScheduleView[]>([]);
   const [queued, setQueued] = useState<Set<string>>(new Set());
