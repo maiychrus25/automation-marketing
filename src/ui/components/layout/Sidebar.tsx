@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { useAppStore } from '@/store/appStore';
+import { useAppStore, type FacebookPosterSection } from '@/store/appStore';
 import { useEmployeeStore } from '@/store/employeeStore';
 import SidebarAccounts from './SidebarAccounts';
 import useIsMobile from '@/hooks/useIsMobile';
@@ -45,6 +45,9 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
   const { can: canErp } = useErpPermissions();
   const canErpAccess = canErp('erp.access');
   const { view, setView, sidebarCollapsed, windowAppearance } = useAppStore();
+  const facebookPosterSection = useAppStore(s => s.facebookPosterSection);
+  const openFacebookPoster = useAppStore(s => s.openFacebookPoster);
+  const [posterOpen, setPosterOpen] = useState(view === 'facebookPoster');
   const crmRequestUnseenByAccount = useAppStore(s => s.crmRequestUnseenByAccount);
   const forceRail = useIsMobile(FORCE_RAIL_BELOW);
   const collapsed = sidebarCollapsed || forceRail;
@@ -123,7 +126,19 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
         {empMode !== 'employee' && !isSimulating && (
           <>
           <NavItem icon="browser" label="Trình duyệt" collapsed={collapsed} active={view === 'browser'} onClick={() => setView('browser')} />
-          <NavItem icon="facebookPoster" label="Đăng Facebook" collapsed={collapsed} active={view === 'facebookPoster'} onClick={() => setView('facebookPoster')} />
+          <NavItem
+            icon="facebookPoster"
+            label="Đăng Facebook"
+            collapsed={collapsed}
+            active={!posterOpen && view === 'facebookPoster'}
+            expanded={posterOpen}
+            onClick={() => setPosterOpen(v => !v)}
+          />
+          {posterOpen && FACEBOOK_POSTER_ITEMS.map(item => (
+            <NavItem key={item.section} icon={item.icon} label={item.label} collapsed={collapsed} sub
+              active={view === 'facebookPoster' && facebookPosterSection === item.section}
+              onClick={() => openFacebookPoster(item.section)} />
+          ))}
           </>
         )}
       </nav>
@@ -244,6 +259,13 @@ function NavItem({ icon, label, active, onClick, dot, collapsed, expanded, sub }
   );
 }
 
+const FACEBOOK_POSTER_ITEMS: { section: FacebookPosterSection; label: string; icon: string }[] = [
+  { section: 'schedule', label: 'Lịch đăng', icon: 'posterSchedule' },
+  { section: 'join', label: 'Tham gia nhóm', icon: 'friends' },
+  { section: 'comments', label: 'Thu bình luận', icon: 'chat' },
+  { section: 'history', label: 'Lịch sử', icon: 'posterHistory' },
+];
+
 // ─── Shared icon component ────────────────────────────────────────────────────
 
 function NavIcon({ name }: { name: string }) {
@@ -329,6 +351,18 @@ function NavIcon({ name }: { name: string }) {
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
           <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+      );
+    case 'posterSchedule':
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8 2v4m8-4v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14H3V6a2 2 0 0 1 2-2Z"/>
+        </svg>
+      );
+    case 'posterHistory':
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 11a9 9 0 1 1 2 7M3 3v8h8m1-4v5l3 2"/>
         </svg>
       );
     case 'facebookPoster':

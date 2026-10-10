@@ -4,6 +4,7 @@ import { TIME_RE, computeNextRun } from './scheduleTime';
 const MAX_NAME = 100;
 const MIN_LEAD_MS = 60 * 1000;
 export const LEAD_ERROR = 'Giờ đăng phải sau thời điểm hiện tại ít nhất 1 phút';
+export const DRAFT_ENABLE_ERROR = 'Bản nháp phải được duyệt trước khi bật';
 
 export type ScheduleUpdateFields = Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt'>>;
 
@@ -37,6 +38,7 @@ export function planScheduleUpdate(
     request: { name?: unknown; enabled?: unknown; runAt?: unknown; days?: unknown; time?: unknown },
     now: number,
 ): ScheduleUpdateFields {
+    if (existing.draft && request.enabled !== undefined) throw new Error(DRAFT_ENABLE_ERROR);
     const fields: ScheduleUpdateFields = {};
     if (request.name !== undefined) {
         const name = readName(request.name);

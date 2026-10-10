@@ -1,10 +1,10 @@
-import { planScheduleUpdate, LEAD_ERROR } from '../../services/facebookPoster/scheduleUpdate';
+import { planScheduleUpdate, LEAD_ERROR, DRAFT_ENABLE_ERROR } from '../../services/facebookPoster/scheduleUpdate';
 import type { FbPosterSchedule } from '../../models/facebookPoster';
 
 const NOW = new Date(2026, 9, 7, 10, 0, 0).getTime(); // Wed 2026-10-07 10:00 local
 const base: FbPosterSchedule = {
     id: 's1', name: 'old', kind: 'recurring', params: {}, runAt: null, days: [0, 1, 2, 3, 4, 5, 6], time: '09:00',
-    enabled: true, nextRunAt: NOW - 1000, lastRunId: null, createdAt: 0, updatedAt: 0,
+    enabled: true, draft: false, nextRunAt: NOW - 1000, lastRunId: null, createdAt: 0, updatedAt: 0,
 };
 const once: FbPosterSchedule = { ...base, kind: 'once', runAt: NOW - 5000, days: [], time: '', nextRunAt: null };
 
@@ -40,5 +40,11 @@ describe('planScheduleUpdate', () => {
     });
     it('an empty name throws', () => {
         expect(() => planScheduleUpdate(base, { name: '  ' }, NOW)).toThrow('Tên lịch không được để trống');
+    });
+    it('a draft cannot be enabled through scheduleUpdate', () => {
+        expect(() => planScheduleUpdate({ ...once, draft: true, enabled: false, runAt: NOW + 3_600_000 }, { enabled: true }, NOW)).toThrow(DRAFT_ENABLE_ERROR);
+    });
+    it('a draft can move its planned time and stays disabled', () => {
+        expect(planScheduleUpdate({ ...once, draft: true, enabled: false }, { runAt: NOW + 3_600_000 }, NOW)).toEqual({ runAt: NOW + 3_600_000, nextRunAt: null });
     });
 });

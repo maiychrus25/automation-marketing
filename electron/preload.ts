@@ -903,6 +903,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     scheduleList:   ()                            => ipcRenderer.invoke('facebookPoster:scheduleList'),
     scheduleUpdate: (params: any)                 => ipcRenderer.invoke('facebookPoster:scheduleUpdate', params),
     scheduleDelete: (id: string)                  => ipcRenderer.invoke('facebookPoster:scheduleDelete', { id }),
+    draftSave:      (params: any)                 => ipcRenderer.invoke('facebookPoster:draftSave', params),
+    draftGet:       (id: string)                  => ipcRenderer.invoke('facebookPoster:draftGet', { id }),
+    draftApprove:   (params: any)                 => ipcRenderer.invoke('facebookPoster:draftApprove', params),
     takeMissed:     ()                            => ipcRenderer.invoke('facebookPoster:takeMissed'),
   },
 });

@@ -139,3 +139,24 @@ export function validateStartParams(input: { kind?: unknown; params?: unknown },
             throw new Error('Loại việc không hợp lệ');
     }
 }
+
+/**
+ * Bản nháp: chỉ bắt buộc nội dung (đã chốt ở spec GĐ2). Profile/nhóm/ảnh được thiếu; khi duyệt mới kiểm
+ * đầy đủ bằng validateStartParams. Ảnh nếu có vẫn phải tồn tại và hợp lệ. Đích giữ nguyên dạng người dùng nhập.
+ */
+export function validateDraftParams(raw: unknown, env: StartParamsEnv): Record<string, unknown> {
+    const p = asObject(raw);
+    if (p.mode !== 'group' && p.mode !== 'page') throw new Error('Chế độ đăng không hợp lệ');
+    const text = typeof p.text === 'string' ? p.text : '';
+    if (!text.trim()) throw new Error('Nội dung bài không được để trống');
+    if (text.length > MAX_TEXT) throw new Error(`Nội dung bài tối đa ${MAX_TEXT} ký tự`);
+    const comment = typeof p.comment === 'string' ? p.comment : '';
+    if (comment.length > MAX_COMMENT) throw new Error(`Bình luận tối đa ${MAX_COMMENT} ký tự`);
+    const profiles = asArray(p.profiles).map(asObject)
+        .filter((entry) => typeof entry.profileId === 'string' && entry.profileId !== '')
+        .map((entry) => ({
+            profileId: entry.profileId as string,
+            targets: asArray(entry.targets).filter((t): t is string => typeof t === 'string' && t.trim() !== ''),
+        }));
+    return { ...p, mode: p.mode, text, comment, mediaPaths: readMediaPaths(p, env), profiles };
+}

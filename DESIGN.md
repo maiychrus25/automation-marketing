@@ -165,6 +165,49 @@ geometry:
 source:
   file: resources/icons/icon.svg
   build: node scripts/build-icons.mjs
+poster:
+  font-family: '"Plus Jakarta Sans", sans-serif'
+  font-size: 14
+  title-size: 18         # 16 dưới 640 px
+  channels-width: 260
+  topbar-height: 64
+  panel-radius: 12
+  dialog-radius: 24
+  panel-gap: 1
+  calendar-gap: 4
+  spacing: [8, 12, 20, 24, 28, 32]
+  primary: "#612bd3"
+  primary-hover: "#5421bf"
+  provider: "#1877f2"
+  on-primary: "#ffffff"
+  light:
+    canvas: "#f0f2f4"
+    surface: "#ffffff"
+    line: "#e7e9eb"
+    border: "#e7e9eb"
+    header: "#f5f7f9"
+    text: "#0e0e0e"
+    muted: "#63686c"
+    highlight: "#ab24b0"
+    focus-bg: "#ebe8ff"
+    focus-text: "#3900b2"
+    hover: "#f4f6f8"
+    facebook: "#ffffff"
+    comment: "#f6f6f6"
+  dark:
+    canvas: "#0e0e0e"
+    surface: "#1a1919"
+    line: "#212121"
+    border: "#2b2b2b"
+    header: "#1e1d1d"
+    text: "#ffffff"
+    muted: "#9c9c9c"
+    highlight: "#fc69ff"
+    focus-bg: "#ffffff"
+    focus-text: "#1a1919"
+    hover: "#201f1f"
+    facebook: "#242526"
+    comment: "#333334"
 sizes:
   png: [128, 1024]
   ico: [16, 32, 48, 64, 128, 256]
@@ -309,14 +352,18 @@ Những quyết định còn hiệu lực:
 
 ## Màn hình Đăng Facebook
 
-Màn `src/ui/features/facebookPoster/`, không thêm token; dùng lại class gray/blue và trạng thái như màn Trình duyệt.
+Màn `src/ui/features/facebookPoster/` có ngoại lệ thị giác theo brief GĐ1: dùng bộ token `--poster-*` bám source Postiz, scope trong `.poster-workspace` và `.poster-dialog`. Các màn khác giữ hệ MaiHub mặc định.
 
-- **Bố cục.** Thanh tab (`role="tablist"`, phím mũi tên đổi tab) và khung tiến độ cạnh nhau từ 1024 px (khung tiến độ rộng 384 px bên phải); dưới 1024 px khung tiến độ xếp xuống dưới nội dung. Cuộn ở vùng nội dung, không cuộn ngang cấp trang.
+- **Bố cục.** Không có rail riêng: 4 màn (Lịch đăng, Tham gia nhóm, Thu bình luận, Lịch sử) là sub-nav của mục "Đăng Facebook" ở sidebar chính. Top bar 64 px (tiêu đề 18 px), panel Kênh 260 px và Calendar, các panel cách nhau 1 px trên nền line, bo 12 px. Tiến độ mở theo nhu cầu ở dưới, tự hiện khi bắt đầu việc. Dưới 1100 px panel Kênh mở bằng nút; dưới 640 px Kênh mở trong vùng nội dung.
+- **Chữ và màu.** Plus Jakarta Sans 14 px, font Google Fonts tự lưu local với giấy phép OFL; không dùng logo/asset thương hiệu Postiz. Primary tím, now-line hồng. Light dùng muted và highlight đậm hơn source tham chiếu để giữ tương phản. Token và class gray/blue được scope để các component cũ cũng nhất quán.
+- **Calendar.** Tuần/ngày có 24 hàng giờ, header dính 62 px, khoảng cách 4 px; tháng là lưới 7 cột. Chỉ cuộn ngang trong lưới ở màn hẹp; nhiều bài cùng giờ xếp dọc để không đè nhau. Now-line cập nhật mỗi phút. Lịch lặp dời giờ cần xác nhận phạm vi các lần sau.
+- **Bản nháp (GĐ2).** Thẻ nháp viền nét đứt, dải giờ nền `--poster-draft`; nháp chưa có giờ dự kiến nằm ở dải "Nháp chưa xếp lịch" trên lưới; nháp quá giờ dự kiến hiện "Quá giờ dự kiến" và không tự chạy. Chi tiết nháp: Sửa · Duyệt & hẹn giờ · Đăng ngay (xác nhận) · Xoá (xác nhận). Modal soạn bài có "Lưu nháp" (chỉ cần nội dung).
+- **Soạn bài.** Dialog native bo 24 px giữ focus và Escape; editor trái, preview Facebook phải, xuống một cột trên mobile. Nội dung chưa gửi giữ trong phiên đóng/mở dialog, chưa có draft DB. Bỏ AI theo brief; dùng lại chọn profile, nhóm/Trang, ảnh/video kéo-thả, bình luận đầu và dialog lịch một lần/lặp lại.
 - **Màu nhật ký.** info = `text-gray-400` (secondary), success = `text-green-400`, warning = `text-orange-400`, error = `text-red-400`; giờ `HH:mm:ss` màu `text-gray-500`.
 - **Chip trạng thái profile.** Chờ = gray-400, Đang chạy = blue-400, Xong = green-400, Lỗi = red-400, Đã hủy = orange-400; "Đang mở" của profile = yellow-400 như cảnh báo ở màn Trình duyệt.
 - **Một việc một lúc.** Khi có việc chạy, mọi nút Bắt đầu tắt và nêu lý do ngay cạnh nút; "Hủy" (đỏ) luôn qua `showConfirm`.
 - **Lưới ảnh (MediaPicker, từ 26.14.0).** Ô 72×72 px, bo góc như thẻ gray hiện có, số thứ tự ở góc, nút Lên/Xuống/Bỏ có `aria-label`; lưới xuống dòng, không cuộn ngang. Vượt giới hạn thì hiện lý do màu đỏ cạnh nút và tắt "Bắt đầu đăng"/"Lên lịch".
-- **Tab "Lịch đăng" (từ 26.14.0).** Nằm giữa "Đăng bài" và "Tham gia nhóm"; hàng danh sách dùng lại class gray/blue, công tắc Bật/Tạm dừng, xoá qua `showConfirm`. Trạng thái "Đã lỡ" = orange-400 như cảnh báo. Dưới 1024 px mỗi hàng xếp dọc, không tràn ngang.
+- **Quản lý lịch.** Calendar có chế độ danh sách để quản lý cả lịch ngoài khoảng đang xem. Giữ Bật/Tạm dừng, Sửa giờ, Xoá qua `showConfirm`, liên kết lịch sử; lỗi IPC có nút thử lại. Trạng thái có nhãn chữ, không chỉ màu.
 - **Nhật ký** tự cuộn xuống cuối, trừ khi người dùng đã cuộn lên; giữ tối đa 500 dòng.
 
 ## Dấu hiệu

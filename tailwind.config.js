@@ -20,6 +20,13 @@ module.exports = {
         },
         sidebar: 'var(--color-sidebar)',
         'sidebar-hover': 'var(--color-sidebar-hover)',
+        poster: {
+          canvas: 'var(--poster-canvas)',
+          surface: 'var(--poster-surface)',
+          border: 'var(--poster-border)',
+          primary: 'var(--poster-primary)',
+          highlight: 'var(--poster-highlight)',
+        },
       },
       backgroundColor: {
         gray: {

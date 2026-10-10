@@ -16,6 +16,7 @@ import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
+import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 
 
 let service: FacebookPosterService | null = null;
@@ -101,6 +102,10 @@ export async function cancelAndWaitFacebookPosterJobs(timeoutMs = 10000): Promis
 }
 
 const emitSchedulesChanged = (): void => EventBroadcaster.emit('facebookPoster:schedulesChanged', undefined);
+
+function draftDeps(): DraftDeps {
+    return { store: store(), env: startEnv, baseDir: scheduleBaseDir(), now: () => Date.now(), newId: () => randomUUID(), maxSchedules: MAX_SCHEDULES };
+}
 
 function scheduleBaseDir(): string {
     return path.dirname(db().getDbPath());
@@ -243,6 +248,21 @@ export function registerFacebookPosterIpc(): void {
         removeScheduleMedia(scheduleBaseDir(), id);
         scheduler?.reschedule();
         emitSchedulesChanged();
+    });
+
+    handle('facebookPoster:draftSave', (params) => {
+        const schedule = saveDraft(draftDeps(), params);
+        emitSchedulesChanged();
+        return { schedule };
+    });
+
+    handle('facebookPoster:draftGet', (params) => getDraft(draftDeps(), params.id));
+
+    handle('facebookPoster:draftApprove', (params) => {
+        const schedule = approveDraft(draftDeps(), params);
+        scheduler?.reschedule(); // "Đăng ngay" đặt nextRunAt = now → scheduler chạy qua hàng đợi
+        emitSchedulesChanged();
+        return { schedule };
     });
 
     handle('facebookPoster:takeMissed', () => {

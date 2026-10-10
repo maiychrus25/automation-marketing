@@ -4,7 +4,7 @@ import { useAppStore } from '@/store/appStore';
 import { computeNextRun } from '../../../services/facebookPoster/scheduleTime';
 import type { FbPosterScheduleView } from '../../../models/facebookPoster';
 
-// Thứ tự hiển thị T2..T7, CN; giá trị theo getDay().
+// Monday-first display; values follow getDay().
 const DAYS: { value: number; label: string }[] = [
   { value: 1, label: 'T2' }, { value: 2, label: 'T3' }, { value: 3, label: 'T4' }, { value: 4, label: 'T5' },
   { value: 5, label: 'T6' }, { value: 6, label: 'T7' }, { value: 0, label: 'CN' },
@@ -30,26 +30,30 @@ interface Props {
   /** Edit mode ("Sửa giờ"): only name and timing of this schedule's own kind are editable. */
   schedule?: FbPosterScheduleView;
   onSaved?: () => void;
+  initialRunAt?: number;
+  /** Duyệt nháp: lưu bằng draftApprove thay vì tạo/sửa lịch. */
+  approveDraftId?: string;
 }
 
-export default function ScheduleDialog({ onClose, buildParams, defaultName = '', schedule, onSaved }: Props) {
+export default function ScheduleDialog({ onClose, buildParams, defaultName = '', schedule, onSaved, initialRunAt, approveDraftId }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const edit = !!schedule;
   const [name, setName] = useState(schedule?.name ?? '');
   const [kind, setKind] = useState<'once' | 'recurring'>(schedule?.kind ?? 'once');
-  const [runAtInput, setRunAtInput] = useState(schedule?.runAt ? toLocalInput(schedule.runAt) : '');
+  const [runAtInput, setRunAtInput] = useState(schedule?.runAt ? toLocalInput(schedule.runAt) : initialRunAt ? toLocalInput(initialRunAt) : '');
   const [days, setDays] = useState<number[]>(schedule?.days ?? [1, 2, 3, 4, 5]);
   const [time, setTime] = useState(schedule?.time || '08:00');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
 
-  useEffect(() => { nameRef.current?.focus(); }, []);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    nameRef.current?.focus();
+    return () => dialog?.close();
+  }, []);
 
   const runAt = runAtInput ? new Date(runAtInput).getTime() : null;
   const next = computeNextRun({ kind, runAt, days, time }, Date.now());
@@ -61,7 +65,12 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
     setError('');
     try {
       let res;
-      if (schedule) {
+      if (approveDraftId) {
+        res = await ipc.facebookPoster?.draftApprove({
+          id: approveDraftId, when: 'schedule', kind,
+          ...(kind === 'once' ? { runAt: runAt as number } : { days, time }),
+        });
+      } else if (schedule) {
         // Send only what changed, so a rename never recomputes the next run.
         const patch: { id: string; name?: string; runAt?: number; days?: number[]; time?: string } = { id: schedule.id };
         if (name.trim() !== schedule.name) patch.name = name.trim();
@@ -98,16 +107,16 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div role="dialog" aria-modal="true" aria-labelledby="schedule-dialog-title"
-        className="w-full max-w-md max-h-full overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3 min-w-0">
-        <h2 id="schedule-dialog-title" className="text-base font-semibold text-white">{edit ? 'Sửa giờ' : 'Lên lịch đăng'}</h2>
+      <dialog ref={dialogRef} aria-labelledby="schedule-dialog-title" className="poster-dialog poster-schedule-dialog space-y-3" onCancel={e => { e.preventDefault(); e.stopPropagation(); onClose(); }}>
+        <h2 id="schedule-dialog-title" className="text-base font-semibold text-white">{approveDraftId ? 'Duyệt & hẹn giờ' : edit ? 'Sửa giờ' : 'Lên lịch đăng'}</h2>
 
-        <label className="block text-xs text-gray-400">
-          Tên lịch
-          <input ref={nameRef} className="input-field text-sm w-full mt-1 focus-visible:ring-2 focus-visible:ring-blue-500" maxLength={100} value={name}
-            placeholder={defaultName.slice(0, 40)} onChange={(e) => setName(e.target.value)} />
-        </label>
+        {!approveDraftId && (
+          <label className="block text-xs text-gray-400">
+            Tên lịch
+            <input ref={nameRef} className="input-field text-sm w-full mt-1 focus-visible:ring-2 focus-visible:ring-blue-500" maxLength={100} value={name}
+              placeholder={defaultName.slice(0, 40)} onChange={(e) => setName(e.target.value)} />
+          </label>
+        )}
 
         {!edit && (
           <div role="radiogroup" aria-label="Kiểu lịch" className="flex gap-4">
@@ -148,10 +157,9 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg text-sm border border-gray-600 text-gray-300 hover:border-gray-400 focus-visible:ring-2 focus-visible:ring-blue-500">Huỷ</button>
           <button type="button" onClick={save} disabled={saving || missing} className="btn-primary text-sm px-4 py-1.5 text-white disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-blue-500">
-            {saving ? 'Đang lưu...' : edit ? 'Lưu' : 'Lưu lịch'}
+            {saving ? 'Đang lưu...' : approveDraftId ? 'Duyệt & hẹn giờ' : edit ? 'Lưu' : 'Lưu lịch'}
           </button>
         </div>
-      </div>
-    </div>
+      </dialog>
   );
 }
