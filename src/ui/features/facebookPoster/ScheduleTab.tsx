@@ -7,7 +7,7 @@ import { describeRecurrence } from '../../../services/facebookPoster/scheduleTim
 import ScheduleDialog, { formatShort } from './ScheduleDialog';
 import PostPreview from './PostPreview';
 import { STATUS_LABEL } from './HistoryTab';
-import { buildMovePatch, canDragSchedule, getCalendarDays, getScheduleOccurrences, getUnscheduledDrafts, matchesChannels, type CalendarView, type ScheduleOccurrence } from './calendarModel';
+import { buildMovePatch, canDragSchedule, getCalendarDays, getScheduleOccurrences, getNowLine, getUnscheduledDrafts, matchesChannels, type CalendarView, type ScheduleOccurrence } from './calendarModel';
 import type { FbPosterScheduleView } from '../../../models/facebookPoster';
 
 interface Props {
@@ -76,6 +76,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
   }, [loading, listView, view]);
 
   const days = useMemo(() => getCalendarDays(anchor, view), [anchor, view]);
+  const nowLine = view === 'month' ? null : getNowLine(days, now);
   const entries = useMemo(() => getScheduleOccurrences(schedules, days, selectedChannels, now, queued), [schedules, days, selectedChannels, now, queued]);
   const status = (entry: ScheduleOccurrence) => entry.schedule.draft ? 'draft' : entry.historical ? entry.schedule.lastRun?.status || 'done'
     : !entry.schedule.enabled ? 'paused' : entry.queued ? 'queued' : 'scheduled';
@@ -153,7 +154,8 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
   };
   const slot = (date: Date, hour?: number) => {
     const key = `${dayKey(date)}:${hour ?? ''}`;
-    const currentHour = hour !== undefined && dayKey(date) === dayKey(new Date(now)) && hour === new Date(now).getHours();
+    const nowRow = hour !== undefined && nowLine?.hour === hour;
+    const isToday = dayKey(date) === dayKey(new Date(now));
     const draftAt = new Date(date);
     draftAt.setHours(hour ?? 9, 0, 0, 0);
     const future = draftAt.getTime() >= now + 60_000;
@@ -178,7 +180,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
           </button>;
         })}
       </div>
-      {currentHour && <div className="poster-now-line" aria-label={`Giờ hiện tại ${clock(now)}`} style={{ top: `${new Date(now).getMinutes() / 60 * 100}%` }}><span>{clock(now)}</span></div>}
+      {nowRow && <div className={`poster-now-line ${isToday ? 'is-today' : ''}`} aria-hidden="true" style={{ top: `${nowLine!.topPct}%` }} />}
     </div>;
   };
 
@@ -229,7 +231,9 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
               {(view === 'month' ? days.slice(0, 7) : days).map(date => <div key={dayKey(date)} className={`poster-day-header ${dayKey(date) === dayKey(new Date(now)) ? 'is-today' : ''}`}>
                 <span className="poster-muted">{date.toLocaleDateString('vi-VN', { weekday: 'short' })}</span>{view !== 'month' && <strong>{dateLabel(date)}</strong>}
               </div>)}
-              {view === 'month' ? days.map(date => slot(date)) : Array.from({ length: 24 }, (_, hour) => <React.Fragment key={hour}><div className="poster-hour-label">{String(hour).padStart(2, '0')}:00</div>{days.map(date => slot(date, hour))}</React.Fragment>)}
+              {view === 'month' ? days.map(date => slot(date)) : Array.from({ length: 24 }, (_, hour) => <React.Fragment key={hour}><div className="poster-hour-label">{nowLine?.hour === hour
+                ? <span className="poster-now-time" role="note" aria-label={`Giờ hiện tại ${nowLine.label}`} style={{ top: `${nowLine.topPct}%` }}>{nowLine.label}</span>
+                : `${String(hour).padStart(2, '0')}:00`}</div>{days.map(date => slot(date, hour))}</React.Fragment>)}
             </div>
           </div>
           <div className="poster-calendar-footer"><span>{shownEntries.length ? `${shownEntries.length} bài trong khoảng đang xem` : 'Chưa có bài trong khoảng đang xem. Bấm ＋ để soạn bài.'}</span><span>Giờ địa phương · {Intl.DateTimeFormat().resolvedOptions().timeZone}</span></div>

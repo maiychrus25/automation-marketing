@@ -1,5 +1,5 @@
 process.env.TZ = 'Asia/Ho_Chi_Minh';
-import { getCalendarDays, getScheduleOccurrences, buildMovePatch, canDragSchedule, matchesChannels, getUnscheduledDrafts } from '../../ui/features/facebookPoster/calendarModel';
+import { getCalendarDays, getScheduleOccurrences, buildMovePatch, canDragSchedule, matchesChannels, getUnscheduledDrafts, getNowLine } from '../../ui/features/facebookPoster/calendarModel';
 import type { FbPosterScheduleView } from '../../models/facebookPoster';
 
 const at = (day: number, hour = 0, minute = 0) => new Date(2026, 9, day, hour, minute).getTime();
@@ -82,5 +82,22 @@ describe('poster calendar', () => {
     expect(getUnscheduledDrafts([planned, loose, other], ['p1']).map((s) => s.id)).toEqual(['u']);
     expect(matchesChannels(other, ['p1'])).toBe(false);
     expect(matchesChannels(other, null)).toBe(true);
+  });
+});
+
+describe('getNowLine (vạch "bây giờ" kiểu Postiz)', () => {
+  const week = getCalendarDays(new Date(2026, 9, 10), 'week'); // Th2 05-10 … CN 11-10
+
+  it('hôm nay nằm trong tuần đang xem: đúng hàng giờ, vị trí theo phút, cột hôm nay, nhãn H:mm', () => {
+    expect(getNowLine(week, at(10, 14, 30))).toEqual({ hour: 14, topPct: 50, todayIndex: 5, label: '14:30' });
+  });
+  it('đầu giờ thì vạch ở mép trên của hàng', () => {
+    expect(getNowLine(week, at(10, 9, 0))).toMatchObject({ hour: 9, topPct: 0, label: '9:00' });
+  });
+  it('khoảng đang xem không có hôm nay thì không có vạch', () => {
+    expect(getNowLine(getCalendarDays(new Date(2026, 9, 20), 'week'), at(10, 14, 30))).toBeNull();
+  });
+  it('chế độ ngày: hôm nay là cột 0', () => {
+    expect(getNowLine(getCalendarDays(new Date(2026, 9, 10), 'day'), at(10, 23, 45))).toEqual({ hour: 23, topPct: 75, todayIndex: 0, label: '23:45' });
   });
 });

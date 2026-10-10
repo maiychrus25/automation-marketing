@@ -80,3 +80,15 @@ export function canDragSchedule(schedule: FbPosterScheduleView): boolean {
 export function buildMovePatch(schedule: FbPosterScheduleView, target: number) {
   return { id: schedule.id, runAt: target };
 }
+
+/**
+ * Vạch "bây giờ" kiểu Postiz: hàng giờ hiện tại, vị trí theo phút (% chiều cao ô), cột hôm nay và nhãn H:mm.
+ * null khi khoảng đang xem không có hôm nay.
+ */
+export function getNowLine(days: Date[], now: number): { hour: number; topPct: number; todayIndex: number; label: string } | null {
+  const current = new Date(now);
+  const todayIndex = days.findIndex((d) => d.toDateString() === current.toDateString());
+  if (todayIndex === -1) return null;
+  const minutes = current.getMinutes();
+  return { hour: current.getHours(), topPct: (minutes / 60) * 100, todayIndex, label: `${current.getHours()}:${String(minutes).padStart(2, '0')}` };
+}
