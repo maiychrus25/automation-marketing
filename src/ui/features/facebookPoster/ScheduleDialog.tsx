@@ -157,7 +157,7 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg text-sm border border-gray-600 text-gray-300 hover:border-gray-400 focus-visible:ring-2 focus-visible:ring-blue-500">Huỷ</button>
           <button type="button" onClick={save} disabled={saving || missing} className="btn-primary text-sm px-4 py-1.5 text-white disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-blue-500">
-            {saving ? 'Đang lưu...' : edit ? 'Lưu' : 'Lưu lịch'}
+            {saving ? 'Đang lưu...' : approveDraftId ? 'Duyệt & hẹn giờ' : edit ? 'Lưu' : 'Lưu lịch'}
           </button>
         </div>
       </dialog>

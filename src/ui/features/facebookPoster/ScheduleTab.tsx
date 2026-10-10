@@ -111,18 +111,17 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
     } catch (error) { showNotification(error instanceof Error ? error.message : 'Không xoá được lịch', 'error'); }
     finally { setSaving(false); load(); }
   };
+  // Gọi sau khi đã đóng hộp chi tiết: <dialog> showModal nằm ở top layer, hộp xác nhận sẽ bị che và không bấm được.
   const approveNow = async (schedule: FbPosterScheduleView) => {
     const ok = await showConfirm({ title: 'Đăng ngay bản nháp?', message: `Bài "${schedule.name}" sẽ được đăng ngay khi không còn việc nào đang chạy.`, confirmText: 'Đăng ngay' });
     if (!ok) return;
     setSaving(true);
-    setOperationError('');
     try {
       const res = await ipc.facebookPoster?.draftApprove({ id: schedule.id, when: 'now' });
       if (!res?.success) throw new Error(res?.error || 'Không duyệt được nháp');
       showNotification('Đã duyệt — bài sẽ được đăng ngay', 'success');
-      closeDetail();
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : 'Không duyệt được nháp');
+      showNotification(error instanceof Error ? error.message : 'Không duyệt được nháp', 'error');
     } finally {
       setSaving(false);
       load();
@@ -173,7 +172,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
             <span className="poster-post-time">{clock(entry.at)} · {entry.schedule.draft && entry.at < now ? 'Quá giờ dự kiến' : LABELS[state]}</span>
             <span className="poster-post-title">{entry.schedule.name}</span>
             <span className="poster-post-channel"><span className="poster-mini-avatar" aria-hidden="true">{(profileNames.get(profiles[0]?.profileId) || '?').slice(0, 1)}</span>
-              <span className="truncate">{profileNames.get(profiles[0]?.profileId) || 'Profile đã xoá'}{profiles.length > 1 ? ` +${profiles.length - 1}` : ''}</span>
+              <span className="truncate">{profiles.length === 0 ? 'Chưa chọn profile' : profileNames.get(profiles[0].profileId) || 'Profile đã xoá'}{profiles.length > 1 ? ` +${profiles.length - 1}` : ''}</span>
               {entry.schedule.kind === 'recurring' && <span title="Lịch lặp lại">↻</span>}
             </span>
           </button>;
@@ -247,7 +246,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
           {detail.schedule.draft ? <div className="flex flex-wrap gap-2">
             <button className="poster-button" onClick={() => { const id = detail.schedule.id; closeDetail(); onEditDraft(id); }}>Sửa</button>
             <button className="poster-primary" disabled={saving} onClick={() => { setApproving(detail.schedule); closeDetail(); }}>Duyệt & hẹn giờ</button>
-            <button className="poster-button" disabled={saving} onClick={() => void approveNow(detail.schedule)}>Đăng ngay</button>
+            <button className="poster-button" disabled={saving} onClick={() => { const schedule = detail.schedule; closeDetail(); void approveNow(schedule); }}>Đăng ngay</button>
             <button className="poster-button text-red-400" disabled={saving} onClick={() => { const schedule = detail.schedule; closeDetail(); void remove(schedule); }}>Xoá</button>
           </div> : <div className="flex flex-wrap gap-2"><button className="poster-button" disabled={saving} onClick={() => toggle(detail.schedule)}>{detail.schedule.enabled ? 'Tạm dừng lịch' : 'Bật lịch'}</button>
             <button className="poster-primary" onClick={() => { setEditing(detail.schedule); closeDetail(); }}>Sửa giờ</button><button className="poster-button" onClick={() => { closeDetail(); onOpenHistory(); }}>Lịch sử</button>
