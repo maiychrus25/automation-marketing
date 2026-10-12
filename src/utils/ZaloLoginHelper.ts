@@ -385,7 +385,7 @@ class ZaloLoginHelper {
 
             // Cập nhật tên nhóm nếu chưa có - luôn write vào boss DB
             if (!hasRealName) {
-                EventBroadcaster.runOnBossDb((bossDb) => bossDb.updateContactProfile(zaloId, groupId, name, avatar));
+                EventBroadcaster.runOnBossDb((bossDb) => bossDb.updateContactProfile(zaloId, groupId, name, avatar, '', 'group'));
                 Logger.log(`[ZaloLoginHelper] ✅ Fetched group info for ${groupId}: "${name}"`);
                 EventBroadcaster.broadcastGroupInfoUpdate(zaloId, groupId, name, avatar, groupData);
             }
