@@ -521,6 +521,9 @@ class DatabaseService {
                 UNIQUE(msg_id, owner_zalo_id)
             );
             CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(owner_zalo_id, thread_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_messages_owner_timestamp ON messages(owner_zalo_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_messages_owner_type_timestamp ON messages(owner_zalo_id, thread_type, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_messages_thread_cursor ON messages(owner_zalo_id, thread_id, timestamp DESC, msg_id DESC);
         `);
 
         this.exec(`
@@ -1561,20 +1564,33 @@ class DatabaseService {
                 Logger.log('[DatabaseService] Migration: added listener_active column');
             }
 
-            // Đếm trước để log
-            const badContacts = this.query<any>(`SELECT count(*) as n FROM contacts WHERE contact_id = 'undefined' OR contact_id = '' OR contact_id IS NULL`);
-            const badMessages = this.query<any>(`SELECT count(*) as n FROM messages WHERE thread_id = 'undefined' OR thread_id = '' OR thread_id IS NULL`);
-            const nContacts = badContacts[0]?.n || 0;
-            const nMessages = badMessages[0]?.n || 0;
-
-            if (nContacts > 0 || nMessages > 0) {
-                Logger.warn(`[DatabaseService] 🧹 Migration: found ${nContacts} bad contacts, ${nMessages} bad messages - deleting...`);
-                db!.exec(`DELETE FROM contacts WHERE contact_id = 'undefined' OR contact_id = '' OR contact_id IS NULL`);
-                db!.exec(`DELETE FROM messages WHERE thread_id = 'undefined' OR thread_id = '' OR thread_id IS NULL`);
-                this.save();
-                Logger.log(`[DatabaseService] ✅ Migration: deleted ${nContacts} bad contacts, ${nMessages} bad messages`);
+            // One-time cleanup: run once per database, then persist the flag so later launches skip the scan.
+            // migrate() runs before `initialized` is set, so use queryOne/run directly instead of get/setSetting.
+            const invalidRowsKey = 'migration_invalid_contact_thread_cleanup_v1';
+            const invalidRowsFlag = this.queryOne<{ value: string }>('SELECT value FROM app_settings WHERE key = ?', [invalidRowsKey]);
+            if (invalidRowsFlag?.value === 'done') {
+                Logger.log('[DatabaseService] Migration: invalid contact/thread cleanup already done, skipping');
             } else {
-                Logger.log('[DatabaseService] ✅ Migration: no bad data found');
+                // Đếm trước để log
+                const badContacts = this.query<any>(`SELECT count(*) as n FROM contacts WHERE contact_id = 'undefined' OR contact_id = '' OR contact_id IS NULL`);
+                const badMessages = this.query<any>(`SELECT count(*) as n FROM messages WHERE thread_id = 'undefined' OR thread_id = '' OR thread_id IS NULL`);
+                const nContacts = badContacts[0]?.n || 0;
+                const nMessages = badMessages[0]?.n || 0;
+
+                if (nContacts > 0 || nMessages > 0) {
+                    Logger.warn(`[DatabaseService] 🧹 Migration: found ${nContacts} bad contacts, ${nMessages} bad messages - deleting...`);
+                    db!.exec(`DELETE FROM contacts WHERE contact_id = 'undefined' OR contact_id = '' OR contact_id IS NULL`);
+                    db!.exec(`DELETE FROM messages WHERE thread_id = 'undefined' OR thread_id = '' OR thread_id IS NULL`);
+                    this.save();
+                    Logger.log(`[DatabaseService] ✅ Migration: deleted ${nContacts} bad contacts, ${nMessages} bad messages`);
+                } else {
+                    Logger.log('[DatabaseService] ✅ Migration: no bad data found');
+                }
+                this.run(
+                    `INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+                    [invalidRowsKey, 'done']
+                );
             }
         } catch (err: any) {
             Logger.warn(`[DatabaseService] Migration warning: ${err.message}`);
@@ -1638,6 +1654,9 @@ class DatabaseService {
         try {
             db!.exec(`CREATE INDEX IF NOT EXISTS idx_contacts_channel ON contacts(channel, owner_zalo_id)`);
             db!.exec(`CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel, owner_zalo_id, thread_id)`);
+            db!.exec(`CREATE INDEX IF NOT EXISTS idx_messages_owner_timestamp ON messages(owner_zalo_id, timestamp)`);
+            db!.exec(`CREATE INDEX IF NOT EXISTS idx_messages_owner_type_timestamp ON messages(owner_zalo_id, thread_type, timestamp)`);
+            db!.exec(`CREATE INDEX IF NOT EXISTS idx_messages_thread_cursor ON messages(owner_zalo_id, thread_id, timestamp DESC, msg_id DESC)`);
             db!.exec(`CREATE INDEX IF NOT EXISTS idx_contacts_others ON contacts(owner_zalo_id, is_in_others)`);
         } catch (err: any) {
             Logger.warn(`[DatabaseService] Migration channel indexes: ${err.message}`);
@@ -4072,6 +4091,11 @@ class DatabaseService {
      */
     public migrateAllAbsolutePathsToRelative(): number {
         if (!this.initialized) return 0;
+        // Run once per database: rescanning every message on each launch blocks the main
+        // process on large databases even when all paths are already relative.
+        const migrationKey = 'migration_local_paths_relative_v2';
+        if (this.getSetting(migrationKey) === 'done') return 0;
+
         let migrationCount = 0;
         try {
             // JS UDF: receives local_paths JSON string, returns transformed string.
@@ -4098,16 +4122,21 @@ class DatabaseService {
                 } catch { return jsonStr; }
             });
 
-            // Single UPDATE - UDF handles everything, no bound params needed
+            // Only feed the UDF rows that can still hold an absolute path: JSON escapes Windows
+            // separators as `\\`, and absolute Unix paths contain `/media/`.
             db!.exec(
                 `UPDATE messages SET local_paths = _migrate_local_path(local_paths)
-                 WHERE local_paths IS NOT NULL AND local_paths != '' AND local_paths != '{}' AND local_paths != 'null'`
+                 WHERE local_paths IS NOT NULL
+                   AND local_paths != ''
+                   AND local_paths != '{}'
+                   AND local_paths != 'null'
+                   AND (instr(local_paths, ':\\\\') > 0 OR instr(local_paths, '/media/') > 0)`
             );
 
-            if (migrationCount > 0) {
-                this.save();
-                Logger.log(`[DatabaseService] migrateAllAbsolutePathsToRelative: ${migrationCount} paths converted`);
-            }
+            // better-sqlite3 persists through WAL immediately; do not force a checkpoint here
+            // (it can stall startup on a large database). Write the flag only after success.
+            this.setSetting(migrationKey, 'done');
+            Logger.log(`[DatabaseService] migrateAllAbsolutePathsToRelative: ${migrationCount} paths converted`);
             return migrationCount;
         } catch (err: any) {
             Logger.error(`[DatabaseService] migrateAllAbsolutePathsToRelative error: ${err?.message ?? String(err)}`);
