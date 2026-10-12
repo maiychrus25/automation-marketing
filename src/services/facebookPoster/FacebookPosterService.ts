@@ -36,6 +36,7 @@ export interface FacebookPosterServiceDeps {
 export const BUSY_ERROR = 'Đang có việc chạy';
 const NOT_LOGGED_IN_ERROR = 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập';
 const STOPPED_REASON = 'Đã dừng';
+const FORCED_CLOSE_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook';
 const POST_FAILED_DEFAULT = 'Không đăng được, xem nhật ký';
 const SCAN_ERROR_MESSAGE = 'Quét nhóm bị lỗi giữa chừng, giữ danh sách cũ';
 const SCAN_LIMIT_MESSAGE = 'Danh sách có thể thiếu (chạm trần cuộn)';
@@ -45,7 +46,14 @@ const STAGGER_SPREAD_MS = 60000;
 const SLEEP_SLICE_MS = 500;
 
 interface PlannedTarget { url: string; name: string; }
-interface ProfilePlan { profileId: string; name: string; targets: PlannedTarget[]; progress: ProfileProgress; started: boolean; }
+interface ProfilePlan {
+    profileId: string; name: string; targets: PlannedTarget[]; progress: ProfileProgress; started: boolean;
+    sessions: AutomationSession[];
+    /** Inside an irreversible step (publish/join click until its result is known): cancel must not close the browser. */
+    critical: boolean;
+    /** The result being recorded came from a step that was critical; a failure there is real, not a cancel side effect. */
+    reachedCritical: boolean;
+}
 interface ActiveRun { run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number }; }
 interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; identity?: string; }
 
@@ -75,6 +83,7 @@ export class FacebookPosterService {
 
     private active: ActiveRun | null = null;
     private stopping = false;
+    private forced = false;
     private idle: Promise<void> = Promise.resolve();
     /** First store error seen outside a task; the run ends 'failed' with it (tasks swallow errors thrown by their callbacks). */
     private storeError: string | null = null;
@@ -105,6 +114,7 @@ export class FacebookPosterService {
         };
         this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt, scheduleId: run.scheduleId });
         this.stopping = false;
+        this.forced = false;
         this.storeError = null;
         const parallel = params.kind === 'post' || params.kind === 'scan_groups' ? params : null;
         const concurrency = parallel ? Math.max(1, parallel.concurrency) : 1;
@@ -118,7 +128,19 @@ export class FacebookPosterService {
     }
 
     cancel(): void {
-        if (this.active) this.stopping = true;
+        if (!this.active) return;
+        this.stopping = true;
+        // Closing a session rejects the profile's pending browser calls, so the task stops now instead of at its next check.
+        for (const plan of this.active.plans) if (!plan.critical) this.closeSessions(plan);
+    }
+
+    /** Stops the job and waits for it: graceful first, then closes every browser (critical ones too). True when nothing runs anymore. */
+    async stopAndWait(graceMs = 45000, forceMs = 10000): Promise<boolean> {
+        if (!this.active) return true;
+        this.cancel();
+        if (await this.waitIdle(graceMs)) return true;
+        this.forceStop();
+        return this.waitIdle(forceMs);
     }
 
     cancelAll(): void {
@@ -133,6 +155,26 @@ export class FacebookPosterService {
         return this.idle;
     }
 
+    private async waitIdle(ms: number): Promise<boolean> {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms); });
+        try {
+            return await Promise.race([this.idle.then(() => true, () => true), timeout]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    private forceStop(): void {
+        this.forced = true;
+        for (const plan of this.active?.plans ?? []) this.closeSessions(plan);
+    }
+
+    /** Fire and forget: close() is idempotent and its failure must not surface. */
+    private closeSessions(plan: ProfilePlan): void {
+        void Promise.allSettled(plan.sessions.map((session) => session.close()));
+    }
+
     // ─── Planning ────────────────────────────────────────────────────────────
 
     private plan(params: StartParams): ProfilePlan[] {
@@ -142,6 +184,9 @@ export class FacebookPosterService {
             targets,
             progress: { profileId, state: 'waiting', done: 0, total },
             started: false,
+            sessions: [],
+            critical: false,
+            reachedCritical: false,
         });
         switch (params.kind) {
             case 'post':
@@ -221,7 +266,6 @@ export class FacebookPosterService {
         plan.progress.state = 'running';
         this.emitProgress(active);
 
-        const sessions: AutomationSession[] = [];
         let loginChecked = false;
         let launchError: unknown = null;
         // Called once by most tasks and twice by join; every call opens a new session.
@@ -230,7 +274,12 @@ export class FacebookPosterService {
                 // A profile deleted after a schedule was saved fails only its own targets.
                 if (!this.deps.getProfile(profileId)) throw new Error('Không tìm thấy profile');
                 const session = await this.deps.openForAutomation(profileId);
-                sessions.push(session);
+                plan.sessions.push(session);
+                if (this.stopping) {
+                    // Cancel came while the browser was still opening: nothing was started, so close it and stop.
+                    await session.close().catch(() => undefined);
+                    throw new Error(STOPPED_REASON);
+                }
                 if (!loginChecked) {
                     loginChecked = true;
                     if (!(await isLoggedIn(session.context))) {
@@ -250,6 +299,8 @@ export class FacebookPosterService {
             getIsStopping: () => this.stopping,
             sendLog: (message: string, level: LogLevel) => this.emit('facebookPoster:log', { runId: run.id, profileId, level, message, at: this.now() }),
             updateProgress: () => undefined,
+            enterCritical: () => { plan.critical = true; plan.reachedCritical = true; },
+            leaveCritical: () => { plan.critical = false; },
         };
 
         let failed = false;
@@ -266,7 +317,7 @@ export class FacebookPosterService {
                 this.failRemaining(active, plan, message, err === launchError);
             }
         } finally {
-            await Promise.allSettled(sessions.map((session) => session.close()));
+            await Promise.allSettled(plan.sessions.map((session) => session.close()));
         }
         plan.progress.state = failed ? 'failed' : this.stopping ? 'cancelled' : 'done';
         // The join total was only a cap (`limit`); settle it to what was actually reported.
@@ -345,7 +396,8 @@ export class FacebookPosterService {
                         },
                     },
                 );
-                for (const r of results) this.record(active, plan, { url: r.url, name: '', outcome: r.outcome, error: r.error ?? '' });
+                // Only the last row can be the one a cancel cut off; earlier rows finished normally.
+                results.forEach((r, i) => this.record(active, plan, { url: r.url, name: '', outcome: r.outcome, error: r.error ?? '' }, { stopAware: i === results.length - 1 }));
                 return;
             }
         }
@@ -354,7 +406,8 @@ export class FacebookPosterService {
     // ─── Recording ───────────────────────────────────────────────────────────
 
     /** Writes one result immediately and bumps the profile's counter. Never throws: a store error is remembered instead. */
-    private record(active: ActiveRun, plan: ProfilePlan, row: ResultRow): void {
+    private record(active: ActiveRun, plan: ProfilePlan, original: ResultRow, { stopAware = true } = {}): void {
+        const row = stopAware ? this.stopAwareRow(plan, original) : original;
         try {
             this.store.addResult({
                 runId: active.run.id,
@@ -372,8 +425,16 @@ export class FacebookPosterService {
         } catch (err) {
             this.rememberStoreError(err);
         }
+        plan.reachedCritical = plan.critical;
         plan.progress.done += 1;
         this.emitProgress(active);
+    }
+
+    /** A failure caused by our own cancel is a stop, not an error; one after a critical step stays a failure (forced close gets its own text). */
+    private stopAwareRow(plan: ProfilePlan, row: ResultRow): ResultRow {
+        if (row.outcome !== 'failed' || !this.stopping) return row;
+        if (!plan.reachedCritical) return { ...row, outcome: 'skipped', error: STOPPED_REASON };
+        return this.forced ? { ...row, error: FORCED_CLOSE_ERROR } : row;
     }
 
     /** Targets with no result yet: the first one carries the error, the rest were never reached (or all fail when the error hit every target alike). */

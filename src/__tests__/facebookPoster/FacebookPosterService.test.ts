@@ -819,3 +819,188 @@ describe('FacebookPosterService scheduleId', () => {
     expect(h.run(second.runId).scheduleId).toBeNull();
   });
 });
+
+describe('FacebookPosterService cancel closes sessions', () => {
+  const FORCED_CLOSE = 'Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook';
+
+  /** Service whose sessions can be killed: close() rejects every promise made by hang(), like a closed Playwright page. */
+  function killable(tasks: Record<string, any>, openGate?: Promise<void>) {
+    const store = new FacebookPosterStore(memoryDb());
+    store.ensureSchema();
+    const closes: string[] = [];
+    const killers: ((err: Error) => void)[] = [];
+    const hang = () => new Promise<never>((_, reject) => { killers.push(reject); });
+    let idSeq = 0;
+    const service = new FacebookPosterService({
+      store,
+      getProfile: (id) => ({ id, name: id }),
+      openForAutomation: async (profileId) => {
+        await openGate;
+        const page = {};
+        const ctx = { cookies: async () => [{ name: 'c_user', value: '1' }], pages: () => [page], newPage: async () => page };
+        let closed = false;
+        return {
+          context: ctx as any,
+          close: async () => {
+            if (closed) return;
+            closed = true;
+            closes.push(profileId);
+            killers.forEach((kill) => kill(new Error('Target closed')));
+          },
+        };
+      },
+      emit: () => {},
+      random: () => 0,
+      sleep: async () => {},
+      newId: () => `run-${++idSeq}`,
+      tasks: tasks as any,
+    });
+    return { service, store, closes, hang, results: (runId: string) => store.getRun(runId)!.results, run: (runId: string) => store.getRun(runId)!.run };
+  }
+
+  const rowsOf = (rows: any[]) => rows.map((r) => [r.outcome, r.error]);
+
+  test('cancel closes sessions of profiles outside a critical section', async () => {
+    let hang!: () => Promise<never>;
+    const k = killable({ postToTargets: jest.fn(async (_input: any, deps: any) => { await deps.launch(); await hang(); }) });
+    hang = k.hang;
+    const { runId } = k.service.start(postParams());
+    await tick();
+    expect(k.closes).toEqual([]);
+    k.service.cancel();
+    await tick();
+    expect(k.closes).toEqual(['p1']);
+    await k.service.whenIdle();
+    expect(k.run(runId).status).toBe('cancelled');
+    expect(rowsOf(k.results(runId))).toEqual([['skipped', 'Đã dừng'], ['skipped', 'Đã dừng']]);
+  });
+
+  test('cancel waits for a critical section', async () => {
+    const release = deferred();
+    const k = killable({
+      postToTargets: jest.fn(async (input: any, deps: any) => {
+        await deps.launch();
+        deps.enterCritical();
+        await release.promise;
+        deps.onResult({ url: input.targets[0], ok: true, error: null, postUrl: 'u', commentStatus: 'not_requested', identity: 'Me' });
+        deps.leaveCritical();
+      }),
+    });
+    const { runId } = k.service.start(postParams());
+    await tick();
+    k.service.cancel();
+    await tick();
+    expect(k.closes).toEqual([]);
+    release.resolve();
+    await k.service.whenIdle();
+    expect(k.run(runId).status).toBe('cancelled');
+    expect(k.results(runId).map((r) => r.outcome)).toEqual(['posted', 'skipped']);
+  });
+
+  test('keeps a real failure inside a critical section', async () => {
+    const release = deferred();
+    const k = killable({
+      postToTargets: jest.fn(async (input: any, deps: any) => {
+        await deps.launch();
+        deps.enterCritical();
+        await release.promise;
+        deps.onResult({ url: input.targets[0], ok: false, error: 'X' });
+        deps.leaveCritical();
+      }),
+    });
+    const { runId } = k.service.start(postParams());
+    await tick();
+    k.service.cancel();
+    release.resolve();
+    await k.service.whenIdle();
+    expect(rowsOf(k.results(runId))).toEqual([['failed', 'X'], ['skipped', 'Đã dừng']]);
+  });
+
+  test('failure after cancel outside a critical section is stopped', async () => {
+    const release = deferred();
+    const k = killable({
+      postToTargets: jest.fn(async (input: any, deps: any) => {
+        await deps.launch();
+        await release.promise;
+        deps.onResult({ url: input.targets[0], ok: false, error: 'Target closed' });
+      }),
+    });
+    const { runId } = k.service.start(postParams());
+    await tick();
+    k.service.cancel();
+    release.resolve();
+    await k.service.whenIdle();
+    expect(rowsOf(k.results(runId))).toEqual([['skipped', 'Đã dừng'], ['skipped', 'Đã dừng']]);
+  });
+
+  test('closes a session that finishes opening after cancel', async () => {
+    const gate = deferred();
+    const after = jest.fn();
+    const k = killable({
+      postToTargets: jest.fn(async (_input: any, deps: any) => { await deps.launch(); after(); }),
+    }, gate.promise);
+    const { runId } = k.service.start(postParams());
+    await tick();
+    k.service.cancel();
+    gate.resolve();
+    await k.service.whenIdle();
+    expect(k.closes).toEqual(['p1']);
+    expect(after).not.toHaveBeenCalled();
+    expect(rowsOf(k.results(runId))).toEqual([['skipped', 'Đã dừng'], ['skipped', 'Đã dừng']]);
+  });
+
+  test('only the last collect result becomes stopped', async () => {
+    const release = deferred();
+    const k = killable({
+      collectComments: jest.fn(async () => {
+        await release.promise;
+        return { results: [
+          { url: 'https://www.facebook.com/a', outcome: 'failed', error: 'A' },
+          { url: 'https://www.facebook.com/b', outcome: 'failed', error: 'Target closed' },
+        ] };
+      }),
+    });
+    const { runId } = k.service.start({ kind: 'collect_comments', profileId: 'p1', postUrls: ['https://www.facebook.com/a', 'https://www.facebook.com/b'] });
+    await tick();
+    k.service.cancel();
+    release.resolve();
+    await k.service.whenIdle();
+    expect(rowsOf(k.results(runId))).toEqual([['failed', 'A'], ['skipped', 'Đã dừng']]);
+  });
+
+  describe('stopAndWait', () => {
+    beforeEach(() => { jest.useFakeTimers({ doNotFake: ['setImmediate'] }); });
+    afterEach(() => { jest.useRealTimers(); });
+
+    test('stopAndWait force-closes after the grace period', async () => {
+      let hang!: () => Promise<never>;
+      const k = killable({
+        postToTargets: jest.fn(async (_input: any, deps: any) => { await deps.launch(); deps.enterCritical(); await hang(); }),
+      });
+      hang = k.hang;
+      const { runId } = k.service.start(postParams());
+      await tick();
+      const stopped = k.service.stopAndWait(45000, 10000);
+      await jest.advanceTimersByTimeAsync(44999);
+      expect(k.closes).toEqual([]);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(k.closes).toEqual(['p1']);
+      await expect(stopped).resolves.toBe(true);
+      expect(rowsOf(k.results(runId))).toEqual([['failed', FORCED_CLOSE], ['skipped', 'Đã dừng']]);
+    });
+
+    test('stopAndWait returns false when the job never ends', async () => {
+      const k = killable({ postToTargets: jest.fn(async (_input: any, deps: any) => { await deps.launch(); await new Promise(() => undefined); }) });
+      k.service.start(postParams());
+      await tick();
+      const stopped = k.service.stopAndWait(45000, 10000);
+      await jest.advanceTimersByTimeAsync(55000);
+      await expect(stopped).resolves.toBe(false);
+    });
+
+    test('stopAndWait with no job returns true', async () => {
+      const k = killable({});
+      await expect(k.service.stopAndWait()).resolves.toBe(true);
+    });
+  });
+});
