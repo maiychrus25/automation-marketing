@@ -1044,6 +1044,20 @@ describe('FacebookPosterService cancel closes sessions', () => {
       expect(rowsOf(k.results(runId))).toEqual([['failed', FORCED_CLOSE], ['skipped', 'Đã dừng']]);
     });
 
+    test('a forced close of a join says to check the group request, not a post', async () => {
+      let hang!: () => Promise<never>;
+      const k = killable({
+        searchAndJoinGroups: jest.fn(async (_input: any, deps: any) => { await deps.launch(); deps.enterCritical(); await hang(); }),
+      });
+      hang = k.hang;
+      const { runId } = k.service.start({ kind: 'join', profileId: 'p1', keywords: ['k'], limit: 3, minDelaySec: 1, maxDelaySec: 2 });
+      await tick();
+      const stopped = k.service.stopAndWait(45000, 10000);
+      await jest.advanceTimersByTimeAsync(45000);
+      await expect(stopped).resolves.toBe(true);
+      expect(rowsOf(k.results(runId))).toEqual([['failed', 'Đã đóng khi đang chờ kết quả — kiểm tra yêu cầu vào nhóm trên Facebook']]);
+    });
+
     test('stopAndWait does not force-close a job that ends within the grace period', async () => {
       const release = deferred();
       const k = killable({

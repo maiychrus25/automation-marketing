@@ -37,6 +37,7 @@ export const BUSY_ERROR = 'Đang có việc chạy';
 const NOT_LOGGED_IN_ERROR = 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập';
 const STOPPED_REASON = 'Đã dừng';
 const FORCED_CLOSE_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook';
+const FORCED_CLOSE_JOIN_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra yêu cầu vào nhóm trên Facebook';
 const POST_FAILED_DEFAULT = 'Không đăng được, xem nhật ký';
 const SCAN_ERROR_MESSAGE = 'Quét nhóm bị lỗi giữa chừng, giữ danh sách cũ';
 const SCAN_LIMIT_MESSAGE = 'Danh sách có thể thiếu (chạm trần cuộn)';
@@ -408,7 +409,7 @@ export class FacebookPosterService {
 
     /** Writes one result immediately and bumps the profile's counter. Never throws: a store error is remembered instead. */
     private record(active: ActiveRun, plan: ProfilePlan, original: ResultRow, { stopAware = true } = {}): void {
-        const row = stopAware ? this.stopAwareRow(plan, original) : original;
+        const row = stopAware ? this.stopAwareRow(active, plan, original) : original;
         try {
             this.store.addResult({
                 runId: active.run.id,
@@ -432,10 +433,10 @@ export class FacebookPosterService {
     }
 
     /** A failure caused by our own cancel is a stop, not an error; one after a critical step stays a failure (forced close gets its own text). */
-    private stopAwareRow(plan: ProfilePlan, row: ResultRow): ResultRow {
+    private stopAwareRow(active: ActiveRun, plan: ProfilePlan, row: ResultRow): ResultRow {
         if (row.outcome !== 'failed' || !this.stopping) return row;
         if (!plan.critical && !plan.reachedCritical) return { ...row, outcome: 'skipped', error: STOPPED_REASON };
-        return this.forced ? { ...row, error: FORCED_CLOSE_ERROR } : row;
+        return this.forced ? { ...row, error: active.params.kind === 'join' ? FORCED_CLOSE_JOIN_ERROR : FORCED_CLOSE_ERROR } : row;
     }
 
     /** Targets with no result yet: the first one carries the error, the rest were never reached (or all fail when the error hit every target alike). */
