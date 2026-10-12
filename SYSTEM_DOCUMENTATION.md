@@ -146,6 +146,15 @@ sequenceDiagram
 
 Thứ tự `startupAllWorkspaces` là: relay local trước, kết nối Zalo local sau, rồi mới kết nối workspace remote để máy boss sẵn sàng trước employee. **Cần xác nhận vận hành** về thời gian khởi động, phục hồi mạng và hành vi khi nhiều workspace cùng lỗi. Nguồn: `electron/main.ts`.
 
+Từ đợt port Deplao 26.9.0–26.10.0 (12/10/2026, nhánh `feat/upstream-26.10-fixes`, chưa phát hành), khởi động có thêm các bước sau:
+
+- **Điểm vào là `electron/bootstrap.ts`** (`package.json` `main` = `dist-electron/electron/bootstrap.js`, script `dev` cũng chạy tệp này). Tệp đặt `WS_NO_BUFFER_UTIL=1` và `WS_NO_UTF_8_VALIDATE=1` rồi `require('./main')`, để `ws` dùng bản JavaScript thuần thay cho addon native từng gây crash trên Windows (`electron/bootstrap.ts:9-12`).
+- **Renderer báo sẵn sàng.** `src/ui/App.tsx:202` gọi `ipc.app?.rendererReady?.()` (preload `electron/preload.ts:336`, kênh `app:rendererReady`); main chỉ nhận từ `mainWindow.webContents` (`electron/main.ts:1140`).
+- **Kết nối kênh chạy sau đó**, trong `startConnectorServices` (`electron/main.ts:1188`, đúng một lần): kết nối lại Facebook và Telegram, health check bot Telegram, `startupAllWorkspaces` sau 500 ms (`:1203`), và CRM `resumeActiveCampaigns` sau 3 s tính từ lúc connector bắt đầu (`:1207`) để chiến dịch Telegram không bị đánh dấu lỗi khi Telegram chưa kết nối. Nếu renderer không báo, hàm vẫn chạy sau 30 s (`:1211`). Scheduler Đăng Facebook, ERP, Workflow Engine, Integration Registry, auto-update và chuyển dữ liệu AHV Connect không gắn vào renderer.
+- **Dự phòng màn hình trắng.** Sau `ready-to-show`, hẹn giờ 8 s: nếu cửa sổ chưa hiện thì `show()` rồi nạp lại renderer một lần; nếu cửa sổ đã hiện (`isVisible()`) thì bỏ qua (`electron/main.ts:279-301`).
+- **Chuyển `local_paths` sang đường dẫn tương đối** chạy 30 s sau khi `startConnectorServices` bắt đầu (`electron/main.ts:1089-1102`, gọi tại `:1191`).
+- **Zalo kết nối thất bại** trong `startupAllWorkspaces` thì ghi cảnh báo "cần đăng nhập lại" và bỏ qua tài khoản đó (`electron/main.ts:870-878`).
+
 ### 3.2 Luồng chat và lưu dữ liệu
 
 ```mermaid
@@ -180,6 +189,10 @@ Workspace remote lưu URL boss, token, employee identity và cache quyền/accou
 - Zalo dùng `zca-js`; Telegram có user và bot; Facebook có service thường và bridge E2EE; Page Facebook là tài khoản con gửi qua Business Suite (mục 4.11).
 - UI hợp nhất trải nghiệm nhưng capability thực tế khác nhau theo kênh; cần kiểm tra `CRMChannelCapabilityService` và handler kênh trước khi cam kết một hành động.
 
+- Zalo gửi ảnh/tệp: IPC `zalo:sendImage`, `zalo:sendImages`, `zalo:sendFile` truyền `p.type ?? p.threadType` nên media gửi vào nhóm đi đúng hội thoại nhóm (`electron/ipc/zaloIpc.ts:189-197`). `ZaloService.sendImage` chuẩn hóa `threadType`/`threadId`, ném lỗi khi thiếu hội thoại hoặc tệp không tồn tại, và gửi tệp `.gif` như đính kèm (`attachments: [filePath]`) thay vì Buffer ảnh (`src/services/zalo/ZaloService.ts:1439-1448`; `sendImages` tại `:1509-1514`). Không có bước từ chối ảnh theo đuôi tệp hay kích thước. `sendFile` chỉ được sửa ở phần truyền loại hội thoại.
+- Tin nhóm Zalo: trước khi phát `broadcastMessage`, chờ thông tin nhóm tối đa 3 s (`GROUP_INFO_WAIT_MS`, `src/utils/ZaloLoginHelper.ts:14`) để `$trigger.groupName` có sẵn ở lần chạy workflow đầu tiên. Tin của cùng một nhóm được xếp hàng tuần tự bằng `enqueuePerKey` (`src/utils/ZaloLoginHelper.ts:771`, `src/utils/enqueuePerKey.ts`), nên tin đến sau không vượt tin đang chờ. `EventBroadcaster.broadcastMessage` bổ sung `groupName` từ tên nhóm đã lưu trong DB, không gọi mạng (`src/services/event/EventBroadcaster.ts:585-597`).
+- Lệnh thu hồi Zalo có thể đến dưới dạng tin thường mang payload điều khiển; `getUndoControlPayload` nhận diện (cần `globalMsgId`/`cliMsgId` kèm `deleteMsg`/`srcId`/`destId`) và `broadcastMessage` chuyển thành `broadcastUndo`, không lưu bong bóng JSON (`src/services/event/undoControlPayload.ts:7`, `src/services/event/EventBroadcaster.ts:240`). Lỗi trong các hook trước khi gửi được ghi log kèm tên event và event vẫn được gửi tiếp (`src/services/event/EventBroadcaster.ts:144`, `:179`).
+
 Nguồn: `src/services/zalo/`, `src/services/facebook/`, `src/services/telegram/`, `src/ui/components/chat/`.
 
 ### 4.2 CRM
@@ -213,6 +226,7 @@ Nguồn: `src/models/erp/`, `src/services/erp/`, `electron/ipc/erp*`, `src/ui/fe
 - Trigger gồm message, friend request, group event, reaction, undo, schedule, manual, label, webhook, payment và trigger theo Facebook/Telegram.
 - Action gồm chat, logic, transform dữ liệu, Sheets, AI, notification, HTTP, POS, thanh toán, vận chuyển.
 - Run có `success`, `error`, `partial`; node có `success`, `error`, `skipped`.
+- Node `zalo.addReaction` gọi `api.addReaction(reaction, { data: { msgId, cliMsgId }, threadId, type })` theo chữ ký của `zca-js`; tham số dựng bởi `buildZaloReactionCall` (`src/services/workflow/zaloReaction.ts:35`, gọi ở `src/services/workflow/WorkflowEngineService.ts:1476`). Lấy `msgId`/`threadId`/`threadType`/`cliMsgId` từ cấu hình, rồi `$trigger`, rồi tin trong DB; thiếu một trong ba giá trị bắt buộc thì ném lỗi `[zalo.addReaction]`. Cảm xúc cũ `'1'`–`'6'` vẫn chạy. Dữ liệu trigger tin nhắn có thêm `cliMsgId` (`WorkflowEngineService.ts:1009`).
 
 Nguồn: `src/models/workflow.ts`, `src/services/workflow/WorkflowEngineService.ts`, `src/ui/components/workflow/`.
 
@@ -372,6 +386,10 @@ SQLite được bật WAL trong `DatabaseService`. Thay vì liệt kê mọi c�
 - Mã chỉ chuyển thư mục `AHV Connect`; dữ liệu của bản gốc Deplao không tự chuyển (chép tay, xem `NOTICE.md`). Trên Linux/macOS, dữ liệu mã hóa bằng `safeStorage` gắn với tên app trong kho khóa của hệ điều hành nên không giải mã được sau khi đổi tên và phải đăng nhập lại (`README.md`); **Cần xác nhận vận hành** trên từng OS trước khi di trú thật.
 - Chưa có backup tự động được mô tả trong mã/tài liệu hiện hành; vận hành phải sao lưu database, config và media trước nâng cấp.
 - Tên tệp `deplao-tool.db` và một số khóa `deplao_*` được giữ để tương thích.
+- Index bảng `messages` (đợt port 26.10): `idx_messages_owner_timestamp`, `idx_messages_owner_type_timestamp`, `idx_messages_thread_cursor`, tạo cả ở schema mới (`src/services/database/DatabaseService.ts:524-526`) lẫn migration cho DB cũ (`:1657-1659`).
+- Hai cờ `app_settings` của từng DB (mỗi workspace chạy một lần cho DB của nó): `migration_invalid_contact_thread_cleanup_v1` (dọn hàng thiếu `contact_id`/`thread_id`, chạy thêm một lần rồi bỏ qua, `:1569`) và `migration_local_paths_relative_v2` (chuyển `local_paths` sang đường dẫn tương đối, `:4096`). Xóa cờ để chạy lại.
+- `migrateAllAbsolutePathsToRelative` chỉ quét các hàng còn có thể chứa đường dẫn tuyệt đối và không ép checkpoint (`:4092`). Hai nơi đổi thư mục dữ liệu trong `electron/ipc/databaseIpc.ts` (`:347`, `:427`) gọi `{ force: true }` để bỏ qua cờ đã hoàn tất vì vừa ghi đường dẫn tuyệt đối mới.
+- IPC `db:getMessages` kẹp tham số bằng `clampMessagesQuery` (`src/services/database/messageQueryLimits.ts:11`): `limit` mặc định 50, tối đa 5.000 tin mỗi lần gọi (`MAX_MESSAGES_PER_REQUEST`); `offset`, `before` là số nguyên ≥ 0. <!-- docs-check: src/services/database/messageQueryLimits.ts#MAX_MESSAGES_PER_REQUEST = 5000 --> Trần là 5.000 vì `ChatHeader.tsx` đọc lại tới `limit + 20` tin sau khi tải 5.000 tin Telegram.
 
 ## 6. Sản phẩm BA 1 — Sơ đồ BPMN mức nghiệp vụ
 

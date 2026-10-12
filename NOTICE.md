@@ -33,6 +33,30 @@ Hai thay đổi 6–7 do phía trung tâm thực hiện trước; cách tắt te
 lấy theo bản của trung tâm (trả về kết quả rỗng có thông báo, phủ đủ 7 hàm)
 thay vì ném lỗi.
 
+## Port từ Deplao 26.9.0–26.10.0 (MaiHub, 12/10/2026)
+
+Các bản sửa dưới đây được **port bằng tay, từng đoạn** từ commit `206c35f` (26.9.0),
+`d0abfd3` (26.10.0) và `c958a38` của https://github.com/babyvibe/deplao-builder
+(MIT). Không gộp nhánh, không chép nguyên tệp. Thiết kế đầy đủ ở
+`docs/specs/2026-10-12-upstream-26.10-fixes.md`.
+
+| Nhóm | Commit nguồn | File đích | MaiHub khác bản gốc ở điểm nào |
+|---|---|---|---|
+| Chặn addon native của `ws` (crash Windows) | `206c35f` | `electron/bootstrap.ts`, `package.json` (`main`, `dev`) | Giữ ý gốc. Chỉ đổi điểm vào của tiến trình; `bootstrap.js` rồi mới `require('./main')` |
+| Index messages và bước dọn chạy một lần | `206c35f` | `src/services/database/DatabaseService.ts` | Bước dọn hàng thiếu `contact_id`/`thread_id` **chạy thêm một lần** rồi mới ghi cờ nghỉ hưu (bản gốc bỏ ngay). Không port bước dọn "Zalo undo" vì MaiHub chưa từng có bước này |
+| Giới hạn `db:getMessages` | `206c35f` | `src/services/database/messageQueryLimits.ts`, `electron/ipc/databaseIpc.ts` | Trần **5.000** tin mỗi lần gọi (bản gốc 200), vì `ChatHeader.tsx` đọc lại tới 5.020 tin sau khi tải 5.000 tin Telegram |
+| Chuyển `local_paths` sang đường dẫn tương đối | `d0abfd3` | `src/services/database/DatabaseService.ts`, `electron/ipc/databaseIpc.ts`, `electron/main.ts` | Hai nơi đổi thư mục dữ liệu gọi `migrateAllAbsolutePathsToRelative({ force: true })` để bỏ qua cờ đã hoàn tất (vừa ghi đường dẫn tuyệt đối mới). Lần chạy lúc khởi động vẫn dùng cờ |
+| Màn hình trắng và thứ tự kết nối lúc khởi động | `d0abfd3` | `electron/main.ts`, `electron/preload.ts`, `src/ui/App.tsx`, `src/ui/lib/ipc.ts` | Chạy kết nối kênh khi renderer báo sẵn sàng (dự phòng 30 s). **CRM `resumeActiveCampaigns` chạy 3 s sau khi connector bắt đầu**, không phải lúc khởi động. Dự phòng 8 s **bỏ qua cửa sổ đã hiện**. Bỏ phần `powerMonitor`/Vite-suspend của bản gốc |
+| Zalo: ảnh/GIF/tệp vào nhóm, thất bại kết nối | `d0abfd3` | `electron/ipc/zaloIpc.ts`, `src/services/zalo/ZaloService.ts` | **Không** từ chối ảnh theo đuôi tệp hay khi không đọc được kích thước, để không chặn tệp hiện gửi được |
+| Workflow `zalo.addReaction` và `cliMsgId` của trigger | `c958a38` | `src/services/workflow/zaloReaction.ts`, `src/services/workflow/WorkflowEngineService.ts` | Tham số dựng bằng hàm thuần `buildZaloReactionCall` có test; giữ giá trị cấu hình cũ `'1'`–`'6'` |
+| `$trigger.groupName` | `c958a38` | `src/services/event/EventBroadcaster.ts`, `src/utils/ZaloLoginHelper.ts`, `src/utils/enqueuePerKey.ts` | Chờ thông tin nhóm **tối đa 3 s** (bản gốc chờ không giới hạn) và **tuần tự theo từng nhóm** để tin đến sau không vượt tin đang chờ |
+| Lệnh thu hồi đi qua luồng tin thường; log lỗi hook | `c958a38` | `src/services/event/undoControlPayload.ts`, `src/services/event/EventBroadcaster.ts` | Giữ logic nhận diện của bản gốc, tách thành hàm thuần có test (kể cả JSON tin thật không bị nhận nhầm) |
+
+**Cố ý không port:** quét thành viên nhóm qua `deplaoapp.com` (gửi cookie và imei
+Zalo ra máy chủ thượng nguồn, cùng loại với thay đổi số 2 ở bảng trên), tệp nhị
+phân `.exe` đã commit, `go.mod`/submodule của bridge Go, Facebook cá nhân/E2EE,
+Telegram User/Bot, Trung tâm tính năng và các tính năng lớn khác của bản gốc.
+
 ## Thư mục dữ liệu và chuyển dữ liệu
 
 ### MaiHub (từ 26.9.0): tự chuyển từ AHV Connect
