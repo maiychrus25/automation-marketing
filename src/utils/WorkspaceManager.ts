@@ -268,16 +268,23 @@ class WorkspaceManager {
         return { success: true };
     }
 
-    public deleteWorkspace(id: string): { success: boolean; error?: string } {
+    /** Whether deleteWorkspace(id) would be accepted; callers check this before side effects such as stopping jobs. */
+    public canDeleteWorkspace(id: string): { success: boolean; error?: string } {
         if (id === DEFAULT_WORKSPACE_ID) {
             return { success: false, error: 'Không thể xóa workspace mặc định' };
         }
         if (this.config.workspaces.length <= 1) {
             return { success: false, error: 'Phải có ít nhất 1 workspace' };
         }
+        if (!this.config.workspaces.some(w => w.id === id)) return { success: false, error: 'Workspace không tồn tại' };
+        return { success: true };
+    }
 
-        const ws = this.config.workspaces.find(w => w.id === id);
-        if (!ws) return { success: false, error: 'Workspace không tồn tại' };
+    public deleteWorkspace(id: string): { success: boolean; error?: string } {
+        const check = this.canDeleteWorkspace(id);
+        if (!check.success) return check;
+
+        const ws = this.config.workspaces.find(w => w.id === id)!;
 
         this.config.workspaces = this.config.workspaces.filter(w => w.id !== id);
 

@@ -79,6 +79,10 @@ function httpPost(url: string, body: any, timeoutMs = 15000): Promise<any> {
     });
 }
 
+const SWITCH_BUSY_ERROR = 'Đang chuyển workspace, thử lại sau.';
+/** The stop-and-switch wait can last ~55 s: a second switch/delete-of-active must not start meanwhile. */
+let switchInProgress = false;
+
 /**
  * registerWorkspaceIpc - IPC handlers for Workspace CRUD + switching.
  * 8 channels total.
@@ -159,58 +163,50 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
 
     ipcMain.handle('workspace:delete', async (_e, { id }: { id: string }) => {
         try {
-            // Record whether this is the currently active workspace BEFORE deleting
-            const wasActive = wm().getActiveWorkspaceId() === id;
+            // Refused deletes must not stop a running job
+            const check = wm().canDeleteWorkspace(id);
+            if (!check.success) return check;
 
-            let posterStopped = false;
-            if (wasActive) {
+            // Record whether this is the currently active workspace BEFORE deleting
+            if (wm().getActiveWorkspaceId() !== id) return wm().deleteWorkspace(id);
+
+            if (switchInProgress) return { success: false, error: SWITCH_BUSY_ERROR };
+            switchInProgress = true;
+            try {
                 if (!(await stopPosterForSwitch())) {
                     return { success: false, error: POSTER_NOT_STOPPED_ERROR };
                 }
-                posterStopped = true;
-            }
+                // The poster is stopped: whatever happens below, the scheduler must come back
+                try {
+                    const result = wm().deleteWorkspace(id);
+                    if (result.success) {
+                        // WorkspaceManager already updated activeWorkspaceId to the first remaining.
+                        // Now we need to: switch DB + notify renderer (same as workspace:switch).
+                        const newActiveWs = wm().getActiveWorkspace();
+                        if (newActiveWs) {
+                            AppModeManager.getInstance().clearOverride();
+                            const newDbPath = wm().resolveDbPath(newActiveWs.dbPath || 'deplao-tool.db');
+                            // Browser profile data belongs to the workspace being left: close before its DB goes away
+                            try { closeAllBrowserProfiles(); } catch {}
+                            await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
+                            FileStorageService.resetBaseDir();
 
-            let result;
-            try {
-                result = wm().deleteWorkspace(id);
-            } catch (err) {
-                if (posterStopped) { try { startFacebookPosterScheduler(); } catch {} }
-                throw err;
-            }
-            if (posterStopped && !result.success) {
-                try { startFacebookPosterScheduler(); } catch {}
-            }
-
-            if (result.success && wasActive) {
-                // WorkspaceManager already updated activeWorkspaceId to the first remaining.
-                // Now we need to: switch DB + notify renderer (same as workspace:switch).
-                const newActiveWs = wm().getActiveWorkspace();
-                if (newActiveWs) {
-                    AppModeManager.getInstance().clearOverride();
-                    const newDbPath = wm().resolveDbPath(newActiveWs.dbPath || 'deplao-tool.db');
-                    // Browser profile data belongs to the workspace being left: close before its DB goes away
-                    try { closeAllBrowserProfiles(); } catch {}
-                    try {
-                        await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
-                    } finally {
-                        // Also runs after a rolled-back switch: the previous DB is active again
-                        try { startFacebookPosterScheduler(); } catch {}
+                            if (mainWindow && !mainWindow.isDestroyed()) {
+                                mainWindow.webContents.send('workspace:switched', {
+                                    workspace: newActiveWs,
+                                });
+                            }
+                            Logger.log(`[workspaceIpc] Deleted active workspace → switched to "${newActiveWs.name}"`);
+                        }
                     }
-                    FileStorageService.resetBaseDir();
-
-                    if (mainWindow && !mainWindow.isDestroyed()) {
-                        mainWindow.webContents.send('workspace:switched', {
-                            workspace: newActiveWs,
-                        });
-                    }
-                    Logger.log(`[workspaceIpc] Deleted active workspace → switched to "${newActiveWs.name}"`);
-                } else {
-                    // No workspace left to switch to: the poster was stopped above, bring the scheduler back
+                    return result;
+                } finally {
+                    // Also runs after a rolled-back switch (previous DB active again) or when no workspace is left
                     try { startFacebookPosterScheduler(); } catch {}
                 }
+            } finally {
+                switchInProgress = false;
             }
-
-            return result;
         } catch (err: any) {
             Logger.error(`[workspaceIpc] delete error: ${err.message}`);
             return { success: false, error: err.message };
@@ -219,7 +215,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
 
     // ─── Switch ──────────────────────────────────────────────────────
 
-    ipcMain.handle('workspace:switch', async (_e, { id }: { id: string }) => {
+    const switchWorkspace = async (id: string) => {
         const prevWorkspaceId = wm().getActiveWorkspaceId();
         try {
             const result = wm().switchWorkspace(id);
@@ -321,6 +317,16 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             const msg = err?.message || String(err) || 'Unknown switch error';
             Logger.error(`[workspaceIpc] switch error: ${msg}`, err);
             return { success: false, error: msg };
+        }
+    };
+
+    ipcMain.handle('workspace:switch', async (_e, { id }: { id: string }) => {
+        if (switchInProgress) return { success: false, error: SWITCH_BUSY_ERROR };
+        switchInProgress = true;
+        try {
+            return await switchWorkspace(id);
+        } finally {
+            switchInProgress = false;
         }
     });
 
