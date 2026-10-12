@@ -212,6 +212,16 @@ class ZaloLoginHelper {
     private static fetchedGroupIds: Set<string> = new Set();
     /** Per-group tails that keep realtime group messages in arrival order */
     private static groupMessageChains: Map<string, Promise<void>> = new Map();
+
+    /**
+     * Run a group event handler behind the same per-group chain as group messages, so an
+     * undo / delete / reaction can never overtake a message still waiting on its group-info
+     * fetch. Non-group events (or without a thread id) run immediately, unchanged.
+     */
+    private static runInGroupOrder(zaloId: string, isGroup: boolean, threadId: string, handler: () => void | Promise<void>): void | Promise<void> {
+        if (!isGroup || !threadId) return handler();
+        return enqueuePerKey(ZaloLoginHelper.groupMessageChains, `${zaloId}_${threadId}`, async () => { await handler(); });
+    }
     private static readonly MAX_FETCHED_GROUP_CACHE = 2000;
 
     /** Add key vào fetchedGroupIds với LRU-eviction khi đầy */
@@ -734,7 +744,13 @@ class ZaloLoginHelper {
                         .map((item: any) => String(item.globalDelMsgId || item.clientDelMsgId || ''))
                         .filter(Boolean);
                     Logger.log(`[ZaloLoginHelper] 🗑️ chat.delete: thread=${threadId} msgIds=${JSON.stringify(msgIds)}`);
-                    EventBroadcaster.broadcastDeleteMessages(zaloId, msgIds, threadId);
+                    void ZaloLoginHelper.runInGroupOrder(zaloId, message.type === 1, threadId, () => {
+                        try {
+                            EventBroadcaster.broadcastDeleteMessages(zaloId, msgIds, threadId);
+                        } catch (error: any) {
+                            Logger.error(`[ZaloLoginHelper] chat.delete event error: ${error.message}`);
+                        }
+                    });
                     return;
                 }
 
@@ -876,7 +892,15 @@ class ZaloLoginHelper {
                 // ────────────────────────────────────────────────────────────────
 
                 reaction.zaloId = zaloId;
-                EventBroadcaster.broadcastReaction(zaloId, reaction);
+                // Only the broadcast waits behind pending group messages (see runInGroupOrder);
+                // the sender lookup above stays outside the chain so a slow API call cannot stall it.
+                await ZaloLoginHelper.runInGroupOrder(zaloId, isGroup, threadId, () => {
+                    try {
+                        EventBroadcaster.broadcastReaction(zaloId, reaction);
+                    } catch (error: any) {
+                        Logger.error(`[ZaloLoginHelper] reaction event error: ${error.message}`);
+                    }
+                });
             } catch (error: any) {
                 Logger.error(`[ZaloLoginHelper] reaction event error: ${error.message}`);
             }
@@ -914,7 +938,13 @@ class ZaloLoginHelper {
                 })}`);
 
                 if (recalledMsgId) {
-                    EventBroadcaster.broadcastUndo(zaloId, recalledMsgId, threadId);
+                    void ZaloLoginHelper.runInGroupOrder(zaloId, !!undo.isGroup, threadId, () => {
+                        try {
+                            EventBroadcaster.broadcastUndo(zaloId, recalledMsgId, threadId);
+                        } catch (error: any) {
+                            Logger.error(`[ZaloLoginHelper] undo event error: ${error.message}`);
+                        }
+                    });
                 }
             } catch (error: any) {
                 Logger.error(`[ZaloLoginHelper] undo event error: ${error.message}`);
