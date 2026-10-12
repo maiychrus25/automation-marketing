@@ -36,6 +36,12 @@
     affected" is an assumption, not a verification. If a regression is genuinely
     unavoidable, say so and get approval before proceeding.
 
+# Tài liệu đi cùng code
+- Thay đổi hành vi, giới hạn, IPC, schema hoặc luồng phát hành phải cập nhật `SYSTEM_DOCUMENTATION.md` (và dấu `docs-check` liên quan) trong **cùng commit**.
+- Khi tính năng phát hành hoặc bị thay thế: cập nhật dòng Trạng thái của spec và thêm "Ghi chú sau phát hành" nếu code khác spec; không viết lại thân tài liệu lịch sử.
+- Tăng `version` thì cập nhật dòng phiên bản trong `SYSTEM_DOCUMENTATION.md`.
+- `node scripts/check-docs.js` phải sạch trước khi báo xong.
+
 # Ponytail Rulepack
 - Skip: Do not build code that does not need to exist.
 - Reuse local: Prefer existing helpers, components, patterns, and project conventions.

@@ -70,6 +70,9 @@ jobs:
       - name: Type-check renderer
         run: node --max-old-space-size=4096 node_modules/typescript/bin/tsc -p tsconfig.json --noEmit
 
+      - name: Kiểm tài liệu khớp code
+        run: node scripts/check-docs.js
+
       - name: Unit test
         run: npx jest --runInBand
 
