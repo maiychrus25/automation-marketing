@@ -344,7 +344,7 @@ export function registerDatabaseIpc() {
                 // Convert ALL absolute local_paths → relative (folder-agnostic).
                 // Works for any old base dir - no need to rewriteLocalPaths first.
                 try {
-                    const migrated = DatabaseService.getInstance().migrateAllAbsolutePathsToRelative();
+                    const migrated = DatabaseService.getInstance().migrateAllAbsolutePathsToRelative({ force: true });
                     if (migrated > 0) {
                         DatabaseService.getInstance().forceFlush();
                         console.log(`[databaseIpc] useExisting: migrated ${migrated} messages to relative paths`);
@@ -424,7 +424,7 @@ export function registerDatabaseIpc() {
             // (kể cả path từ các lần đổi folder cũ hơn) → relative, folder-agnostic.
             let pathsMigrated = 0;
             try {
-                pathsMigrated = DatabaseService.getInstance().migrateAllAbsolutePathsToRelative();
+                pathsMigrated = DatabaseService.getInstance().migrateAllAbsolutePathsToRelative({ force: true });
             } catch (migrateErr: any) {
                 console.error(`[databaseIpc] migrateAllAbsolutePathsToRelative error: ${migrateErr.message}`);
             }

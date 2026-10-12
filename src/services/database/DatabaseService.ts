@@ -4089,12 +4089,13 @@ class DatabaseService {
      * This bypasses the sql.js Wasm "unknown type undefined" error that occurs when trying
      * to bind rowid values (sql.js does not expose rowid via getAsObject).
      */
-    public migrateAllAbsolutePathsToRelative(): number {
+    public migrateAllAbsolutePathsToRelative(options: { force?: boolean } = {}): number {
         if (!this.initialized) return 0;
         // Run once per database: rescanning every message on each launch blocks the main
         // process on large databases even when all paths are already relative.
         const migrationKey = 'migration_local_paths_relative_v2';
-        if (this.getSetting(migrationKey) === 'done') return 0;
+        // Explicit data-folder-change callers force the scan: they just rewrote paths to new absolute ones.
+        if (!options.force && this.getSetting(migrationKey) === 'done') return 0;
 
         let migrationCount = 0;
         try {
@@ -4136,7 +4137,9 @@ class DatabaseService {
             // better-sqlite3 persists through WAL immediately; do not force a checkpoint here
             // (it can stall startup on a large database). Write the flag only after success.
             this.setSetting(migrationKey, 'done');
-            Logger.log(`[DatabaseService] migrateAllAbsolutePathsToRelative: ${migrationCount} paths converted`);
+            if (migrationCount > 0) {
+                Logger.log(`[DatabaseService] migrateAllAbsolutePathsToRelative: ${migrationCount} paths converted`);
+            }
             return migrationCount;
         } catch (err: any) {
             Logger.error(`[DatabaseService] migrateAllAbsolutePathsToRelative error: ${err?.message ?? String(err)}`);
