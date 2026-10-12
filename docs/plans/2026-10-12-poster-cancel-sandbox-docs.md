@@ -281,3 +281,18 @@ Không giao subagent. Sau Task 7:
 4. Mở một profile tự động qua Playwright với args từ `buildLaunchArgs({ noSandbox: false })`: renderer ở user namespace khác tiến trình chính (so `/proc/<pid>/ns/user`); `launchPersistentContext` với `chromiumSandbox: true`: `/proc/<pid>/cmdline` không có `--no-sandbox`.
 5. Chạy app dev, màn Trình duyệt desktop + hẹp (mobile), sáng/tối: không có dải cảnh báo (máy không chặn), không tràn ngang. Giả lập `disabled` (env tạm trong phiên dev, không commit) để chụp dải cảnh báo ở hai chế độ màu và hai bề rộng.
 6. Hai vòng stress test theo AGENTS.md; không đăng thật.
+
+---
+
+## Điều chỉnh khi triển khai (12/10/2026)
+
+Các điểm code khác văn bản plan ở trên, đã được review và có test:
+
+1. **Cờ đoạn không thể quay lại (Task 2):** `record()` đặt `reachedCritical = false` sau mỗi kết quả; quy tắc đổi kết quả coi `critical || reachedCritical` là đang trong đoạn (plan ghi `reachedCritical = critical`, làm cờ dính sang đích sau).
+2. **Kiểm dừng ngay trước click (Task 1/2):** `postToTargets` và `joinGroups` kiểm `getIsStopping()` ngay trước `enterCritical`, để Hủy rơi sát lúc bấm vẫn ghi "Đã dừng" và không bấm.
+3. **Trạng thái profile sau Hủy:** hiện `cancelled` (không phải `failed`) khi lỗi do Hủy, trừ khi đóng cứng.
+4. **Chạy thử sandbox (Task 4):** `makeTempDir` nằm trong `try`; Promise lỗi không bị cache; `runProcess` chạy nhóm tiến trình riêng, hết hạn thì giết cả nhóm và trả ngay. Sau review cuối: lần chạy đầu thoát mã khác 0 mà không phải "No usable sandbox" thì chạy lại có `--no-sandbox`; chạy được → `disabled`.
+5. **Lệnh AppArmor (Task 5):** `browserProfile:sandboxStatus` trả thêm `apparmorPath` = `<thư mục browser-engine>/*/*/<tên file nhân>` tính ở tiến trình chính, đặt trong ngoặc kép trong lệnh (thư mục dữ liệu có thể là `AHV Connect`, có dấu cách).
+6. **Workspace (Task 3, sau review cuối):** `WorkspaceManager.canDeleteWorkspace` kiểm điều kiện xóa trước khi dừng việc; cờ `switchInProgress` từ chối chuyển/xóa chồng nhau (`Đang chuyển workspace, thử lại sau.`); bước sau khi dừng nằm trong `try/finally` khởi động lại scheduler; có `src/__tests__/app/workspaceIpc.test.ts`.
+7. **Đóng cứng việc xin vào nhóm:** lỗi riêng `Đã đóng khi đang chờ kết quả — kiểm tra yêu cầu vào nhóm trên Facebook`.
+8. **check-docs (Task 7):** báo dấu `docs-check` sai định dạng, báo lỗi khi tài liệu không còn dấu nào, `package.json` hỏng ra dòng lỗi thay vì stack trace.
