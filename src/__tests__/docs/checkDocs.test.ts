@@ -100,6 +100,36 @@ describe('check-docs', () => {
     });
   });
 
+  describe('makePathExists', () => {
+    it('accepts gitignored generated paths that are absent from a clean checkout', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-docs-git-'));
+      try {
+        require('child_process').execFileSync('git', ['init', '-q', dir]);
+        fs.writeFileSync(path.join(dir, '.gitignore'), 'src/gen/\n');
+        fs.mkdirSync(path.join(dir, 'src'));
+        fs.writeFileSync(path.join(dir, 'src', 'real.ts'), '');
+        const exists = checkDocs.makePathExists(dir);
+        expect(exists('src/real.ts')).toBe(true);
+        expect(exists('src/gen')).toBe(true);
+        expect(exists('src/missing.ts')).toBe(false);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to the file system outside a git repository', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-docs-nogit-'));
+      try {
+        fs.writeFileSync(path.join(dir, 'a.md'), '');
+        const exists = checkDocs.makePathExists(dir);
+        expect(exists('a.md')).toBe(true);
+        expect(exists('src/gen')).toBe(false);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('runChecks is clean on the real repo', () => {
     expect(checkDocs.runChecks(path.resolve(__dirname, '../../..'))).toEqual([]);
   });

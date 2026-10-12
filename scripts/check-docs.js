@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const VERSION_LABEL = 'Phiên bản ứng dụng được khảo sát';
 const PATH_PREFIXES = ['src/', 'electron/', 'scripts/', 'docs/', 'resources/', 'public/', '.github/'];
@@ -93,6 +94,26 @@ function checkPaths(docFile, docText, exists) {
   return errors;
 }
 
+/**
+ * A documented path is valid when it exists, or when .gitignore declares it: generated
+ * folders (e.g. src/bridge-e2ee/meta) exist on a dev machine but not in a clean CI checkout,
+ * so a plain existence check would pass locally and fail in CI.
+ */
+function makePathExists(root) {
+  const isIgnored = (rel) => {
+    for (const candidate of [rel, `${rel.replace(/\/+$/, '')}/`]) {
+      try {
+        execFileSync('git', ['check-ignore', '-q', '--', candidate], { cwd: root, stdio: 'ignore' });
+        return true;
+      } catch {
+        // exit 1 = not ignored; other errors (no git, not a repository) = unknown, treat as not ignored
+      }
+    }
+    return false;
+  };
+  return (rel) => fs.existsSync(path.join(root, rel)) || isIgnored(rel);
+}
+
 function runChecks(root) {
   const readFile = (rel) => {
     try {
@@ -101,7 +122,7 @@ function runChecks(root) {
       return null;
     }
   };
-  const exists = (rel) => fs.existsSync(path.join(root, rel));
+  const exists = makePathExists(root);
   const errors = [];
 
   const pkg = readFile('package.json');
@@ -137,6 +158,6 @@ function main() {
   console.log('docs-check: OK (phiên bản, hằng số, đường dẫn khớp code)');
 }
 
-module.exports = { evaluateNumber, findConstant, checkVersion, checkConstantMarkers, checkPaths, runChecks };
+module.exports = { evaluateNumber, findConstant, checkVersion, checkConstantMarkers, checkPaths, makePathExists, runChecks };
 
 if (require.main === module) main();
