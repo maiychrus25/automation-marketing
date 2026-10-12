@@ -60,7 +60,7 @@ describe('group contact_type is kept as group', () => {
       await saveMsg('g3', 1, 'rm1');
       service.run(`UPDATE contacts SET contact_type='user' WHERE owner_zalo_id=? AND contact_id='g3'`, [OWNER]);
       expect(contactType('g3')).toBe('user');
-      expect(service.repairZaloGroupContactTypes()).toBeGreaterThanOrEqual(1);
+      expect(service.repairZaloGroupContactTypes()).toBe(1);
       expect(contactType('g3')).toBe('group');
     });
 
@@ -79,7 +79,11 @@ describe('group contact_type is kept as group', () => {
       expect(contactType('fb1')).toBe('user');
     });
 
-    test('is idempotent', () => {
+    test('is idempotent', async () => {
+      service.updateContactProfile(OWNER, 'g4', 'G4', '', '', '');
+      await saveMsg('g4', 1, 'rm4');
+      service.run(`UPDATE contacts SET contact_type='user' WHERE owner_zalo_id=? AND contact_id='g4'`, [OWNER]);
+      expect(service.repairZaloGroupContactTypes()).toBe(1);
       expect(service.repairZaloGroupContactTypes()).toBe(0);
     });
   });
