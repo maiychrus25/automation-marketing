@@ -4,6 +4,16 @@ import type { Page } from 'playwright-core';
 export const delayRandom = (minMs: number, maxMs: number): Promise<void> =>
     new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs));
 
+/** Ngủ theo lát để dừng được: trả ngay khi `getIsStopping()` đúng, không phải chờ hết `ms`. */
+export async function sleepStoppable(ms: number, getIsStopping: () => boolean, sliceMs = 500): Promise<void> {
+    let remaining = ms;
+    while (remaining > 0 && !getIsStopping()) {
+        const step = Math.min(sliceMs, remaining);
+        await new Promise<void>(resolve => setTimeout(resolve, step));
+        remaining -= step;
+    }
+}
+
 /** Click vào một điểm ngẫu nhiên trong 60% giữa của phần tử, có di chuyển chuột. */
 export const humanClick = async (page: Page, selector: string): Promise<void> => {
     const element = await page.waitForSelector(selector, { state: 'visible', timeout: 20000 });

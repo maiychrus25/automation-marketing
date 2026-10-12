@@ -2,6 +2,7 @@
 // In-page functions below run in the browser; electron tsconfig has no DOM lib, so pull it in for this file.
 import type { TaskDeps } from './types';
 import { FB_HOME, isLoggedIn } from './loginState';
+import { sleepStoppable } from './humanize';
 
 const FB = 'https://www.facebook.com';
 
@@ -74,8 +75,6 @@ function collectGroupLinksInPage(): { href: string; text: string }[] {
     }));
 }
 
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-
 export interface ScanGroupsResult {
     groups: ScannedGroup[];
     hitScrollLimit: boolean;
@@ -113,7 +112,8 @@ export async function scanGroups(deps: TaskDeps & {
             throw new Error('Chưa đăng nhập. Hãy bấm Đăng nhập trước khi quét.');
         }
         await page.goto(JOINS_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await sleep(settleMs);
+        await sleepStoppable(settleMs, deps.getIsStopping);
+        if (deps.getIsStopping()) throw new Error('Đã dừng');
 
         // CỘNG DỒN link qua từng vòng, không ghi đè. Facebook gỡ bớt node cũ khỏi
         // DOM khi cuộn xuống, nên đọc lại chỉ thấy phần đang hiển thị: ghi đè thì
@@ -129,6 +129,7 @@ export async function scanGroups(deps: TaskDeps & {
         let scrollError = false;
 
         for (; scrollRounds < maxScrolls; scrollRounds++) {
+            if (deps.getIsStopping()) throw new Error('Đã dừng');
             // Mấy vòng liên tiếp số nhóm không nhúc nhích thì kết luận Facebook hết
             // nhóm để nạp.
             if (groups.length === previousCount) {
@@ -141,7 +142,7 @@ export async function scanGroups(deps: TaskDeps & {
 
             try {
                 await page.evaluate(scrollToBottomInPage);
-                await sleep(scrollWaitMs);
+                await sleepStoppable(scrollWaitMs, deps.getIsStopping);
                 collectedLinks.push(...await page.evaluate(collectGroupLinksInPage));
             } catch {
                 // Cuộn hoặc đọc hỏng giữa chừng: giữ phần đã gom còn hơn ném đi tất

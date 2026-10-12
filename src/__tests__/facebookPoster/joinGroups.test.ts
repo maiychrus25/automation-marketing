@@ -830,3 +830,23 @@ test('launch của vòng tham gia được gọi đúng một lần và không �
   );
   assert.deepStrictEqual(launchArgs, [[]]);
 });
+
+test('wraps the join click in a critical section', async () => {
+  const b = fakeBrowser({ 'g1': joinAndJoined() }, []);
+  const events: string[] = [];
+  const baseLocator = b.page.locator;
+  b.page.locator = (sel: string) => {
+    const loc = baseLocator(sel);
+    return { first: () => ({ click: async (o?: Any) => { events.push('click:join'); await loc.first().click(o); } }) };
+  };
+  await searchAndJoinGroups(
+    { keywords: ['x'], ...ZERO },
+    makeDeps(b, {
+      search: async () => ([{ id: 'g1', name: 'Test', url: 'https://www.facebook.com/groups/g1/' }]),
+      enterCritical: () => events.push('enter'),
+      leaveCritical: () => events.push('leave'),
+      onResult: () => events.push('onResult'),
+    }),
+  );
+  assert.deepStrictEqual(events, ['enter', 'click:join', 'leave', 'onResult']);
+});

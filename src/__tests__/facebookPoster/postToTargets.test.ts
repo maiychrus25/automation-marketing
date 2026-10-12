@@ -1211,3 +1211,114 @@ test('commentDelayMin: bấm Huỷ trong lúc chờ thì không bình luận', a
   assert.strictEqual(ra.results[0].commentStatus, 'failed');
   assert.ok(!logs.some((l) => l.msg.startsWith('[Bình luận]')), 'không được mở bài để bình luận sau khi huỷ');
 });
+
+/** Trang giả đăng thành công; `hooks` cho test chèn sự kiện vào các bước chính. */
+function pageForCritical(opts: {
+  events?: string[];
+  gotos?: string[];
+  onWaitHidden?: () => Promise<void> | void;
+} = {}) {
+  const { events = [], gotos = [], onWaitHidden } = opts;
+  return {
+    goto: async (u: string) => { gotos.push(u); },
+    $: async () => null,
+    on: () => {},
+    off: () => {},
+    evaluate: async (fn: AnyFn) => {
+      if (fn.name === 'composerIsOpenInPage') return true;
+      if (fn.name === 'focusEditorInPage') return true;
+      if (fn.name === 'markPublishButtonInPage') return true;
+      return false;
+    },
+    locator: () => ({ first: () => ({ click: async () => { events.push('click:publish'); } }) }),
+    waitForSelector: async (_sel: string, o?: { state?: string }) => {
+      if (o && o.state === 'hidden') { await onWaitHidden?.(); return null; }
+      throw new Error('không tìm thấy (giả lập)');
+    },
+    keyboard: { type: async () => {}, press: async () => {} },
+  };
+}
+
+test('rest between targets ends within a second of cancel', async () => {
+  const gotos: string[] = [];
+  let stopping = false;
+  let stoppedAt = 0;
+  const page = pageForCritical({ gotos });
+  jest.useFakeTimers();
+  try {
+    const promise = postToTargets(
+      {
+        text: 'hi',
+        targets: ['https://www.facebook.com/groups/1/', 'https://www.facebook.com/groups/2/'],
+        minDelay: 600, maxDelay: 600,
+      },
+      makeDeps(loggedInCtx([]), page, {
+        getIsStopping: () => stopping,
+        // Cờ dừng bật 5 giây SAU khi đích 1 xong, tức giữa lúc đang nghỉ 600 giây.
+        onResult: () => { setTimeout(() => { stopping = true; stoppedAt = Date.now(); }, 5000); },
+      }),
+    );
+    let settled = false;
+    promise.then(() => { settled = true; }, () => { settled = true; });
+    // onResult của đích 1 bật cờ dừng ở giữa luồng; tua từng 100 ms tới khi xong.
+    for (let i = 0; i < 2000 && !settled; i++) await jest.advanceTimersByTimeAsync(100);
+    await promise;
+    assert.ok(stoppedAt > 0, 'đích 1 phải chạy xong');
+    assert.ok(Date.now() - stoppedAt <= 1000, `trả sau ${Date.now() - stoppedAt} ms kể từ lúc dừng`);
+  } finally {
+    jest.useRealTimers();
+  }
+  assert.ok(!gotos.some(u => u.includes('/groups/2/')), 'đích 2 không được mở');
+});
+
+test('wraps publish click to result in a critical section', async () => {
+  const events: string[] = [];
+  const page = pageForCritical({ events });
+  await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', targets: ['https://www.facebook.com/groups/1/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page, {
+      enterCritical: () => events.push('enter'),
+      leaveCritical: () => events.push('leave'),
+      onResult: () => events.push('onResult'),
+    }),
+  ));
+  assert.deepStrictEqual(events, ['enter', 'click:publish', 'onResult', 'leave']);
+});
+
+test('leaves the critical section when publishing throws', async () => {
+  const events: string[] = [];
+  const page = pageForCritical({
+    events,
+    onWaitHidden: () => { throw new Error('dialog lỗi (giả lập)'); },
+  });
+  // waitForSelector(hidden) ném lỗi được nuốt thành dialogClosed=false; ép lỗi thật qua page.off.
+  page.off = () => { throw new Error('off lỗi (giả lập)'); };
+  await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', targets: ['https://www.facebook.com/groups/1/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page, {
+      enterCritical: () => events.push('enter'),
+      leaveCritical: () => events.push('leave'),
+    }),
+  ));
+  assert.strictEqual(events.filter(e => e === 'enter').length, 1);
+  assert.strictEqual(events.filter(e => e === 'leave').length, 1);
+});
+
+test('does not enter a critical section when stopped before publishing', async () => {
+  const events: string[] = [];
+  const page = pageForCritical({ events });
+  let typed = false;
+  page.keyboard.type = async () => { typed = true; };
+  await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', targets: ['https://www.facebook.com/groups/1/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page, {
+      // Dừng ngay sau vòng kiểm đầu của vòng đích, trước bước gõ chữ.
+      getIsStopping: (() => { let n = 0; return () => ++n > 1; })(),
+      enterCritical: () => events.push('enter'),
+      leaveCritical: () => events.push('leave'),
+    }),
+  ));
+  assert.ok(!events.includes('enter'), 'chưa tới nút Đăng thì không được vào đoạn');
+  assert.ok(!events.includes('click:publish'));
+  assert.strictEqual(typed, false);
+});

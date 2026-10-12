@@ -422,3 +422,25 @@ test('đọc DOM ném lỗi giữa chừng cũng phải báo scrollError, không
   assert.strictEqual(result.groups.length, 2, 'giữ phần đã gom');
   assert.strictEqual(closed.length, 1);
 });
+
+test('stops scrolling when cancelled', async () => {
+  const closed: boolean[] = [];
+  const ctx = loggedInCtx(closed);
+  let scrolls = 0;
+  let counter = 0;
+  const page = {
+    goto: async () => {},
+    evaluate: async (fn: AnyFn) => {
+      if (fn.name === 'scrollToBottomInPage') { scrolls += 1; return 1000; }
+      counter += 1; // mỗi lần đọc thêm một nhóm mới để không dừng vì hết nhóm
+      return [{ href: `/groups/${counter}/`, text: `Nhóm ${counter}` }];
+    },
+  };
+
+  await assert.rejects(
+    scanGroups(makeDeps(ctx, page, { settleMs: 0, scrollWaitMs: 0, getIsStopping: () => scrolls >= 2 })),
+    { message: 'Đã dừng' },
+  );
+  assert.ok(scrolls <= 3, `scrollToBottom gọi ${scrolls} lần`);
+  assert.strictEqual(closed.length, 1);
+});

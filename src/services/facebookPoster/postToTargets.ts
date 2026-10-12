@@ -2,7 +2,7 @@
 // In-page functions below run in the browser; electron tsconfig has no DOM lib, so pull it in for this file.
 import type { BrowserContext, Page, Response } from 'playwright-core';
 import type { TaskDeps } from './types';
-import { delayRandom, humanClick } from './humanize';
+import { delayRandom, humanClick, sleepStoppable } from './humanize';
 import { normalizeTarget, pickDelaySeconds } from './targets';
 import { FB_HOME, isLoggedIn } from './loginState';
 import { postFirstComment, type CommentStatus } from './firstComment';
@@ -405,7 +405,7 @@ async function postToSingleTarget(
   ctx: BrowserContext,
   target: { url: string; kind: 'group' | 'page' },
   { text, mediaPaths, comment, commentDelayMin = 0 }: { text: string; mediaPaths: string[]; comment: string | null; commentDelayMin?: number },
-  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog'> & { attachShortfall?: () => boolean },
+  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog' | 'enterCritical'> & { attachShortfall?: () => boolean },
 ): Promise<SingleTargetOutcome> {
   const { url, kind } = target;
   const { getIsStopping, sendLog } = deps;
@@ -597,6 +597,8 @@ async function postToSingleTarget(
       sendLog(`[${kind}] [ERROR] Nút Đăng đang tắt — Facebook chưa ghi nhận nội dung trong ô soạn: ${url}`, 'error');
       return failed();
     }
+    // Từ đây là điểm không quay lại: Hủy không được đóng trình duyệt tới khi có kết quả.
+    deps.enterCritical?.();
     sendLog('[Đăng Bài] Đang click nút Đăng bài...', 'info');
     try {
       published = await page.evaluate(markPublishButtonInPage, PUBLISH_LABELS);
@@ -794,35 +796,40 @@ export async function postToTargets(
       let waitedMs = 0;
       chooserShortfall = false;
       try {
-        const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment, commentDelayMin },
-          { getIsStopping, sendLog, attachShortfall: () => chooserShortfall });
-        // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
-        // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
-        ok = single.ok;
-        postUrl = single.postUrl;
-        identity = single.identity;
-        waitedMs = single.waitedMs ?? 0;
-        if (single.commentStatus) commentStatus = single.commentStatus;
-      } catch (err) {
-        error = (err as Error).message;
-        sendLog(`Lỗi khi đăng ${target.url}: ${(err as Error).message}`, 'error');
-      }
-      const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity };
-      results.push(entry);
-      // Báo ngay khi đích này xong để nơi gọi ghi lịch sử/hiển thị từng bước,
-      // không đợi cả lượt.
-      try {
-        onResult?.(entry);
-      } catch (err) {
-        // Lỗi ở nơi nhận kết quả (ghi lịch sử...) không được làm dừng các đích còn lại.
-        sendLog(`Lỗi khi báo kết quả ${target.url}: ${(err as Error).message}`, 'warning');
+        try {
+          const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment, commentDelayMin },
+            { getIsStopping, sendLog, enterCritical: deps.enterCritical, attachShortfall: () => chooserShortfall });
+          // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
+          // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
+          ok = single.ok;
+          postUrl = single.postUrl;
+          identity = single.identity;
+          waitedMs = single.waitedMs ?? 0;
+          if (single.commentStatus) commentStatus = single.commentStatus;
+        } catch (err) {
+          error = (err as Error).message;
+          sendLog(`Lỗi khi đăng ${target.url}: ${(err as Error).message}`, 'error');
+        }
+        const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity };
+        results.push(entry);
+        // Báo ngay khi đích này xong để nơi gọi ghi lịch sử/hiển thị từng bước,
+        // không đợi cả lượt.
+        try {
+          onResult?.(entry);
+        } catch (err) {
+          // Lỗi ở nơi nhận kết quả (ghi lịch sử...) không được làm dừng các đích còn lại.
+          sendLog(`Lỗi khi báo kết quả ${target.url}: ${(err as Error).message}`, 'warning');
+        }
+      } finally {
+        // Idempotent ở phía service: gọi cả khi chưa vào đoạn.
+        deps.leaveCritical?.();
       }
 
       if (current < normalized.length && !getIsStopping()) {
         // Thời gian đã chờ để bình luận tính luôn vào khoảng nghỉ.
         const secs = Math.max(0, pickDelaySeconds(minDelay, maxDelay) - Math.round(waitedMs / 1000));
         sendLog(`Nghỉ ${secs} giây trước bài viết tiếp theo...`, 'info');
-        await delayRandom(secs * 1000, secs * 1000);
+        await sleepStoppable(secs * 1000, getIsStopping);
       }
     }
     updateProgress(100, 'Hoàn tất');

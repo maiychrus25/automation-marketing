@@ -10,4 +10,7 @@ export interface TaskDeps {
     getIsStopping: () => boolean;
     sendLog: (message: string, level: LogLevel) => void;
     updateProgress: (percent: number, label: string) => void;
+    /** Bao thao tác không hoàn tác được (bấm Đăng, bấm Tham gia) tới khi có kết quả; Hủy không đóng trình duyệt trong đoạn này. */
+    enterCritical?: () => void;
+    leaveCritical?: () => void;
 }

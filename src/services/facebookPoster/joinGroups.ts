@@ -303,51 +303,56 @@ export async function searchAndJoinGroups(
                 if (!(await page.evaluate(markJoinButtonInPage, { labels: JOIN_LABELS, groupId: g.id }))) {
                     sendLog(`Không tìm thấy nút Tham gia ở ${g.url}`, 'error');
                 } else {
-                    // Click tin cậy qua locator. Lỗi click không được làm hỏng luồng
-                    // ngay: không có bằng chứng nào ở đây cả, quyết định nằm ở phần
-                    // đọc lại nút bên dưới (bằng chứng dương), không ở việc click.
+                    deps.enterCritical?.();
                     try {
-                        await page.locator('[data-maihub-target="join"]').first().click({ timeout: 10000 });
-                    } catch (e) {
-                        sendLog(`Bấm nút Tham gia không được: ${(e as Error).message}`, 'warning');
-                    }
-                    const sets = { pending: PENDING_LABELS, joined: JOINED_LABELS };
-                    const deadline = Date.now() + joinWaitMs;
-                    let read: JoinOutcome = 'unknown';
-                    do {
-                        await delayRandom(pollMs, pollMs);
-                        read = await page.evaluate(readJoinOutcomeInPage, { sets, groupId: g.id });
-                    } while (read === 'unknown' && Date.now() < deadline);
+                        // Click tin cậy qua locator. Lỗi click không được làm hỏng luồng
+                        // ngay: không có bằng chứng nào ở đây cả, quyết định nằm ở phần
+                        // đọc lại nút bên dưới (bằng chứng dương), không ở việc click.
+                        try {
+                            await page.locator('[data-maihub-target="join"]').first().click({ timeout: 10000 });
+                        } catch (e) {
+                            sendLog(`Bấm nút Tham gia không được: ${(e as Error).message}`, 'warning');
+                        }
+                        const sets = { pending: PENDING_LABELS, joined: JOINED_LABELS };
+                        const deadline = Date.now() + joinWaitMs;
+                        let read: JoinOutcome = 'unknown';
+                        do {
+                            await delayRandom(pollMs, pollMs);
+                            read = await page.evaluate(readJoinOutcomeInPage, { sets, groupId: g.id });
+                        } while (read === 'unknown' && Date.now() < deadline);
 
-                    if (read === 'skipped') {
-                        // Nhóm hỏi câu hỏi thành viên. Theo yêu cầu của người dùng: KHÔNG
-                        // trả lời (trả lời hộ là đoán mò nội dung thay họ), chỉ đóng hộp
-                        // thoại rồi đọc lại trạng thái nút một lần nữa.
-                        await page.evaluate(closeDialogInPage);
-                        await delayRandom(pollMs, pollMs);
-                        const afterClose = await page.evaluate(readJoinOutcomeInPage, { sets, groupId: g.id });
+                        if (read === 'skipped') {
+                            // Nhóm hỏi câu hỏi thành viên. Theo yêu cầu của người dùng: KHÔNG
+                            // trả lời (trả lời hộ là đoán mò nội dung thay họ), chỉ đóng hộp
+                            // thoại rồi đọc lại trạng thái nút một lần nữa.
+                            await page.evaluate(closeDialogInPage);
+                            await delayRandom(pollMs, pollMs);
+                            const afterClose = await page.evaluate(readJoinOutcomeInPage, { sets, groupId: g.id });
 
-                        if (afterClose === 'joined' || afterClose === 'pending') {
-                            outcome = afterClose;
-                            sendLog(`Nhóm "${g.name}" có câu hỏi thành viên; không trả lời nhưng nút đã đổi — ${afterClose === 'joined' ? 'đã tham gia' : 'đã gửi yêu cầu, chờ duyệt'}.`,
+                            if (afterClose === 'joined' || afterClose === 'pending') {
+                                outcome = afterClose;
+                                sendLog(`Nhóm "${g.name}" có câu hỏi thành viên; không trả lời nhưng nút đã đổi — ${afterClose === 'joined' ? 'đã tham gia' : 'đã gửi yêu cầu, chờ duyệt'}.`,
+                                    'success');
+                            } else {
+                                // Nút chưa đổi. Đóng hộp câu hỏi rất có thể đã huỷ luôn yêu cầu,
+                                // nên đây KHÔNG phải bằng chứng đã gửi. Người dùng vẫn muốn xếp
+                                // vào pending, nhưng nhật ký phải nói rõ là chưa xác nhận được —
+                                // dự án này đã có một lần nhật ký báo thành công mà thực tế không.
+                                outcome = 'pending';
+                                sendLog(`Nhóm "${g.name}" có câu hỏi thành viên; đã bấm Tham gia và bỏ qua câu hỏi, nhưng CHƯA xác nhận được yêu cầu đã gửi. Xếp tạm vào chờ duyệt — hãy kiểm tra ở facebook.com/groups/joins/`,
+                                    'warning');
+                            }
+                        } else if (read === 'joined' || read === 'pending') {
+                            outcome = read;
+                            sendLog(`Nhóm "${g.name}": ${read === 'joined' ? 'đã tham gia' : 'đã gửi yêu cầu, chờ duyệt'}.`,
                                 'success');
                         } else {
-                            // Nút chưa đổi. Đóng hộp câu hỏi rất có thể đã huỷ luôn yêu cầu,
-                            // nên đây KHÔNG phải bằng chứng đã gửi. Người dùng vẫn muốn xếp
-                            // vào pending, nhưng nhật ký phải nói rõ là chưa xác nhận được —
-                            // dự án này đã có một lần nhật ký báo thành công mà thực tế không.
-                            outcome = 'pending';
-                            sendLog(`Nhóm "${g.name}" có câu hỏi thành viên; đã bấm Tham gia và bỏ qua câu hỏi, nhưng CHƯA xác nhận được yêu cầu đã gửi. Xếp tạm vào chờ duyệt — hãy kiểm tra ở facebook.com/groups/joins/`,
-                                'warning');
+                            // 'unknown' (hết giờ chờ) hoặc bất kỳ giá trị lạ nào khác — chỉ
+                            // 'joined'/'pending' mới được coi là dấu hiệu dương.
+                            sendLog(`Nhóm "${g.name}": không rõ kết quả sau ${joinWaitMs / 1000}s.`, 'error');
                         }
-                    } else if (read === 'joined' || read === 'pending') {
-                        outcome = read;
-                        sendLog(`Nhóm "${g.name}": ${read === 'joined' ? 'đã tham gia' : 'đã gửi yêu cầu, chờ duyệt'}.`,
-                            'success');
-                    } else {
-                        // 'unknown' (hết giờ chờ) hoặc bất kỳ giá trị lạ nào khác — chỉ
-                        // 'joined'/'pending' mới được coi là dấu hiệu dương.
-                        sendLog(`Nhóm "${g.name}": không rõ kết quả sau ${joinWaitMs / 1000}s.`, 'error');
+                    } finally {
+                        deps.leaveCritical?.();
                     }
                 }
             } catch (err) {
