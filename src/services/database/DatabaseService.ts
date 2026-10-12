@@ -4124,14 +4124,15 @@ class DatabaseService {
             });
 
             // Only feed the UDF rows that can still hold an absolute path: JSON escapes Windows
-            // separators as `\\`, and absolute Unix paths contain `/media/`.
+            // separators as `\\`, absolute Unix paths contain `/media/`, and a UNC path
+            // (`\\server\share`) starts with four backslashes in the JSON text.
             db!.exec(
                 `UPDATE messages SET local_paths = _migrate_local_path(local_paths)
                  WHERE local_paths IS NOT NULL
                    AND local_paths != ''
                    AND local_paths != '{}'
                    AND local_paths != 'null'
-                   AND (instr(local_paths, ':\\\\') > 0 OR instr(local_paths, '/media/') > 0)`
+                   AND (instr(local_paths, ':\\\\') > 0 OR instr(local_paths, '/media/') > 0 OR instr(local_paths, '"\\\\\\\\') > 0)`
             );
 
             // better-sqlite3 persists through WAL immediately; do not force a checkpoint here
