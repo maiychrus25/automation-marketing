@@ -277,6 +277,8 @@ function createWindow() {
   }
 
   let initialWindowShown = false;
+  // A window shown early (deep link, tray, second instance) never emits ready-to-show.
+  mainWindow.once('show', () => { initialWindowShown = true; });
   mainWindow.once('ready-to-show', () => {
     initialWindowShown = true;
     if (cachedNormalIcon && !cachedNormalIcon.isEmpty()) {
@@ -288,7 +290,7 @@ function createWindow() {
   // Blank-window fallback: if the first paint never arrives, show the window and
   // reload the renderer once so the user is not left with an invisible app.
   setTimeout(() => {
-    if (initialWindowShown || !mainWindow || mainWindow.isDestroyed()) return;
+    if (initialWindowShown || !mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return;
     console.warn('[main] ready-to-show not fired after 8s; showing window and reloading once');
     mainWindow.show();
     if (isDev) {
@@ -1201,12 +1203,12 @@ app.whenReady().then(async () => {
     setTimeout(() => startupAllWorkspaces().catch(err => {
       console.error('[main] startupAllWorkspaces error:', err.message);
     }), 500);
+    // Resume active CRM campaigns only after connectors start, so Telegram items are not failed while disconnected.
+    setTimeout(() => CRMQueueService.getInstance().resumeActiveCampaigns(), 3000);
   };
   onRendererReportedReady = startConnectorServices;
   if (rendererReportedReady) onRendererReportedReady();
   setTimeout(startConnectorServices, 30000).unref();
-  // Resume any active CRM campaigns after restart
-  setTimeout(() => CRMQueueService.getInstance().resumeActiveCampaigns(), 3000);
   // Initialize ERP Calendar reminders scheduler
   setTimeout(() => {
     try {
