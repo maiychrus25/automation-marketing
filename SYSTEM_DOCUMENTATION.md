@@ -7,7 +7,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Tên hệ thống | MaiHub (trước 26.9.0: AHV Connect) |
-| Phiên bản ứng dụng được khảo sát | `26.16.0` (khảo sát gốc trên 26.8.5; các mục 4.9–4.12 cập nhật theo bản mới; riêng cơ chế hủy việc Đăng Facebook và sandbox là mã sau 26.16.0, chưa phát hành) |
+| Phiên bản ứng dụng được khảo sát | `26.17.0` (khảo sát gốc trên 26.8.5; các mục 4.9–4.12 cập nhật theo bản mới; 26.17.0 thêm hủy Đăng Facebook dừng ngay, sandbox có điều kiện và các bản sửa port từ Deplao 26.9–26.10) |
 | Phiên bản tài liệu | `1.2` |
 | Ngày lập | 2026-09-18, cập nhật 2026-10-03, cập nhật 2026-10-12 |
 | Trạng thái | Baseline theo mã nguồn nhánh hiện tại |

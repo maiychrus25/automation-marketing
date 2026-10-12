@@ -15,6 +15,45 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.17.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '⏹️ Bấm Hủy việc Đăng Facebook dừng trong vài giây, kể cả lúc đang nghỉ giữa hai nhóm',
+      '🛡️ Trình duyệt chạy có sandbox, chỉ tắt khi máy Linux chặn — kèm hướng dẫn khắc phục',
+      '🚀 Mở app nhanh và ổn định hơn, sửa crash khi mở trên Windows',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Màn Trình duyệt cảnh báo khi máy chặn sandbox, có lệnh AppArmor để sao chép và nút "Kiểm tra lại"',
+          'Trình duyệt Business Suite của Page cũng chạy có sandbox',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Hủy đóng ngay trình duyệt của profile chưa bấm Đăng; bài đang chờ kết quả vẫn được ghi đúng',
+          'Chuyển/xóa workspace chờ việc Đăng Facebook dừng hẳn, không bao giờ ghi kết quả sang dữ liệu workspace khác',
+          'Kết nối Zalo, Facebook, Telegram chỉ bắt đầu sau khi giao diện đã hiện; tự nạp lại nếu màn hình trắng quá 8 giây',
+          'Thêm chỉ mục cho tin nhắn; các bước dọn dữ liệu cũ chỉ chạy một lần (lần mở đầu sau cập nhật có thể lâu hơn một chút với kho tin lớn)',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Windows: crash khi mở app do addon WebSocket của thư viện Zalo',
+          'Workflow Zalo thả cảm xúc không có tác dụng',
+          'Ảnh/file gửi vào nhóm Zalo bị đi nhầm vào chat riêng; GIF gửi đúng dạng đính kèm',
+          '$trigger.groupName trống ở lần chạy workflow đầu tiên với tin nhóm',
+          'Lệnh thu hồi Zalo bị lưu thành bong bóng tin nhắn',
+          'Nhóm Zalo bị lưu nhầm thành liên hệ cá nhân khiến trả lời đi thành chat 1:1 — tự sửa khi mở app',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.16.0',
     date: '10/2026',
     type: 'minor',
