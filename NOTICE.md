@@ -15,13 +15,13 @@ Bản quyền của tác giả gốc được giữ nguyên theo đúng điều 
 |---|---|---|
 | 1 | **Tắt `TrackingService`** | Bản gốc gửi `pageId` (zalo_id / facebook_id / telegram id của tài khoản đang đăng nhập) và `machineId` lên máy chủ thượng nguồn. Trung tâm không gửi dữ liệu tài khoản ra ngoài |
 | 2 | **Chặn toàn bộ `backendService`** (premium, quét nhóm qua máy chủ, thanh toán, affiliate, chia sẻ nhóm) | Các chức năng này gửi dữ liệu nhóm và tài khoản ra máy chủ thượng nguồn; bản nội bộ không dùng gói premium |
-| 3 | **Tắt kiểm tra cập nhật tự động** | Bản gốc lấy bản mới từ kho phát hành của tác giả; để nguyên thì bản nội bộ bị ghi đè. Bản nội bộ phát theo kênh riêng |
+| 3 | **Tắt kiểm tra cập nhật tự động** (thời AHV Connect; từ MaiHub 26.11.0 đã bật lại, kiểm tra kho `maiychrus25/automation-marketing`, xem README) | Bản gốc lấy bản mới từ kho phát hành của tác giả; để nguyên thì bản nội bộ bị ghi đè. Bản nội bộ phát theo kênh riêng |
 | 4 | **Gỡ 5 workflow CI và thư mục `landing/`** | Đây là hạ tầng phát hành và trang quảng bá của tác giả, không dùng cho bản nội bộ |
-| 5 | **Đổi định danh ứng dụng** | `name` → `ahv-connect`, `appId` → `com.ahv.connect`, `productName` → `AHV Connect` |
+| 5 | **Đổi định danh ứng dụng** | `name` → `ahv-connect`, `appId` → `com.ahv.connect`, `productName` → `AHV Connect` (thời AHV Connect; hiện là `maihub`, `com.maihub.app`, `MaiHub`) |
 | 6 | **Thêm nhà cung cấp AI `ahvchat`** | Tuỳ biến của trung tâm: thêm lựa chọn provider tương thích OpenAI, nhập tên mô hình tự do |
 | 7 | **Sửa `tg.sendMessage` trong WorkflowEngineService** | Bản gốc đọc `segment.text` thay vì `segment.content`, khiến trả lời do AI soạn bị gửi thành tin rỗng qua Telegram |
 | 8 | **Thay toàn bộ bộ biểu tượng** (`resources/icons/`) | Logo cũ là nhận diện của sản phẩm thượng nguồn. Bộ mới vẽ riêng: con đường thu xa, hai mép đường chụm thành chữ "A" của AHV. Nguồn gốc là `resources/icons/icon.svg`, dựng bằng `node scripts/build-icons.mjs`. Xem [DESIGN.md](./DESIGN.md) |
-| 9 | **Đổi protocol deep link** `deplao://` → `ahvconnect://` | Hai nơi khai báo (`package.json` và `electron/main.ts`) phải khớp nhau; giữ scheme cũ thì bản nội bộ giành đăng ký với bản gốc trên cùng một máy |
+| 9 | **Đổi protocol deep link** `deplao://` → `ahvconnect://` (thời AHV Connect; hiện là `maihub://`) | Hai nơi khai báo (`package.json` và `electron/main.ts`) phải khớp nhau; giữ scheme cũ thì bản nội bộ giành đăng ký với bản gốc trên cùng một máy |
 | 10 | **Gỡ trang "Donate & Ủng hộ"** kèm ảnh `src/assets/donate/qr.png` | Trang này chứa **mã QR ngân hàng, Telegram và Facebook cá nhân của tác giả gốc** — nhân sự trung tâm có thể chuyển tiền nhầm |
 | 11 | **Gỡ luồng affiliate** (`AffiliateIntroPopup`, nút "Kiếm tiền", chấm đỏ nhắc) | Chương trình hoa hồng của sản phẩm thượng nguồn, không áp dụng cho bản nội bộ |
 | 12 | **Gỡ/đổi hướng mọi liên kết ra ngoài trỏ về tác giả gốc** | GitHub issues, fanpage `fb.com/deplaoapp`, `t.me/babyvibe9`, nút sao GitHub. Thay bằng hướng dẫn báo lỗi trong ứng dụng |
@@ -87,8 +87,10 @@ Không phải sót — đổi sẽ phá tương thích hoặc gây rủi ro khô
   viên**.
 - Bản dựng **chưa ký số**; hệ điều hành sẽ cảnh báo khi cài. Chỉ cài bản do
   trung tâm phát, không tải bản trôi nổi.
-- Bản gốc **không có** trần gửi theo ngày, giờ im lặng hay cơ chế từ chối
-  nhận. Vì vậy bản này **chỉ dùng để trải nghiệm**, không dùng gửi tin hàng
-  loạt cho học viên thật cho tới khi bổ sung các hàng rào đó.
+- Campaign CRM có trần gửi theo ngày (`daily_send_limit`) và giờ bắt đầu ngày
+  (`daily_start_time`) khi được cấu hình (`src/models/crm.ts`,
+  `src/services/crm/CRMQueueService.ts`), nhưng **chưa có** giờ im lặng hay cơ
+  chế từ chối nhận. Vì vậy bản này **chỉ dùng để trải nghiệm**, không dùng gửi
+  tin hàng loạt cho học viên thật cho tới khi bổ sung các hàng rào đó.
 - **Không bật tunnel Cloudflare** của webhook gateway: nó mở một địa chỉ công
   khai trỏ vào máy đang giữ phiên Zalo của trung tâm.

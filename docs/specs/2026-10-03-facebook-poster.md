@@ -19,7 +19,7 @@ Thân tài liệu giữ nguyên như lúc viết. Các điểm dưới đây là
 - Dữ liệu (mục 5): có năm bảng, thêm `fb_poster_schedules`; `fb_poster_runs` thêm cột `schedule_id` và trạng thái `missed` (`src/services/facebookPoster/schema.ts:8`, `:51`, `:71-72`). Bảng được tạo bởi `FacebookPosterStore`, không phải `DatabaseService` (`src/services/facebookPoster/FacebookPosterStore.ts:93`).
 - Hủy (mục 7): ngoài đặt cờ dừng, `cancel()` đóng ngay phiên trình duyệt của profile không ở đoạn không thể quay lại (`src/services/facebookPoster/FacebookPosterService.ts:130`); đích bị cắt ghi `skipped` "Đã dừng" (`:437`). Chuyển workspace dùng `stopAndWait(45000, 10000)` thay cho `cancelAll()` (`electron/ipc/workspaceIpc.ts:95`, `FacebookPosterService.ts:138`).
 - Thông báo cho run bị dở ở lần mở sau (mục 5, 10) nay là "App đóng khi việc đang chạy. Đích đang đăng dở (nếu có) cần kiểm tra trên Facebook." (`FacebookPosterStore.ts:23`).
-- Giao diện (mục 9): không còn bốn tab trong một màn. "Đăng Facebook" là mục sidebar có bốn màn con Lịch đăng, Tham gia nhóm, Thu bình luận, Lịch sử; soạn bài là hộp thoại mở từ lịch (`src/ui/features/facebookPoster/FacebookPosterView.tsx:141-146`, `src/ui/features/facebookPoster/PostTab.tsx`).
+- Giao diện (mục 9): không còn bốn tab trong một màn. "Đăng Facebook" là mục sidebar có bốn màn con Lịch đăng, Tham gia nhóm, Thu bình luận, Lịch sử; soạn bài là hộp thoại mở từ lịch (`src/ui/features/facebookPoster/FacebookPosterView.tsx:14` (`SECTIONS`), `:141-146`, `src/ui/features/facebookPoster/PostTab.tsx`).
 
 ## 1. Mục tiêu
 

@@ -49,9 +49,10 @@ Hệ quả phụ:
 
 | Đoạn | Bắt đầu | Kết thúc | Thời gian tối đa hiện có |
 |---|---|---|---|
-| Đăng bài | Ngay trước click Đăng (`postToTargets.ts:~596`) | Có/không có bằng chứng đăng xong, đã bắt link bài | ~40 s (click 10 s + chờ đóng/rời trang 30 s) |
-| Gửi bình luận đầu | Ngay trước click gửi (`firstComment.ts:~349`) | `evaluateComment` xong | ~10 s |
-| Xin vào nhóm | Ngay trước click Tham gia (`joinGroups.ts:~310`) | Đọc xong kết quả (tối đa `joinWaitMs` 20 s) | ~30 s |
+| Đăng bài (gồm bình luận đầu nếu có) | Ngay trước click Đăng (`postToTargets.ts:~603`, sau lần kiểm cờ dừng cuối) | Hết đích đó: `leaveCritical` ở `finally` sau khi kết quả đã được báo (`postToTargets.ts:~827`), nên bao cả bắt link bài và bình luận đầu | ~40 s cho phần đăng (click 10 s + chờ đóng/rời trang 30 s) + ~10 s gửi bình luận; chờ "sau X phút" thoát trong 1 s khi Hủy |
+| Xin vào nhóm | Ngay trước click Tham gia (`joinGroups.ts:~308`, sau lần kiểm cờ dừng cuối) | Đọc xong kết quả, `leaveCritical` ở `finally` (`joinGroups.ts:~357`; tối đa `joinWaitMs` 20 s) | ~30 s |
+
+(sửa theo plan, 12/10/2026: bình luận đầu nằm trong đoạn của bài, không có đoạn riêng trong `firstComment.ts`; chỉ có hai đoạn.)
 
 Hành vi khi hủy:
 
@@ -59,7 +60,7 @@ Hành vi khi hủy:
    - nếu profile **không** ở đoạn không thể quay lại → đóng ngay mọi phiên trình duyệt của profile đó (`session.close()`). Mọi thao tác Playwright đang chờ của profile đó lỗi ngay, nên profile dừng trong vài giây bất kể đang chờ trang hay đang nghỉ;
    - nếu profile **đang** ở đoạn không thể quay lại → không đóng; khi đoạn kết thúc, profile tự đóng phiên của mình (kiểm `stopping` ngay sau đoạn).
 2. Mọi khoảng nghỉ dùng một hàm ngủ dừng được (cắt lát ≤ 500 ms, kiểm `stopping`) truyền qua `TaskDeps`, thay cho `delayRandom` dài và `setTimeout` trơn ở `postToTargets.ts:825`, `scanGroups.ts` (`settleMs`, `scrollWaitMs`). `scanGroups` kiểm `stopping` mỗi vòng cuộn. Các `delayRandom` ngắn (≤ 3 s) giữ nguyên.
-3. `TaskDeps` thêm `enterCritical(): void` và `leaveCritical(): void`. Các module việc gọi chúng quanh đúng ba đoạn ở bảng trên (`try/finally`, để lỗi giữa đoạn vẫn rời đoạn).
+3. `TaskDeps` thêm `enterCritical(): void` và `leaveCritical(): void`. Các module việc gọi chúng quanh đúng hai đoạn ở bảng trên (đăng bài và xin vào nhóm) (`try/finally`, để lỗi giữa đoạn vẫn rời đoạn).
 
 **Ghi kết quả khi hủy:**
 
@@ -209,7 +210,7 @@ Thêm mục "Tài liệu đi cùng code":
 | Rủi ro | Giảm thiểu |
 |---|---|
 | Đóng phiên lúc hủy để lại trạng thái nửa vời trên Facebook (ví dụ khung soạn đang mở) | Chỉ đóng ngoài đoạn không thể quay lại; khung soạn chưa đăng thì Facebook không lưu gì ngoài nháp của chính Facebook |
-| Đoạn không thể quay lại khai báo thiếu → đóng phiên ngay sau click Đăng, bài lên mà không ghi | Test bắt buộc cho đúng ba đoạn; review tập trung vào vị trí `enterCritical` |
+| Đoạn không thể quay lại khai báo thiếu → đóng phiên ngay sau click Đăng, bài lên mà không ghi | Test bắt buộc cho đúng hai đoạn; review tập trung vào vị trí `enterCritical` |
 | Chạy thử sandbox chậm hoặc treo trên máy yếu | Timeout 20 s, chạy một lần mỗi phiên app, dự phòng theo sysctl |
 | Bật sandbox cho Business Suite làm hỏng phiên đăng nhập Page đã lưu | Sandbox không đổi dữ liệu profile; đo trên Linux ở plan; Windows giao chủ sản phẩm kiểm |
 | AppArmor profile mẫu sai cú pháp trên bản Ubuntu khác | Lấy theo `/etc/apparmor.d/chrome` của Ubuntu; ghi rõ là hướng dẫn, app không tự chạy `sudo` |

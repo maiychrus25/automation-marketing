@@ -11,7 +11,7 @@ Thân tài liệu giữ nguyên như lúc viết. Các điểm dưới đây là
 
 - Mục 3.2 và 6 (xác nhận gửi): không đếm sticker ĐI mới. Sau khi click ô sticker, driver chờ bảng chọn đóng lại (ô tìm kiếm biến mất), tối đa 15000 ms (`src/services/facebook/pagePlaywrightDriver.ts:261-279`). Lý do trong mã: pane hội thoại không full-width nên không đếm được bong bóng "hugs phải".
 - Mục 4 (vùng panel): không lọc tương đối theo composer. Driver dùng vùng cố định `STICKER_PANEL = { minY: 520, maxY: 815, minX: 660, maxX: 965 }` trên cửa sổ 1400×900 (`pagePlaywrightDriver.ts:27`, dùng ở `panelStickerCells`, `:239`); Business Suite đổi bố cục thì danh sách rỗng.
-- Mục 3.1 (nhận): tin đến được phân biệt theo tâm của khung chat dựng từ mép ô soạn (`isIncoming`, `pagePlaywrightDriver.ts:166-170`) chứ không chỉ "bên trái"; sticker lưu như ảnh `type='image'` đúng thiết kế (`src/services/facebook/FacebookService.ts:597`).
+- Mục 3.1 (nhận): tin đến được phân biệt theo tâm của khung chat dựng từ mép ô soạn (`isIncoming`, `pagePlaywrightDriver.ts:166-170`) chứ không chỉ "bên trái"; sticker lưu như ảnh `type='image'` đúng thiết kế (`src/services/facebook/FacebookService.ts:598`).
 - Hằng số chọn sticker nằm ở `src/services/facebook/pageBusinessSuiteSelectors.ts` (`stickerButton`, `stickerSearch`, `stickerCell`) như thiết kế; `classifyPageNotification` được tách ra `src/services/facebook/pageSendHelpers.ts`.
 
 ## 1. Bối cảnh & mục tiêu

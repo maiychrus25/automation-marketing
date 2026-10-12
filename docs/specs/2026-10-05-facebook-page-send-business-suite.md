@@ -16,7 +16,7 @@ Thân tài liệu giữ nguyên như lúc viết. Các điểm dưới đây là
 - Mục 3.3 bước 3: đính kèm đi qua hộp chọn tệp (`filechooser`) bấm từ nút "Đính kèm file", rồi chờ cố định 7000 ms trước khi Enter (`pagePlaywrightDriver.ts:109-132`, `ATTACH_SETTLE_MS` ở `:24`).
 - Mục 3.3 bước 4 (cách xác nhận): không chờ "bong bóng tin" mà chờ nút "Gửi lượt thích" quay lại sau khi Enter một lần, tối đa 20000 ms (`pagePlaywrightDriver.ts:134-146`, `:205`; `SENT_TIMEOUT_MS` ở `FacebookPageBrowserSender.ts:45`). Lý do ghi tại `waitSent`: đếm ảnh và tìm chữ hay báo hỏng giả, kéo theo gửi lại.
 - Mục 3.4: nhánh Page của `sendMessage` không còn ở dòng ~2041 mà ở `src/services/facebook/FacebookService.ts:2131`; `replyToMessageId` được truyền nhưng driver không dùng.
-- Mục 7 (roadmap): nhận ảnh, video và sticker đã làm bằng trích DOM (`FacebookService.ts:597`, `pagePlaywrightDriver.ts:148`); gửi sticker đã có (`pagePlaywrightDriver.ts:261`). Lịch sử tin cũ và thời gian gửi đúng vẫn chưa làm, nhận tin vẫn dựa vào thông báo MQTT của tài khoản cha chứ chưa chuyển sang GraphQL BizInbox.
+- Mục 7 (roadmap): nhận ảnh, video và sticker đã làm bằng trích DOM (`FacebookService.ts:598`, `pagePlaywrightDriver.ts:148`); gửi sticker đã có (`pagePlaywrightDriver.ts:261`). Lịch sử tin cũ và thời gian gửi đúng vẫn chưa làm, nhận tin vẫn dựa vào thông báo MQTT của tài khoản cha chứ chưa chuyển sang GraphQL BizInbox.
 
 ## 1. Mục tiêu
 
