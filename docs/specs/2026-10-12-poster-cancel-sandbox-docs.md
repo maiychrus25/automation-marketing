@@ -6,6 +6,7 @@
 | Trạng thái | Đã duyệt (12/10/2026) |
 | Intent | `docs/intent/2026-10-12-poster-cancel-sandbox-docs.md` (đã duyệt) |
 | Mã nguồn khảo sát | 26.16.0, commit `e347b8b` |
+| Kế hoạch | `docs/plans/2026-10-12-poster-cancel-sandbox-docs.md` |
 | Phát hành | Gộp vào bản tính năng kế tiếp |
 
 ## 1. Mục tiêu
@@ -127,8 +128,7 @@ Lý do không chờ: `before-quit` còn được gọi khi cài bản cập nh�
 
 **Báo người dùng:**
 
-- `browserProfile:engineStatus` trả thêm `sandbox: 'enabled' | 'disabled' | 'unknown'` (`unknown` khi chưa cài nhân hoặc chưa chạy thử).
-- Kênh mới `browserProfile:recheckSandbox`: xóa kết quả đã lưu, chạy thử lại, trả trạng thái mới.
+- Kênh mới `browserProfile:sandboxStatus({ recheck })` trả `sandbox: 'enabled' | 'disabled' | 'unknown'` (`unknown` khi chưa cài nhân); `recheck: true` xóa kết quả đã lưu và chạy thử lại. `browserProfile:engineStatus` giữ nguyên, để danh sách profile không phải chờ lần chạy thử (sửa theo plan, 12/10/2026).
 - Màn Trình duyệt (`BrowserProfilesView.tsx`), khi `sandbox === 'disabled'`: dải cảnh báo cùng kiểu dải "Cần tải nhân" hiện có:
   - "Máy đang chặn sandbox của trình duyệt (AppArmor/user namespaces). Profile vẫn mở được nhưng chạy không sandbox, kém an toàn hơn."
   - Hướng dẫn có nút sao chép (giống profile `/etc/apparmor.d/chrome` Ubuntu cấp sẵn, khớp mọi phiên bản nhân nhờ đường dẫn có ký tự đại diện):
@@ -145,7 +145,7 @@ EOF
 sudo apparmor_parser -r /etc/apparmor.d/maihub-browser-engine
 ```
 
-  - Nút "Kiểm tra lại" gọi `recheckSandbox`; thành công thì dải cảnh báo biến mất. Profile đang mở giữ trạng thái cũ cho đến khi mở lại.
+  - Nút "Kiểm tra lại" gọi `sandboxStatus({ recheck: true })`; thành công thì dải cảnh báo biến mất. Profile đang mở giữ trạng thái cũ cho đến khi mở lại.
 - Không có cảnh báo trên Windows/macOS.
 
 ## 5. Tài liệu
