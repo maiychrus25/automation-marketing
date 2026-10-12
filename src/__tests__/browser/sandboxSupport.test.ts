@@ -1,0 +1,107 @@
+import { PROBE_TIMEOUT_MS, ProbeResult, SandboxProbeDeps, SandboxSupport, probeSandbox } from '../../services/browser/sandboxSupport';
+
+const ENGINE = '/opt/engine/chrome';
+const USERNS_APPARMOR = '/proc/sys/kernel/apparmor_restrict_unprivileged_userns';
+const USERNS_CLONE = '/proc/sys/kernel/unprivileged_userns_clone';
+const USERNS_MAX = '/proc/sys/user/max_user_namespaces';
+
+type FakeDeps = SandboxProbeDeps & { runs: Array<{ executable: string; args: string[]; timeoutMs: number }>; removed: string[]; made: string[] };
+
+function makeDeps(opts: { platform?: NodeJS.Platform; result?: ProbeResult | Error; sysctl?: Record<string, string> } = {}): FakeDeps {
+    const deps: FakeDeps = {
+        runs: [], removed: [], made: [],
+        platform: opts.platform ?? 'linux',
+        run: async (executable, args, timeoutMs) => {
+            deps.runs.push({ executable, args, timeoutMs });
+            const result = opts.result ?? { code: 0, stderr: '', timedOut: false };
+            if (result instanceof Error) throw result;
+            return result;
+        },
+        readSysctl: (p) => (opts.sysctl && p in opts.sysctl ? opts.sysctl[p] : null),
+        makeTempDir: (parent) => { const dir = `${parent}/.sandbox-probe-x`; deps.made.push(dir); return dir; },
+        removeDir: (dir) => { deps.removed.push(dir); },
+    };
+    return deps;
+}
+
+const TIMED_OUT: ProbeResult = { code: null, stderr: '', timedOut: true };
+
+describe('probeSandbox', () => {
+    it.each(['win32', 'darwin'] as NodeJS.Platform[])('returns enabled without probing on %s', async (platform) => {
+        const deps = makeDeps({ platform });
+        expect(await probeSandbox(ENGINE, deps)).toBe('enabled');
+        expect(deps.runs).toHaveLength(0);
+        expect(deps.made).toHaveLength(0);
+    });
+
+    it('enabled when the probe exits 0, without --no-sandbox', async () => {
+        const deps = makeDeps();
+        expect(await probeSandbox(ENGINE, deps)).toBe('enabled');
+        expect(deps.runs[0].executable).toBe(ENGINE);
+        expect(deps.runs[0].timeoutMs).toBe(PROBE_TIMEOUT_MS);
+        expect(deps.runs[0].args).toEqual([
+            '--headless=new', '--no-first-run', '--no-default-browser-check',
+            '--user-data-dir=/opt/engine/.sandbox-probe-x', '--dump-dom', 'about:blank',
+        ]);
+        expect(deps.runs[0].args).not.toContain('--no-sandbox');
+    });
+
+    it('disabled on "No usable sandbox"', async () => {
+        const deps = makeDeps({ result: { code: 1, stderr: 'FATAL: No usable sandbox! Update your kernel', timedOut: false } });
+        expect(await probeSandbox(ENGINE, deps)).toBe('disabled');
+    });
+
+    it.each([
+        [{ [USERNS_APPARMOR]: '1' }, 'disabled'],
+        [{ [USERNS_CLONE]: '0' }, 'disabled'],
+        [{ [USERNS_MAX]: '0' }, 'disabled'],
+        [{ [USERNS_APPARMOR]: '0', [USERNS_CLONE]: '1', [USERNS_MAX]: '1000' }, 'enabled'],
+        [{}, 'enabled'],
+    ])('times out and falls back to sysctl %j -> %s', async (sysctl, expected) => {
+        const deps = makeDeps({ result: TIMED_OUT, sysctl });
+        expect(await probeSandbox(ENGINE, deps)).toBe(expected);
+    });
+
+    it('non-zero exit without the sandbox message falls back to sysctl', async () => {
+        const deps = makeDeps({ result: { code: 1, stderr: 'other', timedOut: false }, sysctl: { [USERNS_MAX]: '0' } });
+        expect(await probeSandbox(ENGINE, deps)).toBe('disabled');
+    });
+
+    it('run throwing falls back to sysctl', async () => {
+        expect(await probeSandbox(ENGINE, makeDeps({ result: new Error('spawn fail'), sysctl: { [USERNS_CLONE]: '0' } }))).toBe('disabled');
+        expect(await probeSandbox(ENGINE, makeDeps({ result: new Error('spawn fail') }))).toBe('enabled');
+    });
+
+    it('always removes the temp dir, even when run throws', async () => {
+        const ok = makeDeps();
+        await probeSandbox(ENGINE, ok);
+        expect(ok.removed).toEqual(ok.made);
+        const bad = makeDeps({ result: new Error('boom') });
+        await probeSandbox(ENGINE, bad);
+        expect(bad.removed).toEqual(bad.made);
+        expect(bad.removed).toHaveLength(1);
+    });
+});
+
+describe('SandboxSupport', () => {
+    it('caches per engine path', async () => {
+        const deps = makeDeps();
+        const support = new SandboxSupport(deps);
+        const [a, b] = await Promise.all([support.get(ENGINE), support.get(ENGINE)]);
+        expect([a, b]).toEqual(['enabled', 'enabled']);
+        await support.get(ENGINE);
+        expect(deps.runs).toHaveLength(1);
+        await support.get('/other/chrome');
+        expect(deps.runs).toHaveLength(2);
+    });
+
+    it('recheck probes again', async () => {
+        const deps = makeDeps();
+        const support = new SandboxSupport(deps);
+        await support.get(ENGINE);
+        await support.recheck(ENGINE);
+        expect(deps.runs).toHaveLength(2);
+        await support.get(ENGINE);
+        expect(deps.runs).toHaveLength(2);
+    });
+});
