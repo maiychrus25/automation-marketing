@@ -197,6 +197,11 @@ export default function App() {
     document.documentElement.style.fontSize = `${16 * fontSizeScale}px`;
   }, [fontSizeScale]);
 
+  // ─── Tell main the renderer has painted (App always mounts; lock screen is internal state) ──
+  useEffect(() => {
+    ipc.app?.rendererReady?.();
+  }, []);
+
   // ─── Lock screen: check status on mount ─────────────────────────────────
   useEffect(() => {
     ipc.lockScreen.status().then(res => {

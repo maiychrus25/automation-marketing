@@ -333,6 +333,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sendBadgeImage: (params: { dataUrl: string; count: number }) =>
       ipcRenderer.send('app:badgeImage', params),
     flashFrame: (active: boolean) => ipcRenderer.send('app:flashFrame', { active }),
+    rendererReady: () => ipcRenderer.send('app:rendererReady'),
   },
 
   // ─── Auto-update ─────────────────────────────────────────────────

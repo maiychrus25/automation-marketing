@@ -276,12 +276,27 @@ function createWindow() {
     mainWindow.webContents.on('context-menu', (e) => e.preventDefault());
   }
 
+  let initialWindowShown = false;
   mainWindow.once('ready-to-show', () => {
+    initialWindowShown = true;
     if (cachedNormalIcon && !cachedNormalIcon.isEmpty()) {
       mainWindow?.setIcon(cachedNormalIcon);
     }
     mainWindow?.show();
   });
+
+  // Blank-window fallback: if the first paint never arrives, show the window and
+  // reload the renderer once so the user is not left with an invisible app.
+  setTimeout(() => {
+    if (initialWindowShown || !mainWindow || mainWindow.isDestroyed()) return;
+    console.warn('[main] ready-to-show not fired after 8s; showing window and reloading once');
+    mainWindow.show();
+    if (isDev) {
+      mainWindow.loadURL('http://localhost:27799');
+    } else {
+      mainWindow.webContents.reload();
+    }
+  }, 8000).unref();
 
   // ── Renderer crash recovery ────────────────────────────────────────────
   // Khi renderer process bị crash hoặc bị kill bởi OS (OOM) → màn trắng,
@@ -850,11 +865,15 @@ async function startupAllWorkspaces(): Promise<void> {
         try {
           const decryptedCookies = decryptCookiesForStartup(acc.cookies || '');
           console.log(`[startupAllWorkspaces] ${acc.zalo_id}: raw prefix="${(acc.cookies || '').substring(0, 20)}" → decrypted prefix="${decryptedCookies.substring(0, 40)}" len=${decryptedCookies.length}`);
-          await loginService.connectUser({
+          const connected = await loginService.connectUser({
             cookies: decryptedCookies,
             imei: acc.imei || '',
             userAgent: acc.user_agent || acc.userAgent || '',
           });
+          if (!connected) {
+            console.warn(`[startupAllWorkspaces] ${acc.zalo_id} from "${ws.name}" cần đăng nhập lại (kết nối không thành công)`);
+            continue;
+          }
           connectedZaloIds.add(acc.zalo_id);
           console.log(`[startupAllWorkspaces] Connected Zalo ${acc.zalo_id} from workspace "${ws.name}"`);
         } catch (err: any) {
@@ -1064,18 +1083,22 @@ app.whenReady().then(async () => {
   // Initialize database
   await DatabaseService.getInstance().initialize();
 
-  // ── Migrate absolute local_paths → relative (runs once in background) ─────
-  setTimeout(() => {
-    try {
-      const migrated = DatabaseService.getInstance().migrateAllAbsolutePathsToRelative();
-      if (migrated > 0) {
-        DatabaseService.getInstance().forceFlush();
-        console.log(`[main] Startup migration: converted ${migrated} message(s) to relative paths`);
+  // ── Migrate absolute local_paths → relative (runs once, delayed, in background) ─────
+  let startupPathMigrationStarted = false;
+  const runStartupPathMigration = () => {
+    if (startupPathMigrationStarted) return;
+    startupPathMigrationStarted = true;
+    setTimeout(() => {
+      try {
+        const migrated = DatabaseService.getInstance().migrateAllAbsolutePathsToRelative();
+        if (migrated > 0) {
+          console.log(`[main] Startup migration: converted ${migrated} message(s) to relative paths`);
+        }
+      } catch (e: any) {
+        console.warn(`[main] Startup path migration failed: ${e.message}`);
       }
-    } catch (e: any) {
-      console.warn(`[main] Startup path migration failed: ${e.message}`);
-    }
-  }, 2000);
+    }, 30000).unref();
+  };
 
   // ── Anti-debug: kiểm tra debugger attach (chỉ production/staging) ──────────
   if (!isDev) {
@@ -1106,6 +1129,17 @@ app.whenReady().then(async () => {
       app.setAsDefaultProtocolClient('maihub');
     }
   }
+
+  // Renderer-ready signal: channel connectors start only after React has painted,
+  // so heavy startup work cannot hold the window blank. Registered before
+  // createWindow() so an early signal is never lost.
+  let rendererReportedReady = false;
+  let onRendererReportedReady: (() => void) | null = null;
+  ipcMain.on('app:rendererReady', (event) => {
+    if (event.sender !== mainWindow?.webContents) return;
+    rendererReportedReady = true;
+    onRendererReportedReady?.();
+  });
 
   createWindow();
   createTray();
@@ -1147,20 +1181,30 @@ app.whenReady().then(async () => {
   registerErpHrmIpc();
   registerLockScreenIpc();
   registerLibraryIpc();
-  // Auto-reconnect Facebook accounts - start ngay, không đợi 4s
-  reconnectAllFBAccounts().catch(err => {
-    console.error('[main] reconnectAllFBAccounts error:', err.message);
-  });
-  // Auto-reconnect Telegram accounts - start ngay, không đợi 4s
-  reconnectAllTelegramAccounts().catch(err => {
-    console.error('[main] reconnectAllTelegramAccounts error:', err.message);
-  });
-  // Start periodic health check for Telegram bots (every 60s)
-  startTelegramBotHealthCheck();
-  // Ordered startup: relay + Zalo for all local workspaces FIRST, then remote workspaces
-  setTimeout(() => startupAllWorkspaces().catch(err => {
-    console.error('[main] startupAllWorkspaces error:', err.message);
-  }), 3000);
+  // Channel connectors start once the renderer reports ready (or after a 30s fallback).
+  let connectorServicesStarted = false;
+  const startConnectorServices = () => {
+    if (connectorServicesStarted) return;
+    connectorServicesStarted = true;
+    runStartupPathMigration();
+    // Auto-reconnect Facebook accounts
+    reconnectAllFBAccounts().catch(err => {
+      console.error('[main] reconnectAllFBAccounts error:', err.message);
+    });
+    // Auto-reconnect Telegram accounts
+    reconnectAllTelegramAccounts().catch(err => {
+      console.error('[main] reconnectAllTelegramAccounts error:', err.message);
+    });
+    // Start periodic health check for Telegram bots (every 60s)
+    startTelegramBotHealthCheck();
+    // Ordered startup: relay + Zalo for all local workspaces FIRST, then remote workspaces
+    setTimeout(() => startupAllWorkspaces().catch(err => {
+      console.error('[main] startupAllWorkspaces error:', err.message);
+    }), 500);
+  };
+  onRendererReportedReady = startConnectorServices;
+  if (rendererReportedReady) onRendererReportedReady();
+  setTimeout(startConnectorServices, 30000).unref();
   // Resume any active CRM campaigns after restart
   setTimeout(() => CRMQueueService.getInstance().resumeActiveCampaigns(), 3000);
   // Initialize ERP Calendar reminders scheduler
