@@ -7,6 +7,7 @@ import * as fs from "fs";
 import { imageSize } from "image-size";
 import { extractUserProfile } from "./profileUtils";
 import { createProxyAgent } from "./ProxyHelper";
+import { enqueuePerKey } from "./enqueuePerKey";
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_BASE_MS = 5000; // 5s base, exponential backoff
@@ -209,6 +210,8 @@ class ZaloLoginHelper {
     // Set lưu các group IDs đã fetch info để tránh gọi lại
     // ⚠️ FIX: giới hạn 2000 entries để tránh memory leak không giới hạn
     private static fetchedGroupIds: Set<string> = new Set();
+    /** Per-group tails that keep realtime group messages in arrival order */
+    private static groupMessageChains: Map<string, Promise<void>> = new Map();
     private static readonly MAX_FETCHED_GROUP_CACHE = 2000;
 
     /** Add key vào fetchedGroupIds với LRU-eviction khi đầy */
@@ -760,18 +763,29 @@ class ZaloLoginHelper {
 
                 // A workflow starts inside broadcastMessage, so give the group-info
                 // fetch a bounded head start: $trigger.groupName is then available
-                // in the first run. On timeout the fetch keeps running in background.
-                if (message.type === 1) {
-                    const groupId = message.threadId || '';
-                    if (groupId) {
+                // in the first run. Group messages are serialized per group so a
+                // waiting message is never overtaken by a later one from the same
+                // group. On timeout the fetch keeps running in the background.
+                const groupId = message.type === 1 ? (message.threadId || '') : '';
+                if (groupId) {
+                    void enqueuePerKey(ZaloLoginHelper.groupMessageChains, `${zaloId}_${groupId}`, async () => {
                         let timer: NodeJS.Timeout | undefined;
-                        const fetchPromise = ZaloLoginHelper.fetchGroupInfoIfMissing(zaloId, groupId, connection.api).catch(() => {});
-                        const timeoutPromise = new Promise<void>((resolve) => { timer = setTimeout(resolve, GROUP_INFO_WAIT_MS); });
-                        await Promise.race([fetchPromise, timeoutPromise]);
-                        if (timer) clearTimeout(timer);
-                    }
+                        try {
+                            const fetchPromise = ZaloLoginHelper.fetchGroupInfoIfMissing(zaloId, groupId, connection.api).catch(() => {});
+                            const timeoutPromise = new Promise<void>((resolve) => { timer = setTimeout(resolve, GROUP_INFO_WAIT_MS); });
+                            await Promise.race([fetchPromise, timeoutPromise]);
+                        } finally {
+                            if (timer) clearTimeout(timer);
+                        }
+                        try {
+                            await EventBroadcaster.broadcastMessage(zaloId, message);
+                        } catch (error: any) {
+                            Logger.error(`[ZaloLoginHelper] message event error: ${error.message}`);
+                        }
+                    });
+                } else {
+                    await EventBroadcaster.broadcastMessage(zaloId, message);
                 }
-                await EventBroadcaster.broadcastMessage(zaloId, message);
             } catch (error: any) {
                 Logger.error(`[ZaloLoginHelper] message event error: ${error.message}`);
             }

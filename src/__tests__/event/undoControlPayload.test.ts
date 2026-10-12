@@ -24,4 +24,19 @@ describe('getUndoControlPayload', () => {
         expect(getUndoControlPayload(null)).toBeNull();
         expect(getUndoControlPayload({ data: { content: 'hello' } })).toBeNull();
     });
+
+    it('reads message.content as a candidate', () => {
+        expect(getUndoControlPayload({ threadId: 't3', content: { cliMsgId: 'c1', deleteMsg: 1 } }))
+            .toEqual({ msgId: 'c1', threadId: 't3' });
+    });
+
+    it('accepts destId alone as the signature', () => {
+        expect(getUndoControlPayload({ threadId: 't1', data: { content: { globalMsgId: 'g2', destId: 'd' } } }))
+            .toEqual({ msgId: 'g2', threadId: 't1' });
+    });
+
+    it('falls back to data.threadId', () => {
+        expect(getUndoControlPayload({ data: { threadId: 't4', content: { globalMsgId: 'g3', deleteMsg: 1 } } }))
+            .toEqual({ msgId: 'g3', threadId: 't4' });
+    });
 });
