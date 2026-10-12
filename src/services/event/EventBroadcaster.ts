@@ -240,7 +240,13 @@ class EventBroadcaster {
             const undoControl = getUndoControlPayload(message);
             if (undoControl) {
                 Logger.log(`[EventBroadcaster] Detected undo control payload on message stream: recalled msgId=${undoControl.msgId} threadId=${undoControl.threadId || '-'} source=${options?.silent ? 'history' : 'realtime'}`);
-                this.broadcastUndo(zaloId, undoControl.msgId, undoControl.threadId);
+                if (options?.silent) {
+                    // Lịch sử/old_messages: chỉ đánh dấu thu hồi trong DB, không bắn event:undo
+                    // (tránh chạy lại workflow trigger.undo và relay cho recall cũ).
+                    this.markRecalledInBossDb(zaloId, undoControl.msgId, undoControl.threadId);
+                } else {
+                    this.broadcastUndo(zaloId, undoControl.msgId, undoControl.threadId);
+                }
                 return;
             }
 
@@ -1306,14 +1312,18 @@ class EventBroadcaster {
      * Broadcast undo message - marks as recalled in DB (keeps the row, changes status/type)
      */
     public static broadcastUndo(zaloId: string, msgId: string, threadId?: string): void {
-        if (msgId) {
-            this.runOnBossDb((db) => {
-                db.markMessageRecalled(zaloId, String(msgId));
-                if (threadId) { try { db.updateLastMessageIfRecalled(zaloId, threadId, String(msgId)); } catch {} }
-            });
-            Logger.log(`[EventBroadcaster] broadcastUndo: recalled msgId=${msgId} zaloId=${zaloId} threadId=${threadId}`);
-        }
+        this.markRecalledInBossDb(zaloId, msgId, threadId);
         this.sendAware('event:undo', { zaloId, msgId, threadId });
+    }
+
+    /** DB part of an undo: mark the message recalled in the boss DB (no event, no hooks). */
+    private static markRecalledInBossDb(zaloId: string, msgId: string, threadId?: string): void {
+        if (!msgId) return;
+        this.runOnBossDb((db) => {
+            db.markMessageRecalled(zaloId, String(msgId));
+            if (threadId) { try { db.updateLastMessageIfRecalled(zaloId, threadId, String(msgId)); } catch {} }
+        });
+        Logger.log(`[EventBroadcaster] broadcastUndo: recalled msgId=${msgId} zaloId=${zaloId} threadId=${threadId}`);
     }
 
     /**
