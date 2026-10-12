@@ -7,9 +7,9 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Tên hệ thống | MaiHub (trước 26.9.0: AHV Connect) |
-| Phiên bản ứng dụng được khảo sát | `26.10.0` (khảo sát gốc trên 26.8.5; các mục 4.9–4.11 cập nhật theo bản mới) |
-| Phiên bản tài liệu | `1.1` |
-| Ngày lập | 2026-09-18, cập nhật 2026-10-03 |
+| Phiên bản ứng dụng được khảo sát | `26.16.0` (khảo sát gốc trên 26.8.5; các mục 4.9–4.12 cập nhật theo bản mới; riêng cơ chế hủy việc Đăng Facebook và sandbox là mã sau 26.16.0, chưa phát hành) |
+| Phiên bản tài liệu | `1.2` |
+| Ngày lập | 2026-09-18, cập nhật 2026-10-03, cập nhật 2026-10-12 |
 | Trạng thái | Baseline theo mã nguồn nhánh hiện tại |
 | Chủ sở hữu | Maiychrus (dự án cá nhân) |
 | Độc giả | Ban vận hành, BA/PM, đội CNTT, phát triển, kiểm thử, hỗ trợ người dùng |
@@ -114,7 +114,7 @@ flowchart LR
 - SQLite, file/media và credential nằm trên máy; an toàn phụ thuộc quyền tài khoản hệ điều hành và cơ chế mã hóa của OS.
 - API/webhook/tunnel và nền tảng chat là biên ngoài không tin cậy.
 
-Lưu ý: BrowserWindow hiện đặt `sandbox: false`; CSP production tồn tại nhưng cho phép ảnh/media/connect qua `http:`, `https:` và `wss:` để hỗ trợ CDN/API. Đây là bề mặt cần được security review định kỳ. Nguồn: `electron/main.ts`.
+Lưu ý: BrowserWindow hiện đặt `sandbox: false` (sandbox của cửa sổ Electron; khác sandbox Chromium của trình duyệt profile ở mục 4.9); CSP production tồn tại nhưng cho phép ảnh/media/connect qua `http:`, `https:` và `wss:` để hỗ trợ CDN/API. Đây là bề mặt cần được security review định kỳ. Nguồn: `electron/main.ts`.
 
 ## 3. Luồng khởi động và luồng dữ liệu
 
@@ -177,7 +177,7 @@ Workspace remote lưu URL boss, token, employee identity và cache quyền/accou
 - Quản lý nhiều account, chuyển account và hội thoại.
 - Nhận/gửi tin nhắn, ảnh, file, voice và các hành động phụ thuộc khả năng từng kênh.
 - Hỗ trợ reply, reaction, ghim, nhãn, draft, quick message, tìm kiếm và thông báo.
-- Zalo dùng `zca-js`; Telegram có user và bot; Facebook có service thường và bridge E2EE.
+- Zalo dùng `zca-js`; Telegram có user và bot; Facebook có service thường và bridge E2EE; Page Facebook là tài khoản con gửi qua Business Suite (mục 4.11).
 - UI hợp nhất trải nghiệm nhưng capability thực tế khác nhau theo kênh; cần kiểm tra `CRMChannelCapabilityService` và handler kênh trước khi cam kết một hành động.
 
 Nguồn: `src/services/zalo/`, `src/services/facebook/`, `src/services/telegram/`, `src/ui/components/chat/`.
@@ -221,6 +221,7 @@ Nguồn: `src/models/workflow.ts`, `src/services/workflow/WorkflowEngineService.
 - Quản lý assistant, file, hội thoại, message, usage log và liên kết assistant theo account.
 - Hỗ trợ provider cấu hình theo kiểu OpenAI-compatible và provider tùy chỉnh; assistant có thể dùng trực tiếp hoặc từ workflow.
 - API key/endpoint/model là dữ liệu nhạy cảm và phụ thuộc nhà cung cấp.
+- Màn Đăng Facebook không còn panel AI (giao diện soạn nội dung/tạo ảnh bằng AI đã gỡ ở 26.16.0; `src/ui/features/facebookPoster/` không có lời gọi `ai:`). Backend `ai:generateImage` vẫn còn (`electron/ipc/aiAssistantIpc.ts:244`, `AIAssistantService.generateImage`) nhưng hiện không giao diện nào gọi.
 - **Cần xác nhận vận hành** về model thực có quyền truy cập, chi phí, quota, lưu trữ dữ liệu tại provider và chất lượng đầu ra.
 
 Nguồn: `src/services/ai/AIAssistantService.ts`, `src/models/ai.ts`, `src/ui/components/integration/AIAssistantPage.tsx`.
@@ -264,43 +265,81 @@ Nguồn: `src/ui/components/dashboard/`, `src/ui/components/analytics/`, `src/ui
 - Mỗi profile là một trình duyệt Chromium antidetect riêng (nhân `fingerprint-chromium` 148.0.7778.215) với fingerprint cố định, thư mục dữ liệu riêng và proxy riêng lấy từ kho proxy hiện có.
 - Nhân trình duyệt không nằm trong bộ cài; người dùng tải lần đầu (khoảng 190 MB), có kiểm SHA-256, lưu tại `<userData>/browser-engine/`.
 - Profile có proxy đi qua một proxy chuyển tiếp cục bộ trên `127.0.0.1` do main process chạy; proxy lỗi thì trình duyệt nhận `502`, không chuyển sang kết nối trực tiếp.
-- Tối đa 30 profile mở đồng thời. Trạng thái đang chạy chỉ nằm trong bộ nhớ.
+- Tối đa 30 profile mở đồng thời (`BrowserProfileService.open` từ chối khi đã đủ). Trạng thái đang chạy chỉ nằm trong bộ nhớ. <!-- docs-check: src/services/browser/BrowserProfileService.ts#MAX_RUNNING_PROFILES = 30 -->
 - Chỉ dùng được ở chế độ Boss/Standalone, trên Windows và Linux. Persona luôn trùng hệ điều hành máy thật.
 - Dữ liệu trình duyệt (cookie, phiên đăng nhập) nằm tại `<thư mục DB của workspace>/browser-profiles/<id>/` và **chưa được mã hóa**.
-- Chuyển workspace hoặc thoát app sẽ đóng mọi profile đang mở.
+- Chuyển workspace hoặc thoát app sẽ đóng mọi profile đang mở (`electron/ipc/workspaceIpc.ts:192`, `electron/main.ts:1299`).
+- **Sandbox** (mã sau 26.16.0, sẽ phát hành cùng bản tính năng kế tiếp). Mọi Chromium do MaiHub khởi chạy chạy có sandbox, trừ khi Linux đang chặn user namespaces. Profile mở tay và profile cho tự động chỉ truyền `--no-sandbox` khi kết quả dò là `disabled` (`src/services/browser/BrowserProfileService.ts:154`, `:202`); trình duyệt Business Suite của Page đặt `chromiumSandbox` theo cùng kết quả (`src/services/facebook/pagePlaywrightDriver.ts:308`). Windows và macOS luôn bật (`src/services/browser/sandboxSupport.ts:30`). Sandbox này khác với `sandbox: false` của cửa sổ Electron ở mục 2.3.
+- **Cách dò sandbox (Linux).** `probeSandbox` chạy nhân một lần với `--headless=new --no-first-run --no-default-browser-check --user-data-dir=<thư mục tạm> --dump-dom about:blank`, không có `--no-sandbox`, timeout `PROBE_TIMEOUT_MS` = 20000 ms (`sandboxSupport.ts:18`). Thoát mã 0 thì bật; stderr chứa `No usable sandbox` thì tắt; lỗi khác hoặc quá hạn thì xét ba cấu hình hệ thống `apparmor_restrict_unprivileged_userns = 1`, `unprivileged_userns_clone = 0`, `user.max_user_namespaces = 0` (`sandboxSupport.ts:22-26`): có một trong ba thì tắt, không thì bật. Thư mục tạm `.sandbox-probe-*` nằm cạnh tệp thực thi của nhân (trên đĩa, không dùng `/tmp`) và bị xóa ngay sau khi chạy (`sandboxSupport.ts:110`). Kết quả lưu trong bộ nhớ theo đường dẫn nhân đến khi tắt app hoặc người dùng bấm "Kiểm tra lại" (`SandboxSupport.recheck`, `sandboxSupport.ts:67`).
+- **Báo người dùng.** Kênh `browserProfile:sandboxStatus({ recheck })` (`electron/ipc/browserProfileIpc.ts:235`) trả `{ sandbox, apparmorPath }` với `sandbox` là `enabled` hoặc `disabled`, hoặc `{ sandbox: 'unknown' }` khi chưa cài nhân. Khi `disabled`, màn Trình duyệt hiện dải cảnh báo "Máy đang chặn sandbox của trình duyệt (AppArmor/user namespaces)…", lệnh `sudo tee /etc/apparmor.d/maihub-browser-engine …` có nút sao chép và nút "Kiểm tra lại" (`src/ui/features/browser/BrowserProfilesView.tsx:421-433`). Đường dẫn gắn vào profile AppArmor là vị trí nhân thật trên máy, `<thư mục browser-engine>/*/*/<tên tệp thực thi>`, đặt trong dấu nháy kép (`browserProfileIpc.ts:241`), vì thư mục dữ liệu có thể là `AHV Connect` ở bản dev hoặc bản cũ. App không tự chạy `sudo`. Không có cảnh báo trên Windows/macOS.
 
-Nguồn: `src/services/browser/`, `electron/ipc/browserProfileIpc.ts`, `src/ui/features/browser/`, `src/configs/browserEngine.config.ts`, `docs/plans/2026-10-01-browser-profiles.md`.
+Nguồn: `src/services/browser/`, `electron/ipc/browserProfileIpc.ts`, `src/ui/features/browser/`, `src/configs/browserEngine.config.ts`, `docs/plans/2026-10-01-browser-profiles.md`, `docs/specs/2026-10-12-poster-cancel-sandbox-docs.md`.
 
-### 4.10 Đăng Facebook (từ 26.10.0)
+### 4.10 Đăng Facebook (từ 26.10.0; giao diện Postiz và bản nháp từ 26.16.0)
 
-- Đăng một bài (kèm 1–10 ảnh hoặc 1 video, xem bên dưới và bình luận đầu tiên tuỳ chọn) lên nhóm hoặc Page bằng nhiều browser profile cùng lúc; kèm quét nhóm đã tham gia, tìm và xin vào nhóm theo từ khoá, thu bình luận của bài đã đăng, lịch sử và xuất CSV.
+- Đăng một bài (kèm 1–10 ảnh hoặc 1 video, xem bảng giới hạn, và bình luận đầu tiên tuỳ chọn) lên nhóm hoặc Page bằng nhiều browser profile cùng lúc; kèm quét nhóm đã tham gia, tìm và xin vào nhóm theo từ khoá, thu bình luận của bài đã đăng, lịch sử và xuất CSV.
+- Giao diện (từ 26.16.0, kiểu Postiz): mục "Đăng Facebook" ở sidebar có bốn màn con là Lịch đăng, Tham gia nhóm, Thu bình luận, Lịch sử (`src/ui/features/facebookPoster/FacebookPosterView.tsx:141-146`). Lịch đăng là lịch tuần/ngày/tháng có đường "bây giờ"; soạn bài trong hộp thoại có preview. Không có panel AI trong màn này (xem mục 4.5). Chỉ lịch một lần kéo-thả để dời giờ; lịch lặp không kéo-thả được mà đổi giờ bằng nút "Sửa giờ" (`src/ui/features/facebookPoster/calendarModel.ts:76-78`). Chi tiết thị giác: `DESIGN.md`.
+- Bình luận đầu: nhập bình luận thì có thể đặt "bình luận sau X phút" (0–60, 0 = ngay) kể từ lúc bài lên, cho cả nhóm lẫn Page (`validateStartParams.ts` `readCommentDelay`). Thời gian chờ được trừ vào khoảng nghỉ trước đích kế tiếp (`src/services/facebookPoster/postToTargets.ts:693`, `:832`). Bình luận không bao giờ làm hỏng kết quả đăng.
+- Bản nháp và duyệt (từ 26.16.0): bản nháp là một dòng `fb_poster_schedules` có `draft = 1`, luôn `enabled = 0` và `next_run_at = NULL` nên không bao giờ tự chạy (`src/services/facebookPoster/schema.ts:60`, `src/services/facebookPoster/drafts.ts`). Lưu nháp chỉ bắt buộc có nội dung; duyệt mới kiểm đầy đủ như đăng thật rồi chọn "đăng ngay" hoặc hẹn giờ (một lần/lặp lại). IPC: `facebookPoster:draftSave`, `draftGet`, `draftApprove` (`electron/ipc/facebookPosterIpc.ts:247-260`). Bản nháp tính vào giới hạn lịch của workspace.
 - Khi chạy việc, `BrowserProfileService.openForAutomation` cho `playwright-core` khởi chạy nhân trình duyệt của profile qua `--remote-debugging-pipe`, cùng bộ tham số như khi mở tay; **không mở cổng TCP**. Profile đang mở tay thì không nhận việc.
-- Một việc tại một thời điểm; tối đa 10 profile song song (mặc định 3). Các profile bắt đầu cách nhau một khoảng ngẫu nhiên do người dùng đặt (`staggerMinSec`–`staggerMaxSec`, mặc định 30–90 giây, 0–0 là bật đồng loạt); mỗi đích ghi kết quả ngay khi xong.
+- Một việc tại một thời điểm; tối đa 10 profile song song (mặc định 3). Các profile bắt đầu cách nhau một khoảng ngẫu nhiên do người dùng đặt (`staggerMinSec`–`staggerMaxSec`, mặc định 30–90 giây, 0–0 là bật đồng loạt); mỗi đích ghi kết quả ngay khi xong. Khoảng nghỉ giữa hai đích mặc định 300–900 giây.
 - Chỉ nhận link `https://` thuộc `facebook.com` hoặc tên miền con của nó.
-- Dữ liệu ở năm bảng `fb_poster_runs`, `fb_poster_results`, `fb_poster_groups`, `fb_poster_comments`, `fb_poster_schedules` trong DB của workspace; `fb_poster_runs` có thêm cột `schedule_id` (lượt chạy từ lịch nào) và trạng thái `missed`. Run còn `running` khi app tắt đột ngột được đổi thành `failed` ở lần mở sau.
-- Nhiều ảnh (từ 26.14.0): 1–10 ảnh `jpg/jpeg/png/gif/webp` hoặc đúng 1 video `mp4/mov/webm`, không trộn; mỗi ảnh ≤ 20 MB, tổng ≤ 100 MB. `StartParams.mediaPaths` thay `mediaPath` (giá trị cũ vẫn được nhận). Ô chọn tệp có `multiple` thì đưa cả mảng một lần, không thì đưa lần lượt từng tệp; sau đó đợi hết thanh tải.
-- Lên lịch (từ 26.14.0): bảng `fb_poster_schedules`; lịch `once` (ngày giờ, phải sau lúc lưu ít nhất 60 giây) hoặc `recurring` (các thứ trong tuần + `HH:mm`, giờ của máy, tối đa một lượt/ngày). Tối đa 200 lịch mỗi workspace, tên ≤ 100 ký tự. Ảnh của lịch được chép vào `<thư mục DB của workspace>/facebook-poster-media/<scheduleId>/` lúc lưu và xoá cùng lịch.
-- Bộ hẹn giờ `FacebookPosterScheduler` chạy trong tiến trình chính, một `setTimeout` cho lịch gần nhất (tối đa 24 giờ một lần). Quá giờ hơn 60 giây khi app tắt/máy ngủ: ghi run `missed` (`App tắt lúc đến giờ`), không đăng bù. Đang có việc khác thì xếp hàng, chạy khi việc trước xong; chờ quá 2 giờ thì `missed` (`Chờ quá 2 giờ vì đang có việc khác`); thoát app hoặc đổi workspace khi còn mục đang chờ thì `missed` (`App đóng khi lượt đang chờ`). Vẫn một việc tại một thời điểm.
-- Sửa lịch chỉ đổi tên và thời gian (nội dung và ảnh giữ nguyên). Xoá lịch bị từ chối khi lượt của lịch đó đang chạy.
-- IPC mới (qua `handle()`, chế độ nhân viên bị từ chối): `facebookPoster:scheduleCreate`, `scheduleList`, `scheduleUpdate`, `scheduleDelete`, `takeMissed` (lấy các thông báo đã lỡ lúc giao diện chưa sẵn sàng, chỉ lần đầu). Sự kiện: `facebookPoster:scheduleMissed` `{ scheduleId, name, reason, at }` và `facebookPoster:schedulesChanged`.
-- Chỉ dùng được ở chế độ Boss/Standalone (chưa hỗ trợ nhân viên đặt lịch). Chuyển workspace thì huỷ việc và chờ tối đa 10 giây cho việc dừng trước khi đổi DB.
+- Dữ liệu ở năm bảng `fb_poster_runs`, `fb_poster_results`, `fb_poster_groups`, `fb_poster_comments`, `fb_poster_schedules` trong DB của workspace; `fb_poster_runs` có thêm cột `schedule_id` (lượt chạy từ lịch nào) và trạng thái `missed`; `fb_poster_schedules` có thêm cột `draft`. Run còn `running` khi app tắt đột ngột được đổi thành `failed` ở lần mở sau.
+- Nhiều ảnh (từ 26.14.0): `jpg/jpeg/png/gif/webp` hoặc đúng 1 video `mp4/mov/webm`, không trộn. `StartParams.mediaPaths` thay `mediaPath` (giá trị cũ vẫn được nhận). Ô chọn tệp có `multiple` thì đưa cả mảng một lần, không thì đưa lần lượt từng tệp; sau đó đợi hết thanh tải. `facebookPoster:pickMedia` trả `{ items: [{ path, size }] }` (`electron/ipc/facebookPosterIpc.ts:301-308`).
+- Lên lịch (từ 26.14.0): bảng `fb_poster_schedules`; lịch `once` (ngày giờ, phải sau lúc lưu ít nhất 60 giây) hoặc `recurring` (các thứ trong tuần + `HH:mm`, giờ của máy, tối đa một lượt/ngày). Tên lịch ≤ 100 ký tự. Ảnh của lịch được chép vào `<thư mục DB của workspace>/facebook-poster-media/<scheduleId>/` lúc lưu và xoá cùng lịch.
+- Bộ hẹn giờ `FacebookPosterScheduler` chạy trong tiến trình chính, một `setTimeout` cho lịch gần nhất (tối đa 24 giờ một lần). Chỉ lịch `enabled` và không phải nháp mới chạy (`FacebookPosterScheduler.ts:117`). Vẫn một việc tại một thời điểm.
+- Lượt lỡ: quá giờ hơn 60 giây khi app tắt/máy ngủ thì ghi run `missed` (`App tắt lúc đến giờ`), không đăng bù. <!-- docs-check: src/services/facebookPoster/FacebookPosterScheduler.ts#GRACE_MS = 60000 -->
+- Hàng chờ: đang có việc khác thì lượt xếp hàng, chạy khi việc trước xong; chờ quá 2 giờ thì `missed` (`Chờ quá 2 giờ vì đang có việc khác`). <!-- docs-check: src/services/facebookPoster/FacebookPosterScheduler.ts#QUEUE_MAX_WAIT_MS = 7200000 -->
+- Thoát app hoặc đổi workspace khi còn mục đang chờ thì `missed` (`App đóng khi lượt đang chờ`).
+- Sửa lịch đã duyệt chỉ đổi tên và thời gian (nội dung và ảnh giữ nguyên; riêng bản nháp sửa được nội dung qua `draftSave`). Xoá lịch bị từ chối khi lượt của lịch đó đang chạy.
+- IPC lịch (qua `handle()`, chế độ nhân viên bị từ chối): `facebookPoster:scheduleCreate`, `scheduleList`, `scheduleUpdate`, `scheduleDelete`, `takeMissed` (lấy các thông báo đã lỡ lúc giao diện chưa sẵn sàng, chỉ lần đầu). Sự kiện: `facebookPoster:scheduleMissed` `{ scheduleId, name, reason, at }` và `facebookPoster:schedulesChanged`.
+- Chỉ dùng được ở chế độ Boss/Standalone (chưa hỗ trợ nhân viên đặt lịch).
 - Chưa được kiểm chứng bằng tài khoản Facebook thật và trên Windows tại thời điểm phát hành 26.10.0.
 
-Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`, `docs/specs/2026-10-07-facebook-poster-multi-image-schedule.md`, `docs/plans/2026-10-07-facebook-poster-multi-image-schedule.md`. (Kế hoạch triển khai của tính năng này chưa được đưa vào repo; cần bổ sung vào `docs/plans/`.)
+**Giới hạn đang áp dụng** (kiểm ở main process; mỗi dòng có dấu `docs-check` để CI so với mã):
 
-### 4.11 Hộp thư Page Facebook (đang thiết kế)
+| Giới hạn | Giá trị | Dấu kiểm |
+|---|---|---|
+| Nội dung bài | ≤ 63206 ký tự | <!-- docs-check: src/services/facebookPoster/validateStartParams.ts#MAX_TEXT = 63206 --> |
+| Bình luận đầu | ≤ 8000 ký tự | <!-- docs-check: src/services/facebookPoster/validateStartParams.ts#MAX_COMMENT = 8000 --> |
+| Số đích mỗi lần chạy | ≤ 10000 | <!-- docs-check: src/services/facebookPoster/validateStartParams.ts#MAX_TARGETS = 10000 --> |
+| Khoảng nghỉ giữa hai đích | 0–86400 giây | <!-- docs-check: src/services/facebookPoster/validateStartParams.ts#MAX_DELAY_SEC = 86400 --> |
+| Giãn cách khởi động giữa profile | 0–3600 giây | <!-- docs-check: src/services/facebookPoster/validateStartParams.ts#MAX_STAGGER_SEC = 3600 --> |
+| Số ảnh mỗi bài | 1–10 | <!-- docs-check: src/services/facebookPoster/mediaRules.ts#MAX_IMAGES = 10 --> |
+| Dung lượng mỗi ảnh | ≤ 20 MB (20971520 byte) | <!-- docs-check: src/services/facebookPoster/mediaRules.ts#MAX_IMAGE_BYTES = 20971520 --> |
+| Tổng dung lượng ảnh | ≤ 100 MB (104857600 byte) | <!-- docs-check: src/services/facebookPoster/mediaRules.ts#MAX_TOTAL_BYTES = 104857600 --> |
+| Lịch (kể cả nháp) mỗi workspace | ≤ 200 | <!-- docs-check: electron/ipc/facebookPosterIpc.ts#MAX_SCHEDULES = 200 --> |
 
-- Mục tiêu: mỗi Page mà tài khoản Facebook cá nhân quản trị hiện trong Chat như một tài khoản con, nhận và trả lời tin nhắn; Workflow/CRM/AI dùng được như tài khoản thường. Bình luận bài Page để đợt sau.
-- Hướng kỹ thuật đã chốt: giao thức không chính thức qua phiên cá nhân (như Messenger web), không dùng Graph API. Spike 03/10/2026 xác nhận liệt kê được Page (`bookmarks/pages`) và chuyển vai sang Page bằng cookie `i_user` + khởi tạo lại phiên; việc đọc hộp thư Page qua query thread list cũ chưa kết luận vì Page thử nghiệm chưa có tin.
-- Chưa có mã trong sản phẩm. Người nhận việc bắt đầu từ bước 0 của kế hoạch bàn giao.
+**Hủy và dừng việc** (mã sau 26.16.0, sẽ phát hành cùng bản tính năng kế tiếp; thiết kế ở `docs/specs/2026-10-12-poster-cancel-sandbox-docs.md` mục 3):
 
-Nguồn: `docs/intent/2026-10-03-facebook-page-inbox.md`, `docs/reports/2026-10-03-facebook-page-inbox-spike.md`, `docs/plans/2026-10-03-facebook-page-inbox.md`.
+- Bấm Hủy gọi `FacebookPosterService.cancel()` (`src/services/facebookPoster/FacebookPosterService.ts:130`): đặt cờ dừng và đóng ngay mọi phiên trình duyệt của các profile **không** ở đoạn không thể quay lại. Thao tác Playwright đang chờ của profile đó lỗi ngay nên profile dừng trong vài giây, kể cả khi đang chờ trang hay nghỉ.
+- Các khoảng nghỉ dài cắt lát và kiểm cờ dừng mỗi lát: nghỉ giữa hai đích (`sleepStoppable`, lát 500 ms, `src/services/facebookPoster/humanize.ts:8`, dùng ở `postToTargets.ts:834`), `settleMs` và `scrollWaitMs` khi quét nhóm (`scanGroups.ts:115`, `:145`; vòng cuộn cũng kiểm cờ dừng), giãn cách khởi động profile (`defaultSleep`, lát 500 ms, `FacebookPosterService.ts:62`), nghỉ giữa hai lần xin vào nhóm (lát 1000 ms, `joinGroups.ts:224`, `:377`).
+- Đoạn không thể quay lại (`enterCritical`/`leaveCritical` trong `TaskDeps`, `src/services/facebookPoster/types.ts:14-15`): với đăng bài, từ ngay trước click Đăng (`postToTargets.ts:603`, sau lần kiểm cờ dừng cuối ở `:601`) đến hết đích đó, gồm cả chờ và gửi bình luận đầu (`leaveCritical` ở `finally`, `:827`); với xin vào nhóm, quanh click Tham gia tới khi đọc xong kết quả (`joinGroups.ts:308`, `:357`). Trong đoạn này Hủy không đóng phiên; hết đoạn thì profile tự đóng phiên. Riêng chờ "bình luận sau X phút" vẫn thoát trong vòng một giây sau khi Hủy (`postToTargets.ts:693`), bình luận đó ghi trạng thái `failed`.
+- Kết quả ghi: đích bị cắt trước đoạn không thể quay lại và đích chưa làm được ghi `skipped` với lỗi "Đã dừng" (`STOPPED_REASON`, `FacebookPosterService.ts:38`, `:437`); đích đã vào đoạn ghi kết quả thật theo bằng chứng; run ghi `cancelled` (`FacebookPosterService.ts:225`).
+- Chuyển workspace và xoá workspace đang hoạt động (cả hai trong `electron/ipc/workspaceIpc.ts`, `workspace:switch` ở `:222`, `workspace:delete` ở `:160`) gọi `stopAndWait(45000, 10000)` (`FacebookPosterService.ts:138`): hủy rồi chờ êm tối đa 45 giây; quá hạn thì đóng cứng mọi phiên, kể cả profile đang ở đoạn không thể quay lại (đích đó ghi `failed` "Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook"), rồi chờ thêm tối đa 10 giây. Nếu việc vẫn chưa kết thúc thì **không đổi workspace**, trả lỗi "Việc Đăng Facebook chưa dừng được. Thử lại sau." (`facebookPosterIpc.ts:33`, `workspaceIpc.ts:168`, `:228`). Tổng chờ tối đa khoảng 55 giây; giao diện nhận sự kiện `workspace:waitingForJobs` (`workspaceIpc.ts:92`).
+- Thoát app không chờ: `before-quit` gọi `cancelFacebookPosterJobs()` (`electron/main.ts:1294`) rồi đóng DB ngay, nên trình duyệt ngoài đoạn không thể quay lại tắt cùng app. Run còn `running` được đổi thành `failed` với "App đóng khi việc đang chạy. Đích đang đăng dở (nếu có) cần kiểm tra trên Facebook." ở lần mở sau (`FacebookPosterStore.ts:23`, `:122-131`).
 
-### 4.11 Tự cập nhật (từ 26.11.0)
+Nguồn: `src/services/facebookPoster/`, `electron/ipc/facebookPosterIpc.ts`, `src/ui/features/facebookPoster/`, `docs/specs/2026-10-03-facebook-poster.md`, `docs/specs/2026-10-07-facebook-poster-multi-image-schedule.md`, `docs/specs/2026-10-10-poster-gd2-drafts-design.md`, `docs/plans/2026-10-07-facebook-poster-multi-image-schedule.md`, `docs/plans/2026-10-10-poster-gd2-drafts.md`. (Kế hoạch triển khai của tính năng đăng bài gốc chưa được đưa vào repo; cần bổ sung vào `docs/plans/`.)
 
-- Kiểm tra bản mới qua API công khai `releases/latest` của kho `maiychrus25/automation-marketing`, 15 giây sau khi mở app rồi mỗi 6 giờ; lỗi mạng không hiện cho người dùng.
+### 4.11 Hộp thư Page Facebook (từ 26.12.0)
+
+- Mỗi Page mà tài khoản Facebook cá nhân quản trị hiện trong Chat như một tài khoản con (dòng `fb_accounts` có `parent_facebook_id`, `delegate_page_id`, `enabled`; `src/services/database/DatabaseService.ts:2486`). Danh sách Page lấy từ `bookmarks/pages` (`src/services/facebook/FacebookPages.ts:36`) qua `fb:listPages`; bật/tắt Page bằng `fb:setPageEnabled` (`electron/ipc/facebookIpc.ts:492`, `:511`). Tắt Page thì ngắt kết nối nhưng giữ dữ liệu. Page không chạy E2EE bridge (`src/services/facebook/FacebookService.ts:107`).
+- **Nhận tin**: Page không có kết nối MQTT riêng dùng được; tin khách gửi vào Page đến qua MQTT của tài khoản cha dưới dạng `deltaBiiMPageMessageNotification` (`src/services/facebook/FacebookMQTTListener.ts:525-533`). Listener phát sự kiện `pageMessage`, `FacebookService.handlePageMessageNotification` (`FacebookService.ts:522`) tìm Page con theo `delegate_page_id` + tài khoản cha đang bật, chống trùng bằng bộ nhớ 300 `messageId` gần nhất (`:529-532`), lưu tin và phát `fb:onMessage` dưới danh tính Page. Thông báo chỉ mang chữ: tin văn bản lưu từ `body`; khi `body` cho thấy ảnh, video hoặc sticker (`classifyPageNotification`, `src/services/facebook/pageSendHelpers.ts`) thì tải media thật qua trình duyệt Business Suite của Page (`saveIncomingPageMedia`, `FacebookService.ts:597`), sticker lưu như ảnh; không lấy được thì lưu chính chữ thông báo để không mất tin.
+- **Gửi tin**: chữ và tệp đính kèm đi qua một trình duyệt Chromium headless điều khiển client Meta Business Suite (`src/services/facebook/pagePlaywrightDriver.ts`, điều phối ở `src/services/facebook/FacebookPageBrowserSender.ts`); không dùng Graph API hay REST cho Page. Dùng nhân trình duyệt đã cài ở mục 4.9 (chưa cài thì báo lỗi). Phiên đăng nhập Business Suite nằm ở `<userData>/page-browser/<id tài khoản Page>/`, đăng nhập một lần cho mỗi Page; cookie của app được chèn thêm nhưng không đủ tự đăng nhập web (`pagePlaywrightDriver.ts:6-7`). Các lệnh của cùng một Page xếp hàng nối tiếp (mutex `queue`, `FacebookPageBrowserSender.ts`), trình duyệt tự đóng sau 5 phút rảnh (`IDLE_CLOSE_MS`, `pagePlaywrightDriver.ts:25`). Id hội thoại gửi được phải là chuỗi số (`isSendableThreadId`).
+- **Xác nhận đã gửi**: bấm Enter đúng một lần rồi chờ nút "Gửi lượt thích" quay lại (nghĩa là nội dung đã được tiêu thụ), tối đa 20000 ms (`SENT_TIMEOUT_MS`, `FacebookPageBrowserSender.ts:45`; `waitSent`, `pagePlaywrightDriver.ts:205`); quá hạn thì trả lỗi, không báo thành công giả. Không dùng đếm ảnh hay tìm chữ vì hay báo hỏng giả.
+- **Đính kèm**: chọn tệp qua hộp chọn tệp, chờ đính kèm hiện trong ô soạn tối đa 30000 ms (`STAGE_TIMEOUT_MS`) rồi chờ cố định 7000 ms (`ATTACH_SETTLE_MS`, `pagePlaywrightDriver.ts:24`) cho upload xong trước khi Enter, vì Enter sớm làm Business Suite bỏ ảnh. Thời gian cố định này là giới hạn đã biết: tệp lớn có thể chưa upload kịp. Gửi nhiều tệp thì gửi từng tệp, chữ kèm tệp đầu (`electron/ipc/facebookIpc.ts:977`).
+- **Sticker** (từ 26.13.0): `fb:listPageStickers` (tối đa 24 sticker theo từ khoá) và `fb:sendPageSticker` (`facebookIpc.ts:919`, `:929`). Driver chỉ nhận ô sticker nằm trong vùng bảng chọn cố định `STICKER_PANEL` (x 660–965, y 520–815 theo cửa sổ trình duyệt 1400×900, `pagePlaywrightDriver.ts:27`) để loại sticker trong khung chat; nếu Business Suite đổi bố cục, danh sách sẽ rỗng. Xác nhận gửi sticker là bảng chọn đóng lại (ô tìm kiếm biến mất), tối đa 15000 ms (`pagePlaywrightDriver.ts:272`). Sticker đã gửi lưu như ảnh `sticker.webp`.
+- Trình duyệt Business Suite của Page chạy có sandbox theo kết quả dò ở mục 4.9 (`pagePlaywrightDriver.ts:308`).
+- Giới hạn: tính năng phụ thuộc DOM của Business Suite (`src/services/facebook/pageBusinessSuiteSelectors.ts`), có thể hỏng khi Facebook đổi giao diện. Trả lời trích dẫn (`replyToMessageId`) được nhận nhưng driver không dùng (`FacebookPageBrowserSender.doSend`). **Cần xác nhận vận hành** với Page thật, nhiều Page cùng lúc và Windows.
+
+Nguồn: `src/services/facebook/`, `electron/ipc/facebookIpc.ts`, `docs/intent/2026-10-03-facebook-page-inbox.md`, `docs/specs/2026-10-03-facebook-page-inbox.md`, `docs/specs/2026-10-05-facebook-page-send-business-suite.md`, `docs/specs/2026-10-07-facebook-page-sticker.md`, `docs/reports/2026-10-03-facebook-page-inbox-spike.md`.
+
+### 4.12 Tự cập nhật (từ 26.11.0)
+
+- Kiểm tra bản mới qua API công khai `releases/latest` của kho `maiychrus25/automation-marketing`, 15 giây sau khi mở app; lỗi mạng không hiện cho người dùng. <!-- docs-check: electron/ipc/updateIpc.ts#FIRST_CHECK_DELAY_MS = 15000 -->
+- Sau lần đầu, kiểm tra lại mỗi 6 giờ. <!-- docs-check: electron/ipc/updateIpc.ts#CHECK_INTERVAL_MS = 21600000 -->
 - Windows (NSIS) và Linux AppImage tải và cài bằng `electron-updater` khi người dùng bấm; macOS (chưa ký) và `.deb` chỉ mở trang Release.
-- Không cho khởi động lại để cài khi đang có việc Đăng Facebook.
+- Không cho khởi động lại để cài khi đang có việc Đăng Facebook (`isFacebookPosterBusy`, `electron/ipc/facebookPosterIpc.ts:79`).
 - Mỗi Release phải kèm `latest.yml`, `latest-linux.yml`, `latest-mac.yml` và `*.blockmap` (workflow `build.yml` tải lên).
 
 Nguồn: `src/services/update/`, `electron/ipc/updateIpc.ts`, `src/ui/components/common/UpdateNotice.tsx`, `src/ui/store/updateStore.ts`, `docs/specs/2026-10-03-auto-update.md`.
@@ -313,8 +352,8 @@ SQLite được bật WAL trong `DatabaseService`. Thay vì liệt kê mọi c�
 |---|---|---|
 | Account và chat | `accounts`, `messages`, `contacts`, `friends`, `friend_requests`, `links` | Account sở hữu conversation/contact/message theo kênh |
 | Telegram | `telegram_peers`, `telegram_update_state`, `telegram_channel_pts`, `telegram_bot_cursor` | Theo dõi peer và cursor/update state |
-| Facebook | `fb_accounts`, `fb_threads`, `fb_messages`, `fb_crm_contacts` | Account Facebook liên kết thread/message/contact |
-| Đăng Facebook | `fb_poster_runs`, `fb_poster_results`, `fb_poster_groups`, `fb_poster_comments`, `fb_poster_schedules` | Run có nhiều kết quả đích; `fb_poster_runs.schedule_id` trỏ tới lịch đã sinh ra run |
+| Facebook | `fb_accounts`, `fb_threads`, `fb_messages`, `fb_crm_contacts` | Account Facebook liên kết thread/message/contact; Page là dòng `fb_accounts` có `parent_facebook_id` trỏ tới tài khoản cha |
+| Đăng Facebook | `fb_poster_runs`, `fb_poster_results`, `fb_poster_groups`, `fb_poster_comments`, `fb_poster_schedules` | Run có nhiều kết quả đích; `fb_poster_runs.schedule_id` trỏ tới lịch đã sinh ra run; `fb_poster_schedules.draft = 1` là bản nháp |
 | Chat tiện ích | `message_drafts`, `pinned_messages`, `local_pinned_conversations`, `local_quick_messages`, labels/stickers | Metadata cục bộ gắn account/thread/message |
 | CRM | `crm_tags`, `crm_contact_tags`, `crm_notes`, `crm_campaigns`, `crm_campaign_contacts`, `crm_send_log` | Campaign có nhiều contact; log ghi kết quả gửi |
 | Employee | `employees`, `employee_groups`, `employee_permissions`, `employee_account_access`, `employee_sessions`, `employee_message_log` | Employee thuộc group, có module permission và account assignment |
@@ -328,8 +367,9 @@ SQLite được bật WAL trong `DatabaseService`. Thay vì liệt kê mọi c�
 
 ### 5.1 Dữ liệu và vòng đời
 
-- Database và media nằm trong Electron `userData`; thư mục là `MaiHub`. Lần đầu chạy 26.9.0, thư mục `MaiHub` cũ được đổi tên thành `MaiHub` (`src/services/app/legacyDataMigration.ts`); trên Linux/macOS dữ liệu mã hóa bằng `safeStorage` không giải mã được sau khi đổi tên app nên phải đăng nhập lại.
-- Dữ liệu cũ không tự chuyển sang thư mục MaiHub. Có hướng dẫn copy khi app đã tắt trong `NOTICE.md`; **Cần xác nhận vận hành** trên từng OS trước khi di trú thật.
+- Database và media nằm trong Electron `userData`; thư mục là `<appData>/MaiHub` (`electron/main.ts:151-154`).
+- Từ 26.9.0, lần đầu mở MaiHub tự chuyển dữ liệu của AHV Connect: nếu thư mục `MaiHub` chưa tồn tại mà `<appData>/AHV Connect` có, thư mục `AHV Connect` được đổi tên thành `MaiHub` và các tệp khóa Chromium (`SingletonLock`, `SingletonCookie`, `SingletonSocket`) bị xóa (`migrateLegacyUserData`, `src/services/app/legacyDataMigration.ts:44`, gọi ở `electron/main.ts:159` trước khi lấy single-instance lock). Nếu AHV Connect còn chạy (đọc pid từ `SingletonLock`) hoặc đổi tên lỗi, app hiện hộp thoại "Chưa chuyển được dữ liệu" và thoát (`electron/main.ts:164-169`). Đã có test: `src/__tests__/app/legacyDataMigration.test.ts`.
+- Mã chỉ chuyển thư mục `AHV Connect`; dữ liệu của bản gốc Deplao không tự chuyển (chép tay, xem `NOTICE.md`). Trên Linux/macOS, dữ liệu mã hóa bằng `safeStorage` gắn với tên app trong kho khóa của hệ điều hành nên không giải mã được sau khi đổi tên và phải đăng nhập lại (`README.md`); **Cần xác nhận vận hành** trên từng OS trước khi di trú thật.
 - Chưa có backup tự động được mô tả trong mã/tài liệu hiện hành; vận hành phải sao lưu database, config và media trước nâng cấp.
 - Tên tệp `deplao-tool.db` và một số khóa `deplao_*` được giữ để tương thích.
 
@@ -1105,7 +1145,7 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
 | TD-11 | Một số method E2EE có trong bridge nhưng chưa wire qua entrypoint | Capability Facebook không đầy đủ | Chỉ wire khi có use case và test E2EE |
 | TD-12 | Đã xử lý 02/10/2026: có `npm test` (jest); ts-jest chỉ chuyển mã, type-check do `tsc --noEmit` | Lỗi kiểu trong file test chỉ bị bắt bởi `tsc`, không bởi jest | Luôn chạy cả `tsc --noEmit` và `npm test` trước khi merge |
 | TD-13 | Chưa có SLA/performance baseline | Không thể kết luận tải tối đa | Benchmark theo dataset/workspace thực |
-| TD-14 | Di trú dữ liệu → MaiHub là thủ công | Rủi ro thao tác sai | Runbook, backup và dry-run trên từng OS |
+| TD-14 | Di trú `AHV Connect` → `MaiHub` tự động bằng đổi tên thư mục nhưng chưa kiểm chứng trên từng OS; dữ liệu Deplao vẫn chép tay | Linux/macOS mất khóa `safeStorage` nên phải đăng nhập lại; rủi ro thao tác sai khi chép tay | Backup trước nâng cấp và dry-run trên từng OS |
 | TD-15 | UI campaign có preset delay 5–15 giây nhưng queue ép tối thiểu 30 giây | Người vận hành hiểu sai nhịp gửi thực tế | Đồng bộ validation/preset với `MIN_DELAY_MS` hoặc hiển thị rõ delay hiệu lực |
 
 ## 24. Traceability
@@ -1174,8 +1214,10 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
   - Trình duyệt (Browser Profiles): `docs/intent/2026-10-01-browser-profiles.md`, `docs/specs/2026-10-01-browser-profiles.md`, `docs/plans/2026-10-01-browser-profiles.md`, `docs/reports/2026-10-01-antidetect-chromium-spike.md`.
   - Giao diện macOS: `docs/intent/2026-10-02-macos-ui.md`, `docs/specs/2026-10-02-macos-ui.md`, `docs/plans/2026-10-02-macos-ui.md`.
   - Đổi thương hiệu MaiHub: `docs/intent/2026-10-02-maihub-rebrand.md`, `docs/specs/2026-10-02-maihub-rebrand.md`, `docs/plans/2026-10-02-maihub-rebrand.md`.
-  - Đăng Facebook: `docs/intent/2026-10-02-facebook-poster.md`, `docs/specs/2026-10-03-facebook-poster.md`, `docs/reports/2026-10-03-browser-automation-pipe-spike.md` (plan chưa có trong repo).
-  - Hộp thư Page Facebook: `docs/intent/2026-10-03-facebook-page-inbox.md`, `docs/reports/2026-10-03-facebook-page-inbox-spike.md`, `docs/plans/2026-10-03-facebook-page-inbox.md`.
+  - Đăng Facebook: `docs/intent/2026-10-02-facebook-poster.md`, `docs/specs/2026-10-03-facebook-poster.md`, `docs/specs/2026-10-07-facebook-poster-multi-image-schedule.md`, `docs/specs/2026-10-10-poster-gd2-drafts-design.md`, `docs/reports/2026-10-03-browser-automation-pipe-spike.md` (plan của bản gốc chưa có trong repo).
+  - Hộp thư Page Facebook: `docs/intent/2026-10-03-facebook-page-inbox.md`, `docs/specs/2026-10-03-facebook-page-inbox.md`, `docs/specs/2026-10-05-facebook-page-send-business-suite.md`, `docs/specs/2026-10-07-facebook-page-sticker.md`, `docs/reports/2026-10-03-facebook-page-inbox-spike.md`, `docs/plans/2026-10-03-facebook-page-inbox.md`.
+  - Tự cập nhật: `docs/specs/2026-10-03-auto-update.md`. Trợ lý AI cho Đăng Facebook (giao diện đã gỡ): `docs/specs/2026-10-09-ai-facebook-content-assistant.md`.
+  - Hủy việc Đăng Facebook, sandbox trình duyệt, tài liệu đi cùng code: `docs/intent/2026-10-12-poster-cancel-sandbox-docs.md`, `docs/specs/2026-10-12-poster-cancel-sandbox-docs.md`, `docs/plans/2026-10-12-poster-cancel-sandbox-docs.md`.
 
 ## 26. Checklist xác nhận vận hành trước khi dùng thật
 

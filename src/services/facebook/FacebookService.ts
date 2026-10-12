@@ -55,7 +55,7 @@ export class FacebookService {
   private statusChangeCallback?: (status: FBAccountStatus) => void;
   /** Cached real Facebook UID - resolved once from DB, used for broadcasts */
   private _facebookId: string | null = null;
-  /** Dòng này là Page con (có parent_facebook_id): không E2EE bridge, gửi qua REST */
+  /** Dòng này là Page con (có parent_facebook_id): không E2EE bridge, gửi qua trình duyệt Business Suite */
   private _isPage = false;
   /** id Page cổ điển: tin của Page có thể mang id này thay vì id profile */
   private _delegatePageId: string | null = null;
@@ -517,7 +517,8 @@ export class FacebookService {
   /**
    * Tin nhắn khách gửi vào Page, nhận qua kết nối của tài khoản cá nhân (deltaBiiMPageMessageNotification).
    * Chạy trên FacebookService của tài khoản cha; định tuyến về Page con rồi lưu + phát fb:onMessage
-   * dưới danh tính của Page. Đợt này chỉ tin văn bản (thông báo chỉ mang body).
+   * dưới danh tính của Page. Thông báo chỉ mang body chữ: tin văn bản lưu thẳng từ body; ảnh/video/sticker
+   * thì đọc lại từ Business Suite qua trình duyệt Page (saveIncomingPageMedia), không đọc được thì lưu text thông báo.
    */
   private async handlePageMessageNotification(n: {
     pageId: string; messageId: string; senderId: string; body: string;
@@ -1861,7 +1862,7 @@ export class FacebookService {
    * @throws Error nếu bridge không thể khởi động - caller nên kiểm tra isE2EEConnected()
    */
   public async retryE2EE(): Promise<void> {
-    if (this._isPage) return; // Page không có E2EE bridge; caller kiểm isE2EEConnected() và đi REST
+    if (this._isPage) return; // Page không có E2EE bridge; caller kiểm isE2EEConnected(); Page gửi qua Business Suite
     // Clean up stale bridge
     await this.stopE2EEBridge();
     // Reset flags so startE2EEBridge will attempt again
@@ -2374,12 +2375,11 @@ export class FacebookService {
 
   /**
    * Gửi đính kèm (ảnh/file) vai Page qua Business Suite.
-   * Xác nhận giao hàng bằng tín hiệu dương (caption hiện trong khung, hoặc số ảnh tăng),
-   * nên gửi hụt sẽ trả lỗi thay vì báo success giả.
+   * Driver chờ upload xong (ATTACH_SETTLE_MS), Enter một lần rồi xác nhận bằng tín hiệu dương:
+   * nút "Gửi lượt thích" quay lại = nội dung đã được tiêu thụ (waitSent). Quá hạn thì trả lỗi,
+   * không báo success giả.
    */
   public async sendPageAttachment(threadId: string, filePath: string, body?: string): Promise<FBSendResult> {
-    // Xác nhận giao hàng bằng tín hiệu dương: có caption → chờ chữ hiện; không caption → chờ
-    // một ảnh ĐI (outgoing) mới xuất hiện trong khung. Gửi hụt sẽ báo lỗi, không success giả.
     const { classifyFile } = require('./pageSendHelpers');
     const result = await this.sendViaPageBrowser(threadId, {
       text: body,

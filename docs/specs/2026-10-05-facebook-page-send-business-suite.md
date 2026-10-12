@@ -3,9 +3,20 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 05/10/2026 |
-| Trạng thái | Chờ duyệt |
+| Trạng thái | Đã phát hành 26.12.0 |
 | Bối cảnh | Nối tiếp `docs/specs/2026-10-03-facebook-page-inbox.md` — tiêu chí "trả lời văn bản và ảnh với vai Page" của đợt đó CHƯA đạt vì gửi qua REST cổ điển không tới nơi. |
 | Bằng chứng kỹ thuật | `docs/reports/2026-10-03-facebook-page-inbox-spike.md` (§1.3) + capture 05/10/2026 (mục 2 dưới đây) |
+
+## Ghi chú sau phát hành (12/10/2026)
+
+Thân tài liệu giữ nguyên như lúc viết. Các điểm dưới đây là chỗ mã nguồn bản 26.16.0 khác tài liệu:
+
+- Mục 3.1 (hợp đồng): không có `static get()` và `close()` trên class. Class `FacebookPageBrowserSender` chỉ điều phối (hàng đợi nối tiếp, ánh xạ lỗi) với `driver` được truyền vào constructor (`src/services/facebook/FacebookPageBrowserSender.ts:50`). Factory và đóng phiên là hàm `getPageBrowserSender(pageAccountId, deps)` và `closePageBrowserSender(pageAccountId)` ở `src/services/facebook/pagePlaywrightDriver.ts:292`, `:339`, với `deps = { getCookie, delegatePageId }` (`:286-289`).
+- Mục 3.2: thời gian rảnh trước khi đóng trình duyệt là 5 phút (`IDLE_CLOSE_MS`, `pagePlaywrightDriver.ts:25`).
+- Mục 3.3 bước 3: đính kèm đi qua hộp chọn tệp (`filechooser`) bấm từ nút "Đính kèm file", rồi chờ cố định 7000 ms trước khi Enter (`pagePlaywrightDriver.ts:109-132`, `ATTACH_SETTLE_MS` ở `:24`).
+- Mục 3.3 bước 4 (cách xác nhận): không chờ "bong bóng tin" mà chờ nút "Gửi lượt thích" quay lại sau khi Enter một lần, tối đa 20000 ms (`pagePlaywrightDriver.ts:134-146`, `:205`; `SENT_TIMEOUT_MS` ở `FacebookPageBrowserSender.ts:45`). Lý do ghi tại `waitSent`: đếm ảnh và tìm chữ hay báo hỏng giả, kéo theo gửi lại.
+- Mục 3.4: nhánh Page của `sendMessage` không còn ở dòng ~2041 mà ở `src/services/facebook/FacebookService.ts:2131`; `replyToMessageId` được truyền nhưng driver không dùng.
+- Mục 7 (roadmap): nhận ảnh, video và sticker đã làm bằng trích DOM (`FacebookService.ts:597`, `pagePlaywrightDriver.ts:148`); gửi sticker đã có (`pagePlaywrightDriver.ts:261`). Lịch sử tin cũ và thời gian gửi đúng vẫn chưa làm, nhận tin vẫn dựa vào thông báo MQTT của tài khoản cha chứ chưa chuyển sang GraphQL BizInbox.
 
 ## 1. Mục tiêu
 

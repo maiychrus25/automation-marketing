@@ -33,17 +33,36 @@ Hai thay đổi 6–7 do phía trung tâm thực hiện trước; cách tắt te
 lấy theo bản của trung tâm (trả về kết quả rỗng có thông báo, phủ đủ 7 hàm)
 thay vì ném lỗi.
 
-## ⚠️ Thư mục dữ liệu ĐÃ đổi — bản cài Deplao cũ không tự chuyển sang
+## Thư mục dữ liệu và chuyển dữ liệu
 
-`electron/main.ts` gọi `app.setName('AHV Connect')` trước `app.whenReady()`,
+### MaiHub (từ 26.9.0): tự chuyển từ AHV Connect
+
+`electron/main.ts` đặt tên ứng dụng và `userData` là `<appData>/MaiHub`. Lần đầu
+mở, nếu thư mục `MaiHub` chưa tồn tại mà `<appData>/AHV Connect` có, MaiHub **tự
+đổi tên** thư mục `AHV Connect` thành `MaiHub` (`migrateLegacyUserData` trong
+`src/services/app/legacyDataMigration.ts`, test ở
+`src/__tests__/app/legacyDataMigration.test.ts`) và xóa các tệp khóa Chromium của
+tiến trình cũ. Nếu AHV Connect còn chạy hoặc đổi tên lỗi, MaiHub hiện hộp thoại
+"Chưa chuyển được dữ liệu" và thoát; thoát AHV Connect rồi mở lại.
+
+Trên Linux và macOS, dữ liệu mã hóa bằng kho khóa hệ điều hành (`safeStorage`)
+gắn với tên ứng dụng, nên sau khi chuyển phải đăng nhập lại các tài khoản và
+nhập lại khóa API. Mã chỉ chuyển thư mục `AHV Connect`; thư mục `Deplao` của bản
+gốc **không** tự chuyển.
+
+### Thời AHV Connect (trước 26.9.0): bản cài Deplao cũ không tự chuyển sang
+
+Phần này mô tả chuyện **Deplao → AHV Connect**, không còn là cách MaiHub hoạt động.
+Khi đó `electron/main.ts` gọi `app.setName('AHV Connect')` trước `app.whenReady()`,
 nên Electron phân giải `userData` thành `%AppData%\AHV Connect` thay vì
 `%AppData%\Deplao`. Hệ quả: máy nào **đã dùng Deplao từ trước** thì khi cài AHV
 Connect sẽ mở ra một cơ sở dữ liệu **rỗng** — dữ liệu cũ vẫn còn nguyên trong
 thư mục `Deplao`, không mất, nhưng không tự nạp.
 
-Đây là chủ ý (hai bản chạy song song được, danh tính tách bạch). Nếu cần
-chuyển dữ liệu: chép `deplao-tool.db`, `deplao-config.json` và thư mục `media`
-từ `%AppData%\Deplao` sang `%AppData%\AHV Connect` khi ứng dụng đang tắt.
+Đó là chủ ý lúc ấy (hai bản chạy song song được, danh tính tách bạch). Dữ liệu
+Deplao vẫn chuyển bằng tay: chép `deplao-tool.db`, `deplao-config.json` và thư
+mục `media` từ `%AppData%\Deplao` sang thư mục dữ liệu của bản đang dùng
+(`%AppData%\MaiHub` với MaiHub) khi ứng dụng đang tắt.
 
 *Chưa kiểm chứng bằng cách chạy thật* — máy dựng không có Xvfb và chưa tải
 binary electron. Cần xác nhận lại ở lần chạy đầu tiên trên máy Windows.

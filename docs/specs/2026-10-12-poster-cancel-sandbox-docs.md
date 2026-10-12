@@ -108,13 +108,13 @@ Lý do không chờ: `before-quit` còn được gọi khi cài bản cập nh�
 
 **Module mới `src/services/browser/sandboxSupport.ts`** (hàm thuần, tiêm phụ thuộc để test):
 
-- `resolveSandbox(platform, enginePath, deps): Promise<'enabled' | 'disabled'>`
-  - `platform !== 'linux'` → `'enabled'`.
+- `probeSandbox(enginePath, deps): Promise<'enabled' | 'disabled'>` (`deps.platform` thay tham số `platform`; lớp `SandboxSupport` giữ cache)
+  - `deps.platform !== 'linux'` → `'enabled'`.
   - Linux → **chạy thử** nhân: `<engine> --headless=new --no-first-run --user-data-dir=<thư mục tạm> --dump-dom about:blank`, không có `--no-sandbox`, timeout 20 s.
     - Thoát mã 0 → `'enabled'`.
     - stderr chứa `No usable sandbox` → `'disabled'`.
     - Lỗi khác hoặc quá hạn → dự phòng theo cấu hình hệ thống: `apparmor_restrict_unprivileged_userns = 1`, hoặc `unprivileged_userns_clone = 0`, hoặc `user.max_user_namespaces = 0` → `'disabled'`; còn lại `'enabled'`.
-  - Thư mục tạm nằm trên đĩa (`<userData>/browser-engine/.sandbox-probe-<pid>`), xóa ngay sau khi chạy (không dùng `/tmp`, là RAM trên máy dev).
+  - Thư mục tạm nằm trên đĩa, cạnh tệp thực thi của nhân (`mkdtemp` tên `.sandbox-probe-*` trong thư mục chứa `chrome`, tức `<userData>/browser-engine/<phiên bản>/<bản dựng>/`), xóa ngay sau khi chạy (không dùng `/tmp`, là RAM trên máy dev).
   - Kết quả **lưu trong bộ nhớ theo `enginePath`** cho đến khi app tắt hoặc người dùng bấm "Kiểm tra lại".
 - Chạy thử lần đầu khi cần mở profile (lazy) hoặc khi màn Trình duyệt hỏi trạng thái; các lần mở sau dùng kết quả đã lưu.
 
@@ -128,16 +128,16 @@ Lý do không chờ: `before-quit` còn được gọi khi cài bản cập nh�
 
 **Báo người dùng:**
 
-- Kênh mới `browserProfile:sandboxStatus({ recheck })` trả `sandbox: 'enabled' | 'disabled' | 'unknown'` (`unknown` khi chưa cài nhân); `recheck: true` xóa kết quả đã lưu và chạy thử lại. `browserProfile:engineStatus` giữ nguyên, để danh sách profile không phải chờ lần chạy thử (sửa theo plan, 12/10/2026).
+- Kênh mới `browserProfile:sandboxStatus({ recheck })` trả `{ sandbox: 'enabled' | 'disabled', apparmorPath }`, hoặc `{ sandbox: 'unknown' }` khi chưa cài nhân; `recheck: true` xóa kết quả đã lưu và chạy thử lại. `browserProfile:engineStatus` giữ nguyên, để danh sách profile không phải chờ lần chạy thử (sửa theo plan, 12/10/2026).
 - Màn Trình duyệt (`BrowserProfilesView.tsx`), khi `sandbox === 'disabled'`: dải cảnh báo cùng kiểu dải "Cần tải nhân" hiện có:
   - "Máy đang chặn sandbox của trình duyệt (AppArmor/user namespaces). Profile vẫn mở được nhưng chạy không sandbox, kém an toàn hơn."
-  - Hướng dẫn có nút sao chép (giống profile `/etc/apparmor.d/chrome` Ubuntu cấp sẵn, khớp mọi phiên bản nhân nhờ đường dẫn có ký tự đại diện):
+  - Hướng dẫn có nút sao chép (giống profile `/etc/apparmor.d/chrome` Ubuntu cấp sẵn). Đường dẫn gắn profile **không cố định** trong tài liệu: giao diện điền vị trí nhân thật trên máy, đặt trong dấu nháy kép, lấy từ `browserProfile:sandboxStatus().apparmorPath` (`<thư mục browser-engine>/*/*/<tên tệp thực thi>`, ký tự đại diện khớp mọi phiên bản nhân). Lý do: thư mục dữ liệu không phải lúc nào cũng là `~/.config/MaiHub` (bản dev hoặc bản cũ có thể dùng `AHV Connect`, và đường dẫn có thể chứa khoảng trắng). Mẫu lệnh, với `<ĐƯỜNG DẪN NHÂN>` do giao diện điền:
 
 ```bash
 sudo tee /etc/apparmor.d/maihub-browser-engine >/dev/null <<'EOF'
 abi <abi/4.0>,
 include <tunables/global>
-profile maihub-browser-engine @{HOME}/.config/MaiHub/browser-engine/*/*/chrome flags=(unconfined) {
+profile maihub-browser-engine "<ĐƯỜNG DẪN NHÂN>" flags=(unconfined) {
   userns,
   include if exists <local/maihub-browser-engine>
 }

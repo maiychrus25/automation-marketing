@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS fb_poster_runs (
     kind         TEXT NOT NULL,             -- 'post' | 'join' | 'scan_groups' | 'collect_comments'
     mode         TEXT NOT NULL DEFAULT '',  -- 'group' | 'page' với kind='post', rỗng với kind khác
     params_json  TEXT NOT NULL,             -- tham số việc, KHÔNG chứa mật khẩu proxy
-    status       TEXT NOT NULL,             -- 'running' | 'done' | 'cancelled' | 'failed'
+    status       TEXT NOT NULL,             -- 'running' | 'done' | 'cancelled' | 'failed' | 'missed'
     error        TEXT NOT NULL DEFAULT '',
     started_at   INTEGER NOT NULL,
     finished_at  INTEGER DEFAULT NULL

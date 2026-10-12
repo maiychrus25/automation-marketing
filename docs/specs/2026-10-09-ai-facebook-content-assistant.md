@@ -1,8 +1,17 @@
 # Spec — Trợ Lý AI viết content + gen ảnh cho Facebook Poster
 
 - Ngày: 2026-10-09
-- Trạng thái: Draft (chờ anh review)
+- Trạng thái: Đã phát hành 26.15.0; giao diện đã gỡ ở 26.16.0, backend `ai:generateImage` còn
 - Nhánh dự kiến: `feat/ai-fb-content-assistant`
+
+## Ghi chú sau phát hành (12/10/2026)
+
+Thân tài liệu giữ nguyên như lúc viết. Các điểm dưới đây là chỗ mã nguồn bản 26.16.0 khác tài liệu:
+
+- Giao diện (mục 3.3, 3.4, 3.5): khối "Trợ Lý AI" trong `PostTab` và quản lý template thiệp đã bị gỡ khi làm lại màn Đăng Facebook kiểu Postiz (commit `e6d9a5b`, bản 26.16.0): không còn `AIAssistPanel` hay `fbContentPrompt`, `src/ui/features/facebookPoster/` không có lời gọi `ai:`, và không có mã `ai-templates`. Không giao diện nào gọi `ai:generateImage` (chỉ còn kiểu trong `src/ui/lib/ipc.ts`).
+- Endpoint (mục 3.2, "ẩn số"): đã xác định là một đường duy nhất `POST https://auto.ahvchat.com/v1/images/generations`; có trường `image` (một chuỗi hoặc mảng, URL hoặc data URL) thì là chế độ sửa ảnh, không có thì sinh mới (`src/services/ai/aiImage.ts:4`, `:10`, `:45`). Không dùng `/images/edits` hay chat completions.
+- Kiểu trả về (mục 3.2, 4): `{ localPath, size }`, không chỉ `localPath` (`src/services/ai/AIAssistantService.ts:562`); IPC trả `{ success, ...r }` (`electron/ipc/aiAssistantIpc.ts:244-249`) và từ chối ở chế độ nhân viên (`:246`). Đường dẫn là tuyệt đối để khớp `mediaPaths` của poster; model ảnh cố định `cx/gpt-5.5-image` (`AIAssistantService.ts:573`).
+- Tham số thực tế: `quality` mặc định `low`, `output_format` `jpeg`, thử lại tối đa 3 lần theo thông báo "reset after Ns", timeout 180000 ms (`src/services/ai/aiImage.ts:28-46`, `:50-55`, `:77-102`). Kích thước mặc định `1024x1024` như spec.
 
 ## 1. Bối cảnh & mục tiêu
 

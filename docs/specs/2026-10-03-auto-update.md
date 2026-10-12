@@ -3,9 +3,17 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 03/10/2026 |
-| Trạng thái | Đang triển khai |
+| Trạng thái | Đã phát hành 26.11.0 |
 | Nhánh | `feat/auto-update` |
 | Quyết định của chủ dự án | Kho `maiychrus25/automation-marketing` để công khai; macOS giữ như hiện tại (không ký số) |
+
+## Ghi chú sau phát hành (12/10/2026)
+
+Thân tài liệu giữ nguyên như lúc viết. Các điểm dưới đây là chỗ mã nguồn bản 26.16.0 khác tài liệu:
+
+- Bản chạy dev (`isDev`) không đặt lịch kiểm tra 15 giây và 6 giờ, và `update:check` chỉ trả trạng thái hiện có thay vì gọi mạng (`electron/ipc/updateIpc.ts:55`, `:59`); mục 3.4 và tiêu chí 1 chỉ đúng với bản đóng gói.
+- Lịch kiểm tra dùng `setTimeout`/`setInterval` có `unref()` ngay trong `registerUpdateIpc` (`electron/ipc/updateIpc.ts:60-61`), hằng số `FIRST_CHECK_DELAY_MS` = 15000 và `CHECK_INTERVAL_MS` = 6 giờ ở `:10-11`.
+- Việc "đang có việc Đăng Facebook" (tiêu chí 5) do `isFacebookPosterBusy` kiểm tra việc đang chạy, không tính lượt đang chờ trong hàng đợi lịch (`electron/ipc/facebookPosterIpc.ts:79`).
 
 ## 1. Mục tiêu
 

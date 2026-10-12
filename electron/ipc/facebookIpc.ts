@@ -913,9 +913,7 @@ export function registerFacebookIpc(): void {
     }
   });
 
-  /**
-   * Gửi nhiều ảnh/file cùng 1 request (batch attachments)
-   */
+  /** Liệt kê sticker FB theo keyword, vai Page (qua Business Suite). */
   ipcMain.handle('fb:listPageStickers', async (_event, params: { accountId: string; threadId: string; keyword: string }) => {
     try {
       const internalId = resolveInternalId(params.accountId);
@@ -954,6 +952,9 @@ export function registerFacebookIpc(): void {
     } catch (e: any) { return { success: false, error: e?.message }; }
   });
 
+  /**
+   * Gửi nhiều ảnh/file cùng 1 request (batch attachments)
+   */
   ipcMain.handle('fb:sendAttachments', async (_event, params: {
     accountId: string; threadId: string; filePaths: string[]; body?: string; typeChat?: 'user' | null;
     replyToMessageId?: string;

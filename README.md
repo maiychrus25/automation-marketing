@@ -29,12 +29,15 @@ phép **MIT**. Bản quyền của tác giả gốc được giữ nguyên trong
 [LICENSE](./LICENSE). Danh sách đầy đủ những thay đổi so với bản gốc nằm ở
 [NOTICE.md](./NOTICE.md).
 
-## Đăng Facebook: nhiều ảnh và lên lịch
+## Đăng Facebook: nhiều ảnh, lên lịch và bản nháp
 
 - Một bài có 1–10 ảnh (`jpg`, `jpeg`, `png`, `gif`, `webp`; mỗi ảnh tối đa 20 MB, tổng tối đa 100 MB) hoặc đúng 1 video; không trộn ảnh với video. Ảnh lên bài theo thứ tự đã sắp.
 - Lên lịch một lần hoặc lặp lại theo thứ trong tuần và giờ cố định (giờ của máy, tối đa một lượt mỗi ngày mỗi lịch); tối đa 200 lịch mỗi workspace. Ảnh của lịch được chép vào `<thư mục DB của workspace>/facebook-poster-media/<scheduleId>/` và xoá cùng lịch.
 - Lịch chỉ chạy khi app đang mở và máy thức. Quá giờ hẹn hơn 60 giây mà app chưa chạy thì lượt đó bị bỏ, ghi "Đã lỡ" vào Lịch sử và báo khi mở app; không đăng bù. Đang có việc khác thì lượt xếp hàng chờ tối đa 2 giờ.
-- Sửa lịch chỉ đổi được tên và thời gian; muốn đổi nội dung hoặc ảnh thì xoá và lên lịch lại. Không xoá được lịch khi lượt của lịch đó đang chạy. Chế độ nhân viên chưa hỗ trợ.
+- Sửa lịch đã duyệt chỉ đổi được tên và thời gian; muốn đổi nội dung hoặc ảnh thì xoá và lên lịch lại. Không xoá được lịch khi lượt của lịch đó đang chạy. Chế độ nhân viên chưa hỗ trợ.
+- Từ 26.16.0 có bản nháp: **Lưu nháp** chỉ cần nội dung; nháp không bao giờ tự chạy, phải **Duyệt** rồi chọn đăng ngay hoặc hẹn giờ. Nháp tính vào giới hạn 200 lịch. Trên calendar chỉ lịch một lần kéo-thả được để dời giờ; lịch lặp đổi giờ bằng nút **Sửa giờ**.
+- Bình luận đầu có thể đặt chạy sau 0–60 phút kể từ lúc bài lên (0 là ngay), cho cả nhóm lẫn Page.
+- Bấm **Hủy** (mã sau 26.16.0, sẽ có trong bản tính năng kế tiếp): trình duyệt của các profile chưa tới bước bấm Đăng/Tham gia đóng ngay và việc dừng trong vài giây; profile đang ở bước bấm Đăng/Tham gia được chờ cho xong để không mất dấu bài đã lên. Đổi hoặc xoá workspace khi có việc đang chạy chờ tối đa khoảng 55 giây; nếu việc chưa dừng thì không đổi và báo "Việc Đăng Facebook chưa dừng được. Thử lại sau." Thoát app không chờ; lượt đang dở được ghi lỗi ở lần mở sau để kiểm tra bài trên Facebook.
 
 ## Giới hạn đang áp dụng
 
@@ -44,9 +47,9 @@ phép **MIT**. Bản quyền của tác giả gốc được giữ nguyên trong
 | Máy chủ thượng nguồn: premium, quét nhóm, thanh toán, affiliate | **Đã chặn** (`backendService`) |
 | Tự động kiểm tra & tải bản cập nhật | **Bật từ 26.11.0** — xem mục [Tự cập nhật](#tự-cập-nhật) |
 | Trang donate / giới thiệu hoa hồng / link kho mã nguồn của tác giả | **Đã gỡ** |
-| Trần gửi theo ngày, giờ im lặng, cơ chế từ chối nhận | **Chưa có** |
+| Giờ im lặng, cơ chế từ chối nhận | **Chưa có** (trần gửi theo ngày và giờ bắt đầu ngày có trong campaign CRM, chỉ áp dụng khi được cấu hình) |
 
-Vì chưa có hàng rào gửi tin ở dòng cuối, bản này **chỉ dùng để trải nghiệm và
+Vì chưa có giờ im lặng và cơ chế từ chối nhận ở dòng cuối, bản này **chỉ dùng để trải nghiệm và
 đánh giá**, chưa dùng gửi tin hàng loạt cho khách thật.
 
 ## Rủi ro cần biết trước khi dùng
@@ -132,14 +135,18 @@ Thư mục dữ liệu là `%AppData%\MaiHub` (Windows), `~/.config/MaiHub` (Lin
 `~/Library/Application Support/MaiHub` (macOS). Tên tệp bên trong vẫn là
 `deplao-tool.db` / `deplao-config.json` của dự án gốc: xem [NOTICE.md](./NOTICE.md).
 
+## Trình duyệt trên Linux (sandbox)
+
+Mọi trình duyệt do MaiHub mở (profile và trình duyệt Business Suite của Page) chạy có sandbox. Riêng Linux đang chặn user namespaces (AppArmor), MaiHub chạy không sandbox và màn **Trình duyệt** hiện dải cảnh báo kèm lệnh `sudo` để sao chép; làm theo rồi bấm **Kiểm tra lại**. App không tự chạy `sudo`. Tính năng này là mã sau 26.16.0, sẽ có trong bản tính năng kế tiếp.
+
 ## Nâng cấp từ AHV Connect
 
 MaiHub có tên gói và appId khác, nên **cài song song** với AHV Connect chứ không
 thay thế. Các bước:
 
 1. Thoát AHV Connect hoàn toàn (kể cả biểu tượng ở khay hệ thống).
-2. Cài và mở MaiHub. Lần đầu mở, MaiHub tự chuyển thư mục dữ liệu `AHV Connect`
-   thành `MaiHub` (tin nhắn, CRM, workflow, proxy, profile trình duyệt đi theo).
+2. Cài và mở MaiHub. Lần đầu mở, nếu chưa có thư mục `MaiHub`, MaiHub tự chuyển
+   thư mục dữ liệu `AHV Connect` thành `MaiHub` (tin nhắn, CRM, workflow, proxy, profile trình duyệt đi theo).
    Nếu AHV Connect còn chạy, MaiHub báo và thoát; thoát AHV Connect rồi mở lại.
 3. Kiểm tra dữ liệu đã có trong MaiHub, rồi gỡ AHV Connect.
 

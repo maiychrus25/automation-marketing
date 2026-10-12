@@ -345,6 +345,11 @@ Những quyết định còn hiệu lực:
   đều qua `showConfirm`, nêu rõ hậu quả.
 - **Trạng thái đầy đủ.** Đang tải, lỗi kèm nút thử lại, rỗng, không khớp bộ lọc,
   chưa cài nhân trình duyệt, hệ điều hành chưa hỗ trợ.
+- **Dải cảnh báo sandbox (Linux).** Khi máy chặn user namespaces, dải vàng
+  `role="alert"` nằm cạnh dải "Cần tải nhân": một câu giải thích, khối lệnh
+  AppArmor có nút "Sao chép lệnh" và nút "Kiểm tra lại"; khối lệnh cuộn ngang
+  trong chính nó, không làm trang tràn ngang. Không hiện trên Windows/macOS
+  (`src/ui/features/browser/BrowserProfilesView.tsx`).
 - **Truy cập.** Nút chỉ có icon đều có `aria-label`; ô nhập có `label` hoặc
   `aria-label`; modal có `role="dialog"` và `aria-modal`; lỗi dùng `role="alert"`.
 - **Màu trạng thái** dùng bảng màu trạng thái mặc định của Tailwind (xanh lá =
@@ -356,9 +361,9 @@ Màn `src/ui/features/facebookPoster/` có ngoại lệ thị giác theo brief G
 
 - **Bố cục.** Không có rail riêng: 4 màn (Lịch đăng, Tham gia nhóm, Thu bình luận, Lịch sử) là sub-nav của mục "Đăng Facebook" ở sidebar chính. Top bar 64 px (tiêu đề 18 px), panel Kênh 260 px và Calendar, các panel cách nhau 1 px trên nền line, bo 12 px. Tiến độ mở theo nhu cầu ở dưới, tự hiện khi bắt đầu việc. Dưới 1100 px panel Kênh mở bằng nút; dưới 640 px Kênh mở trong vùng nội dung.
 - **Chữ và màu.** Plus Jakarta Sans 14 px, font Google Fonts tự lưu local với giấy phép OFL; không dùng logo/asset thương hiệu Postiz. Primary tím, now-line hồng. Light dùng muted và highlight đậm hơn source tham chiếu để giữ tương phản. Token và class gray/blue được scope để các component cũ cũng nhất quán.
-- **Calendar.** Tuần/ngày có 24 hàng giờ, header dính 62 px, khoảng cách 4 px; tháng là lưới 7 cột. Chỉ cuộn ngang trong lưới ở màn hẹp; nhiều bài cùng giờ xếp dọc để không đè nhau. Now-line kiểu Postiz, cập nhật mỗi phút: nhãn `H:mm` nền highlight thay chỗ nhãn giờ tròn trong cột Giờ, vạch chạy ngang mọi cột ngày của hàng giờ hiện tại ở đúng vị trí phút, chấm tròn ở cột hôm nay; không chặn chuột; tháng không có. Lịch lặp dời giờ cần xác nhận phạm vi các lần sau.
+- **Calendar.** Tuần/ngày có 24 hàng giờ, header dính 62 px, khoảng cách 4 px; tháng là lưới 7 cột. Chỉ cuộn ngang trong lưới ở màn hẹp; nhiều bài cùng giờ xếp dọc để không đè nhau. Now-line kiểu Postiz, cập nhật mỗi phút: nhãn `H:mm` nền highlight thay chỗ nhãn giờ tròn trong cột Giờ, vạch chạy ngang mọi cột ngày của hàng giờ hiện tại ở đúng vị trí phút, chấm tròn ở cột hôm nay; không chặn chuột; tháng không có. Chỉ lịch một lần kéo-thả được để dời giờ; lịch lặp không kéo-thả được (mọi ngày của chuỗi dùng chung một giờ, nên dời một lần sẽ dời cả các ngày khác) và đổi giờ bằng nút "Sửa giờ" (`src/ui/features/facebookPoster/calendarModel.ts:76`).
 - **Bản nháp (GĐ2).** Thẻ nháp viền nét đứt, dải giờ nền `--poster-draft`; nháp chưa có giờ dự kiến nằm ở dải "Nháp chưa xếp lịch" trên lưới; nháp quá giờ dự kiến hiện "Quá giờ dự kiến" và không tự chạy. Chi tiết nháp: Sửa · Duyệt & hẹn giờ · Đăng ngay (xác nhận) · Xoá (xác nhận). Modal soạn bài có "Lưu nháp" (chỉ cần nội dung). Dưới ô bình luận đầu có "Bình luận sau … phút" (0–60, 0 = ngay; tắt khi chưa có bình luận); thời gian chờ trừ vào khoảng nghỉ giữa các nhóm.
-- **Soạn bài.** Dialog native bo 24 px giữ focus và Escape; editor trái, preview Facebook phải, xuống một cột trên mobile. Nội dung chưa gửi giữ trong phiên đóng/mở dialog, chưa có draft DB. Bỏ AI theo brief; dùng lại chọn profile, nhóm/Trang, ảnh/video kéo-thả, bình luận đầu và dialog lịch một lần/lặp lại.
+- **Soạn bài.** Dialog native bo 24 px giữ focus và Escape; editor trái, preview Facebook phải, xuống một cột trên mobile. Nội dung chưa gửi giữ trong phiên đóng/mở dialog; muốn lưu lâu hơn thì "Lưu nháp" (bản nháp nằm trong DB, xem mục Bản nháp). Màn này không có panel AI; dùng chọn profile, nhóm/Trang, ảnh/video kéo-thả, bình luận đầu và dialog lịch một lần/lặp lại.
 - **Màu nhật ký.** info = `text-gray-400` (secondary), success = `text-green-400`, warning = `text-orange-400`, error = `text-red-400`; giờ `HH:mm:ss` màu `text-gray-500`.
 - **Chip trạng thái profile.** Chờ = gray-400, Đang chạy = blue-400, Xong = green-400, Lỗi = red-400, Đã hủy = orange-400; "Đang mở" của profile = yellow-400 như cảnh báo ở màn Trình duyệt.
 - **Một việc một lúc.** Khi có việc chạy, mọi nút Bắt đầu tắt và nêu lý do ngay cạnh nút; "Hủy" (đỏ) luôn qua `showConfirm`.
