@@ -25,20 +25,34 @@ const BLOCKING_SYSCTLS: Array<[string, string]> = [
     ['/proc/sys/user/max_user_namespaces', '0'],
 ];
 
-/** Chạy engine một lần (headless, không --no-sandbox) để biết sandbox có dùng được không. */
-export async function probeSandbox(enginePath: string, deps: SandboxProbeDeps): Promise<SandboxState> {
-    if (deps.platform !== 'linux') return 'enabled';
+/** Chạy engine headless một lần (thư mục tạm riêng, luôn dọn) và trả kết quả. */
+async function runProbe(enginePath: string, deps: SandboxProbeDeps, extraArgs: string[]): Promise<ProbeResult> {
     let dir: string | undefined;
     try {
         dir = deps.makeTempDir(path.dirname(enginePath));
-        const args = ['--headless=new', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${dir}`, '--dump-dom', 'about:blank'];
-        const result = await deps.run(enginePath, args, PROBE_TIMEOUT_MS);
-        if (result.code === 0) return 'enabled';
-        if (/No usable sandbox/i.test(result.stderr)) return 'disabled';
-    } catch {
-        // Không kết luận được: dùng sysctl bên dưới.
+        const args = [...extraArgs, '--headless=new', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${dir}`, '--dump-dom', 'about:blank'];
+        return await deps.run(enginePath, args, PROBE_TIMEOUT_MS);
     } finally {
         if (dir !== undefined) deps.removeDir(dir);
+    }
+}
+
+/**
+ * Chạy engine để biết sandbox có dùng được không. Lần đầu không --no-sandbox; nếu thoát lỗi không phải do
+ * timeout và không nói "No usable sandbox", chạy lại với --no-sandbox: chạy được nghĩa là sandbox là thủ phạm.
+ */
+export async function probeSandbox(enginePath: string, deps: SandboxProbeDeps): Promise<SandboxState> {
+    if (deps.platform !== 'linux') return 'enabled';
+    try {
+        const first = await runProbe(enginePath, deps, []);
+        if (first.code === 0) return 'enabled';
+        if (/No usable sandbox/i.test(first.stderr)) return 'disabled';
+        if (!first.timedOut) {
+            const second = await runProbe(enginePath, deps, ['--no-sandbox']);
+            if (second.code === 0) return 'disabled';
+        }
+    } catch {
+        // Không kết luận được: dùng sysctl bên dưới.
     }
     const blocked = BLOCKING_SYSCTLS.some(([file, value]) => deps.readSysctl(file) === value);
     return blocked ? 'disabled' : 'enabled';

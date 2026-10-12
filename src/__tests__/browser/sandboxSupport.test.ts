@@ -7,13 +7,13 @@ const USERNS_MAX = '/proc/sys/user/max_user_namespaces';
 
 type FakeDeps = SandboxProbeDeps & { runs: Array<{ executable: string; args: string[]; timeoutMs: number }>; removed: string[]; made: string[] };
 
-function makeDeps(opts: { platform?: NodeJS.Platform; result?: ProbeResult | Error; sysctl?: Record<string, string> } = {}): FakeDeps {
+function makeDeps(opts: { platform?: NodeJS.Platform; result?: ProbeResult | Error; results?: ProbeResult[]; sysctl?: Record<string, string> } = {}): FakeDeps {
     const deps: FakeDeps = {
         runs: [], removed: [], made: [],
         platform: opts.platform ?? 'linux',
         run: async (executable, args, timeoutMs) => {
             deps.runs.push({ executable, args, timeoutMs });
-            const result = opts.result ?? { code: 0, stderr: '', timedOut: false };
+            const result = opts.results?.[deps.runs.length - 1] ?? opts.result ?? { code: 0, stderr: '', timedOut: false };
             if (result instanceof Error) throw result;
             return result;
         },
@@ -65,6 +65,37 @@ describe('probeSandbox', () => {
     it('non-zero exit without the sandbox message falls back to sysctl', async () => {
         const deps = makeDeps({ result: { code: 1, stderr: 'other', timedOut: false }, sysctl: { [USERNS_MAX]: '0' } });
         expect(await probeSandbox(ENGINE, deps)).toBe('disabled');
+    });
+
+    it('non-zero first run but zero with --no-sandbox -> disabled, both temp dirs removed', async () => {
+        const deps = makeDeps({ results: [
+            { code: 1, stderr: 'Running as root without --no-sandbox is not supported', timedOut: false },
+            { code: 0, stderr: '', timedOut: false },
+        ] });
+        expect(await probeSandbox(ENGINE, deps)).toBe('disabled');
+        expect(deps.runs).toHaveLength(2);
+        expect(deps.runs[0].args).not.toContain('--no-sandbox');
+        expect(deps.runs[1].args).toContain('--no-sandbox');
+        expect(deps.made).toHaveLength(2);
+        expect(deps.removed).toEqual(deps.made);
+    });
+
+    it('non-zero both runs -> sysctl decides, both temp dirs removed', async () => {
+        const fail: ProbeResult = { code: 1, stderr: 'other', timedOut: false };
+        const blocked = makeDeps({ results: [fail, fail], sysctl: { [USERNS_MAX]: '0' } });
+        expect(await probeSandbox(ENGINE, blocked)).toBe('disabled');
+        expect(blocked.removed).toEqual(blocked.made);
+        expect(blocked.made).toHaveLength(2);
+        expect(await probeSandbox(ENGINE, makeDeps({ results: [fail, fail] }))).toBe('enabled');
+    });
+
+    it('timeout or throwing run never triggers a second run', async () => {
+        const timedOut = makeDeps({ result: TIMED_OUT });
+        await probeSandbox(ENGINE, timedOut);
+        expect(timedOut.runs).toHaveLength(1);
+        const thrown = makeDeps({ result: new Error('x') });
+        await probeSandbox(ENGINE, thrown);
+        expect(thrown.runs).toHaveLength(1);
     });
 
     it('run throwing falls back to sysctl', async () => {
@@ -126,7 +157,7 @@ describe('SandboxSupport', () => {
         await expect(support.get(ENGINE)).rejects.toThrow('boom');
         fail = false;
         expect(await support.get(ENGINE)).toBe('enabled');
-        expect(calls).toBe(2);
+        expect(calls).toBe(4); // two temp dirs per probe (plain + --no-sandbox)
     });
 
     it('caches per engine path', async () => {
