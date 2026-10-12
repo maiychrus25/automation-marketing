@@ -423,6 +423,26 @@ class DatabaseService {
         db!.prepare(sql).run(...params);
     }
 
+    /**
+     * Repair Zalo group contacts that older versions stored as contact_type 'user'.
+     * A Zalo thread that has group messages (thread_type = 1) is a group by definition.
+     * Works before `initialized` is set (called from migrate()). Returns the number of rows changed.
+     */
+    public repairZaloGroupContactTypes(): number {
+        const result = db!.prepare(
+            `UPDATE contacts SET contact_type = 'group'
+             WHERE contact_type IS NOT 'group'
+               AND (channel IS NULL OR channel = 'zalo')
+               AND EXISTS (
+                 SELECT 1 FROM messages m
+                 WHERE m.owner_zalo_id = contacts.owner_zalo_id
+                   AND m.thread_id = contacts.contact_id
+                   AND m.thread_type = 1
+               )`
+        ).run();
+        return result.changes;
+    }
+
     /** Execute SQL without flushing to disk - same as run() now (WAL auto-writes) */
     private runNoSave(sql: string, params: any[] = []): void {
         db!.prepare(sql).run(...params);
@@ -1609,6 +1629,27 @@ class DatabaseService {
             }
         } catch (err: any) {
             Logger.warn(`[DatabaseService] Migration channel column: ${err.message}`);
+        }
+
+        // ─── Migration: repair Zalo groups stored with contact_type 'user' (once per DB) ───
+        // Runs after the channel column and message indexes exist. Uses queryOne/run directly
+        // because `initialized` is not yet true in migrate().
+        try {
+            const groupTypeKey = 'migration_zalo_group_contact_type_v1';
+            const groupTypeFlag = this.queryOne<{ value: string }>('SELECT value FROM app_settings WHERE key = ?', [groupTypeKey]);
+            if (groupTypeFlag?.value !== 'done') {
+                const repaired = this.repairZaloGroupContactTypes();
+                if (repaired > 0) {
+                    Logger.log(`[DatabaseService] ✅ Migration: repaired contact_type of ${repaired} Zalo group(s) stored as user`);
+                }
+                this.run(
+                    `INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+                    [groupTypeKey, 'done']
+                );
+            }
+        } catch (err: any) {
+            Logger.warn(`[DatabaseService] Migration zalo group contact_type: ${err.message}`);
         }
 
         // ─── Migration: copy fb_* data → unified tables (Phase B3) ─────────────

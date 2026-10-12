@@ -47,4 +47,40 @@ describe('group contact_type is kept as group', () => {
     service.updateContactProfile(OWNER, 'group2', 'G2 renamed', '');
     expect(contactType('group2')).toBe('group');
   });
+
+  describe('repairZaloGroupContactTypes', () => {
+    const saveMsg = (threadId: string, type: number, msgId: string) =>
+      service.saveMessage(OWNER, {
+        type, threadId, isSelf: false,
+        data: { msgId, uidFrom: 'u1', ts: String(Date.now()), msgType: 'webchat', content: 'hi' },
+      });
+
+    test('repairs a zalo group stored as user when it has group messages', async () => {
+      service.updateContactProfile(OWNER, 'g3', 'G3', '', '', '');
+      await saveMsg('g3', 1, 'rm1');
+      service.run(`UPDATE contacts SET contact_type='user' WHERE owner_zalo_id=? AND contact_id='g3'`, [OWNER]);
+      expect(contactType('g3')).toBe('user');
+      expect(service.repairZaloGroupContactTypes()).toBeGreaterThanOrEqual(1);
+      expect(contactType('g3')).toBe('group');
+    });
+
+    test('leaves a 1:1 contact alone', async () => {
+      service.updateContactProfile(OWNER, 'u9', 'U9', '', '', '');
+      await saveMsg('u9', 0, 'rm2');
+      service.repairZaloGroupContactTypes();
+      expect(contactType('u9')).toBe('user');
+    });
+
+    test('leaves non-zalo channels alone', async () => {
+      service.updateContactProfile(OWNER, 'fb1', 'FB1', '', '', '');
+      await saveMsg('fb1', 1, 'rm3');
+      service.run(`UPDATE contacts SET contact_type='user', channel='facebook' WHERE owner_zalo_id=? AND contact_id='fb1'`, [OWNER]);
+      service.repairZaloGroupContactTypes();
+      expect(contactType('fb1')).toBe('user');
+    });
+
+    test('is idempotent', () => {
+      expect(service.repairZaloGroupContactTypes()).toBe(0);
+    });
+  });
 });

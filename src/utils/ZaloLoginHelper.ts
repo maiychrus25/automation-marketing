@@ -370,6 +370,12 @@ class ZaloLoginHelper {
                 existingMembers = bossDb.getGroupMembers(zaloId, groupId) || [];
             });
 
+            // Self-heal: this id is a genuine group, so fix a row older versions stored as 'user'.
+            // Name/avatar are passed empty so the upsert keeps the stored values (only contact_type changes).
+            if (existing && existing.contact_type !== 'group') {
+                EventBroadcaster.runOnBossDb((bossDb) => bossDb.updateContactProfile(zaloId, groupId, '', '', '', 'group'));
+            }
+
             // Kiểm tra DB bằng single-row lookup thay vì load toàn bộ contacts
             const hasRealName = existing && existing.display_name &&
                 existing.display_name !== groupId && !existing.display_name.match(/^\d+$/);
