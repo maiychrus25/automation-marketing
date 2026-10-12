@@ -167,10 +167,12 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             const check = wm().canDeleteWorkspace(id);
             if (!check.success) return check;
 
+            // Any delete waits for a running switch: during A→B the manager already says B is active, but A's DB is still in use
+            if (switchInProgress) return { success: false, error: SWITCH_BUSY_ERROR };
+
             // Record whether this is the currently active workspace BEFORE deleting
             if (wm().getActiveWorkspaceId() !== id) return wm().deleteWorkspace(id);
 
-            if (switchInProgress) return { success: false, error: SWITCH_BUSY_ERROR };
             switchInProgress = true;
             try {
                 if (!(await stopPosterForSwitch())) {

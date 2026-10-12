@@ -114,6 +114,23 @@ describe('workspace:switch', () => {
         expect((await call('workspace:switch', 'new')).success).toBe(true);
     });
 
+    it('refuses deleting the previous workspace while a switch is waiting', async () => {
+        const gate = deferred<boolean>();
+        mockPoster.cancelAndWait.mockReturnValueOnce(gate.promise);
+        const first = call('workspace:switch', 'new');
+        await new Promise((r) => setImmediate(r));
+
+        // switchWorkspace already made 'new' active, so 'old' looks non-active
+        mockWm.getActiveWorkspaceId.mockReturnValue('new');
+        expect(await call('workspace:delete', 'old')).toEqual({ success: false, error: BUSY });
+        expect(mockWm.deleteWorkspace).not.toHaveBeenCalled();
+
+        gate.resolve(true);
+        await first;
+        expect(await call('workspace:delete', 'old')).toEqual({ success: true });
+        expect(mockWm.deleteWorkspace).toHaveBeenCalledWith('old');
+    });
+
     it('clears the in-progress flag after a failed switch', async () => {
         mockPoster.cancelAndWait.mockResolvedValueOnce(false).mockResolvedValue(true);
         await call('workspace:switch', 'new');
