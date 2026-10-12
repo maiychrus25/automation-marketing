@@ -80,10 +80,10 @@ Việc phân biệt "lỗi do phiên bị đóng vì hủy" với lỗi thật: 
 `cancelAndWaitFacebookPosterJobs` đổi thành ba bước, tổng tối đa khoảng 55 giây:
 
 1. `cancel()` (mục 3.2) rồi chờ việc kết thúc tối đa **45 giây** (đủ cho đoạn không thể quay lại dài nhất ~40 s).
-2. Quá hạn: **đóng cứng** — `closeAllBrowserProfiles()` đóng mọi phiên, kể cả profile đang ở đoạn không thể quay lại, rồi chờ thêm tối đa **10 giây**. Đích đang ở đoạn đó ghi `failed` với lỗi "Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook".
+2. Quá hạn: **đóng cứng** — `closeAllBrowserProfiles()` đóng mọi phiên, kể cả profile đang ở đoạn không thể quay lại, rồi chờ thêm tối đa **10 giây**. Đích đang ở đoạn đó ghi `failed` với lỗi "Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook" (việc Tham gia nhóm: "… kiểm tra yêu cầu vào nhóm trên Facebook") (sửa sau review cuối, 12/10/2026).
 3. Nếu sau đó việc vẫn chưa kết thúc (không mong đợi): **không đổi workspace**, trả lỗi "Việc Đăng Facebook chưa dừng được. Thử lại sau." Đảm bảo tuyệt đối không ghi sang DB mới.
 
-Áp dụng cho cả hai đường đổi DB trong `electron/ipc/workspaceIpc.ts` (`workspace:switch` và xóa workspace đang active). Trong lúc chờ, giao diện nhận sự kiện để hiện "Đang dừng việc Đăng Facebook…" (toast hiện có).
+Áp dụng cho cả hai đường đổi DB trong `electron/ipc/workspaceIpc.ts` (`workspace:switch` và xóa workspace đang active). Xóa workspace chỉ dừng việc sau khi `WorkspaceManager.canDeleteWorkspace` chấp nhận (xóa bị từ chối thì việc chạy tiếp), scheduler luôn chạy lại trong `finally`, và cờ `switchInProgress` từ chối lần chuyển/xóa-đang-hoạt động chồng lên với "Đang chuyển workspace, thử lại sau." (sửa sau review cuối, 12/10/2026). Trong lúc chờ, giao diện nhận sự kiện để hiện "Đang dừng việc Đăng Facebook…" (toast hiện có).
 
 ### 3.4 Thoát app
 
@@ -114,7 +114,8 @@ Lý do không chờ: `before-quit` còn được gọi khi cài bản cập nh�
   - Linux → **chạy thử** nhân: `<engine> --headless=new --no-first-run --user-data-dir=<thư mục tạm> --dump-dom about:blank`, không có `--no-sandbox`, timeout 20 s.
     - Thoát mã 0 → `'enabled'`.
     - stderr chứa `No usable sandbox` → `'disabled'`.
-    - Lỗi khác hoặc quá hạn → dự phòng theo cấu hình hệ thống: `apparmor_restrict_unprivileged_userns = 1`, hoặc `unprivileged_userns_clone = 0`, hoặc `user.max_user_namespaces = 0` → `'disabled'`; còn lại `'enabled'`.
+    - Thoát lỗi khác (không phải quá hạn) → chạy lại một lần với `--no-sandbox` (thư mục tạm mới, xóa như lần đầu); mã 0 → `'disabled'` (sửa sau review cuối, 12/10/2026).
+    - Còn lại (hai lần lỗi, quá hạn, hoặc chạy ném lỗi) → dự phòng theo cấu hình hệ thống: `apparmor_restrict_unprivileged_userns = 1`, hoặc `unprivileged_userns_clone = 0`, hoặc `user.max_user_namespaces = 0` → `'disabled'`; còn lại `'enabled'`.
   - Thư mục tạm nằm trên đĩa, cạnh tệp thực thi của nhân (`mkdtemp` tên `.sandbox-probe-*` trong thư mục chứa `chrome`, tức `<userData>/browser-engine/<phiên bản>/<bản dựng>/`), xóa ngay sau khi chạy (không dùng `/tmp`, là RAM trên máy dev).
   - Kết quả **lưu trong bộ nhớ theo `enginePath`** cho đến khi app tắt hoặc người dùng bấm "Kiểm tra lại".
 - Chạy thử lần đầu khi cần mở profile (lazy) hoặc khi màn Trình duyệt hỏi trạng thái; các lần mở sau dùng kết quả đã lưu.
