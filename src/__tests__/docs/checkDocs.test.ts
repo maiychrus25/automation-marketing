@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -52,6 +54,12 @@ describe('check-docs', () => {
     it('reports a wrong value', () => {
       expect(checkDocs.checkConstantMarkers('D.md', marker('src/a.ts', 'MAX_A', 11), read)).toHaveLength(1);
     });
+    it('reports malformed markers instead of ignoring them', () => {
+      for (const bad of ['src/a.ts#MAX_A = 1_000', 'src/a.ts#MAX_A = 20MB', 'src/a.ts MAX_A = 10']) {
+        expect(checkDocs.checkConstantMarkers('D.md', `<!-- docs-check: ${bad} -->`, read)).toHaveLength(1);
+      }
+      expect(checkDocs.checkConstantMarkers('D.md', '<!-- docs-check: src/a.ts#MAX_A = 10', read)).toHaveLength(1);
+    });
     it('reports a missing constant or file', () => {
       expect(checkDocs.checkConstantMarkers('D.md', marker('src/a.ts', 'MAX_B', 10), read)).toHaveLength(1);
       expect(checkDocs.checkConstantMarkers('D.md', marker('src/zz.ts', 'MAX_A', 10), read)).toHaveLength(1);
@@ -70,6 +78,25 @@ describe('check-docs', () => {
       const errors = checkDocs.checkPaths('D.md', '`src/missing.ts`', exists);
       expect(errors).toHaveLength(1);
       expect(errors[0]).toContain('src/missing.ts');
+    });
+  });
+
+  describe('runChecks on fixtures', () => {
+    const write = (dir: string, version: string, extra: string): void => {
+      fs.writeFileSync(path.join(dir, 'package.json'), version);
+      fs.writeFileSync(path.join(dir, 'SYSTEM_DOCUMENTATION.md'), `| Phiên bản ứng dụng được khảo sát | \`1.0.0\` |\n${extra}\n`);
+      for (const f of ['README.md', 'DESIGN.md', 'AGENTS.md']) fs.writeFileSync(path.join(dir, f), '');
+    };
+    it('errors when the doc has zero markers, and on invalid package.json', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-docs-'));
+      try {
+        write(dir, '{"version":"1.0.0"}', 'no markers');
+        expect(checkDocs.runChecks(dir)).toEqual([expect.stringContaining('không có dấu docs-check')]);
+        write(dir, '{oops', 'no markers');
+        expect(checkDocs.runChecks(dir).some((e: string) => e.startsWith('package.json:'))).toBe(true);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 

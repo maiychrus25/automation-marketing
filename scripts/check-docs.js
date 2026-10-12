@@ -52,8 +52,10 @@ function checkVersion(docText, version) {
 function checkConstantMarkers(docFile, docText, readFile) {
   const errors = [];
   const re = /<!--\s*docs-check:\s*(\S+?)#(\w+)\s*=\s*(\d+)\s*-->/g;
+  const consumed = new Set();
   let m;
   while ((m = re.exec(docText)) !== null) {
+    consumed.add(m.index);
     const [, rel, name, expected] = m;
     const source = readFile(rel);
     if (source === null) {
@@ -66,6 +68,10 @@ function checkConstantMarkers(docFile, docText, readFile) {
     } else if (actual !== Number(expected)) {
       errors.push(`${docFile}: ${rel}#${name} là ${actual} trong code nhưng tài liệu ghi ${expected}`);
     }
+  }
+  const loose = /<!--\s*docs-check\b[^\n]*/gi;
+  while ((m = loose.exec(docText)) !== null) {
+    if (!consumed.has(m.index)) errors.push(`${docFile}: marker không đúng định dạng: ${m[0].trim()}`);
   }
   return errors;
 }
@@ -103,8 +109,15 @@ function runChecks(root) {
   if (pkg === null) errors.push('package.json: không đọc được');
   if (system === null) errors.push('SYSTEM_DOCUMENTATION.md: không đọc được');
   if (pkg !== null && system !== null) {
-    errors.push(...checkVersion(system, JSON.parse(pkg).version));
+    try {
+      errors.push(...checkVersion(system, JSON.parse(pkg).version));
+    } catch (e) {
+      errors.push(`package.json: JSON không hợp lệ: ${e.message}`);
+    }
     errors.push(...checkConstantMarkers('SYSTEM_DOCUMENTATION.md', system, readFile));
+    if (!/<!--\s*docs-check:\s*\S+?#\w+\s*=\s*\d+\s*-->/.test(system)) {
+      errors.push('SYSTEM_DOCUMENTATION.md: không có dấu docs-check nào');
+    }
   }
   for (const doc of PATH_DOCS) {
     const text = readFile(doc);
