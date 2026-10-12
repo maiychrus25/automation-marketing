@@ -17,6 +17,7 @@ import * as fs from 'fs';
 import { google } from 'googleapis';
 import { parseStructuredResponse, isValidStructuredResponse } from '../../utils/aiUtils';
 import { CHANNEL } from '../../ui/lib/channelHelper';
+import { buildZaloReactionCall } from './zaloReaction';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1005,6 +1006,7 @@ class WorkflowEngineService {
         isGroup,
         groupName:   data.groupName     || (msg as any).groupName  || '',
         msgId:       msgData.msgId      || (msg as any).msgId       || data.msgId    || '',
+        cliMsgId:    msgData.cliMsgId   || (msg as any).cliMsgId    || data.cliMsgId || '',
         timestamp:   Number(msgData.ts) || Number((msg as any).ts) || data.timestamp || Date.now(),
         isSelf:      !!((msg as any).isSelf || data.isSelf),
         zaloId:      data.zaloId || '',
@@ -1465,8 +1467,15 @@ class WorkflowEngineService {
 
       case 'zalo.addReaction': {
         const api = this.getApi(ctx.pageId);
-        await api.addReaction({ msgId: cfg.msgId, clientMsgId: cfg.clientMsgId || '' } as any, Number(cfg.reactionType ?? 1));
-        return { success: true };
+        // Tin trong DB bổ sung thread/cliMsgId khi trigger hoặc cấu hình không có.
+        const lookupMsgId = String(cfg.msgId || ctx.trigger?.msgId || '').trim();
+        const lookupThreadId = String(cfg.threadId || ctx.trigger?.threadId || '').trim();
+        const storedMessage = lookupMsgId
+          ? DatabaseService.getInstance().getMessageById(ctx.trigger?.zaloId || ctx.pageId, lookupMsgId, lookupThreadId || undefined)
+          : undefined;
+        const { reaction, dest } = buildZaloReactionCall(cfg, ctx.trigger, storedMessage);
+        await api.addReaction(reaction, dest);
+        return { success: true, msgId: dest.data.msgId, cliMsgId: dest.data.cliMsgId, reaction };
       }
 
       case 'zalo.assignLabel': {

@@ -186,15 +186,15 @@ export function registerZaloIpc() {
     );
 
     wrap('zalo:sendImage', (s, p) =>
-        s.sendImage(FileStorageService.resolveAbsolutePath(p.filePath), p.threadId, p.type, p.message, p.quote)
+        s.sendImage(FileStorageService.resolveAbsolutePath(p.filePath), p.threadId, p.type ?? p.threadType, p.message, p.quote)
     );
 
     wrap('zalo:sendImages', (s, p) =>
-        s.sendImages((p.filePaths || []).map((fp: string) => FileStorageService.resolveAbsolutePath(fp)), p.threadId, p.type, p.quote)
+        s.sendImages((p.filePaths || []).map((fp: string) => FileStorageService.resolveAbsolutePath(fp)), p.threadId, p.type ?? p.threadType, p.quote)
     );
 
     wrap('zalo:sendFile', (s, p) =>
-        s.sendFile(FileStorageService.resolveAbsolutePath(p.filePath), p.threadId, p.type, p.quote)
+        s.sendFile(FileStorageService.resolveAbsolutePath(p.filePath), p.threadId, p.type ?? p.threadType, p.quote)
     );
 
     wrap('zalo:sendVoice', (s, p) =>

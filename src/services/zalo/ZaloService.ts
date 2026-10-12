@@ -1435,6 +1435,19 @@ export default class ZaloService {
     public async sendImage(filePath: string, threadId: string, type: ThreadType = ThreadType.User, caption?: string, quote: any = null): Promise<any> {
         if (!this.api) throw new Error("API not initialized");
         try {
+            if (!filePath || !fs.existsSync(filePath)) {
+                throw new Error('Không tìm thấy tệp ảnh để gửi');
+            }
+            const threadType = convertThreadType(type);
+            const normalizedThreadId = String(threadId || '');
+            if (!normalizedThreadId) throw new Error('Thiếu hội thoại nhận ảnh');
+
+            // zca-js xử lý GIF riêng: truyền Buffer ảnh làm endpoint upload nhận payload sai.
+            if (path.extname(filePath).toLowerCase() === '.gif') {
+                const gifContent: MessageContent = { msg: caption || '', attachments: [filePath] };
+                return await this.sendMessage(gifContent as any, normalizedThreadId, threadType, null, quote);
+            }
+
             const buffer = fs.readFileSync(filePath);
             const baseName = path.basename(filePath);
             let width = 0, height = 0;
@@ -1445,7 +1458,7 @@ export default class ZaloService {
                 metadata: { totalSize: buffer.length, width, height },
             };
             const content: MessageContent = { msg: caption || '', attachments: [attachment] };
-            return await this.sendMessage(content as any, threadId, type, null, quote);
+            return await this.sendMessage(content as any, normalizedThreadId, threadType, null, quote);
         } catch (error: any) {
             throw new Error('sendImage error: ' + error.message);
         }
@@ -1491,10 +1504,14 @@ export default class ZaloService {
     public async sendImages(filePaths: string[], threadId: string, type: ThreadType = ThreadType.User, quote: any = null): Promise<any> {
         if (!this.api) throw new Error("API not initialized");
         if (!filePaths.length) return [];
+        const threadType = convertThreadType(type);
+        const normalizedThreadId = String(threadId || '');
+        if (!normalizedThreadId) throw new Error('Thiếu hội thoại nhận ảnh');
         // Nếu chỉ 1 ảnh, dùng sendImage thông thường
-        if (filePaths.length === 1) return this.sendImage(filePaths[0], threadId, type, undefined, quote);
+        if (filePaths.length === 1) return this.sendImage(filePaths[0], normalizedThreadId, threadType, undefined, quote);
         try {
             const attachments = filePaths.map(filePath => {
+                if (!filePath || !fs.existsSync(filePath)) throw new Error('Không tìm thấy một trong các tệp ảnh để gửi');
                 const buffer = fs.readFileSync(filePath);
                 const baseName = path.basename(filePath);
                 // zca-js requires filename to contain an extension (`${string}.${string}`)
@@ -1509,7 +1526,7 @@ export default class ZaloService {
                 };
             });
             const content: MessageContent = { msg: '', attachments };
-            return await this.sendMessage(content as any, threadId, type, null, quote);
+            return await this.sendMessage(content as any, normalizedThreadId, threadType, null, quote);
         } catch (error: any) {
             throw new Error('sendImages error: ' + error.message);
         }
