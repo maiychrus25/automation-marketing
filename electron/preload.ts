@@ -882,6 +882,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveGroup:     (group: { id?: number; name: string; color?: string }) => ipcRenderer.invoke('browserProfile:saveGroup', group),
     deleteGroup:   (id: number)                        => ipcRenderer.invoke('browserProfile:deleteGroup', { id }),
     engineStatus:  ()                                  => ipcRenderer.invoke('browserProfile:engineStatus'),
+    sandboxStatus: (recheck?: boolean)                 => ipcRenderer.invoke('browserProfile:sandboxStatus', { recheck: !!recheck }),
     installEngine: ()                                  => ipcRenderer.invoke('browserProfile:installEngine'),
   },
 

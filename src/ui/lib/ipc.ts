@@ -668,6 +668,7 @@ declare global {
         saveGroup:     (group: { id?: number; name: string; color?: string }) => Promise<{ success: boolean; group?: BrowserProfileGroup; error?: string }>;
         deleteGroup:   (id: number) => Promise<{ success: boolean; error?: string }>;
         engineStatus:  () => Promise<{ success: boolean; supported?: boolean; installed?: boolean; version?: string; error?: string }>;
+        sandboxStatus: (recheck?: boolean) => Promise<{ success: boolean; sandbox?: 'enabled' | 'disabled' | 'unknown'; apparmorPath?: string; error?: string }>;
         installEngine: () => Promise<{ success: boolean; supported?: boolean; installed?: boolean; version?: string; error?: string }>;
       };
       facebookPoster: {

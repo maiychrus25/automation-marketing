@@ -44,6 +44,7 @@ function makeHarness(options: {
     forwarderFails?: boolean;
     useDefaultTerminate?: boolean;
     launchAutomation?: BrowserProfileServiceDeps['launchAutomation'];
+    resolveSandbox?: BrowserProfileServiceDeps['resolveSandbox'];
 } = {}): Harness {
     const profilesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profiles-test-'));
     const harness: Harness = {
@@ -81,6 +82,7 @@ function makeHarness(options: {
         terminate: options.useDefaultTerminate ? undefined : (child, force) => { harness.terminated.push({ child, force }); },
         onStatusChanged: (ids) => { harness.statuses.push(ids); },
         launchAutomation: options.launchAutomation,
+        resolveSandbox: options.resolveSandbox,
     };
     harness.service = new BrowserProfileService(deps);
     return harness;
@@ -111,6 +113,40 @@ describe('BrowserProfileService', () => {
         expect(h.service.getRunningIds()).toEqual(['a']);
         expect(h.touched).toEqual(['a']);
         expect(h.statuses).toEqual([['a']]);
+    });
+
+    it('passes --no-sandbox only when the sandbox is disabled', async () => {
+        const asked: string[] = [];
+        const make = (state: 'enabled' | 'disabled') => create({
+            platform: 'linux',
+            resolveSandbox: async (exe) => { asked.push(exe); return state; },
+            launchAutomation: async (_exe, _dir, args) => { launched.push(args); return { on: () => undefined, close: async () => undefined } as any; },
+        });
+        const launched: string[][] = [];
+
+        const enabled = make('enabled');
+        await enabled.service.open('a');
+        expect(enabled.spawned[0].args).not.toContain('--no-sandbox');
+        await enabled.service.openForAutomation('b');
+        expect(launched[0]).not.toContain('--no-sandbox');
+
+        const disabled = make('disabled');
+        await disabled.service.open('a');
+        expect(disabled.spawned[0].args).toContain('--no-sandbox');
+        await disabled.service.openForAutomation('b');
+        expect(launched[1]).toContain('--no-sandbox');
+
+        expect(asked).toEqual(['/engine/chrome', '/engine/chrome', '/engine/chrome', '/engine/chrome']);
+    });
+
+    it('does not spawn when the profile is closed while the sandbox check is running', async () => {
+        let release: (state: 'enabled') => void = () => undefined;
+        const h = create({ resolveSandbox: () => new Promise((resolve) => { release = resolve; }) });
+        const opening = h.service.open('a');
+        h.service.closeAll();
+        release('enabled');
+        await expect(opening).rejects.toThrow('Đã hủy mở trình duyệt');
+        expect(h.spawned).toHaveLength(0);
     });
 
     it('opens a profile with proxy through a local forwarder', async () => {

@@ -7,6 +7,7 @@ import type { BrowserProfile } from '../../models/browserProfile';
 import type { ProxyConfig } from '../../models/proxy';
 import { buildLaunchArgs, hostPersona, type Persona } from './fingerprint';
 import { ProxyForwarder } from './ProxyForwarder';
+import type { SandboxState } from './sandboxSupport';
 
 export const MAX_RUNNING_PROFILES = 30;
 /** How long close() waits for a graceful exit before force-killing the browser. */
@@ -50,6 +51,8 @@ export interface BrowserProfileServiceDeps {
     onStatusChanged?: (runningIds: string[]) => void;
     /** Launches the engine through Playwright (--remote-debugging-pipe). Defaults to automationLauncher. */
     launchAutomation?: LaunchAutomation;
+    /** Whether the engine can run with its sandbox. Defaults to the old behaviour: Linux runs without it. */
+    resolveSandbox?: (executable: string) => Promise<SandboxState>;
 }
 
 interface RunningEntry {
@@ -88,12 +91,14 @@ export class BrowserProfileService {
     private readonly createForwarder: (proxy: ProxyConfig) => ForwarderLike;
     private readonly terminate: (child: BrowserProcess, force: boolean) => void;
     private readonly launchAutomation: LaunchAutomation;
+    private readonly resolveSandbox: (executable: string) => Promise<SandboxState>;
 
     constructor(private readonly deps: BrowserProfileServiceDeps) {
         this.platform = deps.platform || process.platform;
         this.spawnBrowser = deps.spawnBrowser || ((executable, args) => spawn(executable, args, { stdio: 'ignore' }));
         this.createForwarder = deps.createForwarder || ((proxy) => new ProxyForwarder(proxy));
         this.terminate = deps.terminate || defaultTerminate(this.platform);
+        this.resolveSandbox = deps.resolveSandbox || (async () => (this.platform === 'linux' ? 'disabled' : 'enabled'));
         // Lazy require keeps playwright-core out of app start-up.
         this.launchAutomation = deps.launchAutomation
             || ((exe, dir, args) => require('./automationLauncher').launchAutomationBrowser(exe, dir, args));
@@ -146,9 +151,11 @@ export class BrowserProfileService {
             }
             const userDataDir = this.getProfileDir(id);
             fs.mkdirSync(userDataDir, { recursive: true });
+            const noSandbox = (await this.resolveSandbox(executable)) === 'disabled';
+            this.assertNotCancelled(id, entry);
             const child = this.spawnBrowser(
                 executable,
-                buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort, noSandbox: this.platform === 'linux' }),
+                buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort, noSandbox }),
             );
             await new Promise<void>((resolve, reject) => {
                 child.once('spawn', () => resolve());
@@ -192,7 +199,9 @@ export class BrowserProfileService {
             }
             const userDataDir = this.getProfileDir(id);
             fs.mkdirSync(userDataDir, { recursive: true });
-            const args = ['--remote-debugging-pipe', ...buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort, noSandbox: this.platform === 'linux' })];
+            const noSandbox = (await this.resolveSandbox(executable)) === 'disabled';
+            this.assertNotCancelled(id, entry);
+            const args = ['--remote-debugging-pipe', ...buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort, noSandbox })];
             context = await this.launchAutomation(executable, userDataDir, args);
             if (this.running.get(id) !== entry) {
                 await context.close().catch(() => undefined);

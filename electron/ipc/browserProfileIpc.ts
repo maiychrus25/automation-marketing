@@ -8,6 +8,7 @@ import AppModeManager from '../../src/utils/AppModeManager';
 import Logger from '../../src/utils/Logger';
 import { BrowserEngineManager } from '../../src/services/browser/BrowserEngineManager';
 import { BrowserProfileService } from '../../src/services/browser/BrowserProfileService';
+import { getSandboxSupport } from '../../src/services/browser/sandboxSupport';
 import { generateFingerprint, isValidLanguage, isValidTimezone } from '../../src/services/browser/fingerprint';
 
 const MAX_NAME_LENGTH = 100;
@@ -43,6 +44,7 @@ function getProfileService(): BrowserProfileService {
             },
             getExecutablePath: () => getEngineManager().getExecutablePath(),
             getProfilesDir,
+            resolveSandbox: (exe) => getSandboxSupport().get(exe),
             onStatusChanged: (runningIds) => EventBroadcaster.emit('browserProfile:statusChanged', { runningIds }),
         });
     }
@@ -229,6 +231,16 @@ export function registerBrowserProfileIpc(): void {
     });
 
     handle('browserProfile:engineStatus', () => getEngineManager().getStatus());
+
+    handle('browserProfile:sandboxStatus', async (params) => {
+        const exe = getEngineManager().getExecutablePath();
+        if (!exe) return { sandbox: 'unknown' };
+        const support = getSandboxSupport();
+        const sandbox = params.recheck === true ? await support.recheck(exe) : await support.get(exe);
+        // Engine lives at <base>/<version>/<build>/<exe>; an AppArmor attachment with wildcards covers every version.
+        const apparmorPath = path.join(path.dirname(path.dirname(path.dirname(exe))), '*', '*', path.basename(exe));
+        return { sandbox, apparmorPath };
+    });
 
     handle('browserProfile:installEngine', async () => {
         let lastEmit = 0;

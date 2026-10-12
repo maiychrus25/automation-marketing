@@ -18,6 +18,23 @@ interface EngineState {
   version: string;
 }
 
+type SandboxStatus = 'enabled' | 'disabled' | 'unknown';
+
+/** Mirrors the AppArmor profile Ubuntu ships for Chrome; the attachment path is quoted because it may contain spaces. */
+function buildApparmorCommand(apparmorPath: string): string {
+  return [
+    "sudo tee /etc/apparmor.d/maihub-browser-engine >/dev/null <<'EOF'",
+    'abi <abi/4.0>,',
+    'include <tunables/global>',
+    `profile maihub-browser-engine "${apparmorPath}" flags=(unconfined) {`,
+    '  userns,',
+    '  include if exists <local/maihub-browser-engine>',
+    '}',
+    'EOF',
+    'sudo apparmor_parser -r /etc/apparmor.d/maihub-browser-engine',
+  ].join('\n');
+}
+
 function formatTime(timestamp: number | null): string {
   return timestamp ? new Date(timestamp).toLocaleString('vi-VN') : 'Chưa mở';
 }
@@ -128,6 +145,23 @@ export default function BrowserProfilesView() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [formTarget, setFormTarget] = useState<BrowserProfile | 'new' | null>(null);
   const [showGroups, setShowGroups] = useState(false);
+  const [sandbox, setSandbox] = useState<SandboxStatus>('unknown');
+  const [apparmorPath, setApparmorPath] = useState('');
+  const [rechecking, setRechecking] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // Runs the engine once on first call (up to ~20 s), so it never sits in the list's Promise.all.
+  const loadSandbox = useCallback(async (recheck = false) => {
+    try {
+      const res = await ipc.browserProfile?.sandboxStatus(recheck);
+      if (res?.success) {
+        setSandbox(res.sandbox || 'unknown');
+        setApparmorPath(res.apparmorPath || '');
+      }
+    } catch {
+      // The warning is advisory; leave the previous state.
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -150,13 +184,14 @@ export default function BrowserProfilesView() {
       setProxies(proxyRes?.success ? proxyRes.proxies : []);
       if (engineRes?.success) {
         setEngine({ supported: !!engineRes.supported, installed: !!engineRes.installed, version: engineRes.version || '' });
+        if (engineRes.installed) void loadSandbox();
       }
     } catch (err) {
       setLoadError(err instanceof Error && err.message ? err.message : 'Không tải được danh sách profile');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadSandbox]);
 
   useEffect(() => {
     load();
@@ -296,9 +331,26 @@ export default function BrowserProfilesView() {
     if (res?.success) {
       setEngine({ supported: !!res.supported, installed: !!res.installed, version: res.version || '' });
       showNotification('Đã cài trình duyệt', 'success');
+      void loadSandbox();
     } else {
       showNotification(res?.error || 'Tải trình duyệt thất bại', 'error');
     }
+  };
+
+  const handleCopyCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(buildApparmorCommand(apparmorPath));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      showNotification('Không sao chép được. Hãy bôi đen lệnh và sao chép thủ công', 'error');
+    }
+  };
+
+  const handleRecheck = async () => {
+    setRechecking(true);
+    await loadSandbox(true);
+    setRechecking(false);
   };
 
   if (loading) {
@@ -363,6 +415,24 @@ export default function BrowserProfilesView() {
                 : 'Đang tải...'
               : 'Tải trình duyệt'}
           </button>
+        </div>
+      )}
+
+      {engine?.installed && sandbox === 'disabled' && apparmorPath && (
+        <div role="alert" className="mx-4 mt-3 px-3 py-2 rounded-lg border border-yellow-500/40 bg-yellow-900/20 text-xs text-yellow-300 min-w-0">
+          <p>Máy đang chặn sandbox của trình duyệt (AppArmor/user namespaces). Profile vẫn mở được nhưng chạy không sandbox, kém an toàn hơn.</p>
+          <pre className="mt-2 p-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 overflow-x-auto whitespace-pre">{buildApparmorCommand(apparmorPath)}</pre>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button type="button" onClick={handleCopyCommand}
+              className="px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400">
+              {copied ? 'Đã sao chép' : 'Sao chép lệnh'}
+            </button>
+            <button type="button" onClick={handleRecheck} disabled={rechecking}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-60">
+              {rechecking && <Spinner size={3} />}
+              {rechecking ? 'Đang kiểm tra...' : 'Kiểm tra lại'}
+            </button>
+          </div>
         </div>
       )}
 

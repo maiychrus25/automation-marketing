@@ -16,6 +16,7 @@ import path from 'path';
 import fs from 'fs';
 import { FacebookPageBrowserSender, PageInboxDriver, PageStickerThumb } from './FacebookPageBrowserSender';
 import { PAGE_BIZ_SUITE } from './pageBusinessSuiteSelectors';
+import { getSandboxSupport } from '../browser/sandboxSupport';
 import { buildThreadUrl, isSendableThreadId } from './pageSendHelpers';
 
 const OPEN_TIMEOUT_MS = 25000;
@@ -301,8 +302,10 @@ export async function getPageBrowserSender(pageAccountId: string, deps: PageBrow
 }
 
 async function launchSender(pageAccountId: string, deps: PageBrowserSenderDeps): Promise<FacebookPageBrowserSender> {
+  const executablePath = resolveEngineExecutable();
   const ctx = await chromium.launchPersistentContext(resolveUserDataDir(pageAccountId), {
-    executablePath: resolveEngineExecutable(),
+    executablePath,
+    chromiumSandbox: (await getSandboxSupport().get(executablePath)) === 'enabled',
     headless: process.env.FB_PAGE_HEADLESS === '0' ? false : true,
     viewport: { width: 1400, height: 900 },
     args: ['--no-first-run', '--no-default-browser-check'],
