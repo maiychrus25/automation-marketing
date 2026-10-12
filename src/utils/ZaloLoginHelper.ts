@@ -10,6 +10,7 @@ import { createProxyAgent } from "./ProxyHelper";
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_BASE_MS = 5000; // 5s base, exponential backoff
+const GROUP_INFO_WAIT_MS = 3000; // max wait for group info before broadcasting a group message
 
 class ZaloLoginHelper {
 
@@ -756,15 +757,21 @@ class ZaloLoginHelper {
                 }
 
                 message.zaloId = zaloId;
-                await EventBroadcaster.broadcastMessage(zaloId, message);
 
-                // ─── For group messages: fetch group info in background if not cached ─
+                // A workflow starts inside broadcastMessage, so give the group-info
+                // fetch a bounded head start: $trigger.groupName is then available
+                // in the first run. On timeout the fetch keeps running in background.
                 if (message.type === 1) {
                     const groupId = message.threadId || '';
                     if (groupId) {
-                        ZaloLoginHelper.fetchGroupInfoIfMissing(zaloId, groupId, connection.api);
+                        let timer: NodeJS.Timeout | undefined;
+                        const fetchPromise = ZaloLoginHelper.fetchGroupInfoIfMissing(zaloId, groupId, connection.api).catch(() => {});
+                        const timeoutPromise = new Promise<void>((resolve) => { timer = setTimeout(resolve, GROUP_INFO_WAIT_MS); });
+                        await Promise.race([fetchPromise, timeoutPromise]);
+                        if (timer) clearTimeout(timer);
                     }
                 }
+                await EventBroadcaster.broadcastMessage(zaloId, message);
             } catch (error: any) {
                 Logger.error(`[ZaloLoginHelper] message event error: ${error.message}`);
             }

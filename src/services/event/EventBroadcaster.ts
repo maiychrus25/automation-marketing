@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron';
 import * as path from 'path';
 import Logger from '../../utils/Logger';
+import { getUndoControlPayload } from './undoControlPayload';
 import DatabaseService from '../database/DatabaseService';
 import FileStorageService from '../file/FileStorageService';
 
@@ -135,7 +136,13 @@ class EventBroadcaster {
         const hooks = this.beforeSendHooks.get(channel);
         if (hooks && hooks.length > 0) {
             for (const hook of hooks) {
-                try { hook(data); } catch {}
+                try {
+                    hook(data);
+                } catch (error: any) {
+                    // Do not let a workflow/relay hook stop the renderer event,
+                    // but never swallow the failure.
+                    Logger.error(`[EventBroadcaster] before-send hook failed event=${channel}: ${error?.message || String(error)}`);
+                }
             }
         }
         if (this.window && !this.window.isDestroyed()) {
@@ -166,7 +173,11 @@ class EventBroadcaster {
         const hooks = this.beforeSendHooks.get(channel);
         if (hooks && hooks.length > 0) {
             for (const hook of hooks) {
-                try { hook(data); } catch {}
+                try {
+                    hook(data);
+                } catch (error: any) {
+                    Logger.error(`[EventBroadcaster] hooks-only hook failed event=${channel}: ${error?.message || String(error)}`);
+                }
             }
         }
     }
@@ -226,6 +237,13 @@ class EventBroadcaster {
      */
     public static async broadcastMessage(zaloId: string, message: any, options?: { silent?: boolean; fromRelay?: boolean }): Promise<void> {
         try {
+            const undoControl = getUndoControlPayload(message);
+            if (undoControl) {
+                Logger.log(`[EventBroadcaster] Detected undo control payload on message stream: recalled msgId=${undoControl.msgId} threadId=${undoControl.threadId || '-'} source=${options?.silent ? 'history' : 'realtime'}`);
+                this.broadcastUndo(zaloId, undoControl.msgId, undoControl.threadId);
+                return;
+            }
+
             // ─── Resolve the correct DB path for saving ───────────────────────
             // Boss webhook (fromRelay=false): ALWAYS save to the default workspace DB.
             // This ensures the boss DB (source of truth) gets every message,
@@ -557,6 +575,23 @@ class EventBroadcaster {
                     if (groupId && groupName) {
                         DatabaseService.getInstance().updateContactProfile(zaloId, groupId, groupName, groupAvt);
                         Logger.log(`[EventBroadcaster] Saved group profile: ${groupId} → ${groupName}`);
+                    }
+                }
+            }
+
+            // Surface the cached group name on the event so workflow templates
+            // ($trigger.groupName) get it even when Zalo omits it from the payload.
+            // Read from the boss DB: that is where the message is saved and where
+            // ZaloLoginHelper.fetchGroupInfoIfMissing writes the group contact.
+            if (message.type === 1 && !message.groupName) {
+                const groupId = String(message.threadId || '');
+                if (groupId) {
+                    let cachedName = '';
+                    this.runOnBossDb((bossDb) => {
+                        cachedName = String(bossDb.getContactById(zaloId, groupId)?.display_name || '');
+                    });
+                    if (cachedName && cachedName !== groupId && !/^\d+$/.test(cachedName)) {
+                        message.groupName = cachedName;
                     }
                 }
             }
