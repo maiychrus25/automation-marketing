@@ -778,6 +778,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'relay:messageSentByEmployee',
       'relay:tunnelStatusUpdate',
       'workspace:switched',
+      'workspace:waitingForJobs',
       'workspace:connectionStatus',
       'workspace:initialState',
       'workspace:accountAccessUpdate',

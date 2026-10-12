@@ -30,6 +30,7 @@ let uiReady = false;
 
 const MAX_PENDING_MISSED = 50;
 const MAX_SCHEDULES = 200;
+export const POSTER_NOT_STOPPED_ERROR = 'Việc Đăng Facebook chưa dừng được. Thử lại sau.';
 const ENGINE_MISSING_ERROR = 'Chưa cài trình duyệt. Hãy tải trình duyệt ở màn hình Trình duyệt.';
 
 const startEnv: StartParamsEnv = {
@@ -84,20 +85,13 @@ export function cancelFacebookPosterJobs(): void {
     service?.cancelAll();
 }
 
-/** Cancels and waits (up to timeoutMs) for the running job to finish, so it cannot write into the next workspace DB. Never throws. */
-export async function cancelAndWaitFacebookPosterJobs(timeoutMs = 10000): Promise<void> {
-    if (!service) return;
-    let timer: NodeJS.Timeout | undefined;
+/** Cancels the running job and waits (bounded) for it to end, so it cannot write into the next workspace DB. True = no job runs anymore. Never throws. */
+export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
+    if (!service) return true;
     try {
-        service.cancelAll();
-        await Promise.race([
-            service.whenIdle(),
-            new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
-        ]);
+        return await service.stopAndWait();
     } catch {
-        // best effort: the caller goes on to switch the workspace
-    } finally {
-        if (timer) clearTimeout(timer);
+        return false;
     }
 }
 

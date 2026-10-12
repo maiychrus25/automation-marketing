@@ -20,7 +20,7 @@ export interface SqlDatabase {
     queryOne<T>(sql: string, params?: any[]): T | undefined;
 }
 
-const INTERRUPTED_RUN_ERROR = 'App đóng khi việc đang chạy';
+const INTERRUPTED_RUN_ERROR = 'App đóng khi việc đang chạy. Đích đang đăng dở (nếu có) cần kiểm tra trên Facebook.';
 
 function mapRun(row: any): FbPosterRun {
     return {

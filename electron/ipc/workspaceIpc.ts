@@ -11,7 +11,7 @@ import ConnectionManager from '../../src/utils/ConnectionManager';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import { closeAllBrowserProfiles } from './browserProfileIpc';
-import { cancelAndWaitFacebookPosterJobs, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './facebookPosterIpc';
+import { POSTER_NOT_STOPPED_ERROR, cancelAndWaitFacebookPosterJobs, isFacebookPosterBusy, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './facebookPosterIpc';
 
 /**
  * HTTP/HTTPS POST helper for remote login requests.
@@ -86,6 +86,17 @@ function httpPost(url: string, body: any, timeoutMs = 15000): Promise<any> {
 export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
     const wm = () => WorkspaceManager.getInstance();
 
+    /** Stops the scheduler and the running poster job. False = job still runs (scheduler restarted); never switch the DB then. */
+    const stopPosterForSwitch = async (): Promise<boolean> => {
+        if (isFacebookPosterBusy() && mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('workspace:waitingForJobs', {});
+        }
+        try { stopFacebookPosterScheduler(); } catch {}
+        if (await cancelAndWaitFacebookPosterJobs()) return true;
+        try { startFacebookPosterScheduler(); } catch {}
+        return false;
+    };
+
     // ─── List ────────────────────────────────────────────────────────
 
     ipcMain.handle('workspace:list', async () => {
@@ -151,7 +162,24 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             // Record whether this is the currently active workspace BEFORE deleting
             const wasActive = wm().getActiveWorkspaceId() === id;
 
-            const result = wm().deleteWorkspace(id);
+            let posterStopped = false;
+            if (wasActive) {
+                if (!(await stopPosterForSwitch())) {
+                    return { success: false, error: POSTER_NOT_STOPPED_ERROR };
+                }
+                posterStopped = true;
+            }
+
+            let result;
+            try {
+                result = wm().deleteWorkspace(id);
+            } catch (err) {
+                if (posterStopped) { try { startFacebookPosterScheduler(); } catch {} }
+                throw err;
+            }
+            if (posterStopped && !result.success) {
+                try { startFacebookPosterScheduler(); } catch {}
+            }
 
             if (result.success && wasActive) {
                 // WorkspaceManager already updated activeWorkspaceId to the first remaining.
@@ -161,9 +189,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                     AppModeManager.getInstance().clearOverride();
                     const newDbPath = wm().resolveDbPath(newActiveWs.dbPath || 'deplao-tool.db');
                     // Browser profile data belongs to the workspace being left: close before its DB goes away
-                    try { stopFacebookPosterScheduler(); } catch {}
-                    try { await cancelAndWaitFacebookPosterJobs(); } catch {}
-                try { closeAllBrowserProfiles(); } catch {}
+                    try { closeAllBrowserProfiles(); } catch {}
                     try {
                         await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
                     } finally {
@@ -178,6 +204,9 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                         });
                     }
                     Logger.log(`[workspaceIpc] Deleted active workspace → switched to "${newActiveWs.name}"`);
+                } else {
+                    // No workspace left to switch to: the poster was stopped above, bring the scheduler back
+                    try { startFacebookPosterScheduler(); } catch {}
                 }
             }
 
@@ -195,6 +224,9 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
         try {
             const result = wm().switchWorkspace(id);
             if (result.success && result.workspace) {
+                // Stop the poster first: if it cannot stop, nothing else has changed and the catch restores the previous workspace
+                if (!(await stopPosterForSwitch())) throw new Error(POSTER_NOT_STOPPED_ERROR);
+
                 // Clear AppModeManager override so it derives mode from workspace
                 AppModeManager.getInstance().clearOverride();
 
@@ -207,8 +239,6 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                 // Switch DatabaseService to the new workspace's DB
                 const newDbPath = wm().resolveDbPath(result.workspace.dbPath || 'deplao-tool.db');
                 // Browser profile data belongs to the workspace being left: close before its DB goes away
-                try { stopFacebookPosterScheduler(); } catch {}
-                try { await cancelAndWaitFacebookPosterJobs(); } catch {}
                 try { closeAllBrowserProfiles(); } catch {}
                 try {
                     await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
@@ -286,6 +316,8 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                     wm().restoreActiveWorkspace(prevWorkspaceId);
                 }
             } catch { /* ignore rollback helper failure */ }
+            // The DB was not switched, so the scheduler (possibly stopped above) belongs on the current DB; no-op if running
+            try { startFacebookPosterScheduler(); } catch {}
             const msg = err?.message || String(err) || 'Unknown switch error';
             Logger.error(`[workspaceIpc] switch error: ${msg}`, err);
             return { success: false, error: msg };

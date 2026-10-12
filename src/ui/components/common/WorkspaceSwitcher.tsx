@@ -55,6 +55,14 @@ export default function WorkspaceSwitcher() {
         return () => { unsub?.(); };
     }, [setActiveWorkspaceId, loadWorkspaces, setIsSwitching]);
 
+    // ─── Listen for workspace:waitingForJobs events ──────────────────
+    useEffect(() => {
+        const unsub = window.electronAPI?.on?.('workspace:waitingForJobs', () => {
+            showNotification('Đang dừng việc Đăng Facebook trước khi chuyển workspace…', 'info');
+        });
+        return () => { unsub?.(); };
+    }, [showNotification]);
+
     // ─── Click outside to close ──────────────────────────────────────
     useEffect(() => {
         const handler = (e: MouseEvent) => {
@@ -72,8 +80,8 @@ export default function WorkspaceSwitcher() {
         if (id === activeWorkspaceId || isSwitching) return;
         setIsSwitching(true);
         setOpen(false);
-        // Safety timeout: always reset switching state after 10s
-        const safetyTimer = setTimeout(() => setIsSwitching(false), 10000);
+        // Safety timeout: always reset switching state after 70s (poster stop can wait up to 55s)
+        const safetyTimer = setTimeout(() => setIsSwitching(false), 70000);
         try {
             const res = await ipc.workspace?.switch(id);
             if (!res?.success) {

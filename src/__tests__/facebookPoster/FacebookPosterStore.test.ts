@@ -56,7 +56,7 @@ test('failInterruptedRuns chỉ đổi run đang running và trả số lượng
   for (const id of ['a', 'b']) {
     const run = s.getRun(id)!.run;
     assert.strictEqual(run.status, 'failed');
-    assert.strictEqual(run.error, 'App đóng khi việc đang chạy');
+    assert.strictEqual(run.error, 'App đóng khi việc đang chạy. Đích đang đăng dở (nếu có) cần kiểm tra trên Facebook.');
     assert.strictEqual(run.finishedAt, 999);
   }
   const c = s.getRun('c')!.run;
