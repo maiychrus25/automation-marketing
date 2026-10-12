@@ -828,6 +828,7 @@ describe('FacebookPosterService cancel closes sessions', () => {
     const store = new FacebookPosterStore(memoryDb());
     store.ensureSchema();
     const closes: string[] = [];
+    const progress: any[] = [];
     const killers: ((err: Error) => void)[] = [];
     const hang = () => new Promise<never>((_, reject) => { killers.push(reject); });
     let idSeq = 0;
@@ -849,13 +850,13 @@ describe('FacebookPosterService cancel closes sessions', () => {
           },
         };
       },
-      emit: () => {},
+      emit: (channel, data) => { if (channel === 'facebookPoster:progress') progress.push(data); },
       random: () => 0,
       sleep: async () => {},
       newId: () => `run-${++idSeq}`,
       tasks: tasks as any,
     });
-    return { service, store, closes, hang, results: (runId: string) => store.getRun(runId)!.results, run: (runId: string) => store.getRun(runId)!.run };
+    return { service, store, closes, hang, lastProfileStates: () => progress[progress.length - 1].profiles.map((p: any) => p.state), results: (runId: string) => store.getRun(runId)!.results, run: (runId: string) => store.getRun(runId)!.run };
   }
 
   const rowsOf = (rows: any[]) => rows.map((r) => [r.outcome, r.error]);
@@ -873,6 +874,7 @@ describe('FacebookPosterService cancel closes sessions', () => {
     await k.service.whenIdle();
     expect(k.run(runId).status).toBe('cancelled');
     expect(rowsOf(k.results(runId))).toEqual([['skipped', 'Đã dừng'], ['skipped', 'Đã dừng']]);
+    expect(k.lastProfileStates()).toEqual(['cancelled']);
   });
 
   test('cancel waits for a critical section', async () => {
@@ -968,6 +970,59 @@ describe('FacebookPosterService cancel closes sessions', () => {
     expect(rowsOf(k.results(runId))).toEqual([['failed', 'A'], ['skipped', 'Đã dừng']]);
   });
 
+  test('a stopped target after a posted critical one is not treated as critical', async () => {
+    let hang!: () => Promise<never>;
+    const k = killable({
+      postToTargets: jest.fn(async (input: any, deps: any) => {
+        await deps.launch();
+        deps.enterCritical();
+        deps.onResult({ url: input.targets[0], ok: true, error: null, postUrl: 'u', commentStatus: 'not_requested', identity: 'Me' });
+        deps.leaveCritical();
+        await hang();
+      }),
+    });
+    hang = k.hang;
+    const { runId } = k.service.start(postParams());
+    await tick();
+    k.service.cancel();
+    await k.service.whenIdle();
+    expect(rowsOf(k.results(runId))).toEqual([['posted', ''], ['skipped', 'Đã dừng']]);
+  });
+
+  test('cancel closes only the profile outside a critical section', async () => {
+    const release = deferred();
+    let hang!: () => Promise<never>;
+    const k = killable({
+      postToTargets: jest.fn(async (input: any, deps: any) => {
+        await deps.launch();
+        if (input.targets[0].includes('/1/')) {
+          deps.enterCritical();
+          await release.promise;
+          deps.onResult({ url: input.targets[0], ok: true, error: null, postUrl: 'u', commentStatus: 'not_requested', identity: 'Me' });
+          deps.leaveCritical();
+        } else {
+          await hang();
+        }
+      }),
+    });
+    hang = k.hang;
+    const { runId } = k.service.start(postParams({
+      profiles: [
+        { profileId: 'p1', targets: ['https://www.facebook.com/groups/1/'] },
+        { profileId: 'p2', targets: ['https://www.facebook.com/groups/2/'] },
+      ],
+      concurrency: 2,
+    }));
+    await tick();
+    await tick();
+    k.service.cancel();
+    await tick();
+    expect(k.closes).toEqual(['p2']);
+    release.resolve();
+    await k.service.whenIdle();
+    expect(k.results(runId).map((r) => [r.profileId, r.outcome])).toEqual(expect.arrayContaining([['p1', 'posted'], ['p2', 'skipped']]));
+  });
+
   describe('stopAndWait', () => {
     beforeEach(() => { jest.useFakeTimers({ doNotFake: ['setImmediate'] }); });
     afterEach(() => { jest.useRealTimers(); });
@@ -987,6 +1042,52 @@ describe('FacebookPosterService cancel closes sessions', () => {
       expect(k.closes).toEqual(['p1']);
       await expect(stopped).resolves.toBe(true);
       expect(rowsOf(k.results(runId))).toEqual([['failed', FORCED_CLOSE], ['skipped', 'Đã dừng']]);
+    });
+
+    test('stopAndWait does not force-close a job that ends within the grace period', async () => {
+      const release = deferred();
+      const k = killable({
+        postToTargets: jest.fn(async (input: any, deps: any) => {
+          await deps.launch();
+          deps.enterCritical();
+          await release.promise;
+          deps.onResult({ url: input.targets[0], ok: true, error: null, postUrl: 'u', commentStatus: 'not_requested', identity: 'Me' });
+          deps.leaveCritical();
+        }),
+      });
+      const { runId } = k.service.start(postParams());
+      await tick();
+      const stopped = k.service.stopAndWait(45000, 10000);
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(k.closes).toEqual([]);
+      release.resolve();
+      await jest.advanceTimersByTimeAsync(0);
+      await expect(stopped).resolves.toBe(true);
+      expect(rowsOf(k.results(runId))).toEqual([['posted', ''], ['skipped', 'Đã dừng']]);
+    });
+
+    test('a forced close does not blame a target that never reached its critical section', async () => {
+      const release = deferred();
+      let hang!: () => Promise<never>;
+      const k = killable({
+        postToTargets: jest.fn(async (input: any, deps: any) => {
+          await deps.launch();
+          deps.enterCritical();
+          deps.onResult({ url: input.targets[0], ok: true, error: null, postUrl: 'u', commentStatus: 'not_requested', identity: 'Me' });
+          deps.leaveCritical();
+          await hang().catch(() => release.promise);
+          deps.onResult({ url: input.targets[1], ok: false, error: 'Target closed' });
+        }),
+      });
+      hang = k.hang;
+      const { runId } = k.service.start(postParams());
+      await tick();
+      const stopped = k.service.stopAndWait(100, 100);
+      await jest.advanceTimersByTimeAsync(100);
+      release.resolve();
+      await jest.advanceTimersByTimeAsync(0);
+      await expect(stopped).resolves.toBe(true);
+      expect(rowsOf(k.results(runId))).toEqual([['posted', ''], ['skipped', 'Đã dừng']]);
     });
 
     test('stopAndWait returns false when the job never ends', async () => {

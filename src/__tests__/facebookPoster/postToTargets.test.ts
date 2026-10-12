@@ -1322,3 +1322,25 @@ test('does not enter a critical section when stopped before publishing', async (
   assert.ok(!events.includes('click:publish'));
   assert.strictEqual(typed, false);
 });
+
+test('does not click publish when stopped right before the click', async () => {
+  const events: string[] = [];
+  const page = pageForCritical({ events });
+  let stopping = false;
+  const baseEvaluate = page.evaluate;
+  // Cờ dừng bật đúng lúc kiểm nút Đăng, tức sau mọi vòng kiểm trước đó.
+  page.evaluate = async (fn: AnyFn) => {
+    if (fn.name === 'isPublishDisabledInPage') stopping = true;
+    return baseEvaluate(fn);
+  };
+  await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', targets: ['https://www.facebook.com/groups/1/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page, {
+      getIsStopping: () => stopping,
+      enterCritical: () => events.push('enter'),
+      leaveCritical: () => events.push('leave'),
+    }),
+  ));
+  assert.ok(!events.includes('enter'));
+  assert.ok(!events.includes('click:publish'));
+});

@@ -348,7 +348,7 @@ test('searchAndJoinGroups page.goto ném lỗi ở nhóm đầu thì nhóm sau v
 
 test('searchAndJoinGroups dừng khi getIsStopping() trả true', async () => {
   const b = fakeBrowser({ '1': joinAndJoined(), '2': joinAndJoined() }, []);
-  let stopAfterN = 2;  // Called once during search phase, once at start of first target loop
+  let stopAfterN = 3;  // Called once during search phase, once at start of first target loop, once right before the join click
   const out = await searchAndJoinGroups(
     { keywords: ['x'], ...ZERO },
     makeDeps(b, {
@@ -849,4 +849,28 @@ test('wraps the join click in a critical section', async () => {
     }),
   );
   assert.deepStrictEqual(events, ['enter', 'click:join', 'leave', 'onResult']);
+});
+
+test('does not click join when stopped right before the click', async () => {
+  const b = fakeBrowser({ 'g1': joinAndJoined() }, []);
+  const events: string[] = [];
+  let stopping = false;
+  const baseEvaluate = b.page.evaluate;
+  // Cờ dừng bật ngay khi nút Tham gia vừa được đánh dấu, trước lúc bấm.
+  b.page.evaluate = async (fn: Any, arg: Any) => {
+    const result = await baseEvaluate(fn, arg);
+    if (fn.name === 'markJoinButtonInPage') stopping = true;
+    return result;
+  };
+  await searchAndJoinGroups(
+    { keywords: ['x'], ...ZERO },
+    makeDeps(b, {
+      getIsStopping: () => stopping,
+      search: async () => ([{ id: 'g1', name: 'Test', url: 'https://www.facebook.com/groups/g1/' }]),
+      enterCritical: () => events.push('enter'),
+      onResult: () => events.push('onResult'),
+    }),
+  );
+  assert.deepStrictEqual(events, []);
+  assert.deepStrictEqual(b.clicked, []);
 });

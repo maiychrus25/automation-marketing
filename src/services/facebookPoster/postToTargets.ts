@@ -597,6 +597,8 @@ async function postToSingleTarget(
       sendLog(`[${kind}] [ERROR] Nút Đăng đang tắt — Facebook chưa ghi nhận nội dung trong ô soạn: ${url}`, 'error');
       return failed();
     }
+    // Lần kiểm cuối: Hủy bấm trong lúc chờ ở trên thì không được bấm Đăng.
+    if (getIsStopping()) return failed();
     // Từ đây là điểm không quay lại: Hủy không được đóng trình duyệt tới khi có kết quả.
     deps.enterCritical?.();
     sendLog('[Đăng Bài] Đang click nút Đăng bài...', 'info');

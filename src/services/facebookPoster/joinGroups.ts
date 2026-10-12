@@ -303,6 +303,8 @@ export async function searchAndJoinGroups(
                 if (!(await page.evaluate(markJoinButtonInPage, { labels: JOIN_LABELS, groupId: g.id }))) {
                     sendLog(`Không tìm thấy nút Tham gia ở ${g.url}`, 'error');
                 } else {
+                    // Lần kiểm cuối: Hủy bấm trong lúc chờ ở trên thì không được bấm Tham gia.
+                    if (getIsStopping()) break;
                     deps.enterCritical?.();
                     try {
                         // Click tin cậy qua locator. Lỗi click không được làm hỏng luồng

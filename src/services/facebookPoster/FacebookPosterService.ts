@@ -319,7 +319,8 @@ export class FacebookPosterService {
         } finally {
             await Promise.allSettled(plan.sessions.map((session) => session.close()));
         }
-        plan.progress.state = failed ? 'failed' : this.stopping ? 'cancelled' : 'done';
+        // A failure caused by our own cancel is not a profile failure (a forced close still is).
+        plan.progress.state = failed && !(this.stopping && !this.forced) ? 'failed' : this.stopping ? 'cancelled' : 'done';
         // The join total was only a cap (`limit`); settle it to what was actually reported.
         if (params.kind === 'join') plan.progress.total = plan.progress.done;
         this.emitProgress(active);
@@ -425,7 +426,7 @@ export class FacebookPosterService {
         } catch (err) {
             this.rememberStoreError(err);
         }
-        plan.reachedCritical = plan.critical;
+        plan.reachedCritical = false;
         plan.progress.done += 1;
         this.emitProgress(active);
     }
@@ -433,7 +434,7 @@ export class FacebookPosterService {
     /** A failure caused by our own cancel is a stop, not an error; one after a critical step stays a failure (forced close gets its own text). */
     private stopAwareRow(plan: ProfilePlan, row: ResultRow): ResultRow {
         if (row.outcome !== 'failed' || !this.stopping) return row;
-        if (!plan.reachedCritical) return { ...row, outcome: 'skipped', error: STOPPED_REASON };
+        if (!plan.critical && !plan.reachedCritical) return { ...row, outcome: 'skipped', error: STOPPED_REASON };
         return this.forced ? { ...row, error: FORCED_CLOSE_ERROR } : row;
     }
 
