@@ -1,4 +1,4 @@
-import { PROBE_TIMEOUT_MS, ProbeResult, SandboxProbeDeps, SandboxSupport, probeSandbox } from '../../services/browser/sandboxSupport';
+import { PROBE_TIMEOUT_MS, ProbeResult, SandboxProbeDeps, SandboxSupport, probeSandbox, runProcess } from '../../services/browser/sandboxSupport';
 
 const ENGINE = '/opt/engine/chrome';
 const USERNS_APPARMOR = '/proc/sys/kernel/apparmor_restrict_unprivileged_userns';
@@ -83,7 +83,52 @@ describe('probeSandbox', () => {
     });
 });
 
+describe('probeSandbox resilience', () => {
+    it('makeTempDir throwing falls back to sysctl and removes nothing', async () => {
+        const deps = makeDeps({ sysctl: { [USERNS_MAX]: '0' } });
+        deps.makeTempDir = () => { throw new Error('EACCES'); };
+        expect(await probeSandbox(ENGINE, deps)).toBe('disabled');
+        expect(deps.runs).toHaveLength(0);
+        expect(deps.removed).toHaveLength(0);
+    });
+});
+
+describe('runProcess', () => {
+    it('captures exit code and stderr', async () => {
+        const result = await runProcess(process.execPath, ['-e', "process.stderr.write('No usable sandbox'); process.exit(3)"], 5000);
+        expect(result.code).toBe(3);
+        expect(result.timedOut).toBe(false);
+        expect(result.stderr).toContain('No usable sandbox');
+    });
+
+    it('times out quickly and kills the process', async () => {
+        const started = Date.now();
+        const result = await runProcess(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], 300);
+        expect(result).toEqual({ code: null, stderr: '', timedOut: true });
+        expect(Date.now() - started).toBeLessThan(1500);
+    });
+
+    it('rejects for a missing executable', async () => {
+        await expect(runProcess('/nonexistent/engine-binary', [], 1000)).rejects.toThrow();
+    });
+});
+
 describe('SandboxSupport', () => {
+    it('does not cache a rejected probe', async () => {
+        const deps = makeDeps();
+        let calls = 0;
+        deps.makeTempDir = () => { calls++; return '/x'; };
+        deps.platform = 'linux';
+        let fail = true;
+        deps.readSysctl = () => { if (fail) throw new Error('boom'); return null; };
+        deps.run = async () => ({ code: 1, stderr: '', timedOut: false });
+        const support = new SandboxSupport(deps);
+        await expect(support.get(ENGINE)).rejects.toThrow('boom');
+        fail = false;
+        expect(await support.get(ENGINE)).toBe('enabled');
+        expect(calls).toBe(2);
+    });
+
     it('caches per engine path', async () => {
         const deps = makeDeps();
         const support = new SandboxSupport(deps);

@@ -28,8 +28,9 @@ const BLOCKING_SYSCTLS: Array<[string, string]> = [
 /** Chạy engine một lần (headless, không --no-sandbox) để biết sandbox có dùng được không. */
 export async function probeSandbox(enginePath: string, deps: SandboxProbeDeps): Promise<SandboxState> {
     if (deps.platform !== 'linux') return 'enabled';
-    const dir = deps.makeTempDir(path.dirname(enginePath));
+    let dir: string | undefined;
     try {
+        dir = deps.makeTempDir(path.dirname(enginePath));
         const args = ['--headless=new', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${dir}`, '--dump-dom', 'about:blank'];
         const result = await deps.run(enginePath, args, PROBE_TIMEOUT_MS);
         if (result.code === 0) return 'enabled';
@@ -37,7 +38,7 @@ export async function probeSandbox(enginePath: string, deps: SandboxProbeDeps): 
     } catch {
         // Không kết luận được: dùng sysctl bên dưới.
     } finally {
-        deps.removeDir(dir);
+        if (dir !== undefined) deps.removeDir(dir);
     }
     const blocked = BLOCKING_SYSCTLS.some(([file, value]) => deps.readSysctl(file) === value);
     return blocked ? 'disabled' : 'enabled';
@@ -53,7 +54,12 @@ export class SandboxSupport {
         let pending = this.cache.get(enginePath);
         if (!pending) {
             pending = probeSandbox(enginePath, this.deps);
-            this.cache.set(enginePath, pending);
+            const attempt = pending;
+            this.cache.set(enginePath, attempt);
+            // Không cache lời hứa bị từ chối.
+            attempt.catch(() => {
+                if (this.cache.get(enginePath) === attempt) this.cache.delete(enginePath);
+            });
         }
         return pending;
     }
@@ -64,26 +70,34 @@ export class SandboxSupport {
     }
 }
 
-function runProcess(executable: string, args: string[], timeoutMs: number): Promise<ProbeResult> {
+export function runProcess(executable: string, args: string[], timeoutMs: number): Promise<ProbeResult> {
     return new Promise((resolve, reject) => {
-        const child = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+        // detached: engine chạy trong process group riêng để diệt cả tiến trình con khi timeout.
+        const child = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
         let stderr = '';
-        let timedOut = false;
+        let settled = false;
+        const settle = (action: () => void): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            action();
+        };
         const timer = setTimeout(() => {
-            timedOut = true;
-            child.kill('SIGKILL');
+            settle(() => {
+                try {
+                    process.kill(-child.pid!, 'SIGKILL');
+                } catch {
+                    child.kill('SIGKILL');
+                }
+                child.stderr?.destroy();
+                resolve({ code: null, stderr, timedOut: true });
+            });
         }, timeoutMs);
         child.stderr?.on('data', (chunk: Buffer) => {
             stderr = (stderr + chunk.toString()).slice(-STDERR_KEEP_CHARS);
         });
-        child.on('error', (error) => {
-            clearTimeout(timer);
-            reject(error);
-        });
-        child.on('close', (code) => {
-            clearTimeout(timer);
-            resolve({ code: timedOut ? null : code, stderr, timedOut });
-        });
+        child.on('error', (error) => settle(() => reject(error)));
+        child.on('close', (code) => settle(() => resolve({ code, stderr, timedOut: false })));
     });
 }
 
