@@ -10,6 +10,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import AppModeManager from '../../src/utils/AppModeManager';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
+import { clampMessagesQuery } from '../../src/services/database/messageQueryLimits';
 
 function isEmployeeMode(): boolean {
     try {
@@ -66,22 +67,16 @@ async function countFiles(dir: string): Promise<number> {
 }
 
 export function registerDatabaseIpc() {
-    ipcMain.handle('db:getMessages', async (_event, { zaloId, threadId, limit = 50, offset = 0, before = 0, topicId }: { zaloId: string; threadId: string; limit?: number; offset?: number; before?: number; topicId?: string }) => {
+    ipcMain.handle('db:getMessages', async (_event, { zaloId, threadId, limit, offset, before, topicId }: { zaloId: string; threadId: string; limit?: number; offset?: number; before?: number; topicId?: string }) => {
         try {
             const _isEmp = isEmployeeMode();
             if (_isEmp) {
                 Logger.warn(`[databaseIpc] db:getMessages BLOCKED by employee mode (activeWs=${WorkspaceManager.getInstance().getActiveWorkspace()?.type || 'none'})`);
                 return { success: true };
             }
-            Logger.log(`[databaseIpc] db:getMessages zaloId=${zaloId} threadId=${threadId} limit=${limit} offset=${offset} before=${before}`);
-            const messages = DatabaseService.getInstance().getMessages(zaloId, threadId, limit, offset, before > 0 ? before : undefined, topicId);
-            // Log chi tiết 3 tin nhắn đầu để debug attachment/local_paths
-            const sample = messages.slice(0, 3).map((m: any) => {
-                const attLen = m.attachments ? String(m.attachments).length : 0;
-                const hasLp = !!(m.local_paths && m.local_paths !== '{}' && m.local_paths !== '[]');
-                return `{ id=${m.msg_id} type=${m.msg_type} att=${attLen}b lp=${hasLp} sent=${m.is_sent} ch=${m.channel} }`;
-            });
-            Logger.log(`[databaseIpc] db:getMessages → ${messages.length} msgs. Sample: ${sample.join(' | ')}`);
+            const q = clampMessagesQuery({ limit, offset, before });
+            const messages = DatabaseService.getInstance().getMessages(zaloId, threadId, q.limit, q.offset, q.before > 0 ? q.before : undefined, topicId);
+            Logger.log(`[databaseIpc] db:getMessages → ${messages.length} msgs (limit=${q.limit}, cursor=${q.before}, offset=${q.offset})`);
             return { success: true, messages };
         } catch (error: any) {
             return { success: false, error: error.message };
