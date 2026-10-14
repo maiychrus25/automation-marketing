@@ -60,6 +60,16 @@ export function isBrowserEngineInstalled(): boolean {
     return getEngineManager().getExecutablePath() !== null;
 }
 
+/** Engine status and sandbox state for the control API's system.status (same sources as the IPC handlers). */
+export function getBrowserEngineStatus() {
+    return getEngineManager().getStatus();
+}
+
+export async function getBrowserSandboxState(): Promise<'enabled' | 'disabled' | 'unknown'> {
+    const exe = getEngineManager().getExecutablePath();
+    return exe ? getSandboxSupport().get(exe) : 'unknown';
+}
+
 /** Closes every running browser. Called on app quit and before the workspace database is switched. */
 export function closeAllBrowserProfiles(): void {
     profileService?.closeAll();

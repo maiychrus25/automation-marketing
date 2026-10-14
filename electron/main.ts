@@ -17,6 +17,7 @@ import { registerUtilIpc } from './ipc/utilIpc';
 import { registerEmployeeIpc } from './ipc/employeeIpc';
 import { registerRelayIpc } from './ipc/relayIpc';
 import { registerWorkspaceIpc } from './ipc/workspaceIpc';
+import { registerControlApiIpc, startControlApi, stopControlApi } from './ipc/controlApiIpc';
 import { registerFacebookIpc, reconnectAllFBAccounts } from './ipc/facebookIpc';
 import { registerTelegramIpc } from './ipc/telegramIpc';
 import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
@@ -1175,6 +1176,8 @@ app.whenReady().then(async () => {
   registerProxyIpc();
   registerBrowserProfileIpc();
   registerFacebookPosterIpc();
+  registerControlApiIpc();
+  startControlApi().catch((err: any) => Logger.error(`[ControlApi] start failed: ${err?.message}`));
   try { startFacebookPosterScheduler(); } catch (err: any) { Logger.error(`[FacebookPoster] scheduler start failed: ${err?.message}`); }
   registerErpTaskIpc();
   registerErpCalendarIpc();
@@ -1296,6 +1299,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  void stopControlApi().catch(() => {});
 
   // ── Cleanup background services giữ event loop ──────────────────────
   // Nếu không dọn, CRM timers / cron / webhook server giữ process sống,

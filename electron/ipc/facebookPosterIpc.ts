@@ -16,6 +16,7 @@ import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
+import { emitControlEvent, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved } from '../../src/services/control/controlEvents';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 
 
@@ -67,11 +68,37 @@ function getService(): FacebookPosterService {
             openForAutomation: (id) => getBrowserProfileService().openForAutomation(id),
             emit: (channel, data) => {
                 EventBroadcaster.emit(channel, data);
-                if (channel === 'facebookPoster:runFinished') scheduler?.onRunFinished();
+                if (channel === 'facebookPoster:runFinished') {
+                    recordRunFinished(data);
+                    scheduler?.onRunFinished();
+                }
             },
         });
     }
     return service;
+}
+
+/** Control API event run.finished (additive; counts come from the stored results). Recorded before the scheduler may start the next run. */
+function recordRunFinished(data: unknown): void {
+    try {
+        const runId = (data as { runId?: string })?.runId;
+        const found = runId ? store().getRun(runId) : null;
+        if (found) emitControlEvent('run.finished', buildRunFinished(found.run, found.results));
+    } catch (err) {
+        Logger.error(`[facebookPosterIpc] control event run.finished failed: ${(err as Error).message}`);
+    }
+}
+
+/** Starts a run and records the control API event run.started. Used by manual starts and the scheduler. */
+function startRun(params: Parameters<FacebookPosterService['start']>[0], scheduleId?: string): { runId: string } {
+    const started = getService().start(params, scheduleId);
+    emitControlEvent('run.started', buildRunStarted({ runId: started.runId, kind: params.kind, scheduleId: scheduleId ?? null }));
+    return started;
+}
+
+/** True while the poster scheduler is running for the active workspace (control API system.status). */
+export function isFacebookPosterSchedulerRunning(): boolean {
+    return scheduler !== null;
 }
 
 /** True while a job is running; the updater refuses to restart then. */
@@ -129,7 +156,7 @@ export function startFacebookPosterScheduler(): void {
             if (!isBrowserEngineInstalled()) throw new Error(ENGINE_MISSING_ERROR);
             return startParams;
         },
-        startRun: (params, scheduleId) => getService().start(params, scheduleId),
+        startRun: (params, scheduleId) => startRun(params, scheduleId),
         newId: randomUUID,
         onMissed: (notice) => {
             if (!uiReady) {
@@ -137,6 +164,7 @@ export function startFacebookPosterScheduler(): void {
                 if (pendingMissed.length > MAX_PENDING_MISSED) pendingMissed.shift();
             }
             EventBroadcaster.emit('facebookPoster:scheduleMissed', notice);
+            emitControlEvent('schedule.missed', buildScheduleMissed(notice));
         },
         onChanged: emitSchedulesChanged,
     });
@@ -188,7 +216,7 @@ export const posterOperations = {
         if (!isBrowserEngineInstalled()) {
             throw new Error(ENGINE_MISSING_ERROR);
         }
-        return getService().start(startParams);
+        return startRun(startParams);
     },
 
     scheduleCreate: (params: any) => {
@@ -259,6 +287,7 @@ export const posterOperations = {
 
     draftApprove: (params: any) => {
         const schedule = approveDraft(draftDeps(), params);
+        emitControlEvent('draft.approved', buildDraftApproved(schedule, params?.when));
         scheduler?.reschedule(); // "Đăng ngay" đặt nextRunAt = now → scheduler chạy qua hàng đợi
         emitSchedulesChanged();
         return { schedule };

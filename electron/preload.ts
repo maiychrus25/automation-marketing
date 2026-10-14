@@ -887,6 +887,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     installEngine: ()                                  => ipcRenderer.invoke('browserProfile:installEngine'),
   },
 
+  // ─── Control API (MaiHub bridge) ─────────────────────────────────────────
+  controlApi: {
+    getConfig:             ()                    => ipcRenderer.invoke('controlApi:getConfig'),
+    setConfig:             (config: any)         => ipcRenderer.invoke('controlApi:setConfig', config),
+    createKey:             (name: string)        => ipcRenderer.invoke('controlApi:createKey', { name }),
+    listKeys:              ()                    => ipcRenderer.invoke('controlApi:listKeys'),
+    revokeKey:             (id: string)          => ipcRenderer.invoke('controlApi:revokeKey', { id }),
+    listAudit:             (limit?: number)      => ipcRenderer.invoke('controlApi:listAudit', { limit }),
+    firewallCommand:       ()                    => ipcRenderer.invoke('controlApi:firewallCommand'),
+    regenerateCertificate: ()                    => ipcRenderer.invoke('controlApi:regenerateCertificate'),
+  },
+
   // ─── Facebook poster ─────────────────────────────────────────────────────
   facebookPoster: {
     start:          (kind: string, params: any)  => ipcRenderer.invoke('facebookPoster:start', { kind, params }),

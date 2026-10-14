@@ -10,6 +10,7 @@ import HttpRelayService from '../../src/services/http/HttpRelayService';
 import ConnectionManager from '../../src/utils/ConnectionManager';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
+import { restartControlApi, stopControlApi } from './controlApiIpc';
 import { closeAllBrowserProfiles } from './browserProfileIpc';
 import { POSTER_NOT_STOPPED_ERROR, cancelAndWaitFacebookPosterJobs, isFacebookPosterBusy, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './facebookPosterIpc';
 
@@ -96,7 +97,11 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             mainWindow.webContents.send('workspace:waitingForJobs', {});
         }
         try { stopFacebookPosterScheduler(); } catch {}
-        if (await cancelAndWaitFacebookPosterJobs()) return true;
+        if (await cancelAndWaitFacebookPosterJobs()) {
+            // Poster events of the stopped job are recorded; now stop serving so no call hits the DB mid-switch
+            try { await stopControlApi(); } catch {}
+            return true;
+        }
         try { startFacebookPosterScheduler(); } catch {}
         return false;
     };
@@ -205,6 +210,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                 } finally {
                     // Also runs after a rolled-back switch (previous DB active again) or when no workspace is left
                     try { startFacebookPosterScheduler(); } catch {}
+                    await restartControlApi(); // new workspace DB: its own config and keys (old keys stop working)
                 }
             } finally {
                 switchInProgress = false;
@@ -243,6 +249,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                 } finally {
                     // Also runs after a rolled-back switch: the previous DB is active again
                     try { startFacebookPosterScheduler(); } catch {}
+                    await restartControlApi(); // new workspace DB: its own config and keys (old keys stop working)
                 }
 
                 // Reset FileStorageService cache so media resolves to the new workspace's folder
@@ -316,6 +323,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             } catch { /* ignore rollback helper failure */ }
             // The DB was not switched, so the scheduler (possibly stopped above) belongs on the current DB; no-op if running
             try { startFacebookPosterScheduler(); } catch {}
+            await restartControlApi();
             const msg = err?.message || String(err) || 'Unknown switch error';
             Logger.error(`[workspaceIpc] switch error: ${msg}`, err);
             return { success: false, error: msg };

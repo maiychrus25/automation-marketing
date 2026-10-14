@@ -44,6 +44,12 @@ jest.mock('../../../electron/ipc/facebookPosterIpc', () => ({
     isFacebookPosterBusy: () => mockPoster.isBusy(),
 }));
 
+const mockControl = { stop: jest.fn(async () => undefined), restart: jest.fn(async () => undefined) };
+jest.mock('../../../electron/ipc/controlApiIpc', () => ({
+    stopControlApi: () => mockControl.stop(),
+    restartControlApi: () => mockControl.restart(),
+}));
+
 import { registerWorkspaceIpc } from '../../../electron/ipc/workspaceIpc';
 
 const NOT_STOPPED = 'Việc Đăng Facebook chưa dừng được. Thử lại sau.';
@@ -93,6 +99,11 @@ describe('workspace:switch', () => {
         expect(mockDb.switchToWorkspaceDb).toHaveBeenCalledWith('/db/new.db');
         expect(mockWm.restoreActiveWorkspace).not.toHaveBeenCalled();
         expect(mockPoster.startScheduler).toHaveBeenCalled();
+        // The control API stops before the DB changes and restarts on the new workspace afterwards
+        expect(mockControl.stop).toHaveBeenCalledTimes(1);
+        expect(mockControl.stop.mock.invocationCallOrder[0]).toBeLessThan(mockDb.switchToWorkspaceDb.mock.invocationCallOrder[0]);
+        expect(mockControl.restart).toHaveBeenCalledTimes(1);
+        expect(mockControl.restart.mock.invocationCallOrder[0]).toBeGreaterThan(mockDb.switchToWorkspaceDb.mock.invocationCallOrder[0]);
     });
 
     it('refuses a second switch or active delete while one is waiting, then accepts again', async () => {
