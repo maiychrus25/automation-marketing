@@ -46,7 +46,8 @@ export default function ControlApiSettings() {
   const [newKeyName, setNewKeyName] = useState('');
   const [creating, setCreating] = useState(false);
   const [rawKey, setRawKey] = useState<string | null>(null);
-  const [lastKey, setLastKey] = useState('');
+  const [keysError, setKeysError] = useState('');
+  const [auditError, setAuditError] = useState('');
   const [firewall, setFirewall] = useState('');
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -74,15 +75,21 @@ export default function ControlApiSettings() {
   }, []);
 
   const loadKeys = useCallback(async () => {
-    const res = await ipc.controlApi?.listKeys();
-    if (res?.success) setKeys(res.keys || []);
+    try {
+      const res = await ipc.controlApi?.listKeys();
+      if (res?.success) { setKeys(res.keys || []); setKeysError(''); }
+      else setKeysError(res?.error || 'Không tải được danh sách khoá');
+    } catch (e: any) { setKeysError(e?.message || 'Không tải được danh sách khoá'); }
   }, []);
 
   const loadAudit = useCallback(async () => {
     setAuditLoading(true);
     try {
       const res = await ipc.controlApi?.listAudit(100);
-      if (res?.success) setAudit(res.audit || []);
+      if (res?.success) { setAudit(res.audit || []); setAuditError(''); }
+      else setAuditError(res?.error || 'Không tải được danh sách lệnh');
+    } catch (e: any) {
+      setAuditError(e?.message || 'Không tải được danh sách lệnh');
     } finally {
       setAuditLoading(false);
     }
@@ -137,6 +144,8 @@ export default function ControlApiSettings() {
         setView(v => (v ? { ...v, fingerprint: res.fingerprint ?? null, running: !!res.running } : v));
         showNotification('Đã tạo lại chứng chỉ', 'success');
       } else showNotification(res?.error || 'Không tạo lại được chứng chỉ', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'Không tạo lại được chứng chỉ', 'error');
     } finally {
       setRegenerating(false);
     }
@@ -148,10 +157,11 @@ export default function ControlApiSettings() {
       const res = await ipc.controlApi?.createKey(newKeyName.trim());
       if (res?.success && res.key) {
         setRawKey(res.key);
-        setLastKey(res.key);
         setNewKeyName('');
         loadKeys();
       } else showNotification(res?.error || 'Không tạo được khoá', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'Không tạo được khoá', 'error');
     } finally {
       setCreating(false);
     }
@@ -167,9 +177,13 @@ export default function ControlApiSettings() {
       variant: 'danger',
     });
     if (!ok) return;
-    const res = await ipc.controlApi?.revokeKey(k.id);
-    if (res?.success) { showNotification('Đã thu hồi khoá', 'success'); loadKeys(); }
-    else showNotification(res?.error || 'Không thu hồi được khoá', 'error');
+    try {
+      const res = await ipc.controlApi?.revokeKey(k.id);
+      if (res?.success) { showNotification('Đã thu hồi khoá', 'success'); loadKeys(); }
+      else showNotification(res?.error || 'Không thu hồi được khoá', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'Không thu hồi được khoá', 'error');
+    }
   };
 
   if (!view && !loadError) {
@@ -183,7 +197,7 @@ export default function ControlApiSettings() {
     : view.running ? { text: 'Đang chạy', cls: 'bg-green-500/15 text-green-500' }
     : { text: 'Đã tắt', cls: 'bg-gray-500/20 text-gray-400' };
   const urlText = `https://<IP-VPS>:${view.port}`;
-  const envText = `MAIHUB_URL=${urlText}\nMAIHUB_CERT_SHA256=${view.fingerprint || ''}\nMAIHUB_API_KEY=${lastKey || '<khoá vừa tạo>'}`;
+  const envText = `MAIHUB_URL=${urlText}\nMAIHUB_CERT_SHA256=${view.fingerprint || ''}\nMAIHUB_API_KEY=${'<khoá vừa tạo>'}`;
   const mcpText = 'claude mcp add maihub -- python3 /đường/dẫn/maihub_bridge.py mcp';
 
   return (
@@ -247,6 +261,7 @@ export default function ControlApiSettings() {
             {creating ? <Spinner size={4} className="text-white" /> : <KeyIcon className="w-4 h-4" />} Tạo khoá
           </button>
         </div>
+        {keysError && <p className="text-xs text-red-400 break-words" role="alert">{keysError}</p>}
         {keys.length === 0 ? <p className="text-xs text-gray-500">Chưa có khoá nào.</p> : (
           <ul className="divide-y divide-gray-700">
             {keys.map(k => (
@@ -284,11 +299,12 @@ export default function ControlApiSettings() {
             {auditLoading ? <Spinner size={4} /> : <RefreshIcon className="w-4 h-4" />} Làm mới
           </button>
         </div>
+        {auditError && <p className="text-xs text-red-400 break-words" role="alert">{auditError}</p>}
         {audit.length === 0 ? <p className="text-xs text-gray-500">Chưa có lệnh nào.</p> : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left text-gray-300 whitespace-nowrap">
               <thead className="text-gray-500">
-                <tr><th className="pr-3 py-1">Thời gian</th><th className="pr-3">Khoá</th><th className="pr-3">IP</th><th className="pr-3">Phương thức</th><th className="pr-3">Kết quả</th><th>Thời lượng</th></tr>
+                <tr><th scope="col" className="pr-3 py-1">Thời gian</th><th scope="col" className="pr-3">Khoá</th><th scope="col" className="pr-3">IP</th><th scope="col" className="pr-3">Phương thức</th><th scope="col" className="pr-3">Kết quả</th><th scope="col">Thời lượng</th></tr>
               </thead>
               <tbody>
                 {audit.map((a, i) => (
