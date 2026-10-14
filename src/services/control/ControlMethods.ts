@@ -366,7 +366,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             } catch (err) {
                 const mapped = toControlError(err);
                 // Lỗi nội bộ không lộ ra client nên phải để lại dấu vết để chẩn đoán.
-                if (mapped.code === 'INTERNAL' && !(err instanceof ControlError)) console.error(`[control] ${method.name} lỗi nội bộ:`, err);
+                if (mapped.code === 'INTERNAL' && !(err instanceof ControlError)) { console.error(`[control] ${method.name} lỗi nội bộ:`, err); }
                 throw mapped;
             }
         },

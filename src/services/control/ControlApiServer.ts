@@ -255,7 +255,7 @@ export class ControlApiServer {
             try {
                 result = await this.opts.idempotency.run(keyId, idem, () => method.run(params as Record<string, any>, { keyName, signal: abort.signal }));
             } catch (err) {
-                if (!(err instanceof ControlError)) console.error(`[control] Thao tác ${methodName} lỗi:`, err);
+                if (!(err instanceof ControlError)) { console.error(`[control] Thao tác ${methodName} lỗi:`, err); }
                 throw toControlError(err);
             }
             this.send(res, 200, { ok: true, result: result ?? null });

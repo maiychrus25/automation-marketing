@@ -20,7 +20,9 @@ const CONSOLE_PATTERNS = [
 function stripConsoleFromCode(code) {
   let result = code;
   for (const pattern of CONSOLE_PATTERNS) {
-    result = result.replace(pattern, '/* [stripped] */');
+    // Lời gọi kết thúc bằng `;` được thay bằng một câu lệnh rỗng thật (`void 0;`) để `if (x) console.error(..); throw ..`
+    // không biến thành `if (x) /* */ throw ..` (nuốt câu lệnh kế tiếp làm thân của if).
+    result = result.replace(pattern, (match) => (/;\s*$/.test(match) ? '/* [stripped] */ void 0;' : '/* [stripped] */'));
   }
   return result;
 }
@@ -74,5 +76,7 @@ function main() {
   console.log(`[strip-console] Done: ${stripped}/${files.length} files modified.`);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { stripConsoleFromCode };
 
