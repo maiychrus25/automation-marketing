@@ -34,6 +34,7 @@ export interface FacebookPosterServiceDeps {
 }
 
 export const BUSY_ERROR = 'Đang có việc chạy';
+export const ENGINE_MISSING_ERROR = 'Chưa cài trình duyệt. Hãy tải trình duyệt ở màn hình Trình duyệt.';
 const NOT_LOGGED_IN_ERROR = 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập';
 const STOPPED_REASON = 'Đã dừng';
 const FORCED_CLOSE_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook';

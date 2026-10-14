@@ -6,7 +6,7 @@ import DatabaseService from '../../src/services/database/DatabaseService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import AppModeManager from '../../src/utils/AppModeManager';
 import Logger from '../../src/utils/Logger';
-import { FacebookPosterService } from '../../src/services/facebookPoster/FacebookPosterService';
+import { FacebookPosterService, ENGINE_MISSING_ERROR } from '../../src/services/facebookPoster/FacebookPosterService';
 import { FacebookPosterStore } from '../../src/services/facebookPoster/FacebookPosterStore';
 import { buildRunCsv } from '../../src/services/facebookPoster/runCsv';
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from '../../src/services/facebookPoster/mediaRules';
@@ -31,7 +31,6 @@ let uiReady = false;
 const MAX_PENDING_MISSED = 50;
 const MAX_SCHEDULES = 200;
 export const POSTER_NOT_STOPPED_ERROR = 'Việc Đăng Facebook chưa dừng được. Thử lại sau.';
-const ENGINE_MISSING_ERROR = 'Chưa cài trình duyệt. Hãy tải trình duyệt ở màn hình Trình duyệt.';
 
 const startEnv: StartParamsEnv = {
     profileExists: (id) => !!db().getBrowserProfileById(id),

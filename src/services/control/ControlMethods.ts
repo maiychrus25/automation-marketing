@@ -1,4 +1,4 @@
-import { BUSY_ERROR } from '../facebookPoster/FacebookPosterService';
+import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../facebookPoster/FacebookPosterService';
 
 /** Mã lỗi cố định của giao thức (spec §3.2). */
 export type ControlErrorCode =
@@ -13,17 +13,22 @@ export class ControlError extends Error {
     }
 }
 
-/** Tiền tố ổn định của ENGINE_MISSING_ERROR (electron/ipc/facebookPosterIpc.ts); không import được từ src/. */
-const ENGINE_MISSING_PREFIX = 'Chưa cài trình duyệt';
+const INTERNAL_MESSAGE = 'Lỗi nội bộ của MaiHub, thử lại sau';
+const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy'];
 
-/** Đổi lỗi ném ra từ posterOperations thành mã giao thức; lỗi lạ giữ nguyên thông báo gốc dưới INVALID_PARAMS. */
+/**
+ * Đổi lỗi ném ra từ posterOperations thành mã giao thức. Chỉ `new Error(msg)` thuần (lỗi kiểm tra có thông báo tiếng Việt)
+ * mới thành INVALID_PARAMS; mọi lỗi khác (TypeError, lỗi SQLite/hệ thống tệp…) là INTERNAL, không lộ thông báo gốc.
+ */
 export function toControlError(err: unknown): ControlError {
     if (err instanceof ControlError) return err;
-    const message = err instanceof Error ? err.message : String(err);
+    const plain = err instanceof Error && err.constructor === Error && typeof (err as { code?: unknown }).code !== 'string';
+    if (!plain) return new ControlError('INTERNAL', INTERNAL_MESSAGE);
+    const message = (err as Error).message;
     if (message.includes(BUSY_ERROR)) return new ControlError('BUSY', message);
-    if (message.includes(ENGINE_MISSING_PREFIX)) return new ControlError('ENGINE_MISSING', message);
-    if (message.includes('Tối đa 200 lịch')) return new ControlError('LIMIT_REACHED', message);
-    if (message.includes('Không tìm thấy')) return new ControlError('NOT_FOUND', message);
+    if (message === ENGINE_MISSING_ERROR) return new ControlError('ENGINE_MISSING', message);
+    if (/Tối đa \d+ lịch/.test(message)) return new ControlError('LIMIT_REACHED', message);
+    if (NOT_FOUND_MESSAGES.includes(message)) return new ControlError('NOT_FOUND', message);
     return new ControlError('INVALID_PARAMS', message);
 }
 
@@ -34,6 +39,8 @@ export interface ControlMethod {
     name: string;
     description: string;
     destructive: boolean | ((params: ControlParams) => boolean);
+    /** Mô tả cho /v1/describe khi `destructive` là hàm: điều kiện tham số khiến thao tác cần xác nhận. */
+    destructiveWhen?: ControlParams;
     paramsSchema: object;
     resultSchema: object;
     run(params: ControlParams, ctx: ControlContext): Promise<unknown>;
@@ -90,8 +97,8 @@ const profilesProp = {
 };
 const mediaIdsProp = { type: 'array', items: { type: 'string' }, description: 'Mã tệp đã tải lên qua /v1/media' };
 const draftFields: Record<string, object> = {
-    name: str('Tên nháp (mặc định lấy 40 ký tự đầu của nội dung)'),
-    plannedAt: int('Giờ dự kiến đăng (mili giây epoch); null để bỏ'),
+    name: { type: 'string', maxLength: 100, description: 'Tên nháp (mặc định lấy 40 ký tự đầu của nội dung)' },
+    plannedAt: { type: ['integer', 'null'], description: 'Giờ dự kiến đăng (mili giây epoch); null để bỏ' },
     mode: { type: 'string', enum: ['group', 'page'], description: 'Đăng vào nhóm hoặc trang' },
     text: str('Nội dung bài'),
     mediaIds: mediaIdsProp,
@@ -161,8 +168,9 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
         },
         {
             name: 'profiles.list', description: 'Danh sách profile: mã, tên, nhóm, trạng thái mở, ngày quét nhóm gần nhất.',
-            destructive: false, paramsSchema: noParams, resultSchema: anyResult,
-            run: async () => deps.listProfiles(),
+            destructive: false, paramsSchema: noParams,
+            resultSchema: obj({ profiles: { type: 'array', items: { type: 'object' }, description: 'Danh sách profile' } }, ['profiles']),
+            run: async () => ({ profiles: await deps.listProfiles() }),
         },
         {
             name: 'profiles.groups', description: 'Nhóm đã quét của các profile (url, tên).',
@@ -172,28 +180,20 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
         },
         {
             name: 'profiles.scanGroups',
-            description: 'Bắt đầu quét nhóm cho các profile (như nút trong app). BUSY nếu đang có việc chạy. Mặc định song song 3, giãn cách khởi động 30–90 giây.',
+            description: 'Bắt đầu quét nhóm cho các profile (như nút trong app). BUSY nếu đang có việc chạy. Không gửi concurrency/stagger thì dùng mặc định của app (song song 3, giãn cách 30–90 giây).',
             destructive: false,
             paramsSchema: obj({
                 profileIds: { type: 'array', items: { type: 'string' }, description: 'Mã các profile cần quét' },
                 concurrency: draftFields.concurrency, staggerMinSec: draftFields.staggerMinSec, staggerMaxSec: draftFields.staggerMaxSec,
             }, ['profileIds']),
             resultSchema: anyResult,
-            run: async (p) => poster.start({
-                kind: 'scan_groups',
-                params: {
-                    profileIds: p.profileIds,
-                    concurrency: p.concurrency ?? 3,
-                    staggerMinSec: p.staggerMinSec ?? 30,
-                    staggerMaxSec: p.staggerMaxSec ?? 90,
-                },
-            }),
+            run: async (p) => poster.start({ kind: 'scan_groups', params: pick(p, ['profileIds', 'concurrency', 'staggerMinSec', 'staggerMaxSec']) }),
         },
         {
             name: 'drafts.list', description: 'Danh sách bản nháp.',
             destructive: false,
             paramsSchema: obj({ limit: int('Tối đa bao nhiêu dòng (1–200, mặc định 50)'), offset: int('Bỏ qua bao nhiêu dòng đầu', { minimum: 0 }) }),
-            resultSchema: anyResult,
+            resultSchema: obj({ total: int('Tổng số nháp'), items: { type: 'array', items: { type: 'object' }, description: 'Các nháp trong trang' } }, ['total', 'items']),
             run: async (p) => {
                 const { schedules } = await poster.scheduleList();
                 return page((schedules as any[]).filter((s) => s.draft), p);
@@ -238,7 +238,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             name: 'drafts.delete', description: 'Xoá một bản nháp (không xoá được lịch thật). Cần confirm: true.',
             destructive: true,
             paramsSchema: obj({ id: str('Mã bản nháp'), confirm: confirmProp }, ['id', 'confirm']),
-            resultSchema: anyResult,
+            resultSchema: obj({ deleted: { type: 'boolean' } }, ['deleted']),
             run: async (p) => {
                 const id = requireString(p, 'id');
                 await poster.draftGet({ id }); // chỉ cho xoá bản nháp: không phải nháp thì ném "Không tìm thấy bản nháp"
@@ -250,12 +250,15 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             name: 'drafts.approve',
             description: 'Duyệt bản nháp thành lịch thật. when = "now" là đăng ngay (cần confirm: true); hoặc {kind:"once", runAt} / {kind:"recurring", days, time}.',
             destructive: (p) => p.when === 'now',
+            destructiveWhen: { when: 'now' },
             paramsSchema: obj({
                 id: str('Mã bản nháp'),
                 when: {
-                    type: ['string', 'object'],
-                    description: '"now" hoặc đối tượng {kind: "once"|"recurring", runAt?, days?, time?}',
-                    properties: { kind: { type: 'string', enum: ['once', 'recurring'] }, ...timingProps },
+                    description: '"now" (đăng ngay) hoặc đối tượng lịch {kind: "once" + runAt | "recurring" + days + time}',
+                    anyOf: [
+                        { type: 'string', enum: ['now'] },
+                        { type: 'object', required: ['kind'], properties: { kind: { type: 'string', enum: ['once', 'recurring'] }, ...timingProps } },
+                    ],
                 },
                 confirm: confirmProp,
             }, ['id', 'when']),
@@ -271,14 +274,14 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
         },
         {
             name: 'schedules.list', description: 'Danh sách lịch đăng (không gồm bản nháp), kèm queuedIds đang chờ chạy.',
-            destructive: false, paramsSchema: noParams, resultSchema: anyResult,
+            destructive: false, paramsSchema: noParams, resultSchema: obj({ schedules: { type: 'array', items: { type: 'object' }, description: 'Các lịch' }, queuedIds: { type: 'array', items: { type: 'string' }, description: 'Lịch đang chờ chạy' } }, ['schedules', 'queuedIds']),
             run: async () => {
                 const { schedules, queuedIds } = await poster.scheduleList();
                 return { schedules: (schedules as any[]).filter((s) => !s.draft), queuedIds };
             },
         },
         {
-            name: 'schedules.update', description: 'Sửa lịch: tên, bật/tắt, giờ (cùng quy tắc với app).',
+            name: 'schedules.update', description: 'Sửa lịch: tên, bật/tắt, giờ (cùng quy tắc với app). runAt chỉ dùng cho lịch một lần; days/time chỉ dùng cho lịch lặp.',
             destructive: false,
             paramsSchema: obj({ id: str('Mã lịch'), name: str('Tên mới'), enabled: { type: 'boolean', description: 'Bật hoặc tắt lịch' }, ...timingProps }, ['id']),
             resultSchema: anyResult,
@@ -288,9 +291,12 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             name: 'schedules.delete', description: 'Xoá một lịch; từ chối khi lịch đang chạy. Cần confirm: true.',
             destructive: true,
             paramsSchema: obj({ id: str('Mã lịch'), confirm: confirmProp }, ['id', 'confirm']),
-            resultSchema: anyResult,
+            resultSchema: obj({ deleted: { type: 'boolean' } }, ['deleted']),
             run: async (p) => {
-                await poster.scheduleDelete({ id: p.id });
+                const id = requireString(p, 'id');
+                const { schedules } = await poster.scheduleList();
+                if (!(schedules as { id: string }[]).some((s) => s.id === id)) throw new ControlError('NOT_FOUND', 'Không tìm thấy lịch');
+                await poster.scheduleDelete({ id });
                 return { deleted: true };
             },
         },
@@ -317,7 +323,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
         },
         {
             name: 'runs.cancel', description: 'Dừng việc đang chạy. Cần confirm: true.',
-            destructive: true, paramsSchema: obj({ confirm: confirmProp }, ['confirm']), resultSchema: anyResult,
+            destructive: true, paramsSchema: obj({ confirm: confirmProp }, ['confirm']), resultSchema: obj({ cancelled: { type: 'boolean' } }, ['cancelled']),
             run: async () => {
                 await poster.cancel();
                 return { cancelled: true };
@@ -331,7 +337,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                 after: int('Số thứ tự sự kiện cuối đã nhận (0 để lấy từ đầu)', { minimum: 0 }),
                 timeoutSec: int('Chờ tối đa bao nhiêu giây (0–25)', { minimum: 0, maximum: EVENTS_MAX_TIMEOUT_SEC }),
             }, ['after']),
-            resultSchema: anyResult,
+            resultSchema: obj({ events: { type: 'array', items: obj({ seq: int('Số thứ tự'), type: str('Loại sự kiện'), payload: { type: 'object' }, createdAt: int('Thời điểm (mili giây epoch)') }, ['seq', 'type']), description: 'Sự kiện có seq > after (tối đa 100)' } }, ['events']),
             run: async (p) => {
                 if (!Number.isInteger(p.after) || p.after < 0) {
                     throw new ControlError('INVALID_PARAMS', 'after phải là số nguyên ≥ 0', { field: 'after' });
@@ -370,6 +376,7 @@ export function describe(methods: ControlMethod[]) {
             name: m.name,
             description: m.description,
             destructive: m.destructive !== false,
+            ...(m.destructiveWhen ? { destructiveWhen: m.destructiveWhen } : {}),
             paramsSchema: m.paramsSchema,
             resultSchema: m.resultSchema,
         })),

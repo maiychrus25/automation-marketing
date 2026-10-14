@@ -1,7 +1,5 @@
 import { ControlError, createControlMethods, describe as describeMethods, toControlError, type ControlMethodDeps } from '../../services/control/ControlMethods';
-import { BUSY_ERROR } from '../../services/facebookPoster/FacebookPosterService';
-
-const ENGINE_MISSING = 'Chưa cài trình duyệt. Hãy tải trình duyệt ở màn hình Trình duyệt.';
+import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../../services/facebookPoster/FacebookPosterService';
 
 function makeDeps() {
     const poster = {
@@ -45,7 +43,7 @@ describe('createControlMethods', () => {
     it('maps read methods to deps', async () => {
         const { deps, call } = setup();
         expect(await call('system.status')).toEqual({ version: '1' });
-        expect(await call('profiles.list')).toEqual([{ id: 'p1' }]);
+        expect(await call('profiles.list')).toEqual({ profiles: [{ id: 'p1' }] });
         await call('profiles.groups', { profileIds: ['p1'] });
         expect(deps.poster.listGroups).toHaveBeenCalledWith({ profileIds: ['p1'] });
         await call('runs.current');
@@ -58,11 +56,11 @@ describe('createControlMethods', () => {
         expect(deps.poster.draftGet).toHaveBeenCalledWith({ id: 'd1' });
     });
 
-    it('profiles.scanGroups starts a scan_groups run with defaults', async () => {
+    it('profiles.scanGroups starts a scan_groups run passing only provided keys', async () => {
         const { deps, call } = setup();
         expect(await call('profiles.scanGroups', { profileIds: ['p1', 'p2'] })).toEqual({ runId: 'r1' });
         expect(deps.poster.start).toHaveBeenCalledWith({
-            kind: 'scan_groups', params: { profileIds: ['p1', 'p2'], concurrency: 3, staggerMinSec: 30, staggerMaxSec: 90 },
+            kind: 'scan_groups', params: { profileIds: ['p1', 'p2'] },
         });
         await call('profiles.scanGroups', { profileIds: ['p1'], concurrency: 5, staggerMinSec: 0, staggerMaxSec: 0 });
         expect(deps.poster.start).toHaveBeenLastCalledWith({
@@ -143,7 +141,7 @@ describe('createControlMethods', () => {
         ['runs.cancel', {}],
         ['drafts.approve', { id: 'd1', when: 'now' }],
         ['drafts.approve', { id: 'd1', when: 'now', confirm: 'true' }],
-    ])('%s without confirm is refused and touches no dep', async (name, params) => {
+    ])('%s without confirm is refused and touches no dep (case %#)', async (name, params) => {
         const { deps, call } = setup();
         await expect(call(name, params)).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
         allDepFns(deps).forEach((fn) => expect(fn).not.toHaveBeenCalled());
@@ -166,6 +164,22 @@ describe('createControlMethods', () => {
         await expect(call('events.wait', { after: -1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     });
 
+    it('schedules.delete validates id and returns NOT_FOUND for unknown schedule', async () => {
+        const { deps, call } = setup();
+        await expect(call('schedules.delete', { confirm: true })).rejects.toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'id' } });
+        await expect(call('schedules.delete', { id: 'zzz', confirm: true })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+        expect(deps.poster.scheduleDelete).not.toHaveBeenCalled();
+    });
+
+    it('drafts.delete and drafts.update on a non-draft do not write', async () => {
+        const { deps, call } = setup();
+        deps.poster.draftGet.mockImplementation(() => { throw new Error('Không tìm thấy bản nháp'); });
+        await expect(call('drafts.delete', { id: 's1', confirm: true })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+        await expect(call('drafts.update', { id: 's1', text: 'x' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+        expect(deps.poster.scheduleDelete).not.toHaveBeenCalled();
+        expect(deps.poster.draftSave).not.toHaveBeenCalled();
+    });
+
     it('maps thrown errors to protocol codes', async () => {
         const { deps, call } = setup();
         deps.poster.start.mockImplementationOnce(() => { throw new Error(BUSY_ERROR); });
@@ -181,15 +195,31 @@ describe('toControlError', () => {
         expect(toControlError(own)).toBe(own);
         expect(toControlError(new Error(BUSY_ERROR)).code).toBe('BUSY');
         expect(toControlError(new Error(`${BUSY_ERROR} khác`)).code).toBe('BUSY');
-        expect(toControlError(new Error(ENGINE_MISSING)).code).toBe('ENGINE_MISSING');
+        expect(toControlError(new Error(ENGINE_MISSING_ERROR)).code).toBe('ENGINE_MISSING');
         expect(toControlError(new Error('Tối đa 200 lịch cho một workspace')).code).toBe('LIMIT_REACHED');
-        expect(toControlError(new Error('Không tìm thấy lịch')).code).toBe('NOT_FOUND');
+        for (const m of ['Không tìm thấy lịch', 'Không tìm thấy bản nháp', 'Không tìm thấy lần chạy']) {
+            expect(toControlError(new Error(m)).code).toBe('NOT_FOUND');
+        }
+        expect(toControlError(new Error('Tối đa 50 lịch cho một workspace')).code).toBe('LIMIT_REACHED');
+    });
+
+    it('keeps validation messages about profile or file as INVALID_PARAMS', () => {
+        expect(toControlError(new Error('Không tìm thấy profile')).code).toBe('INVALID_PARAMS');
+        expect(toControlError(new Error('Không tìm thấy tệp ảnh/video')).code).toBe('INVALID_PARAMS');
+    });
+
+    it('maps unexpected failures to INTERNAL without leaking the raw message', () => {
+        const cases = [new TypeError('x is undefined'), Object.assign(new Error("EPERM: open '/home/u/secret'"), { code: 'EPERM' }), 'boom', null];
+        for (const c of cases) {
+            const e = toControlError(c);
+            expect(e.code).toBe('INTERNAL');
+            expect(e.message).toBe('Lỗi nội bộ của MaiHub, thử lại sau');
+        }
     });
 
     it('falls back to INVALID_PARAMS keeping the original message', () => {
         const err = toControlError(new Error('Nội dung bài không được để trống'));
         expect(err).toMatchObject({ code: 'INVALID_PARAMS', message: 'Nội dung bài không được để trống' });
-        expect(toControlError('boom').message).toBe('boom');
     });
 });
 
@@ -212,6 +242,12 @@ describe('describe', () => {
         const flags = Object.fromEntries(d.methods.map((m) => [m.name, m.destructive]));
         expect(flags['drafts.delete'] && flags['schedules.delete'] && flags['runs.cancel'] && flags['drafts.approve']).toBe(true);
         expect(flags['drafts.create']).toBe(false);
+        const byName = Object.fromEntries(d.methods.map((m: any) => [m.name, m]));
+        expect(byName['drafts.approve'].destructiveWhen).toEqual({ when: 'now' });
+        expect(byName['drafts.delete'].destructiveWhen).toBeUndefined();
+        expect(byName['drafts.create'].paramsSchema.properties.plannedAt.type).toEqual(['integer', 'null']);
+        expect(byName['drafts.approve'].paramsSchema.properties.when.anyOf).toHaveLength(2);
+        expect(byName['drafts.create'].paramsSchema.properties.name.maxLength).toBe(100);
         const text = JSON.stringify(d);
         for (const banned of ['pickMedia', 'exportRunCsv', 'takeMissed']) expect(text).not.toContain(banned);
     });

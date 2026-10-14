@@ -64,7 +64,7 @@ Telegram ⇄ bot AI (VPS Linux, Claude CLI)
 ### 3.3 Quy tắc chung
 
 - **Phiên bản:** đường dẫn có `/v1`. Trong cùng v1 chỉ được *thêm* thao tác hoặc tham số tuỳ chọn; đổi nghĩa thì sang `/v2`.
-- **Xác nhận:** thao tác có `destructive: true` bắt buộc `params.confirm === true`, nếu thiếu thì trả `CONFIRMATION_REQUIRED` và không làm gì. Bot dùng mã này để hỏi người dùng trên Telegram trước, rồi gọi lại.
+- **Xác nhận:** thao tác có `destructive: true` bắt buộc `params.confirm === true`, nếu thiếu thì trả `CONFIRMATION_REQUIRED` và không làm gì. Bot dùng mã này để hỏi người dùng trên Telegram trước, rồi gọi lại. Thao tác chỉ destructive có điều kiện (như `drafts.approve` khi `when = "now"`) có `destructive: true` kèm trường cộng thêm `destructiveWhen` trong `/v1/describe` (sửa khi triển khai, 14/10/2026).
 - **Chống chạy trùng:** thao tác ghi nhận `idempotencyKey` (tuỳ chọn, ≤ 64 ký tự). Cùng khoá truy cập và cùng `idempotencyKey` trong 24 giờ thì trả lại kết quả cũ, không làm lại.
 - **Cùng đường với app:** mỗi thao tác gọi đúng hàm mà IPC của app đang gọi (mục 5), nên kiểm tra, giới hạn và thông báo lỗi giống hệt khi thao tác trong app.
 - **Kích thước:** thân `/v1/call` ≤ 1 MB. Tệp `/v1/media` theo giới hạn ảnh hiện có (`MAX_IMAGE_BYTES` 20 MB). Video tối đa 200 MB, chỉ khi luồng đăng hiện tại hỗ trợ video.
@@ -82,7 +82,7 @@ Telegram ⇄ bot AI (VPS Linux, Claude CLI)
 | `drafts.create` | `text`, `mediaIds[]`, `comment?`, `commentDelayMin?`, `profiles[{profileId, targets[]}]`, `mode`, giãn cách… | Cùng tham số và kiểm tra với "Lưu nháp" trong app. `mediaIds` ánh xạ sang tệp đã tải |
 | `drafts.update` | `id` + trường cần đổi | |
 | `drafts.delete` | `id`, `confirm` | destructive |
-| `drafts.approve` | `id`, `when: "now" \| {kind:"once", at} \| {kind:"recurring", …}`, `confirm` khi `now` | "Đăng ngay" là destructive |
+| `drafts.approve` | `id`, `when: "now" \| {kind:"once", runAt} \| {kind:"recurring", …}`, `confirm` khi `now` | "Đăng ngay" là destructive; `runAt` là mili giây epoch (sửa khi triển khai, 14/10/2026) |
 | `schedules.list` | — | Kèm `queuedIds` |
 | `schedules.update` | `id`, giờ / bật-tắt / tên | Cùng `planScheduleUpdate` |
 | `schedules.delete` | `id`, `confirm` | destructive; từ chối khi lịch đang chạy (giống app) |
