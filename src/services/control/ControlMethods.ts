@@ -1,3 +1,4 @@
+import Logger from '../../utils/Logger';
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../facebookPoster/FacebookPosterService';
 
 /** Mã lỗi cố định của giao thức (spec §3.2). */
@@ -366,7 +367,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             } catch (err) {
                 const mapped = toControlError(err);
                 // Lỗi nội bộ không lộ ra client nên phải để lại dấu vết để chẩn đoán.
-                if (mapped.code === 'INTERNAL' && !(err instanceof ControlError)) { console.error(`[control] ${method.name} lỗi nội bộ:`, err); }
+                if (mapped.code === 'INTERNAL' && !(err instanceof ControlError)) { Logger.error(`[control] ${method.name} lỗi nội bộ:`, err); }
                 throw mapped;
             }
         },

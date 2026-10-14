@@ -1,3 +1,4 @@
+import Logger from '../../utils/Logger';
 import https from 'https';
 import tls from 'tls';
 import { Readable } from 'stream';
@@ -189,7 +190,7 @@ describe('ControlApiServer /v1/call', () => {
 
   it('error mapping: ControlError, plain Error, internal hidden', async () => {
     ctx = await setup();
-    const spy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const spy = jest.spyOn(Logger, 'error').mockImplementation(() => undefined);
     const a = await ctx.call('denied');
     expect(a.status).toBe(409);
     expect(a.body.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', message: 'Cần xác nhận' });
@@ -265,7 +266,7 @@ describe('ControlApiServer /v1/call', () => {
 
   it('writes audit for ok and failed calls, without bodies', async () => {
     ctx = await setup();
-    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.spyOn(Logger, 'error').mockImplementation(() => undefined);
     await ctx.call('echo', { id: 'd1', text: 'SECRET POST BODY', comment: 'SECRET COMMENT', mediaIds: ['a', 'b'] });
     await ctx.call('denied', {});
     const rows = ctx.store.listAudit(10);
@@ -322,7 +323,7 @@ describe('ControlApiServer /v1/media', () => {
 
   it('saveMedia failure -> INTERNAL, no raw message', async () => {
     ctx = await setup({ saveMedia: async (_n: string, _c: string, s: Readable) => { s.resume(); throw new Error('disk exploded'); } });
-    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.spyOn(Logger, 'error').mockImplementation(() => undefined);
     const r = await upload('a.png', 'image/png', Buffer.alloc(5));
     expect(r.status).toBe(500);
     expect(r.raw).not.toContain('disk exploded');
@@ -421,7 +422,7 @@ describe('ControlApiServer hardening', () => {
 
   it('saveMedia resolving undefined -> INTERNAL, not 413', async () => {
     ctx = await setup({ saveMedia: async (_n: string, _c: string, s: Readable) => { s.resume(); return undefined; } });
-    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.spyOn(Logger, 'error').mockImplementation(() => undefined);
     const r = await ctx.send('POST', '/v1/media', { body: Buffer.alloc(5), headers: { 'content-type': 'image/png', 'x-filename': 'a.png' } });
     expect(r.status).toBe(500);
     expect(r.body.error.code).toBe('INTERNAL');
@@ -429,8 +430,8 @@ describe('ControlApiServer hardening', () => {
 
   it('malformed request target -> 404, concise single-line log, no stack', async () => {
     ctx = await setup();
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warn = jest.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    const err = jest.spyOn(Logger, 'error').mockImplementation(() => undefined);
     const reply = await new Promise<string>((resolve) => {
       const sock = tls.connect({ host: '127.0.0.1', port: ctx.port, rejectUnauthorized: false }, () => {
         sock.write('GET http://[ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n');
@@ -457,7 +458,7 @@ describe('ControlApiServer hardening', () => {
 
   it('wrapped method throwing TypeError -> INTERNAL and original logged with method name', async () => {
     ctx = await setup({ poster: { current: () => { throw new TypeError('wrapped secret'); } } });
-    const spy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const spy = jest.spyOn(Logger, 'error').mockImplementation(() => undefined);
     const r = await ctx.call('runs.current');
     expect(r.status).toBe(500);
     expect(r.body.error.code).toBe('INTERNAL');

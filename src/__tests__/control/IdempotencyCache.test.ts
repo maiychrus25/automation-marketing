@@ -1,3 +1,4 @@
+import Logger from '../../utils/Logger';
 import { memoryDb } from '../facebookPoster/helpers';
 import { ControlStore, CONTROL_SCHEMA_SQL } from '../../services/control/ControlStore';
 import { IdempotencyCache } from '../../services/control/IdempotencyCache';
@@ -51,7 +52,7 @@ describe('IdempotencyCache', () => {
   });
   it('non-serializable result still resolves', async () => {
     const { cache } = make();
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = jest.spyOn(Logger, 'warn').mockImplementation(() => {});
     expect(await cache.run('k', 'i', async () => BigInt(5))).toBe(BigInt(5));
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();

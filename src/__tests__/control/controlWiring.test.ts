@@ -1,3 +1,4 @@
+import Logger from '../../utils/Logger';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -103,7 +104,7 @@ describe('control events', () => {
   test('sink errors never propagate; no sink is a no-op', () => {
     emitControlEvent('run.started', {});
     setControlEventSink(() => { throw new Error('db gone'); });
-    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.spyOn(Logger, 'error').mockImplementation(() => undefined);
     expect(() => emitControlEvent('run.started', {})).not.toThrow();
     setControlEventSink(null);
   });

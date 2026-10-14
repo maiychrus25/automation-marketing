@@ -1,3 +1,4 @@
+import Logger from '../../utils/Logger';
 import https from 'https';
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { AddressInfo, Socket } from 'net';
@@ -132,7 +133,7 @@ export class ControlApiServer {
         try {
             await this.pipeline(req, res);
         } catch (err) {
-            console.error('[control] Lỗi xử lý yêu cầu:', err);
+            Logger.error('[control] Lỗi xử lý yêu cầu:', err);
             this.sendError(res, new ControlError('INTERNAL', INTERNAL_MESSAGE));
         }
     }
@@ -146,7 +147,7 @@ export class ControlApiServer {
         try {
             path = new URL(req.url ?? '/', 'http://localhost').pathname;
         } catch {
-            console.warn('[control] Bỏ qua yêu cầu có đường dẫn không hợp lệ');
+            Logger.warn('[control] Bỏ qua yêu cầu có đường dẫn không hợp lệ');
             this.sendError(res, new ControlError('NOT_FOUND', 'Không có đường dẫn này'), true);
             return;
         }
@@ -216,7 +217,7 @@ export class ControlApiServer {
         try {
             this.opts.store.addAudit({ at: this.now(), keyName, ip, method, paramsSummary: null, ok: false, errorCode, durationMs: 0 });
         } catch (err) {
-            console.error('[control] Không ghi được nhật ký:', err);
+            Logger.error('[control] Không ghi được nhật ký:', err);
         }
     }
 
@@ -255,7 +256,7 @@ export class ControlApiServer {
             try {
                 result = await this.opts.idempotency.run(keyId, idem, () => method.run(params as Record<string, any>, { keyName, signal: abort.signal }));
             } catch (err) {
-                if (!(err instanceof ControlError)) { console.error(`[control] Thao tác ${methodName} lỗi:`, err); }
+                if (!(err instanceof ControlError)) { Logger.error(`[control] Thao tác ${methodName} lỗi:`, err); }
                 throw toControlError(err);
             }
             this.send(res, 200, { ok: true, result: result ?? null });
@@ -276,7 +277,7 @@ export class ControlApiServer {
                     ok: errorCode === null, errorCode, durationMs: this.now() - startedAt,
                 });
             } catch (err) {
-                console.error('[control] Không ghi được nhật ký:', err);
+                Logger.error('[control] Không ghi được nhật ký:', err);
             }
         }
     }
@@ -316,12 +317,12 @@ export class ControlApiServer {
             } catch (err) {
                 if (!exceeded) {
                     if (err instanceof ControlError) throw err;
-                    console.error('[control] Lưu media lỗi:', err);
+                    Logger.error('[control] Lưu media lỗi:', err);
                     throw new ControlError('INTERNAL', 'Không lưu được tệp, thử lại sau');
                 }
             }
             if (exceeded) throw tooLarge;
-            if (!saved) { console.error('[control] saveMedia không trả kết quả'); throw new ControlError('INTERNAL', INTERNAL_MESSAGE); }
+            if (!saved) { Logger.error('[control] saveMedia không trả kết quả'); throw new ControlError('INTERNAL', INTERNAL_MESSAGE); }
             summary = JSON.stringify({ kind: saved.kind, size: saved.size });
             this.send(res, 200, { ok: true, result: saved });
         } catch (err) {
@@ -332,7 +333,7 @@ export class ControlApiServer {
             try {
                 this.opts.store.addAudit({ at: startedAt, keyName, ip, method: 'media.upload', paramsSummary: summary, ok: errorCode === null, errorCode, durationMs: this.now() - startedAt });
             } catch (err) {
-                console.error('[control] Không ghi được nhật ký:', err);
+                Logger.error('[control] Không ghi được nhật ký:', err);
             }
         }
     }
