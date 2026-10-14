@@ -198,7 +198,7 @@ export default function ControlApiSettings() {
     : { text: 'Đã tắt', cls: 'bg-gray-500/20 text-gray-400' };
   const urlText = `https://<IP-VPS>:${view.port}`;
   const envText = `MAIHUB_URL=${urlText}\nMAIHUB_CERT_SHA256=${view.fingerprint || ''}\nMAIHUB_API_KEY=${'<khoá vừa tạo>'}`;
-  const mcpText = 'claude mcp add maihub -- python3 /đường/dẫn/maihub_bridge.py mcp';
+  const mcpText = 'claude mcp add maihub -- python3 /đường/dẫn/maihub_bridge.py mcp --env-file /đường/dẫn/.env';
 
   return (
     <div className="space-y-4 max-w-3xl min-w-0">

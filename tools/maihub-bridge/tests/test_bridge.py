@@ -364,6 +364,17 @@ class EnvFileAndDoctorTests(BridgeTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["protocol"], 1)
 
+    def test_env_file_accepted_before_and_after_subcommand(self):
+        path = self.write_env()
+        parse = bridge.build_parser().parse_args
+        self.assertEqual(parse(["mcp", "--env-file", path]).env_file, path)
+        self.assertEqual(parse(["--env-file", path, "mcp"]).env_file, path)
+        self.assertEqual(parse(["--env-file", path, "doctor"]).env_file, path)
+        self.assertIsNone(parse(["doctor"]).env_file)
+        code, out, _ = self.run_cli(["describe", "--env-file", path], {})
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["protocol"], 1)
+
     def test_doctor_ok_masks_key(self):
         code, out, err = self.run_cli(["--env-file", self.write_env(), "doctor"], {})
         self.assertEqual(code, 0, out + err)

@@ -382,22 +382,26 @@ def cmd_doctor(config_loader):
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="maihub_bridge.py", description="Cầu nối CLI / MCP tới giao thức điều khiển MaiHub")
-    parser.add_argument("--env-file", help="Tệp KEY=VALUE chứa MAIHUB_URL, MAIHUB_API_KEY, MAIHUB_CERT_SHA256")
+    env_help = "Tệp KEY=VALUE chứa MAIHUB_URL, MAIHUB_API_KEY, MAIHUB_CERT_SHA256"
+    parser.add_argument("--env-file", help=env_help)
+    # Cho phép đặt --env-file sau lệnh con (`mcp --env-file X`); SUPPRESS để giá trị đặt trước lệnh con không bị ghi đè bằng None.
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--env-file", default=argparse.SUPPRESS, help=env_help)
     sub = parser.add_subparsers(dest="command")
     sub.required = True
-    sub.add_parser("describe", help="In danh sách thao tác (GET /v1/describe)")
-    p_call = sub.add_parser("call", help="Gọi một thao tác")
+    sub.add_parser("describe", parents=[shared], help="In danh sách thao tác (GET /v1/describe)")
+    p_call = sub.add_parser("call", parents=[shared], help="Gọi một thao tác")
     p_call.add_argument("method")
     p_call.add_argument("params", nargs="?", default="{}", help="Tham số dạng JSON (mặc định {})")
     p_call.add_argument("--idempotency-key", help="Khoá chống gọi trùng")
     p_call.add_argument("--auto-idem", action="store_true", help="Tự sinh khoá chống gọi trùng (uuid4)")
-    p_up = sub.add_parser("upload", help="Tải ảnh/video lên MaiHub")
+    p_up = sub.add_parser("upload", parents=[shared], help="Tải ảnh/video lên MaiHub")
     p_up.add_argument("path")
-    p_wait = sub.add_parser("wait", help="Chờ sự kiện (events.wait)")
+    p_wait = sub.add_parser("wait", parents=[shared], help="Chờ sự kiện (events.wait)")
     p_wait.add_argument("--after", type=int, default=0)
     p_wait.add_argument("--timeout", type=int, default=25, help="Giây, tối đa 25")
-    sub.add_parser("doctor", help="Kiểm tra cấu hình, kết nối, ghim chứng chỉ, khoá")
-    sub.add_parser("mcp", help="Chạy MCP server qua stdio")
+    sub.add_parser("doctor", parents=[shared], help="Kiểm tra cấu hình, kết nối, ghim chứng chỉ, khoá")
+    sub.add_parser("mcp", parents=[shared], help="Chạy MCP server qua stdio")
     return parser
 
 

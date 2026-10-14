@@ -38,6 +38,8 @@ Chạy lệnh dưới bằng đúng user sẽ chạy Claude CLI của bot (cấu
 sudo -u botuser claude mcp add maihub -- python3 /opt/bot/maihub/maihub_bridge.py mcp --env-file /opt/bot/maihub/.env
 ```
 
+`--env-file` đặt trước hoặc sau tên lệnh con đều được (`mcp --env-file X` hay `--env-file X mcp`).
+
 Codex (`~/.codex/config.toml` của user đó):
 
 ```toml
