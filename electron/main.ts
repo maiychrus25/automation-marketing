@@ -1300,7 +1300,6 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
-  void shutdownControlApi().catch(() => {}); // listener + sink closed synchronously, before DatabaseService.close() below
 
   // ── Cleanup background services giữ event loop ──────────────────────
   // Nếu không dọn, CRM timers / cron / webhook server giữ process sống,
@@ -1344,6 +1343,9 @@ app.on('before-quit', () => {
   try {
     cancelFacebookPosterJobs();
   } catch {}
+
+  // Listener + sink closed synchronously. After the poster scheduler/jobs stop (so schedule.missed raised during quit is recorded), before DatabaseService.close() below.
+  void shutdownControlApi().catch(() => {});
 
   try {
     // Ask every open browser profile to exit so cookies are flushed and no orphan keeps running
