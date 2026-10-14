@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 12/10/2026 |
-| Trạng thái | Đã duyệt (12/10/2026) |
+| Trạng thái | Đã phát hành 26.17.0 (12/10/2026) |
 | Intent | `docs/intent/2026-10-12-poster-cancel-sandbox-docs.md` (đã duyệt) |
 | Mã nguồn khảo sát | 26.16.0, commit `e347b8b` |
 | Kế hoạch | `docs/plans/2026-10-12-poster-cancel-sandbox-docs.md` |

@@ -15,6 +15,32 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.18.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🤖 Bot AI (vd. bot Telegram trên VPS) điều khiển được Đăng Facebook của MaiHub qua kết nối HTTPS có khoá',
+      '🔌 Kèm công cụ MCP cho bot: lên ý tưởng, tạo nháp có ảnh, duyệt/hẹn giờ và nhận kết quả ngay trong Telegram',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Cài đặt → Điều khiển từ bot: bật/tắt, danh sách IP được phép, tạo/thu hồi khoá truy cập, dấu vân tay chứng chỉ, lệnh mở tường lửa Windows và nhật ký lệnh gần đây',
+          'Bot làm được: xem trạng thái máy, profile và nhóm, quét nhóm, tạo/sửa/xoá nháp kèm ảnh, duyệt hẹn giờ hoặc đăng ngay, xem lịch và kết quả, huỷ việc đang chạy, chờ sự kiện',
+          'Thao tác không hoàn tác được (đăng ngay, xoá, huỷ) luôn cần bot hỏi lại người dùng để xác nhận',
+          'Công cụ maihub_bridge.py (MCP server + dòng lệnh) cài cạnh bot trên VPS Linux',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Bản phát hành giữ nguyên câu lệnh khi lược bỏ log, tránh đổi nghĩa mã',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.17.0',
     date: '10/2026',
     type: 'minor',
