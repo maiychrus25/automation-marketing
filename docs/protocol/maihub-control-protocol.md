@@ -109,8 +109,8 @@ Lỗi: `{ "ok": false, "error": { "code": "…", "message": "<tiếng Việt>", 
 | `BUSY` | 409 | Đang có việc Đăng Facebook chạy (`Đang có việc chạy`), thao tác cần máy rảnh |
 | `BUSY` | 503 | MaiHub đang ở chế độ nhân viên, không nhận lệnh điều khiển |
 | `ENGINE_MISSING` | 503 | Chưa cài nhân trình duyệt trong MaiHub |
-| `LIMIT_REACHED` | 422 | Đã đủ tối đa 200 lịch cho workspace |
-| `PAYLOAD_TOO_LARGE` | 413 | Thân `/v1/call` quá 1 MB, hoặc tệp `/v1/media` quá giới hạn |
+| `LIMIT_REACHED` | 422 | Đã đủ tối đa 200 lịch cho workspace, hoặc hộp thư `/v1/media` đã đủ 200 tệp |
+| `PAYLOAD_TOO_LARGE` | 413 | Thân `/v1/call` quá 1 MB, hoặc tệp `/v1/media` quá giới hạn, hoặc hộp thư `/v1/media` đã đầy 2 GiB |
 | `UNKNOWN_METHOD` | 404 | `method` không có trong `/v1/describe` |
 | `INTERNAL` | 500 | Lỗi nội bộ MaiHub (không lộ thông báo gốc); thử lại sau và xem nhật ký của app |
 
@@ -167,7 +167,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `Authorization` | `Bearer <khoá>` |
 
 - Đuôi nhận: ảnh `jpg`, `jpeg`, `png`, `gif`, `webp`; video `mp4`, `mov`, `webm`. Khác thì `INVALID_PARAMS` (`details.field = "X-Filename"` hoặc `"Content-Type"`).
-- Giới hạn: ảnh ≤ **20 MB** (`MAX_IMAGE_BYTES`), video ≤ **200 MB**. Vượt thì `413 PAYLOAD_TOO_LARGE`. Tệp rỗng: `INVALID_PARAMS` (`details.field = "body"`).
+- Giới hạn: ảnh ≤ **20 MB** (`MAX_IMAGE_BYTES`), video ≤ **200 MB**. Vượt thì `413 PAYLOAD_TOO_LARGE`. Tệp rỗng: `INVALID_PARAMS` (`details.field = "body"`). Hộp thư (tất cả khoá cộng lại) chứa tối đa **200 tệp** và **2 GiB**: đủ số tệp thì `422 LIMIT_REACHED`, vượt dung lượng thì `413 PAYLOAD_TOO_LARGE` (kiểm trước khi ghi và cả khi đang nhận; tải song song được tính chung). Chờ tệp cũ bị dọn (24 giờ) rồi thử lại.
 - Quy tắc của luồng đăng vẫn áp khi tạo nháp/duyệt: một bài có 1–10 ảnh (tổng ≤ 100 MB) **hoặc** đúng 1 video, không trộn.
 - Kết quả: `{ "mediaId": "<uuid>", "name": "anh.jpg", "size": 123456, "kind": "image" }` (`kind` là `image` hoặc `video`).
 - Tệp lưu ở `userData/control-api/inbox/<mediaId>.<đuôi>` trên máy MaiHub và **bị xoá sau 24 giờ** (dọn mỗi giờ). Hết hạn thì `drafts.create/update` với `mediaId` đó trả `INVALID_PARAMS` (`details.field = "mediaIds"`): tải lại.

@@ -367,6 +367,8 @@ Tệp chính trong `src/services/control/`: `ControlApiServer.ts` (HTTPS, pipeli
 | Nhật ký: thời gian giữ | 30 ngày (2592000000 ms) | <!-- docs-check: src/services/control/ControlStore.ts#AUDIT_RETENTION_MS = 2592000000 --> |
 | Kết quả idempotency | 24 giờ (86400000 ms) | <!-- docs-check: src/services/control/ControlStore.ts#IDEMPOTENCY_TTL_MS = 86400000 --> |
 | Tệp trong inbox chưa dùng | xoá sau 24 giờ (86400000 ms) | <!-- docs-check: src/services/control/InboxMediaStore.ts#INBOX_MAX_AGE_MS = 86400000 --> |
+| Inbox: tổng dung lượng | ≤ 2147483648 byte (2 GiB); vượt thì 413 `PAYLOAD_TOO_LARGE`, kiểm trước khi ghi và khi đang nhận | <!-- docs-check: src/services/control/InboxMediaStore.ts#INBOX_MAX_BYTES = 2147483648 --> |
+| Inbox: số tệp | ≤ 200; đủ thì 422 `LIMIT_REACHED` | <!-- docs-check: src/services/control/InboxMediaStore.ts#INBOX_MAX_FILES = 200 --> |
 
 ### 4.11 Hộp thư Page Facebook (từ 26.12.0)
 

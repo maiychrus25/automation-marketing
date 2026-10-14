@@ -2,12 +2,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { pipeline } from 'stream/promises';
-import type { Readable } from 'stream';
+import { Transform, type Readable } from 'stream';
 import { IMAGE_EXTENSIONS, extensionOf } from '../facebookPoster/mediaRules';
 import { ControlError } from './ControlMethods';
 import type { SavedMedia } from './ControlApiServer';
 
 export const INBOX_MAX_AGE_MS = 24 * 3_600_000;
+export const INBOX_MAX_BYTES = 2_147_483_648; // 2 GiB
+export const INBOX_MAX_FILES = 200;
 const PART_SUFFIX = '.part';
 const MEDIA_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -17,7 +19,27 @@ const MEDIA_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
  * Tệp đang ghi nằm ở `<mediaId>.<đuôi>.part` và chỉ được đổi tên khi ghi xong, nên `resolve` không bao giờ thấy tệp dở.
  */
 export class InboxMediaStore {
-    constructor(private readonly dir: string) {}
+    /** Đang ghi dở của mọi lần `save` đồng thời: cộng vào dung lượng đã có để tải song song không vượt trần. */
+    private pendingFiles = 0;
+    private pendingBytes = 0;
+
+    constructor(
+        private readonly dir: string,
+        private readonly limits: { maxBytes: number; maxFiles: number } = { maxBytes: INBOX_MAX_BYTES, maxFiles: INBOX_MAX_FILES },
+    ) {}
+
+    /** Số tệp và tổng byte của tệp đã lưu xong (bỏ `.part`: tệp dở được tính riêng qua pending*). */
+    private usage(): { files: number; bytes: number } {
+        let files = 0;
+        let bytes = 0;
+        let names: string[] = [];
+        try { names = fs.readdirSync(this.dir); } catch { return { files, bytes }; }
+        for (const name of names) {
+            if (name.endsWith(PART_SUFFIX)) continue;
+            try { bytes += fs.statSync(path.join(this.dir, name)).size; files++; } catch { /* tệp biến mất giữa chừng */ }
+        }
+        return { files, bytes };
+    }
 
     async save(name: string, _contentType: string, stream: Readable): Promise<SavedMedia> {
         const ext = extensionOf(name);
@@ -25,8 +47,24 @@ export class InboxMediaStore {
         const finalPath = path.join(this.dir, `${mediaId}.${ext}`);
         const partPath = `${finalPath}${PART_SUFFIX}`;
         fs.mkdirSync(this.dir, { recursive: true });
+        const used = this.usage();
+        if (used.files + this.pendingFiles >= this.limits.maxFiles) {
+            throw new ControlError('LIMIT_REACHED', `Hộp thư tải lên đã đủ ${this.limits.maxFiles} tệp, hãy đợi tệp cũ được dọn (24 giờ) rồi thử lại`);
+        }
+        if (used.bytes + this.pendingBytes >= this.limits.maxBytes) throw this.bytesError();
+        this.pendingFiles++;
+        let written = 0;
+        // Đếm byte khi đang nhận: nhiều tải song song cùng vượt trần thì chỉ tệp làm tràn bị cắt.
+        const guard = new Transform({
+            transform: (chunk, _enc, cb) => {
+                if (used.bytes + this.pendingBytes + chunk.length > this.limits.maxBytes) { cb(this.bytesError()); return; }
+                written += chunk.length;
+                this.pendingBytes += chunk.length;
+                cb(null, chunk);
+            },
+        });
         try {
-            await pipeline(stream, fs.createWriteStream(partPath, { flags: 'wx', mode: 0o600 }));
+            await pipeline(stream, guard, fs.createWriteStream(partPath, { flags: 'wx', mode: 0o600 }));
             const size = fs.statSync(partPath).size;
             if (size === 0) throw new ControlError('INVALID_PARAMS', 'Tệp rỗng', { field: 'body' });
             fs.renameSync(partPath, finalPath);
@@ -34,7 +72,14 @@ export class InboxMediaStore {
         } catch (err) {
             fs.rmSync(partPath, { force: true }); // stream lỗi / vượt giới hạn / client ngắt: không để tệp dở
             throw err;
+        } finally {
+            this.pendingFiles--;
+            this.pendingBytes -= written;
         }
+    }
+
+    private bytesError(): ControlError {
+        return new ControlError('PAYLOAD_TOO_LARGE', `Hộp thư tải lên đã gần đầy (tối đa ${Math.round(this.limits.maxBytes / 1024 / 1024)} MB), hãy đợi tệp cũ được dọn (24 giờ) rồi thử lại`);
     }
 
     /** mediaId → đường dẫn tuyệt đối; id lạ, sai định dạng hoặc đã bị dọn thì ném INVALID_PARAMS (field mediaIds). */

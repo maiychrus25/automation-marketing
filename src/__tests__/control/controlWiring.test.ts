@@ -39,6 +39,33 @@ describe('InboxMediaStore', () => {
     expect(fs.readdirSync(path.join(dir, 'inbox'))).toEqual([]);
   });
 
+  test('refuses a new upload when the inbox already holds the maximum number of files', async () => {
+    const store = new InboxMediaStore(path.join(dir, 'inbox'), { maxBytes: 1000, maxFiles: 2 });
+    await store.save('a.jpg', 'image/jpeg', Readable.from([Buffer.from('1')]));
+    await store.save('b.jpg', 'image/jpeg', Readable.from([Buffer.from('2')]));
+    await expect(store.save('c.jpg', 'image/jpeg', Readable.from([Buffer.from('3')]))).rejects.toMatchObject({ code: 'LIMIT_REACHED' });
+    expect(fs.readdirSync(path.join(dir, 'inbox'))).toHaveLength(2);
+  });
+
+  test('refuses an upload that would push the inbox over the byte cap, before and during writing', async () => {
+    const store = new InboxMediaStore(path.join(dir, 'inbox'), { maxBytes: 10, maxFiles: 50 });
+    await store.save('a.jpg', 'image/jpeg', Readable.from([Buffer.from('123456')]));
+    await expect(store.save('b.jpg', 'image/jpeg', Readable.from([Buffer.from('1234'), Buffer.from('5678')]))).rejects.toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
+    expect(fs.readdirSync(path.join(dir, 'inbox'))).toHaveLength(1); // chỉ còn a.jpg, không để tệp dở
+    await store.save('c.jpg', 'image/jpeg', Readable.from([Buffer.from('1234')])); // vừa đủ 10 byte
+  });
+
+  test('concurrent uploads are counted together so they cannot overshoot the caps', async () => {
+    const store = new InboxMediaStore(path.join(dir, 'inbox'), { maxBytes: 10, maxFiles: 2 });
+    const slow = () => new Readable({ read() { setTimeout(() => { this.push(Buffer.from('123456')); this.push(null); }, 20); } });
+    const results = await Promise.allSettled([store.save('a.jpg', 'image/jpeg', slow()), store.save('b.jpg', 'image/jpeg', slow())]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
+    const third = await Promise.allSettled([store.save('c.jpg', 'image/jpeg', Readable.from([Buffer.from('1')])), store.save('d.jpg', 'image/jpeg', Readable.from([Buffer.from('1')]))]);
+    expect(third.some((r) => r.status === 'rejected' && (r.reason as any).code === 'LIMIT_REACHED')).toBe(true);
+  });
+
   test('cleanup removes only files older than the limit', async () => {
     const store = new InboxMediaStore(path.join(dir, 'inbox'));
     const old = await store.save('a.jpg', 'image/jpeg', Readable.from([Buffer.from('1')]));
