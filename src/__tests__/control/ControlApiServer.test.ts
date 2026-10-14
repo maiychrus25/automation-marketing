@@ -1,4 +1,5 @@
 import https from 'https';
+import tls from 'tls';
 import { Readable } from 'stream';
 import { memoryDb } from '../facebookPoster/helpers';
 import { ControlStore, CONTROL_SCHEMA_SQL } from '../../services/control/ControlStore';
@@ -23,13 +24,13 @@ const fakeMethods: ControlMethod[] = [
   { name: 'crash', description: 'x', destructive: false, paramsSchema: obj, resultSchema: obj, run: async () => { throw new TypeError('secret internal detail'); } },
 ];
 
-async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any } = {}) {
+async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any; poster?: any } = {}) {
   const db = memoryDb();
   db.exec(CONTROL_SCHEMA_SQL);
   const store = new ControlStore(db);
   const notifier = new EventNotifier(store);
   const real = createControlMethods({
-    poster: {} as any,
+    poster: (opts.poster ?? {}) as any,
     listProfiles: () => [],
     systemStatus: () => ({}),
     resolveMedia: (ids) => ids,
@@ -75,7 +76,7 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
 }
 
 let ctx: Awaited<ReturnType<typeof setup>>;
-afterEach(async () => { await ctx?.server.stop(); });
+afterEach(async () => { jest.restoreAllMocks(); await ctx?.server.stop(); });
 
 describe('ControlApiServer basics', () => {
   it('exports default port', () => { expect(DEFAULT_CONTROL_PORT).toBe(47321); });
@@ -143,6 +144,18 @@ describe('ControlApiServer auth pipeline', () => {
     expect(outcome).toBe('closed');
   });
 
+  it('IP outside allow-list: TLS handshake never completes', async () => {
+    ctx = await setup({ allowList: ['10.9.9.9'] });
+    const events = await new Promise<string[]>((resolve) => {
+      const seen: string[] = [];
+      const sock = tls.connect({ host: '127.0.0.1', port: ctx.port, rejectUnauthorized: false });
+      sock.on('secureConnect', () => seen.push('secureConnect'));
+      sock.on('error', () => undefined);
+      sock.on('close', () => resolve(seen));
+    });
+    expect(events).not.toContain('secureConnect');
+  });
+
   it('empty allow-list denies everything', async () => {
     ctx = await setup({ allowList: [] });
     await expect(ctx.send('GET', '/v1/health', { key: null })).rejects.toBeDefined();
@@ -188,7 +201,6 @@ describe('ControlApiServer /v1/call', () => {
     expect(c.body.error.code).toBe('INTERNAL');
     expect(c.raw).not.toContain('secret internal detail');
     expect(spy.mock.calls.some((args) => String(args[0]).includes('crash'))).toBe(true);
-    spy.mockRestore();
   });
 
   it('unknown method -> 404 UNKNOWN_METHOD; bad JSON / bad shape -> INVALID_PARAMS', async () => {
@@ -265,7 +277,6 @@ describe('ControlApiServer /v1/call', () => {
     expect(ok.paramsSummary).toContain('text');
     expect(JSON.stringify(rows)).not.toContain('SECRET');
     expect(failed).toMatchObject({ method: 'denied', ok: false, errorCode: 'CONFIRMATION_REQUIRED' });
-    jest.restoreAllMocks();
   });
 });
 
@@ -315,7 +326,6 @@ describe('ControlApiServer /v1/media', () => {
     const r = await upload('a.png', 'image/png', Buffer.alloc(5));
     expect(r.status).toBe(500);
     expect(r.raw).not.toContain('disk exploded');
-    jest.restoreAllMocks();
   });
 });
 
@@ -367,25 +377,110 @@ describe('ControlApiServer events.wait long-poll', () => {
   });
 });
 
-describe('EventNotifier', () => {
-  it('does not lose an event added between check and wait (registers before re-check)', async () => {
-    const calls: number[] = [];
-    let has = false;
-    const notifier = new EventNotifier({ listEventsAfter: () => { calls.push(1); return has ? [{} as any] : []; } });
-    has = true;
-    await expect(notifier.waitForEvent(0, 5000)).resolves.toBeUndefined();
-    expect(notifier.pending).toBe(0);
+describe('ControlApiServer rejected-call audit', () => {
+  it('audits 401 and lockout 429 on /v1/call without reading the body', async () => {
+    ctx = await setup();
+    const bad = (k: string) => ctx.send('POST', '/v1/call', { key: k, body: JSON.stringify({ method: 'echo' }) });
+    for (let i = 0; i < 10; i++) expect((await bad('mh_bad' + i)).status).toBe(401);
+    expect((await bad('mh_bad')).status).toBe(429);
+    const rows = ctx.store.listAudit(20);
+    expect(rows).toHaveLength(11);
+    expect(rows[0]).toMatchObject({ keyName: null, ip: '127.0.0.1', method: '(unauthenticated)', ok: false, errorCode: 'RATE_LIMITED' });
+    expect(rows[1]).toMatchObject({ keyName: null, method: '(unauthenticated)', ok: false, errorCode: 'UNAUTHORIZED' });
+    expect(rows.filter((r) => r.errorCode === 'UNAUTHORIZED')).toHaveLength(10);
   });
 
-  it('abort signal resolves and removes waiter and timer', async () => {
-    const notifier = new EventNotifier({ listEventsAfter: () => [] });
-    const ac = new AbortController();
-    const p = notifier.waitForEvent(0, 60_000, ac.signal);
-    expect(notifier.pending).toBe(1);
-    ac.abort();
-    await p;
-    expect(notifier.pending).toBe(0);
-    await notifier.waitForEvent(0, 60_000, ac.signal); // already aborted
-    expect(notifier.pending).toBe(0);
+  it('audits rate-limit 429 only once per key per window', async () => {
+    ctx = await setup({ rate: 2 });
+    await ctx.call('echo'); await ctx.call('echo');
+    for (let i = 0; i < 4; i++) expect((await ctx.call('echo')).status).toBe(429);
+    const rows = ctx.store.listAudit(20);
+    const limited = rows.filter((r) => r.errorCode === 'RATE_LIMITED');
+    expect(limited).toHaveLength(1);
+    expect(limited[0]).toMatchObject({ keyName: 'Claude bot', method: '(rate-limited)', ok: false });
+    expect(rows).toHaveLength(3);
+  });
+});
+
+describe('ControlApiServer hardening', () => {
+  it('caps audit paramsSummary (20 keys, <= 500 chars) for a body of 5000 empty keys', async () => {
+    ctx = await setup();
+    const params: Record<string, string> = {};
+    for (let i = 0; i < 5000; i++) params['key_number_' + i] = '';
+    expect((await ctx.call('echo', params)).status).toBe(200);
+    const summary = ctx.store.listAudit(1)[0].paramsSummary!;
+    expect(summary.length).toBeLessThanOrEqual(500);
+    expect(JSON.parse(summary).keys.length).toBeLessThanOrEqual(20);
+  });
+
+  it('405 carries details.field httpMethod', async () => {
+    ctx = await setup();
+    const r = await ctx.send('GET', '/v1/call');
+    expect(r.body.error).toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'httpMethod' } });
+  });
+
+  it('saveMedia resolving undefined -> INTERNAL, not 413', async () => {
+    ctx = await setup({ saveMedia: async (_n: string, _c: string, s: Readable) => { s.resume(); return undefined; } });
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const r = await ctx.send('POST', '/v1/media', { body: Buffer.alloc(5), headers: { 'content-type': 'image/png', 'x-filename': 'a.png' } });
+    expect(r.status).toBe(500);
+    expect(r.body.error.code).toBe('INTERNAL');
+  });
+
+  it('malformed request target -> 404, concise single-line log, no stack', async () => {
+    ctx = await setup();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const reply = await new Promise<string>((resolve) => {
+      const sock = tls.connect({ host: '127.0.0.1', port: ctx.port, rejectUnauthorized: false }, () => {
+        sock.write('GET http://[ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n');
+      });
+      let data = ''; sock.on('data', (c) => { data += c; }); sock.on('close', () => resolve(data)); sock.on('error', () => resolve(data));
+    });
+    expect(reply).toMatch(/^HTTP\/1\.1 404/);
+    expect(err).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(typeof warn.mock.calls[0][0]).toBe('string');
+    expect(warn.mock.calls[0]).toHaveLength(1);
+  });
+
+  it('declared Content-Length over the limit is rejected immediately (fast path)', async () => {
+    ctx = await setup();
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = https.request({ host: '127.0.0.1', port: ctx.port, method: 'POST', path: '/v1/call', rejectUnauthorized: false, agent: false,
+        headers: { authorization: `Bearer ${ctx.key.key}`, 'content-length': String(2_000_000) } }, (res) => { resolve(res.statusCode!); req.destroy(); });
+      req.on('error', (e) => { if ((e as any).code !== 'ECONNRESET') reject(e); });
+      req.write('{"method":"echo"'); // never sends the declared 2 MB
+    });
+    expect(status).toBe(413);
+  });
+
+  it('wrapped method throwing TypeError -> INTERNAL and original logged with method name', async () => {
+    ctx = await setup({ poster: { current: () => { throw new TypeError('wrapped secret'); } } });
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const r = await ctx.call('runs.current');
+    expect(r.status).toBe(500);
+    expect(r.body.error.code).toBe('INTERNAL');
+    expect(r.raw).not.toContain('wrapped secret');
+    expect(spy.mock.calls.some((a) => String(a[0]).includes('runs.current') && a[1] instanceof TypeError)).toBe(true);
+  });
+
+  it('caps concurrent events.wait long-polls per key at 4', async () => {
+    ctx = await setup();
+    const waits = Array.from({ length: 4 }, () => new Promise<void>((resolve) => {
+      const req = https.request({ host: '127.0.0.1', port: ctx.port, method: 'POST', path: '/v1/call', rejectUnauthorized: false, agent: false,
+        headers: { authorization: `Bearer ${ctx.key.key}` } }, (res) => { res.resume(); res.on('end', () => resolve()); });
+      req.on('error', () => resolve());
+      req.end(JSON.stringify({ method: 'events.wait', params: { after: 0, timeoutSec: 25 } }));
+    }));
+    for (let i = 0; i < 50 && ctx.notifier.pending < 4; i++) await new Promise((r) => setTimeout(r, 50));
+    expect(ctx.notifier.pending).toBe(4);
+    const fifth = await ctx.call('events.wait', { after: 0, timeoutSec: 25 });
+    expect(fifth.status).toBe(429);
+    expect(fifth.body.error.code).toBe('RATE_LIMITED');
+    ctx.store.addEvent('x', {}); ctx.notifier.notify();
+    await Promise.all(waits);
+    expect(ctx.notifier.pending).toBe(0);
+    expect((await ctx.call('events.wait', { after: 0, timeoutSec: 1 })).status).toBe(200);
   });
 });

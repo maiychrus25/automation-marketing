@@ -32,13 +32,13 @@ Telegram ⇄ bot AI (VPS Linux, Claude CLI)
 |---|---|
 | Cổng | Mặc định `47321`, đổi được; nghe `0.0.0.0` |
 | TLS | Chứng chỉ tự ký RSA-2048, tạo lần đầu bật, lưu ở `userData/control-api/` (khoá riêng mã hoá bằng `safeStorage`). Bridge **ghim dấu vân tay SHA-256** của chứng chỉ (`MAIHUB_CERT_SHA256`); sai thì từ chối, không cần tên miền hay CA |
-| Thư viện | Thêm dependency `selfsigned` (dựa trên `node-forge`) chỉ để tạo chứng chỉ X.509. Lý do: Node không tự tạo được chứng chỉ, và không nên tự viết bộ mã hoá ASN.1 |
+| Thư viện | Thêm dependency `selfsigned` (dựa trên `@peculiar/x509` + `pkijs`, sửa khi triển khai, 14/10/2026) chỉ để tạo chứng chỉ X.509. Lý do: Node không tự tạo được chứng chỉ, và không nên tự viết bộ mã hoá ASN.1 |
 | Xác thực | `Authorization: Bearer <khoá>`. Khoá 32 byte ngẫu nhiên, dạng `mh_<base64url>`, chỉ hiện **một lần** khi tạo. DB chỉ lưu SHA-256 của khoá kèm tên (ví dụ "Claude bot", "Codex bot"). Có nhiều khoá, thu hồi từng khoá |
 | Giới hạn IP | Danh sách IP/CIDR được phép, **bắt buộc khác rỗng** mới bật được API (ví dụ `161.248.81.164`). Kết nối ngoài danh sách bị đóng ngay, trước TLS |
 | Chống dò khoá | Sai khoá 10 lần trong 10 phút từ một IP thì chặn IP đó 15 phút. Mỗi khoá tối đa 60 lời gọi/phút |
 | Chế độ nhân viên | Máy chủ không chạy; đang chạy mà chuyển sang chế độ nhân viên thì dừng |
 | Tường lửa Windows | App không tự mở cổng (cần quyền admin). Cài đặt hiện sẵn lệnh `netsh advfirewall firewall add rule …` để chủ máy chạy |
-| Nhật ký | Bảng `control_audit`: thời điểm, tên khoá, IP, thao tác, tóm tắt tham số (không có nội dung bài hay khoá), kết quả hoặc mã lỗi, thời gian xử lý. Giữ 30 ngày; Cài đặt hiện 100 dòng gần nhất |
+| Nhật ký | Bảng `control_audit`: thời điểm, tên khoá, IP, thao tác, tóm tắt tham số (không có nội dung bài hay khoá), kết quả hoặc mã lỗi, thời gian xử lý. Giữ 30 ngày; Cài đặt hiện 100 dòng gần nhất. Lời gọi `/v1/call` bị từ chối (sai khoá, IP bị khoá, quá tốc độ) cũng được ghi, không đọc thân yêu cầu; quá tốc độ chỉ ghi lần đầu của mỗi khoá trong mỗi cửa sổ 60 giây (sửa khi triển khai, 14/10/2026) |
 
 ## 3. Giao thức
 
@@ -166,4 +166,4 @@ Telegram ⇄ bot AI (VPS Linux, Claude CLI)
 | Bot (AI) gọi sai tham số | Lỗi `INVALID_PARAMS` có `field` và lời giải thích tiếng Việt; dùng đúng kiểm tra của app |
 | Bot gọi lại nhiều lần (mạng chập chờn) | `idempotencyKey` |
 | Refactor IPC làm đổi hành vi | Chỉ tách thân handler thành hàm có tên, không sửa logic; toàn bộ test cũ phải xanh |
-| Dependency mới (`selfsigned`/`node-forge`) | Chỉ dùng để tạo chứng chỉ một lần; ghi trong NOTICE nếu cần; không nạp lúc khởi động khi API tắt |
+| Dependency mới (`selfsigned` (+ `@peculiar/x509`, `pkijs`)) | Chỉ dùng để tạo chứng chỉ một lần; ghi trong NOTICE nếu cần; không nạp lúc khởi động khi API tắt |

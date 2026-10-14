@@ -1,5 +1,4 @@
 import { X509Certificate, createHash } from 'crypto';
-import { generate } from 'selfsigned';
 
 const TEN_YEARS_MS = 10 * 365 * 86_400_000;
 
@@ -12,6 +11,8 @@ export interface ControlCertificate {
 
 /** Chứng chỉ tự ký RSA-2048, CN `maihub-control`, hạn 10 năm. */
 export async function createCertificate(): Promise<ControlCertificate> {
+    // Nạp muộn: selfsigned kéo theo @peculiar/x509 + reflect-metadata, không nên nạp khi app khởi động mà API đang tắt.
+    const { generate } = await import('selfsigned');
     const notBeforeDate = new Date();
     const pems = await generate([{ name: 'commonName', value: 'maihub-control' }], {
         keySize: 2048,

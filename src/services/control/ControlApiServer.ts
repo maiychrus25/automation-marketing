@@ -13,6 +13,13 @@ export const MAX_CALL_BODY_BYTES = 1_048_576;
 export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 64;
 const MAX_FILENAME_LENGTH = 200;
+const MAX_SUMMARY_KEYS = 20;
+const MAX_SUMMARY_CHARS = 500;
+const MAX_CONNECTIONS = 64;
+const CONNECTIONS_CHECK_INTERVAL_MS = 5_000;
+const MAX_CONCURRENT_WAITS_PER_KEY = 4;
+const RATE_AUDIT_WINDOW_MS = 60_000;
+const INTERNAL_MESSAGE = 'Lỗi nội bộ của MaiHub, thử lại sau';
 
 // Chống slowloris: tiêu đề và bắt tay TLS phải xong nhanh; cả thân yêu cầu có tối đa 5 phút (đủ cho video 200 MB trên LAN chậm).
 // `requestTimeout` chỉ tính tới khi nhận xong yêu cầu nên long-poll 25 giây không bị cắt.
@@ -48,12 +55,15 @@ export interface ControlApiServerOptions {
 /** Tóm tắt tham số cho nhật ký: chỉ tên khoá, mã định danh và số phần tử; không bao giờ có nội dung bài/bình luận. */
 function summarizeParams(params: unknown): string {
     if (!params || typeof params !== 'object' || Array.isArray(params)) return '{}';
-    const summary: Record<string, unknown> = { keys: Object.keys(params) };
-    for (const [k, v] of Object.entries(params as Record<string, unknown>)) {
+    const entries = Object.entries(params as Record<string, unknown>);
+    const summary: Record<string, unknown> = { keys: entries.slice(0, MAX_SUMMARY_KEYS).map(([k]) => k.slice(0, 40)) };
+    if (entries.length > MAX_SUMMARY_KEYS) summary.keyCount = entries.length;
+    for (const [k, v] of entries.slice(0, MAX_SUMMARY_KEYS)) {
         if (/^(id|runId|scheduleId|kind|when|mode)$/.test(k) && (typeof v === 'string' || typeof v === 'number') && String(v).length <= 64) summary[k] = v;
-        else if (Array.isArray(v)) summary[`${k}Count`] = v.length;
+        else if (Array.isArray(v)) summary[`${k.slice(0, 40)}Count`] = v.length;
     }
-    return JSON.stringify(summary);
+    const text = JSON.stringify(summary);
+    return text.length <= MAX_SUMMARY_CHARS ? text : JSON.stringify({ truncated: true, keyCount: entries.length });
 }
 
 /** Chỉ lấy tên tệp: bỏ thư mục, ký tự điều khiển; null nếu rỗng. */
@@ -70,6 +80,8 @@ class PayloadTooLargeError extends Error {}
 export class ControlApiServer {
     private server: https.Server | null = null;
     private readonly now: () => number;
+    private readonly activeWaits = new Map<string, number>();
+    private readonly rateAuditedAt = new Map<string, number>();
 
     constructor(private readonly opts: ControlApiServerOptions) {
         this.now = opts.now ?? Date.now;
@@ -78,12 +90,13 @@ export class ControlApiServer {
     start(): Promise<{ port: number }> {
         return new Promise((resolve, reject) => {
             const server = https.createServer(
-                { key: this.opts.tls.key, cert: this.opts.tls.cert, handshakeTimeout: TLS_HANDSHAKE_TIMEOUT_MS },
+                { key: this.opts.tls.key, cert: this.opts.tls.cert, handshakeTimeout: TLS_HANDSHAKE_TIMEOUT_MS, connectionsCheckingInterval: CONNECTIONS_CHECK_INTERVAL_MS },
                 (req, res) => { void this.handle(req, res); },
             );
             server.headersTimeout = HEADERS_TIMEOUT_MS;
             server.requestTimeout = REQUEST_TIMEOUT_MS;
             server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+            server.maxConnections = MAX_CONNECTIONS;
             // Sự kiện 'connection' chạy trên socket thô, trước bắt tay TLS: IP ngoài danh sách bị đóng ở đây.
             server.on('connection', (socket: Socket) => {
                 socket.on('error', () => undefined);
@@ -118,7 +131,7 @@ export class ControlApiServer {
             await this.pipeline(req, res);
         } catch (err) {
             console.error('[control] Lỗi xử lý yêu cầu:', err);
-            this.sendError(res, new ControlError('INTERNAL', toControlError(err).message));
+            this.sendError(res, new ControlError('INTERNAL', INTERNAL_MESSAGE));
         }
     }
 
@@ -127,12 +140,22 @@ export class ControlApiServer {
         const remote = req.socket.remoteAddress;
         if (!this.isAllowed(remote)) { req.socket.destroy(); return; }
         const ip = normalizeIp(remote as string);
-        const url = new URL(req.url ?? '/', 'http://localhost');
-        const path = url.pathname;
+        let path: string;
+        try {
+            path = new URL(req.url ?? '/', 'http://localhost').pathname;
+        } catch {
+            console.warn('[control] Bỏ qua yêu cầu có đường dẫn không hợp lệ');
+            this.sendError(res, new ControlError('NOT_FOUND', 'Không có đường dẫn này'), true);
+            return;
+        }
         const { lockout, rateLimiter, store } = this.opts;
 
         // (3) IP đang bị khoá do sai khoá quá nhiều.
-        if (lockout.isBlocked(ip)) { this.sendError(res, new ControlError('RATE_LIMITED', 'Quá nhiều lần sai khoá, IP này tạm thời bị chặn'), true); return; }
+        if (lockout.isBlocked(ip)) {
+            this.auditRejected(path, null, ip, '(unauthenticated)', 'RATE_LIMITED');
+            this.sendError(res, new ControlError('RATE_LIMITED', 'Quá nhiều lần sai khoá, IP này tạm thời bị chặn'), true);
+            return;
+        }
 
         if (path === '/v1/health') {
             if (req.method !== 'GET') { this.sendMethodNotAllowed(res, 'GET'); return; }
@@ -145,6 +168,7 @@ export class ControlApiServer {
         const keyInfo = match ? store.findActiveKeyByHash(hashKey(match[1])) : null;
         if (!keyInfo) {
             lockout.recordFailure(ip);
+            this.auditRejected(path, null, ip, '(unauthenticated)', 'UNAUTHORIZED');
             this.sendError(res, new ControlError('UNAUTHORIZED', 'Thiếu hoặc sai khoá truy cập'), true);
             return;
         }
@@ -152,7 +176,16 @@ export class ControlApiServer {
         store.touchKey(keyInfo.id, this.now());
 
         // (5) Giới hạn tốc độ theo khoá.
-        if (!rateLimiter.take(keyInfo.id)) { this.sendError(res, new ControlError('RATE_LIMITED', 'Gọi quá nhanh (tối đa 60 lời gọi mỗi phút), hãy thử lại sau'), true); return; }
+        if (!rateLimiter.take(keyInfo.id)) {
+            // Chỉ ghi nhật ký lần bị từ chối đầu tiên của mỗi khoá trong mỗi cửa sổ để kẻ gọi dồn dập không làm đầy bảng.
+            const last = this.rateAuditedAt.get(keyInfo.id);
+            if (last === undefined || this.now() - last >= RATE_AUDIT_WINDOW_MS) {
+                this.rateAuditedAt.set(keyInfo.id, this.now());
+                this.auditRejected(path, keyInfo.name, ip, '(rate-limited)', 'RATE_LIMITED');
+            }
+            this.sendError(res, new ControlError('RATE_LIMITED', 'Gọi quá nhanh (tối đa 60 lời gọi mỗi phút), hãy thử lại sau'), true);
+            return;
+        }
 
         // (6)-(7) Định tuyến và đọc thân (giới hạn kích thước áp khi đang nhận).
         if (path === '/v1/describe') {
@@ -169,11 +202,22 @@ export class ControlApiServer {
         }
     }
 
+    /** Ghi nhật ký lời gọi /v1/call bị từ chối trước khi vào thao tác; không đọc thân yêu cầu. */
+    private auditRejected(path: string, keyName: string | null, ip: string, method: string, errorCode: string): void {
+        if (path !== '/v1/call') return;
+        try {
+            this.opts.store.addAudit({ at: this.now(), keyName, ip, method, paramsSummary: null, ok: false, errorCode, durationMs: 0 });
+        } catch (err) {
+            console.error('[control] Không ghi được nhật ký:', err);
+        }
+    }
+
     private async handleCall(req: IncomingMessage, res: ServerResponse, keyId: string, keyName: string, ip: string): Promise<void> {
         const startedAt = this.now();
         let methodName: string | null = null;
         let params: unknown;
         let errorCode: string | null = null;
+        let waitHeld = false;
         const abort = new AbortController();
         res.on('close', () => { if (!res.writableFinished) abort.abort(); });
         try {
@@ -193,6 +237,13 @@ export class ControlApiServer {
             if (!method) throw new ControlError('UNKNOWN_METHOD', `Không có thao tác "${methodName}"`);
 
             let result: unknown;
+            if (methodName === 'events.wait') {
+                if ((this.activeWaits.get(keyId) ?? 0) >= MAX_CONCURRENT_WAITS_PER_KEY) {
+                    throw new ControlError('RATE_LIMITED', `Tối đa ${MAX_CONCURRENT_WAITS_PER_KEY} lời gọi events.wait cùng lúc cho mỗi khoá`);
+                }
+                this.activeWaits.set(keyId, (this.activeWaits.get(keyId) ?? 0) + 1);
+                waitHeld = true;
+            }
             try {
                 result = await this.opts.idempotency.run(keyId, idem, () => method.run(params as Record<string, any>, { keyName, signal: abort.signal }));
             } catch (err) {
@@ -207,6 +258,10 @@ export class ControlApiServer {
             errorCode = controlError.code;
             this.sendError(res, controlError, controlError.code === 'PAYLOAD_TOO_LARGE');
         } finally {
+            if (waitHeld) {
+                const left = (this.activeWaits.get(keyId) ?? 1) - 1;
+                if (left > 0) this.activeWaits.set(keyId, left); else this.activeWaits.delete(keyId);
+            }
             try {
                 this.opts.store.addAudit({
                     at: startedAt, keyName, ip, method: methodName, paramsSummary: summarizeParams(params),
@@ -257,7 +312,8 @@ export class ControlApiServer {
                     throw new ControlError('INTERNAL', 'Không lưu được tệp, thử lại sau');
                 }
             }
-            if (exceeded || !saved) throw tooLarge;
+            if (exceeded) throw tooLarge;
+            if (!saved) { console.error('[control] saveMedia không trả kết quả'); throw new ControlError('INTERNAL', INTERNAL_MESSAGE); }
             summary = JSON.stringify({ kind: saved.kind, size: saved.size });
             this.send(res, 200, { ok: true, result: saved });
         } catch (err) {
@@ -321,6 +377,6 @@ export class ControlApiServer {
 
     private sendMethodNotAllowed(res: ServerResponse, allow: string): void {
         res.setHeader('Allow', allow);
-        this.send(res, 405, { ok: false, error: { code: 'INVALID_PARAMS', message: `Đường dẫn này chỉ nhận ${allow}` } });
+        this.send(res, 405, { ok: false, error: { code: 'INVALID_PARAMS', message: `Đường dẫn này chỉ nhận ${allow}`, details: { field: 'httpMethod' } } });
     }
 }
