@@ -27,3 +27,4 @@ dist-electron/
 # E2EE bridge: build output + auto-cloned mautrix/meta source
 src/bridge-e2ee/build/
 src/bridge-e2ee/meta/
+__pycache__/

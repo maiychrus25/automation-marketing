@@ -3,6 +3,7 @@ import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { showConfirm } from '../common/ConfirmDialog';
 import { Spinner } from '../common/PageLoading';
+import { findBroadCidrs } from './controlAllowList';
 import { BotIcon, CopyIcon, KeyIcon, RefreshIcon, TrashIcon } from '../common/icons';
 
 type ControlView = { enabled: boolean; port: number; allowList: string[]; fingerprint: string | null; running: boolean; error?: string; warning?: string };
@@ -23,8 +24,8 @@ function Card({ title, children }: { title?: string; children: React.ReactNode }
 /** Ô mã nguồn: cuộn ngang bên trong ô, kèm nút sao chép. */
 function CodeBox({ text, onCopy, label }: { text: string; onCopy: (t: string) => void; label: string }) {
   return (
-    <div className="flex items-start gap-2 min-w-0">
-      <pre className="flex-1 min-w-0 overflow-x-auto bg-gray-900/60 rounded-lg px-3 py-2 text-xs font-mono text-gray-200 select-all whitespace-pre">{text}</pre>
+    <div className="flex flex-wrap items-start gap-2 min-w-0">
+      <pre className="flex-1 min-w-0 basis-[12rem] overflow-x-auto bg-gray-900/60 rounded-lg px-3 py-2 text-xs font-mono text-gray-200 select-all whitespace-pre">{text}</pre>
       <button type="button" className="btn-secondary flex-shrink-0 flex items-center gap-1" onClick={() => onCopy(text)} aria-label={label}>
         <CopyIcon className="w-4 h-4" /> Sao chép
       </button>
@@ -227,6 +228,9 @@ export default function ControlApiSettings() {
             <textarea id="control-allow" className="input-field font-mono min-h-[5rem]" rows={4} value={allowText} placeholder={'203.0.113.5\n10.0.0.0/24'} onChange={e => setAllowText(e.target.value)} />
           </div>
         </div>
+        {findBroadCidrs(allowText).length > 0 && (
+          <p className="text-xs text-amber-500 break-words" role="status">Cảnh báo: {findBroadCidrs(allowText).join(', ')} là dải IP rất rộng (rộng hơn /16), nhiều máy lạ có thể kết nối tới cổng này. Chỉ nên cho phép đúng IP của bot.</p>
+        )}
         {formError && <p className="text-xs text-red-400 break-words" role="alert">{formError}</p>}
         {invalid.length > 0 && (
           <ul className="text-xs text-red-400 font-mono list-disc pl-5 break-all">
@@ -256,7 +260,7 @@ export default function ControlApiSettings() {
 
       <Card title="Khoá truy cập">
         <div className="flex flex-wrap gap-2">
-          <input aria-label="Tên khoá" className="input-field flex-1 min-w-[10rem]" maxLength={64} placeholder="Tên khoá (vd. bot-telegram)" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newKeyName.trim() && !creating) createKey(); }} />
+          <input aria-label="Tên khoá" className="input-field flex-1 min-w-[10rem]" maxLength={60} placeholder="Tên khoá (vd. bot-telegram)" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newKeyName.trim() && !creating) createKey(); }} />
           <button type="button" className="btn-primary flex items-center gap-2" onClick={createKey} disabled={creating || !newKeyName.trim()}>
             {creating ? <Spinner size={4} className="text-white" /> : <KeyIcon className="w-4 h-4" />} Tạo khoá
           </button>
@@ -293,7 +297,7 @@ export default function ControlApiSettings() {
       </Card>
 
       <Card>
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-white">Lệnh gần đây</h3>
           <button type="button" className="btn-secondary flex items-center gap-1" onClick={loadAudit} disabled={auditLoading}>
             {auditLoading ? <Spinner size={4} /> : <RefreshIcon className="w-4 h-4" />} Làm mới

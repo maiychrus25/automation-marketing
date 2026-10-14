@@ -100,7 +100,7 @@ describe('controlConfig', () => {
   });
   test('firewall command', () => {
     expect(buildFirewallCommand({ port: 47321, allowList: ['10.0.0.1', '10.0.0.2'] }))
-      .toBe('netsh advfirewall firewall add rule name="MaiHub Control API" dir=in action=allow protocol=TCP localport=47321 remoteip=10.0.0.1,10.0.0.2');
+      .toBe('netsh advfirewall firewall delete rule name="MaiHub Control API"\nnetsh advfirewall firewall add rule name="MaiHub Control API" dir=in action=allow protocol=TCP localport=47321 remoteip=10.0.0.1,10.0.0.2');
     expect(() => buildFirewallCommand({ port: 47321, allowList: [] })).toThrow(ControlConfigError);
   });
 });

@@ -46,8 +46,8 @@ export function validateConfigInput(input: any): ControlConfig {
     return { enabled, port, allowList: [...new Set(entries)] };
 }
 
-/** Lệnh cho Windows; chuỗi để người dùng tự chạy trong PowerShell quản trị, app không chạy hộ. */
+/** Lệnh cho Windows; chuỗi để người dùng tự chạy trong PowerShell quản trị, app không chạy hộ. Dòng đầu xoá luật cũ cùng tên (đổi cổng/IP không để lại luật thừa); báo "No rules match" lần đầu là bình thường. */
 export function buildFirewallCommand(config: Pick<ControlConfig, 'port' | 'allowList'>): string {
     if (config.allowList.length === 0) throw new ControlConfigError('Chưa có địa chỉ IP nào trong danh sách được phép');
-    return `netsh advfirewall firewall add rule name="${FIREWALL_RULE_NAME}" dir=in action=allow protocol=TCP localport=${config.port} remoteip=${config.allowList.join(',')}`;
+    return `netsh advfirewall firewall delete rule name="${FIREWALL_RULE_NAME}"\nnetsh advfirewall firewall add rule name="${FIREWALL_RULE_NAME}" dir=in action=allow protocol=TCP localport=${config.port} remoteip=${config.allowList.join(',')}`;
 }

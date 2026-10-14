@@ -25,15 +25,18 @@ Telegram ⇄ bot AI (VPS Linux, Claude CLI)
 Cài đặt → **Điều khiển từ bot** (ẩn ở chế độ nhân viên):
 
 1. Nhập **Cổng** (mặc định `47321`, hợp lệ `1024`–`65535`).
-2. Nhập **IP được phép**, mỗi dòng một IP hoặc CIDR IPv4 (ví dụ `161.248.81.164` hay `10.0.0.0/24`). **Bắt buộc có ít nhất một mục** mới bật được. CIDR IPv6 chưa hỗ trợ (chỉ `::1` nhập tường minh).
+2. Nhập **IP được phép**, mỗi dòng một IP hoặc CIDR IPv4 (ví dụ `161.248.81.164` hay `10.0.0.0/24`). **Bắt buộc có ít nhất một mục** mới bật được. Chỉ IPv4: máy chủ lắng nghe IPv4 (`0.0.0.0`) nên IPv6 và `::1` không dùng được. Tránh dải rộng (như `/8`, `/0`): app cảnh báo khi dải rộng hơn `/16`.
 3. Bật công tắc rồi lưu. Máy chủ chạy ngay; lỗi bind cổng (cổng bận, không đủ quyền) hiện ngay trong màn hình, app không bị lỗi.
 4. Mục **Khoá truy cập** → đặt tên (1–60 ký tự, ví dụ `bot-telegram`) → **Tạo khoá**. Khoá dạng `mh_<base64url>` **chỉ hiện một lần**; sao chép ngay. MaiHub chỉ lưu SHA-256 của khoá. Thu hồi từng khoá bằng **Thu hồi**.
 5. Mục **Thông tin kết nối** hiện địa chỉ `https://<ip-may-maihub>:<cổng>` và **dấu vân tay SHA-256** của chứng chỉ. Bot cần cả hai.
 6. App không tự mở cổng Windows. Mục **Tường lửa Windows** hiện sẵn lệnh để chạy trong PowerShell quản trị:
 
 ```powershell
+netsh advfirewall firewall delete rule name="MaiHub Control API"
 netsh advfirewall firewall add rule name="MaiHub Control API" dir=in action=allow protocol=TCP localport=47321 remoteip=161.248.81.164
 ```
+
+Lần đầu máy chủ lắng nghe, Windows có thể hiện hộp thoại Tường lửa của Windows: chọn **Cho phép truy cập** (Allow). Nếu đã bấm **Hủy** (Cancel), Windows tạo luật *chặn* cho `MaiHub.exe`: vào Windows Defender Firewall → Inbound Rules, xoá luật chặn đó rồi chạy lại lệnh trên.
 
 Đổi cổng, danh sách IP hay cờ bật sẽ dừng rồi chạy lại máy chủ (kết nối cũ bị ngắt). **Tạo lại chứng chỉ** đổi dấu vân tay: mọi bot đã ghim phải cập nhật `MAIHUB_CERT_SHA256`.
 
@@ -122,7 +125,7 @@ Cách xử lý gợi ý: `INVALID_PARAMS` thì sửa tham số theo `details.fie
 - **Xác nhận (`confirm`).** Thao tác có `destructive: true` bắt buộc `params.confirm === true`, thiếu thì `CONFIRMATION_REQUIRED` và không làm gì. Bot dùng mã này để hỏi người dùng (ví dụ trên Telegram) rồi gọi lại. Thao tác chỉ nguy hiểm có điều kiện (`drafts.approve` khi `when = "now"`) có `destructive: true` kèm `destructiveWhen: { "when": "now" }` trong `/v1/describe`: chỉ cần `confirm` khi tham số khớp điều kiện đó. Đừng tự đặt `confirm: true` khi người dùng chưa đồng ý.
 - **Chống chạy trùng (`idempotencyKey`).** Trường tuỳ chọn ở cấp ngoài của `/v1/call` (không nằm trong `params`), chuỗi 1–**64** ký tự. Cùng khoá truy cập, cùng thao tác (`method`) và cùng `idempotencyKey` trong **24 giờ** thì trả lại kết quả thành công cũ, không làm lại; dùng lại một `idempotencyKey` cho thao tác khác trong 24 giờ bị từ chối `400 INVALID_PARAMS` (`details.field = "idempotencyKey"`) và không chạy gì, nên mỗi lần ghi cần một khoá riêng; hai lời gọi đồng thời cùng khoá dùng chung một lần chạy. Lỗi không được lưu nên gọi lại sau lỗi sẽ chạy thật. Dùng cho mọi thao tác ghi khi mạng chập chờn.
 - **Kích thước.** Thân `/v1/call` ≤ **1.048.576 byte** (1 MB). Ảnh ≤ 20 MB, video ≤ 200 MB (mục 8).
-- **Phân trang.** `drafts.list` và `runs.list`: `limit` 1–200 (mặc định 50), `offset` ≥ 0.
+- **Phân trang.** `drafts.list` và `runs.list`: `limit` 1–200 (mặc định 50); `limit` ngoài khoảng này **không bị từ chối mà được cắt về khoảng** (nhỏ hơn 1 hoặc không phải số nguyên thì dùng 50, lớn hơn 200 thì dùng 200); `offset` ≥ 0.
 - **Thời gian** là mili giây epoch (UTC), ví dụ `createdAt`, `plannedAt`, `runAt`.
 
 ## 7. Thao tác
@@ -152,7 +155,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `runs.list` | `limit`, `offset`, `kind` (`post`, `join`, `scan_groups`, `collect_comments`) | `{ runs, total }`, mới nhất trước | không |
 | `runs.get` | **`runId`** | `{ run, results }`: kết quả từng đích, link bài, trạng thái bình luận | không |
 | `runs.cancel` | **`confirm`** | `{ cancelled: true }`. Dừng việc đang chạy | có |
-| `events.wait` | **`after`** (≥ 0), `timeoutSec` (0–25) | `{ events: [{ seq, type, payload, createdAt }] }` | không |
+| `events.wait` | **`after`** (≥ 0), `timeoutSec` (0–25) | `{ events: [{ seq, type, payload, createdAt }], workspaceId }` | không |
 
 `run.status` nhận một trong `running`, `done`, `cancelled`, `failed`, `missed`.
 
@@ -180,6 +183,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 - Có sẵn sự kiện: trả ngay.
 - Chưa có và `timeoutSec > 0`: giữ kết nối tới khi có sự kiện mới hoặc hết `timeoutSec` (tối đa **25** giây; nhỏ hơn 0 hoặc thiếu thì coi như 0, lớn hơn 25 thì cắt về 25), rồi trả `{ "events": [] }` nếu không có gì. Client ngắt kết nối thì lời chờ huỷ.
 - `after` thiếu hoặc không phải số nguyên ≥ 0: `INVALID_PARAMS`. Bot tự lưu `after` của mình (lấy `seq` lớn nhất đã nhận); lần đầu dùng `0`.
+- Kết quả luôn kèm `workspaceId` (workspace đang mở, `null` nếu chưa có). `seq` thuộc DB của từng workspace, nên bot lưu `workspaceId` cùng `after` và **đặt lại `after = 0` khi `workspaceId` đổi** (nếu không sẽ bỏ lỡ sự kiện của workspace mới).
 - `seq` tăng đơn điệu và **bền qua khởi động lại**. Sự kiện giữ **7 ngày**, tối đa **5.000 dòng** (cũ hơn bị xoá); nhật ký giữ 30 ngày.
 - Sự kiện được ghi **trong suốt thời gian API ở trạng thái bật** (cấu hình đang bật và app không ở chế độ nhân viên), kể cả khi cổng chưa bind được; **khi API tắt thì không ghi** nên có khoảng trống. Sự kiện phát sinh từ cả thao tác trong app lẫn qua API.
 
@@ -187,7 +191,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 |---|---|---|
 | `run.started` | Bắt đầu một việc (đăng, quét nhóm, v.v.) | `{ runId, kind, scheduleId }` (`scheduleId` là `null` nếu không từ lịch) |
 | `run.finished` | Việc kết thúc | `{ runId, kind, status, scheduleId, posted, failed, skipped }` (đếm theo kết quả từng đích) |
-| `schedule.missed` | Lịch bị lỡ (app tắt/máy ngủ quá giờ, hoặc chờ quá 2 giờ) | `{ scheduleId, name, reason, at }` |
+| `schedule.missed` | Lịch bị lỡ (app tắt/máy ngủ quá giờ, chờ quá 2 giờ, hoặc app đóng khi lượt đang chờ) | `{ scheduleId, name, reason, at }`; `reason` là một trong `App tắt lúc đến giờ`, `Chờ quá 2 giờ vì đang có việc khác`, `App đóng khi lượt đang chờ` (`MISSED_APP_QUIT`) |
 | `draft.approved` | Duyệt nháp (trong app hoặc qua API) | `{ scheduleId, name, when: "now"\|"scheduled", kind, nextRunAt }` |
 
 Sau `run.finished`, gọi `runs.get` với `runId` để lấy link bài và chi tiết từng đích.
@@ -213,7 +217,7 @@ curl -sk "$BASE/v1/health"
 # {"ok":true,"protocol":1}
 ```
 
-**Bước 1. Tình trạng và profile**:
+**Bước 1. Danh sách profile** (có thể gọi thêm `system.status` để xem tình trạng app):
 
 ```bash
 curl -sk -X POST "$BASE/v1/call" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
