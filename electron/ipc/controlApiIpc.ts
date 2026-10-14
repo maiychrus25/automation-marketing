@@ -4,15 +4,14 @@ import DatabaseService from '../../src/services/database/DatabaseService';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import Logger from '../../src/utils/Logger';
 import { ControlStore } from '../../src/services/control/ControlStore';
-import { EventNotifier } from '../../src/services/control/EventNotifier';
+import { ControlEventRecorder } from '../../src/services/control/ControlEventRecorder';
 import { IdempotencyCache } from '../../src/services/control/IdempotencyCache';
 import { AuthLockout, RateLimiter } from '../../src/services/control/controlSecurity';
 import { ControlApiServer } from '../../src/services/control/ControlApiServer';
-import { createControlMethods } from '../../src/services/control/ControlMethods';
+import { createControlMethods, type PosterPort } from '../../src/services/control/ControlMethods';
 import { createCertificate } from '../../src/services/control/certificate';
-import { CertificateStore } from '../../src/services/control/CertificateStore';
+import { CertificateKeyUnreadableError, CertificateStore } from '../../src/services/control/CertificateStore';
 import { InboxMediaStore } from '../../src/services/control/InboxMediaStore';
-import { setControlEventSink } from '../../src/services/control/controlEvents';
 import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
     CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, parseStoredConfig, validateConfigInput, type ControlConfig,
@@ -36,6 +35,9 @@ let lastError: string | null = null;
 let queue: Promise<void> = Promise.resolve();
 let modeTimer: NodeJS.Timeout | null = null;
 let lastBlocked = false;
+let quitting = false;
+const recorder = new ControlEventRecorder();
+const poster: PosterPort = posterOperations;
 
 const db = () => DatabaseService.getInstance();
 const controlDir = () => path.join(app.getPath('userData'), 'control-api');
@@ -51,6 +53,7 @@ function certStoreOf(): CertificateStore {
             isAvailable: () => safeStorage.isEncryptionAvailable(),
             encrypt: (plain) => safeStorage.encryptString(plain),
             decrypt: (data) => safeStorage.decryptString(data),
+            isWeak: () => process.platform === 'linux' && (safeStorage as any).getSelectedStorageBackend?.() === 'basic_text',
         },
         createCertificate,
     );
@@ -70,7 +73,6 @@ function describeBindError(err: any, port: number): string {
 async function stopRuntime(): Promise<void> {
     const current = runtime;
     runtime = null;
-    setControlEventSink(null);
     if (!current) return;
     current.timers.forEach(clearInterval);
     await current.server.stop();
@@ -84,57 +86,77 @@ function housekeeping(store: ControlStore): void {
 
 async function startRuntime(config: ControlConfig): Promise<void> {
     const store = currentStore();
-    const notifier = new EventNotifier(store);
+    const notifier = recorder.notifier;
     const mediaStore = inbox();
     const profiles = () => getBrowserProfileService();
     const methods = createControlMethods({
-        poster: posterOperations as any,
-        listProfiles: () => toSafeProfiles(db().getBrowserProfiles(), db().getBrowserProfileGroups(), profiles().getRunningIds()),
+        poster,
+        listProfiles: () => {
+            const list = db().getBrowserProfiles();
+            const scanned = poster.listGroups({ profileIds: list.map((p) => p.id) }).groups;
+            return toSafeProfiles(list, db().getBrowserProfileGroups(), profiles().getRunningIds(), scanned);
+        },
         systemStatus: async () => {
             const ws = WorkspaceManager.getInstance().getActiveWorkspace();
             return {
                 appVersion: app.getVersion(),
                 workspace: ws ? { id: ws.id, name: ws.name } : null,
                 browserEngine: getBrowserEngineStatus(),
-                sandbox: await getBrowserSandboxState(),
+                sandbox: await getBrowserSandboxState().catch(() => 'unknown' as const),
                 schedulerRunning: isFacebookPosterSchedulerRunning(),
-                currentRun: posterOperations.current(),
+                currentRun: poster.current(),
             };
         },
         resolveMedia: (ids) => mediaStore.resolve(ids),
         events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, sig) => notifier.waitForEvent(a, t, sig) },
     });
     const tls = await certStoreOf().ensure();
+    if (quitting) return;
     const server = new ControlApiServer({
         tls, port: config.port, host: BIND_HOST, allowList: config.allowList, store, methods,
         idempotency: new IdempotencyCache(store), rateLimiter: new RateLimiter(60), lockout: new AuthLockout(),
         saveMedia: (name, contentType, stream) => mediaStore.save(name, contentType, stream),
+        isBlocked: isFacebookPosterEmployeeBlocked,
     });
     await server.start();
+    if (quitting) { await server.stop(); return; }
     housekeeping(store);
     const timer = setInterval(() => housekeeping(store), HOUR_MS);
     timer.unref();
     runtime = { server, store, timers: [timer] };
-    setControlEventSink((type, payload) => {
-        store.addEvent(type, payload);
-        notifier.notify();
-    });
+}
+
+/**
+ * Synchronous (no await): install or remove the event sink for the ACTIVE workspace DB. Must run before the poster scheduler starts
+ * (app start, after a workspace DB switch) so schedule.missed / run.started fired synchronously are not lost. Independent of the server.
+ */
+export function syncControlEventSink(): void {
+    if (quitting) { recorder.deactivate(); return; }
+    try {
+        recorder.sync(readConfig().enabled, isFacebookPosterEmployeeBlocked(), currentStore);
+    } catch (err: any) {
+        recorder.deactivate();
+        Logger.error(`[controlApi] event sink setup failed: ${err?.message ?? err}`);
+    }
 }
 
 /** Stop, then (re)start from the active workspace's config. Serialized so concurrent callers never overlap. */
-function apply(): Promise<void> {
+function apply(opts: { regenerateCertificate?: boolean } = {}): Promise<void> {
+    syncControlEventSink(); // synchronous part first: the sink follows the config with no window while the server restarts
     const run = async () => {
         await stopRuntime();
         lastError = null;
         lastBlocked = isFacebookPosterEmployeeBlocked();
-        if (lastBlocked) return;
-        const config = readConfig();
-        if (!config.enabled) return;
+        if (quitting) return;
         try {
+            if (opts.regenerateCertificate) await certStoreOf().regenerate();
+            if (lastBlocked) return;
+            const config = readConfig();
+            if (!config.enabled) return;
             await startRuntime(config);
         } catch (err: any) {
             await stopRuntime();
-            lastError = describeBindError(err, config.port);
+            lastError = err instanceof CertificateKeyUnreadableError ? err.message : describeBindError(err, readConfig().port);
             Logger.error(`[controlApi] start failed: ${err?.message ?? err}`);
         }
     };
@@ -142,7 +164,7 @@ function apply(): Promise<void> {
     return queue;
 }
 
-/** App start (after DB init): start if enabled; also watches for a switch into/out of employee mode. */
+/** App start (after DB init, before the poster scheduler): sink is installed synchronously, then the server starts if enabled; also watches for a switch into/out of employee mode. */
 export function startControlApi(): Promise<void> {
     if (!modeTimer) {
         modeTimer = setInterval(() => {
@@ -153,9 +175,24 @@ export function startControlApi(): Promise<void> {
     return apply();
 }
 
-/** before-quit and workspace switch: stop serving. */
+/** Workspace switch: stop serving and recording until restartControlApi(). */
 export function stopControlApi(): Promise<void> {
+    recorder.deactivate();
     const run = () => stopRuntime();
+    queue = queue.then(run, run);
+    return queue;
+}
+
+/** before-quit: synchronously drop the sink and close the listener (before DatabaseService.close()); no apply may start afterwards. */
+export function shutdownControlApi(): Promise<void> {
+    quitting = true;
+    recorder.deactivate();
+    if (modeTimer) { clearInterval(modeTimer); modeTimer = null; }
+    const current = runtime;
+    runtime = null;
+    current?.timers.forEach(clearInterval);
+    const closing = current ? current.server.stop() : Promise.resolve(); // stop() closes the listener and sockets synchronously
+    const run = () => closing.then(() => stopRuntime());
     queue = queue.then(run, run);
     return queue;
 }
@@ -220,14 +257,10 @@ export function registerControlApiIpc(): void {
         return { audit: currentStore().listAudit(limit) };
     });
 
-    handle('controlApi:firewallCommand', () => {
-        try { return { command: buildFirewallCommand(readConfig()) }; }
-        catch (err: any) { throw new Error(err.message); }
-    });
+    handle('controlApi:firewallCommand', () => ({ command: buildFirewallCommand(readConfig()) }));
 
     handle('controlApi:regenerateCertificate', async () => {
-        await certStoreOf().regenerate();
-        await apply(); // restart so the server presents the new certificate
+        await apply({ regenerateCertificate: true }); // same queue as every other restart; the new certificate is served after it
         return getConfigView();
     });
 }

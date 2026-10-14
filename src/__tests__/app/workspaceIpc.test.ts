@@ -44,10 +44,11 @@ jest.mock('../../../electron/ipc/facebookPosterIpc', () => ({
     isFacebookPosterBusy: () => mockPoster.isBusy(),
 }));
 
-const mockControl = { stop: jest.fn(async () => undefined), restart: jest.fn(async () => undefined) };
+const mockControl = { stop: jest.fn(async () => undefined), restart: jest.fn(async () => undefined), sync: jest.fn() };
 jest.mock('../../../electron/ipc/controlApiIpc', () => ({
     stopControlApi: () => mockControl.stop(),
     restartControlApi: () => mockControl.restart(),
+    syncControlEventSink: () => mockControl.sync(),
 }));
 
 import { registerWorkspaceIpc } from '../../../electron/ipc/workspaceIpc';
@@ -102,6 +103,9 @@ describe('workspace:switch', () => {
         // The control API stops before the DB changes and restarts on the new workspace afterwards
         expect(mockControl.stop).toHaveBeenCalledTimes(1);
         expect(mockControl.stop.mock.invocationCallOrder[0]).toBeLessThan(mockDb.switchToWorkspaceDb.mock.invocationCallOrder[0]);
+        // sink follows the new DB before the scheduler restarts
+        expect(mockControl.sync.mock.invocationCallOrder[0]).toBeGreaterThan(mockDb.switchToWorkspaceDb.mock.invocationCallOrder[0]);
+        expect(mockControl.sync.mock.invocationCallOrder[0]).toBeLessThan(mockPoster.startScheduler.mock.invocationCallOrder.slice(-1)[0]);
         expect(mockControl.restart).toHaveBeenCalledTimes(1);
         expect(mockControl.restart.mock.invocationCallOrder[0]).toBeGreaterThan(mockDb.switchToWorkspaceDb.mock.invocationCallOrder[0]);
     });

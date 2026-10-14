@@ -17,7 +17,7 @@ import { registerUtilIpc } from './ipc/utilIpc';
 import { registerEmployeeIpc } from './ipc/employeeIpc';
 import { registerRelayIpc } from './ipc/relayIpc';
 import { registerWorkspaceIpc } from './ipc/workspaceIpc';
-import { registerControlApiIpc, startControlApi, stopControlApi } from './ipc/controlApiIpc';
+import { registerControlApiIpc, startControlApi, shutdownControlApi, syncControlEventSink } from './ipc/controlApiIpc';
 import { registerFacebookIpc, reconnectAllFBAccounts } from './ipc/facebookIpc';
 import { registerTelegramIpc } from './ipc/telegramIpc';
 import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
@@ -1177,6 +1177,7 @@ app.whenReady().then(async () => {
   registerBrowserProfileIpc();
   registerFacebookPosterIpc();
   registerControlApiIpc();
+  syncControlEventSink(); // sink first, synchronously: the scheduler below may fire schedule.missed / run.started at once
   startControlApi().catch((err: any) => Logger.error(`[ControlApi] start failed: ${err?.message}`));
   try { startFacebookPosterScheduler(); } catch (err: any) { Logger.error(`[FacebookPoster] scheduler start failed: ${err?.message}`); }
   registerErpTaskIpc();
@@ -1299,7 +1300,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
-  void stopControlApi().catch(() => {});
+  void shutdownControlApi().catch(() => {}); // listener + sink closed synchronously, before DatabaseService.close() below
 
   // ── Cleanup background services giữ event loop ──────────────────────
   // Nếu không dọn, CRM timers / cron / webhook server giữ process sống,

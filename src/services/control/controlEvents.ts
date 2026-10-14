@@ -31,6 +31,10 @@ export function setControlEventSink(next: Sink | null): void {
     sink = next;
 }
 
+export function hasControlEventSink(): boolean {
+    return sink !== null;
+}
+
 /** Không bao giờ ném: sự kiện Control API không được làm hỏng luồng Đăng Facebook. */
 export function emitControlEvent(type: ControlEventType, payload: unknown): void {
     try {

@@ -16,7 +16,8 @@ import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
-import { emitControlEvent, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved } from '../../src/services/control/controlEvents';
+import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved } from '../../src/services/control/controlEvents';
+import type { FbPosterRun } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 
 
@@ -80,10 +81,11 @@ function getService(): FacebookPosterService {
 
 /** Control API event run.finished (additive; counts come from the stored results). Recorded before the scheduler may start the next run. */
 function recordRunFinished(data: unknown): void {
+    if (!hasControlEventSink()) return;
     try {
-        const runId = (data as { runId?: string })?.runId;
+        const { runId, status } = (data ?? {}) as { runId?: string; status?: FbPosterRun['status'] };
         const found = runId ? store().getRun(runId) : null;
-        if (found) emitControlEvent('run.finished', buildRunFinished(found.run, found.results));
+        if (found) emitControlEvent('run.finished', buildRunFinished({ ...found.run, status: status ?? found.run.status }, found.results));
     } catch (err) {
         Logger.error(`[facebookPosterIpc] control event run.finished failed: ${(err as Error).message}`);
     }

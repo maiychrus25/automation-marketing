@@ -10,7 +10,7 @@ import HttpRelayService from '../../src/services/http/HttpRelayService';
 import ConnectionManager from '../../src/utils/ConnectionManager';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
-import { restartControlApi, stopControlApi } from './controlApiIpc';
+import { restartControlApi, stopControlApi, syncControlEventSink } from './controlApiIpc';
 import { closeAllBrowserProfiles } from './browserProfileIpc';
 import { POSTER_NOT_STOPPED_ERROR, cancelAndWaitFacebookPosterJobs, isFacebookPosterBusy, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './facebookPosterIpc';
 
@@ -209,6 +209,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                     return result;
                 } finally {
                     // Also runs after a rolled-back switch (previous DB active again) or when no workspace is left
+                    syncControlEventSink(); // new DB: events from the scheduler start below must not be lost
                     try { startFacebookPosterScheduler(); } catch {}
                     await restartControlApi(); // new workspace DB: its own config and keys (old keys stop working)
                 }
@@ -248,6 +249,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                     await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
                 } finally {
                     // Also runs after a rolled-back switch: the previous DB is active again
+                    syncControlEventSink(); // new DB: events from the scheduler start below must not be lost
                     try { startFacebookPosterScheduler(); } catch {}
                     await restartControlApi(); // new workspace DB: its own config and keys (old keys stop working)
                 }
@@ -322,6 +324,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                 }
             } catch { /* ignore rollback helper failure */ }
             // The DB was not switched, so the scheduler (possibly stopped above) belongs on the current DB; no-op if running
+            syncControlEventSink();
             try { startFacebookPosterScheduler(); } catch {}
             await restartControlApi();
             const msg = err?.message || String(err) || 'Unknown switch error';

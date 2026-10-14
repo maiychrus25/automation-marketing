@@ -100,6 +100,7 @@ Telegram ⇄ bot AI (VPS Linux, Claude CLI)
   - `schedule.missed`;
   - `draft.approved`, ghi nhận cả khi duyệt trong app lẫn qua API.
 - Nguồn: các nơi đã phát `facebookPoster:runFinished`, `facebookPoster:scheduleMissed` và luồng duyệt nháp. Chỉ ghi thêm, không đổi hành vi cũ.
+- Sự kiện được ghi trong suốt thời gian API ở trạng thái bật (cấu hình enabled, không ở chế độ nhân viên), kể cả khi cổng chưa bind được; sink được cài đồng bộ trước khi scheduler khởi động và theo DB của workspace đang mở (sửa khi triển khai, 14/10/2026).
 - Bot tự hỏi lại bằng `events.wait`, nên MaiHub không cần gọi ngược về bot. `seq` bền qua khởi động lại; bot lưu `after` của mình.
 
 ### 3.6 Tệp media
@@ -107,6 +108,7 @@ Telegram ⇄ bot AI (VPS Linux, Claude CLI)
 - `/v1/media` lưu tệp vào `userData/control-api/inbox/<mediaId>`, chỉ nhận đuôi ảnh/video mà luồng đăng hỗ trợ. Kiểm tra kích thước và loại bằng `mediaRules` hiện có.
 - `drafts.create`/`update` chuyển `mediaIds` thành đường dẫn tệp rồi gọi `saveDraft`. `saveDraft` đã sao tệp sang thư mục của lịch.
 - Tệp trong inbox chưa dùng quá 24 giờ thì bị xoá.
+- Tên tệp thực tế là `userData/control-api/inbox/<mediaId>.<đuôi>` (giữ đuôi vì kiểm loại tệp theo đuôi); tệp đang ghi là `.part` và chỉ đổi tên khi ghi xong (sửa khi triển khai, 14/10/2026).
 
 ## 4. Phía bot: `maihub_bridge.py`
 

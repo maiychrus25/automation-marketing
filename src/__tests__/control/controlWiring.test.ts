@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { Readable } from 'stream';
 import { InboxMediaStore } from '../../services/control/InboxMediaStore';
-import { CertificateStore, PLAIN_KEY_WARNING } from '../../services/control/CertificateStore';
+import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
 import { ControlConfigError, buildFirewallCommand, parseStoredConfig, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
 import { buildDraftApproved, buildRunFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
@@ -11,7 +11,7 @@ import { createCertificate } from '../../services/control/certificate';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-')); });
-afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { jest.restoreAllMocks(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe('InboxMediaStore', () => {
   test('saves, resolves, and rejects unknown ids', async () => {
@@ -82,8 +82,15 @@ describe('toSafeProfiles', () => {
     const out = toSafeProfiles(
       [{ id: 'p1', name: 'A', group_id: 2, proxy_id: 9, fingerprint: { seed: 1, hardwareConcurrency: 4, language: 'vi', timezone: 'x' }, note: 'secret', last_opened_at: 5, created_at: 1, updated_at: 2 }],
       [{ id: 2, name: 'G', color: '', sort_order: 0, created_at: 0 }], ['p1']);
-    expect(out).toEqual([{ id: 'p1', name: 'A', groupId: 2, groupName: 'G', running: true, lastOpenedAt: 5, createdAt: 1 }]);
+    expect(out).toEqual([{ id: 'p1', name: 'A', groupId: 2, groupName: 'G', running: true, lastOpenedAt: 5, createdAt: 1, lastScannedAt: null }]);
     expect(JSON.stringify(out)).not.toMatch(/proxy|fingerprint|secret/);
+  });
+
+  test('lastScannedAt is the newest scanned group of that profile, null if never', () => {
+    const base = { group_id: null, proxy_id: null, fingerprint: { seed: 1, hardwareConcurrency: 4, language: 'vi', timezone: 'x' }, note: '', last_opened_at: null, created_at: 1, updated_at: 2 };
+    const out = toSafeProfiles([{ ...base, id: 'a', name: 'A' }, { ...base, id: 'b', name: 'B' }], [], [],
+      { a: [{ scannedAt: 10 }, { scannedAt: 30 }] });
+    expect(out.map((p) => p.lastScannedAt)).toEqual([30, null]);
   });
 });
 
@@ -122,6 +129,22 @@ describe('CertificateStore', () => {
     expect(fp).toMatch(/^[0-9a-f]{64}$/);
     await store.regenerate();
     expect(store.fingerprint()).not.toBe(fp);
+  }, 60000);
+
+  test('does NOT regenerate when an existing encrypted key cannot be decrypted', async () => {
+    const good = new CertificateStore(dir, cipher(true), fakeCert);
+    await good.ensure();
+    const before = good.fingerprint();
+    const broken = new CertificateStore(dir, { ...cipher(true), decrypt: () => { throw new Error('bad'); } }, fakeCert);
+    await expect(broken.ensure()).rejects.toBeInstanceOf(CertificateKeyUnreadableError);
+    expect(broken.fingerprint()).toBe(before);
+  }, 60000);
+
+  test('warns when the OS backend is only basic_text', async () => {
+    const store = new CertificateStore(dir, { ...cipher(true), isWeak: () => true }, fakeCert);
+    await store.ensure();
+    expect(store.warning).toBe(WEAK_KEY_WARNING);
+    expect(fs.existsSync(path.join(dir, 'key.enc'))).toBe(true);
   }, 60000);
 
   test('falls back to a 0600 key file with a warning', async () => {

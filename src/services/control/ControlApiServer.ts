@@ -49,6 +49,8 @@ export interface ControlApiServerOptions {
     lockout: AuthLockout;
     /** Lưu tệp (Task 5: userData inbox). Stream sẽ lỗi nếu vượt giới hạn; nên xoá tệp dở khi stream lỗi. */
     saveMedia(name: string, contentType: string, stream: Readable): Promise<SavedMedia>;
+    /** Chế độ nhân viên: mọi lời gọi đã xác thực bị từ chối 503 BUSY, kể cả khi server chưa kịp dừng. */
+    isBlocked?: () => boolean;
     now?: () => number;
 }
 
@@ -184,6 +186,12 @@ export class ControlApiServer {
                 this.auditRejected(path, keyInfo.name, ip, '(rate-limited)', 'RATE_LIMITED');
             }
             this.sendError(res, new ControlError('RATE_LIMITED', 'Gọi quá nhanh (tối đa 60 lời gọi mỗi phút), hãy thử lại sau'), true);
+            return;
+        }
+
+        if (this.opts.isBlocked?.()) {
+            this.auditRejected(path, keyInfo.name, ip, '(employee-mode)', 'BUSY');
+            this.send(res, 503, { ok: false, error: { code: 'BUSY', message: 'MaiHub đang ở chế độ nhân viên, không nhận lệnh điều khiển' } }, true);
             return;
         }
 

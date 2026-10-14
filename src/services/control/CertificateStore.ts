@@ -8,12 +8,24 @@ export interface SecretCipher {
     isAvailable(): boolean;
     encrypt(plain: string): Buffer;
     decrypt(data: Buffer): string;
+    /** true khi kho khoá hệ điều hành chỉ là văn bản thường (Linux `basic_text`). */
+    isWeak?(): boolean;
 }
 
 const CERT_FILE = 'cert.pem';
 const KEY_ENC_FILE = 'key.enc';
 const KEY_PLAIN_FILE = 'key.pem';
 export const PLAIN_KEY_WARNING = 'Máy này không có kho khoá hệ điều hành, khoá riêng của chứng chỉ được lưu dạng tệp (quyền 0600).';
+
+export const WEAK_KEY_WARNING = 'Kho khoá của hệ điều hành chỉ là basic_text nên khoá riêng của chứng chỉ chỉ được che, không được bảo vệ thật sự.';
+
+/** Có tệp khoá mã hoá nhưng không giải mã được; KHÔNG tự tạo lại chứng chỉ (sẽ làm mọi bridge đã ghim dấu vân tay mất kết nối). */
+export class CertificateKeyUnreadableError extends Error {
+    constructor() {
+        super('Không giải mã được khoá chứng chỉ; tạo lại chứng chỉ trong Cài đặt');
+        this.name = 'CertificateKeyUnreadableError';
+    }
+}
 
 export function fingerprintOf(certPem: string): string {
     return createHash('sha256').update(new X509Certificate(certPem).raw).digest('hex');
@@ -36,19 +48,23 @@ export class CertificateStore {
         try { return fingerprintOf(fs.readFileSync(path.join(this.dir, CERT_FILE), 'utf8')); } catch { return null; }
     }
 
+    /** null khi chưa có chứng chỉ/khoá; ném CertificateKeyUnreadableError khi khoá mã hoá có mà không giải mã được. */
     load(): { key: string; cert: string } | null {
+        let cert: string;
+        try { cert = fs.readFileSync(path.join(this.dir, CERT_FILE), 'utf8'); } catch { return null; }
+        const encPath = path.join(this.dir, KEY_ENC_FILE);
+        if (fs.existsSync(encPath)) {
+            let key: string;
+            try { key = this.cipher.decrypt(fs.readFileSync(encPath)); } catch { throw new CertificateKeyUnreadableError(); }
+            this.warningText = this.cipher.isWeak?.() ? WEAK_KEY_WARNING : null;
+            return { cert, key };
+        }
         try {
-            const cert = fs.readFileSync(path.join(this.dir, CERT_FILE), 'utf8');
-            const encPath = path.join(this.dir, KEY_ENC_FILE);
-            if (fs.existsSync(encPath)) {
-                this.warningText = null;
-                return { cert, key: this.cipher.decrypt(fs.readFileSync(encPath)) };
-            }
             const key = fs.readFileSync(path.join(this.dir, KEY_PLAIN_FILE), 'utf8');
             this.warningText = PLAIN_KEY_WARNING;
             return { cert, key };
         } catch {
-            return null; // thiếu hoặc không giải mã được: coi như chưa có, ensure() sẽ tạo lại
+            return null;
         }
     }
 
@@ -64,7 +80,7 @@ export class CertificateStore {
         if (this.cipher.isAvailable()) {
             fs.writeFileSync(path.join(this.dir, KEY_ENC_FILE), this.cipher.encrypt(made.key), { mode: 0o600 });
             fs.rmSync(path.join(this.dir, KEY_PLAIN_FILE), { force: true });
-            this.warningText = null;
+            this.warningText = this.cipher.isWeak?.() ? WEAK_KEY_WARNING : null;
         } else {
             fs.writeFileSync(path.join(this.dir, KEY_PLAIN_FILE), made.key, { mode: 0o600 });
             fs.rmSync(path.join(this.dir, KEY_ENC_FILE), { force: true });

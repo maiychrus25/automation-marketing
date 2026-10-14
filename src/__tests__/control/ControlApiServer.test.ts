@@ -24,7 +24,7 @@ const fakeMethods: ControlMethod[] = [
   { name: 'crash', description: 'x', destructive: false, paramsSchema: obj, resultSchema: obj, run: async () => { throw new TypeError('secret internal detail'); } },
 ];
 
-async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any; poster?: any } = {}) {
+async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any; poster?: any; isBlocked?: () => boolean } = {}) {
   const db = memoryDb();
   db.exec(CONTROL_SCHEMA_SQL);
   const store = new ControlStore(db);
@@ -48,7 +48,7 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
     tls: { key: cert.key, cert: cert.cert }, port: 0, host: '127.0.0.1',
     allowList: opts.allowList ?? ['127.0.0.1'],
     store, methods: [...real, ...fakeMethods], idempotency: new IdempotencyCache(store),
-    rateLimiter: new RateLimiter(opts.rate ?? 60), lockout, saveMedia,
+    rateLimiter: new RateLimiter(opts.rate ?? 60), lockout, saveMedia, isBlocked: opts.isBlocked,
   });
   const { port } = await server.start();
   const key = store.createKey('Claude bot');
@@ -482,5 +482,19 @@ describe('ControlApiServer hardening', () => {
     await Promise.all(waits);
     expect(ctx.notifier.pending).toBe(0);
     expect((await ctx.call('events.wait', { after: 0, timeoutSec: 1 })).status).toBe(200);
+  });
+});
+
+describe('ControlApiServer employee-mode guard', () => {
+  it('answers 503 BUSY to authenticated calls while blocked, and recovers; health stays open', async () => {
+    let blocked = true;
+    ctx = await setup({ isBlocked: () => blocked });
+    const r = await ctx.call('echo', {});
+    expect(r.status).toBe(503);
+    expect(r.body.error).toEqual({ code: 'BUSY', message: 'MaiHub đang ở chế độ nhân viên, không nhận lệnh điều khiển' });
+    expect((await ctx.send('GET', '/v1/describe')).status).toBe(503);
+    expect((await ctx.send('GET', '/v1/health', { key: null })).status).toBe(200);
+    blocked = false;
+    expect((await ctx.call('echo', {})).status).toBe(200);
   });
 });
