@@ -17,7 +17,13 @@ export class IdempotencyCache {
 
         const promise = (async () => {
             const result = await fn();
-            this.store.putIdempotent(keyId, idemKey, JSON.stringify(result), this.now());
+            // Lưu thất bại (không serialize được, lỗi DB) không được biến thành lỗi sau khi tác vụ đã chạy xong.
+            // `undefined` được lưu thành null nên lần phát lại trả null.
+            try {
+                this.store.putIdempotent(keyId, idemKey, JSON.stringify(result ?? null), this.now());
+            } catch (err) {
+                console.warn('[control] Không lưu được kết quả idempotency:', err);
+            }
             return result;
         })();
         this.inFlight.set(flightKey, promise);

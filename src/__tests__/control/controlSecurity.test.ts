@@ -47,6 +47,25 @@ describe('ipAllowed', () => {
   });
 });
 
+describe('ipAllowed edge cases', () => {
+  it('handles uppercase mapped prefix, whitespace, high-bit CIDR', () => {
+    expect(ipAllowed('::FFFF:1.2.3.4', ['1.2.3.4'])).toBe(true);
+    expect(ipAllowed(' 1.2.3.4 ', ['  1.2.3.4  '])).toBe(true);
+    expect(ipAllowed('200.1.2.3', ['200.0.0.0/8'])).toBe(true);
+    expect(ipAllowed('200.1.2.3', ['128.0.0.0/1'])).toBe(true);
+    expect(ipAllowed('100.1.2.3', ['128.0.0.0/1'])).toBe(false);
+  });
+  it('rejects out-of-range and leading-zero octets', () => {
+    expect(ipAllowed('256.0.0.1', ['256.0.0.1'])).toBe(false);
+    expect(ipAllowed('10.0.0.1', ['010.0.0.1'])).toBe(false);
+    expect(parseAllowList('010.0.0.1 256.0.0.1 10.0.0.0/8')).toEqual({ entries: ['10.0.0.0/8'], invalid: ['010.0.0.1', '256.0.0.1'] });
+  });
+  it('fails closed on other IPv6 forms', () => {
+    expect(ipAllowed('::ffff:c0a8:0109', ['192.168.1.9', '0.0.0.0/0'])).toBe(false);
+    expect(ipAllowed('0:0:0:0:0:ffff:1.2.3.4', ['1.2.3.4', '0.0.0.0/0'])).toBe(false);
+  });
+});
+
 describe('RateLimiter', () => {
   it('allows 60 per minute per key then recovers', () => {
     let t = 1000;
@@ -75,6 +94,16 @@ describe('AuthLockout', () => {
     expect(lo.isBlocked('1.1.1.1')).toBe(true);
     t += 2_000;
     expect(lo.isBlocked('1.1.1.1')).toBe(false);
+  });
+  it('evicts stale state after the window', () => {
+    let t = 0;
+    const lo = new AuthLockout(() => t);
+    lo.recordFailure('a'); for (let i = 0; i < 10; i++) lo.recordFailure('b');
+    t += 1_000_000;
+    lo.recordFailure('c');
+    expect((lo as any).failures.has('a')).toBe(false);
+    expect((lo as any).blockedUntil.has('b')).toBe(false);
+    expect((lo as any).failures.has('c')).toBe(true);
   });
   it('failures older than 600s do not count', () => {
     let t = 0;

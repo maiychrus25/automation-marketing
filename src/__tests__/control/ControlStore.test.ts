@@ -28,7 +28,9 @@ describe('ControlStore keys', () => {
     expect(store.findActiveKeyByHash(hashKey('mh_nope'))).toBeNull();
     store.touchKey(k.id, 1234);
     expect(store.listKeys()[0].lastUsedAt).toBe(1234);
-    store.revokeKey(k.id);
+    expect(store.revokeKey(k.id)).toBe(true);
+    expect(store.revokeKey(k.id)).toBe(false);
+    expect(store.revokeKey('missing')).toBe(false);
     expect(store.findActiveKeyByHash(hashKey(k.key))).toBeNull();
     expect(store.listKeys()[0].revokedAt).not.toBeNull();
   });

@@ -26,6 +26,7 @@ function ipv4ToInt(ip: string): number | null {
     if (!m) return null;
     let n = 0;
     for (let i = 1; i <= 4; i++) {
+        if (m[i].length > 1 && m[i].startsWith('0')) return null; // chặn số 0 đứng đầu (mơ hồ bát phân)
         const o = Number(m[i]);
         if (o > 255) return null;
         n = n * 256 + o;
@@ -121,6 +122,7 @@ export class AuthLockout {
     }
 
     recordFailure(ip: string, now: number = this.now()): void {
+        this.sweep(now);
         const recent = (this.failures.get(ip) ?? []).filter((f) => now - f < LOCKOUT_WINDOW_MS);
         recent.push(now);
         if (recent.length >= LOCKOUT_MAX_FAILURES) {
@@ -128,6 +130,14 @@ export class AuthLockout {
             this.failures.delete(ip);
         } else {
             this.failures.set(ip, recent);
+        }
+    }
+
+    /** Xoá IP có toàn bộ lần sai đã quá cửa sổ và các khoá đã hết hạn để map không phình mãi. */
+    private sweep(now: number): void {
+        for (const [ip, until] of this.blockedUntil) if (now >= until) this.blockedUntil.delete(ip);
+        for (const [ip, list] of this.failures) {
+            if (now - list[list.length - 1] >= LOCKOUT_WINDOW_MS) this.failures.delete(ip);
         }
     }
 

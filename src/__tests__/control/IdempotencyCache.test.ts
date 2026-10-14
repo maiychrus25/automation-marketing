@@ -42,4 +42,18 @@ describe('IdempotencyCache', () => {
     expect(store.getIdempotent('k', 'i')).toBeNull();
     expect(await cache.run('k', 'i', async () => 'ok')).toBe('ok');
   });
+  it('undefined result is stored and not re-run', async () => {
+    const { cache } = make();
+    const fn = jest.fn(async () => undefined);
+    expect(await cache.run('k', 'i', fn)).toBeUndefined();
+    expect(await cache.run('k', 'i', fn)).toBeNull();
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+  it('non-serializable result still resolves', async () => {
+    const { cache } = make();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await cache.run('k', 'i', async () => BigInt(5))).toBe(BigInt(5));
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
 });

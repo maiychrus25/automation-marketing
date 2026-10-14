@@ -92,8 +92,12 @@ export class ControlStore {
             }));
     }
 
-    revokeKey(id: string): void {
+    /** true nếu khoá đang hoạt động đã bị thu hồi bây giờ. */
+    revokeKey(id: string): boolean {
+        const active = this.db.queryOne<any>('SELECT id FROM control_keys WHERE id = ? AND revoked_at IS NULL', [id]);
+        if (!active) return false;
         this.db.run('UPDATE control_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL', [Date.now(), id]);
+        return true;
     }
 
     findActiveKeyByHash(hash: string): { id: string; name: string } | null {
