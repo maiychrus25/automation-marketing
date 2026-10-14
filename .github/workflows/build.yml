@@ -76,6 +76,9 @@ jobs:
       - name: Unit test
         run: npx jest --runInBand
 
+      - name: Unit test bridge Python
+        run: python3 -m unittest discover -s tools/maihub-bridge/tests -v
+
   package:
     name: Đóng gói ${{ matrix.name }}
     needs: verify
