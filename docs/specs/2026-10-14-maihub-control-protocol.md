@@ -3,9 +3,11 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 14/10/2026 |
-| Trạng thái | Chờ duyệt |
+| Trạng thái | Đã duyệt (14/10/2026) |
+| Kế hoạch | `docs/plans/2026-10-14-maihub-control-protocol.md` |
 | Intent | `docs/intent/2026-10-14-maihub-control-protocol.md` (đã duyệt) |
 | Nhánh | `feat/maihub-control-protocol` |
+| Môi trường thử | Bot: VPS Linux `161.248.81.164`; MaiHub: VPS Windows `161.248.81.230` (chỉ mở RDP) |
 
 ## 1. Tổng quan
 
