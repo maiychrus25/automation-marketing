@@ -260,7 +260,7 @@ export default function ControlApiSettings() {
 
       <Card title="Khoá truy cập">
         <div className="flex flex-wrap gap-2">
-          <input aria-label="Tên khoá" className="input-field flex-1 min-w-[10rem]" maxLength={60} placeholder="Tên khoá (vd. bot-telegram)" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newKeyName.trim() && !creating) createKey(); }} />
+          <input aria-label="Tên khoá" className="input-field flex-1 min-w-0 basis-[8rem]" maxLength={60} placeholder="Tên khoá (vd. bot-telegram)" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newKeyName.trim() && !creating) createKey(); }} />
           <button type="button" className="btn-primary flex items-center gap-2" onClick={createKey} disabled={creating || !newKeyName.trim()}>
             {creating ? <Spinner size={4} className="text-white" /> : <KeyIcon className="w-4 h-4" />} Tạo khoá
           </button>
@@ -287,7 +287,7 @@ export default function ControlApiSettings() {
 
       <Card title="Tường lửa Windows">
         {firewall ? <CodeBox text={firewall} onCopy={copy} label="Sao chép lệnh tường lửa" /> : <p className="text-xs text-gray-500">Lưu danh sách IP để hiện lệnh.</p>}
-        <p className="text-xs text-gray-400">Chạy một lần trong PowerShell/CMD quyền Administrator trên máy Windows.</p>
+        <p className="text-xs text-gray-400">Chạy một lần trong PowerShell/CMD quyền Administrator trên máy Windows. Lần đầu dòng xoá luật có thể báo "No rules match the specified criteria.": bình thường, cứ chạy tiếp dòng thêm luật.</p>
       </Card>
 
       <Card title="Cấu hình cho bot">
