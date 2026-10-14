@@ -1,5 +1,5 @@
 import { memoryDb } from '../facebookPoster/helpers';
-import { ControlStore, CONTROL_SCHEMA_SQL } from '../../services/control/ControlStore';
+import { ControlStore, CONTROL_MIGRATIONS, CONTROL_SCHEMA_SQL } from '../../services/control/ControlStore';
 import { hashKey } from '../../services/control/controlSecurity';
 
 const DAY = 86_400_000;
@@ -55,8 +55,21 @@ describe('ControlStore audit/events/idempotency', () => {
   it('idempotency get/put', () => {
     const { store } = make();
     expect(store.getIdempotent('k', 'i')).toBeNull();
-    store.putIdempotent('k', 'i', '{"a":1}', 100);
-    expect(store.getIdempotent('k', 'i')).toEqual({ result: '{"a":1}', createdAt: 100 });
+    store.putIdempotent('k', 'i', 'drafts.create', '{"a":1}', 100);
+    expect(store.getIdempotent('k', 'i')).toEqual({ result: '{"a":1}', createdAt: 100, method: 'drafts.create' });
+  });
+  it('idempotency keeps the method, replaces on re-put, and the ALTER migration is idempotent on an old table', () => {
+    const { db, store } = make();
+    store.putIdempotent('k', 'i', 'a', '1', 1);
+    store.putIdempotent('k', 'i', 'b', '2', 2);
+    expect(store.getIdempotent('k', 'i')).toEqual({ result: '2', createdAt: 2, method: 'b' });
+    const old = memoryDb();
+    old.exec("CREATE TABLE control_idempotency (key_id TEXT NOT NULL, idem_key TEXT NOT NULL, result TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (key_id, idem_key))");
+    old.run("INSERT INTO control_idempotency VALUES ('k','i','7',5)");
+    for (const sql of CONTROL_MIGRATIONS) old.exec(sql);
+    expect(new ControlStore(old).getIdempotent('k', 'i')).toEqual({ result: '7', createdAt: 5, method: '' });
+    expect(() => old.exec(CONTROL_MIGRATIONS[0])).toThrow();
+    void db;
   });
   it('pruneOld applies retention windows and 5000 cap', () => {
     const { db, store } = make();
@@ -64,8 +77,8 @@ describe('ControlStore audit/events/idempotency', () => {
     store.addAudit(audit(now - 31 * DAY)); store.addAudit(audit(now - 29 * DAY));
     db.run('INSERT INTO control_events (type, payload, created_at) VALUES (?,?,?)', ['old', '{}', now - 8 * DAY]);
     db.run('INSERT INTO control_events (type, payload, created_at) VALUES (?,?,?)', ['new', '{}', now - 6 * DAY]);
-    store.putIdempotent('k', 'old', '1', now - 25 * 3600_000);
-    store.putIdempotent('k', 'new', '1', now - 23 * 3600_000);
+    store.putIdempotent('k', 'old', 'm', '1', now - 25 * 3600_000);
+    store.putIdempotent('k', 'new', 'm', '1', now - 23 * 3600_000);
     store.pruneOld(now);
     expect(store.listAudit(10)).toHaveLength(1);
     expect(store.listEventsAfter(0, 10).map((e) => e.type)).toEqual(['new']);

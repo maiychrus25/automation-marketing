@@ -33,11 +33,17 @@ CREATE TABLE IF NOT EXISTS control_events (
 CREATE TABLE IF NOT EXISTS control_idempotency (
   key_id TEXT NOT NULL,
   idem_key TEXT NOT NULL,
+  method TEXT NOT NULL DEFAULT '',
   result TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (key_id, idem_key)
 );
 `;
+
+/** Cột thêm sau khi bảng đã có (DB cũ); lỗi "cột đã tồn tại" được bỏ qua. Dòng cũ có method '' và không bị coi là xung đột. */
+export const CONTROL_MIGRATIONS = [
+  `ALTER TABLE control_idempotency ADD COLUMN method TEXT NOT NULL DEFAULT ''`,
+];
 
 export const AUDIT_RETENTION_MS = 30 * 86_400_000;
 export const EVENT_RETENTION_MS = 7 * 86_400_000;
@@ -136,13 +142,13 @@ export class ControlStore {
             .map((r) => ({ seq: r.seq, type: r.type, payload: JSON.parse(r.payload), createdAt: r.created_at }));
     }
 
-    getIdempotent(keyId: string, idem: string): { result: string; createdAt: number } | null {
-        const row = this.db.queryOne<any>('SELECT result, created_at FROM control_idempotency WHERE key_id = ? AND idem_key = ?', [keyId, idem]);
-        return row ? { result: row.result, createdAt: row.created_at } : null;
+    getIdempotent(keyId: string, idem: string): { result: string; createdAt: number; method: string } | null {
+        const row = this.db.queryOne<any>('SELECT result, created_at, method FROM control_idempotency WHERE key_id = ? AND idem_key = ?', [keyId, idem]);
+        return row ? { result: row.result, createdAt: row.created_at, method: row.method ?? '' } : null;
     }
 
-    putIdempotent(keyId: string, idem: string, resultJson: string, now: number): void {
-        this.db.run('INSERT OR REPLACE INTO control_idempotency (key_id, idem_key, result, created_at) VALUES (?,?,?,?)', [keyId, idem, resultJson, now]);
+    putIdempotent(keyId: string, idem: string, method: string, resultJson: string, now: number): void {
+        this.db.run('INSERT OR REPLACE INTO control_idempotency (key_id, idem_key, method, result, created_at) VALUES (?,?,?,?,?)', [keyId, idem, method, resultJson, now]);
     }
 
     /** Audit > 30 ngày; sự kiện > 7 ngày hoặc ngoài 5000 dòng mới nhất; idempotency > 24 giờ. */

@@ -239,6 +239,16 @@ describe('ControlApiServer /v1/call', () => {
     expect(counter).toBe(2);
   });
 
+  it('idempotencyKey reused for another method -> 400 INVALID_PARAMS, nothing executed', async () => {
+    ctx = await setup();
+    counter = 0;
+    await ctx.call('count', {}, { idempotencyKey: 'shared' });
+    const r = await ctx.call('echo', {}, { idempotencyKey: 'shared' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'idempotencyKey' } });
+    expect(counter).toBe(1);
+  });
+
   it('body over 1 MiB -> 413 PAYLOAD_TOO_LARGE, nothing executed', async () => {
     ctx = await setup();
     counter = 0;
