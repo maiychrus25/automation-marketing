@@ -16,6 +16,7 @@ docs/*
 !docs/intent/
 !docs/specs/
 !docs/plans/
+!docs/protocol/
 .vscode/
 /.worktrees/
 

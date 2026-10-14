@@ -39,6 +39,10 @@ phép **MIT**. Bản quyền của tác giả gốc được giữ nguyên trong
 - Bình luận đầu có thể đặt chạy sau 0–60 phút kể từ lúc bài lên (0 là ngay), cho cả nhóm lẫn Page.
 - Bấm **Hủy** (mã sau 26.16.0, sẽ có trong bản tính năng kế tiếp): trình duyệt của các profile chưa tới bước bấm Đăng/Tham gia đóng ngay và việc dừng trong vài giây; profile đang ở bước bấm Đăng/Tham gia được chờ cho xong để không mất dấu bài đã lên. Đổi hoặc xoá workspace khi có việc đang chạy chờ tối đa khoảng 55 giây; nếu việc chưa dừng thì không đổi và báo "Việc Đăng Facebook chưa dừng được. Thử lại sau." Thoát app không chờ; lượt đang dở được ghi lỗi ở lần mở sau để kiểm tra bài trên Facebook.
 
+## Điều khiển MaiHub từ bot (API điều khiển)
+
+MaiHub có thể mở một máy chủ HTTPS tắt-theo-mặc-định để bot (ví dụ bot Telegram dùng Claude CLI) tạo nháp, tải ảnh, duyệt lịch và chờ kết quả Đăng Facebook. Bật trong Cài đặt → **Điều khiển từ bot**: bắt buộc nhập danh sách IP được phép, mỗi bot dùng một khoá riêng, chứng chỉ tự ký được bot ghim bằng dấu vân tay SHA-256. Đặc tả giao thức, mã lỗi, từng thao tác và luồng mẫu: [docs/protocol/maihub-control-protocol.md](./docs/protocol/maihub-control-protocol.md). Cài cầu nối Python (CLI và MCP) trên VPS của bot: [tools/maihub-bridge/README.md](./tools/maihub-bridge/README.md).
+
 ## Giới hạn đang áp dụng
 
 | Hạng mục | Trạng thái |

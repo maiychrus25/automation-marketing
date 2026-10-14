@@ -103,6 +103,28 @@ Không phải sót — đổi sẽ phá tương thích hoặc gây rủi ro khô
 | Thư mục tạm: `deplao-clipboard`, `deplao-videometa`, `deplao-workflow-images` | Nội bộ, không hiển thị cho người dùng |
 | Chú thích mô tả dịch vụ đã tắt (`TrackingService`, `backendService`) | Ghi đúng những gì đã bị chặn — là tài liệu, không phải nhận diện thương hiệu |
 
+## Dependency runtime thêm cho API điều khiển (MaiHub, 14/10/2026)
+
+`selfsigned` **5.5.0** (giấy phép **MIT**, khai báo trong `dependencies` của `package.json`) dùng để tạo chứng chỉ TLS tự ký cho API điều khiển (`src/services/control/certificate.ts`); chỉ được nạp khi cần tạo chứng chỉ. Các dependency runtime kéo theo (đối chiếu `node_modules/*/package.json` ngày 14/10/2026):
+
+| Gói | Phiên bản | Giấy phép |
+|---|---|---|
+| `selfsigned` | 5.5.0 | MIT |
+| `@peculiar/x509` | 1.14.3 | MIT |
+| `@peculiar/asn1-schema`, `asn1-x509`, `asn1-cms`, `asn1-csr`, `asn1-ecc`, `asn1-pfx`, `asn1-pkcs8`, `asn1-pkcs9`, `asn1-rsa`, `asn1-x509-attr` | 2.11.0 | MIT |
+| `@peculiar/utils` | 2.0.3 | MIT |
+| `pkijs` | 3.4.1 | BSD-3-Clause |
+| `asn1js` | 3.0.10 | BSD-3-Clause |
+| `bytestreamjs` | 2.0.1 | BSD-3-Clause |
+| `pvtsutils` | 1.3.6 | MIT |
+| `pvutils` | 1.2.0 | MIT |
+| `tsyringe` | 4.10.0 | MIT |
+| `tslib` | 2.8.1 (và 1.14.1 lồng trong `tsyringe`) | 0BSD |
+| `reflect-metadata` | 0.2.2 | Apache-2.0 |
+| `@noble/hashes` | 1.8.0 (lồng trong `pkijs`) | MIT |
+
+Bản quyền và văn bản giấy phép của từng gói nằm trong thư mục của gói đó trong `node_modules` và được giữ nguyên khi đóng gói.
+
 ## Lưu ý khi dùng
 
 - Ứng dụng thao tác trên **tài khoản Zalo cá nhân** qua thư viện `zca-js`.

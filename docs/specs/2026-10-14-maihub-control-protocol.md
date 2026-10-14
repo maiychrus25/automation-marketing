@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 14/10/2026 |
-| Trạng thái | Đã duyệt (14/10/2026) |
+| Trạng thái | Đã triển khai trên nhánh `feat/maihub-control-protocol`, chưa phát hành (14/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-14-maihub-control-protocol.md` |
 | Intent | `docs/intent/2026-10-14-maihub-control-protocol.md` (đã duyệt) |
 | Nhánh | `feat/maihub-control-protocol` |
