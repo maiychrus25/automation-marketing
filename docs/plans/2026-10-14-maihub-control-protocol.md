@@ -259,3 +259,20 @@ Lỗi trả về `isError: true` kèm mã. Với `CONFIRMATION_REQUIRED`, bridge
 3. Màn Cài đặt: desktop/mobile, sáng/tối, không tràn.
 4. Chạy hai vòng stress theo `AGENTS.md`.
 5. Kiểm thử thật trên VPS Windows `.230` và bot `.164`: chờ anh duyệt việc cài trên 164 và mở cổng trên Windows.
+
+---
+
+## Điều chỉnh khi triển khai (14/10/2026)
+
+1. **Mã lỗi:** `toControlError` chỉ trả `NOT_FOUND` cho đúng ba thông báo tài nguyên (nháp, lịch, lần chạy). Lỗi không phải `Error` thường thành `INTERNAL`, kèm thông báo cố định. Có thêm trường `destructiveWhen` cho `drafts.approve`.
+2. **Máy chủ:**
+   - ghi nhật ký cả các lời gọi bị từ chối (401 mỗi lần; 429 tối đa một dòng/60 s cho mỗi khoá và mỗi IP);
+   - tối đa 64 kết nối và 4 long-poll mỗi khoá;
+   - `selfsigned` nạp lười;
+   - thư mục tải lên giới hạn 2 GiB / 200 tệp;
+   - tải lên bị từ chối vẫn đọc hết thân để client không bị treo.
+3. **Idempotency:** khoá gắn với tên thao tác. Dùng lại cho thao tác khác thì trả `INVALID_PARAMS`.
+4. **Sự kiện:** ghi khi API được bật, không phụ thuộc máy chủ có bind được cổng hay không. Bộ ghi được gắn đồng bộ trước khi scheduler chạy. `events.wait` trả thêm `workspaceId`.
+5. **Chế độ nhân viên:** mỗi lời gọi bị từ chối bằng `BUSY` (503). Lúc thoát app, API dừng sau scheduler và trước khi đóng DB.
+6. **Bản build phát hành:** `scripts/strip-console.js` thay lời gọi `console` bị xoá bằng `void 0;` để giữ nguyên câu lệnh; code của API dùng `Logger` nên bản phát hành vẫn còn log chẩn đoán.
+7. **Bridge:** `--env-file` nhận được cả trước lẫn sau lệnh con; loại tệp lấy từ bảng cố định; stdio dùng UTF-8.
