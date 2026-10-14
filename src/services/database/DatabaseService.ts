@@ -9,6 +9,7 @@ import { CHANNEL } from '../../ui/lib/channelHelper';
 import { getTelegramMessagePreview } from '../telegram/TelegramMessagePreview';
 import type { BrowserFingerprint, BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
 import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from '../facebookPoster/schema';
+import { CONTROL_SCHEMA_SQL } from '../control/ControlStore';
 
 // better-sqlite3: native SQLite - no WASM heap, memory-mapped I/O
 let db: BetterSqlite3.Database | null = null;
@@ -1158,6 +1159,9 @@ class DatabaseService {
         // ─── Facebook poster ─────────────────────────────────────────────────────
         this.exec(FB_POSTER_SCHEMA_SQL);
         for (const sql of FB_POSTER_MIGRATIONS) { try { this.exec(sql); } catch { /* cột đã có */ } }
+
+        // ─── MaiHub Control API ──────────────────────────────────────────────────
+        this.exec(CONTROL_SCHEMA_SQL);
 
     }
 
