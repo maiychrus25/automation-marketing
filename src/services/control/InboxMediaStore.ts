@@ -22,6 +22,8 @@ export class InboxMediaStore {
     /** Đang ghi dở của mọi lần `save` đồng thời: cộng vào dung lượng đã có để tải song song không vượt trần. */
     private pendingFiles = 0;
     private pendingBytes = 0;
+    /** Byte của các lần `save` đã xong từ khi instance tạo; trừ phần lúc bắt đầu để biết tệp nào vừa vào trong lúc đang nhận. */
+    private committedBytes = 0;
 
     constructor(
         private readonly dir: string,
@@ -53,11 +55,12 @@ export class InboxMediaStore {
         }
         if (used.bytes + this.pendingBytes >= this.limits.maxBytes) throw this.bytesError();
         this.pendingFiles++;
+        const committedAtStart = this.committedBytes;
         let written = 0;
         // Đếm byte khi đang nhận: nhiều tải song song cùng vượt trần thì chỉ tệp làm tràn bị cắt.
         const guard = new Transform({
             transform: (chunk, _enc, cb) => {
-                if (used.bytes + this.pendingBytes + chunk.length > this.limits.maxBytes) { cb(this.bytesError()); return; }
+                if (used.bytes + (this.committedBytes - committedAtStart) + this.pendingBytes + chunk.length > this.limits.maxBytes) { cb(this.bytesError()); return; }
                 written += chunk.length;
                 this.pendingBytes += chunk.length;
                 cb(null, chunk);
@@ -68,6 +71,7 @@ export class InboxMediaStore {
             const size = fs.statSync(partPath).size;
             if (size === 0) throw new ControlError('INVALID_PARAMS', 'Tệp rỗng', { field: 'body' });
             fs.renameSync(partPath, finalPath);
+            this.committedBytes += size;
             return { mediaId, name, size, kind: IMAGE_EXTENSIONS.includes(ext) ? 'image' : 'video' };
         } catch (err) {
             fs.rmSync(partPath, { force: true }); // stream lỗi / vượt giới hạn / client ngắt: không để tệp dở

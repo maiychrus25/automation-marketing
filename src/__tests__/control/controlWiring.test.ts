@@ -5,7 +5,7 @@ import * as path from 'path';
 import { Readable } from 'stream';
 import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
-import { ControlConfigError, buildFirewallCommand, parseStoredConfig, validateConfigInput } from '../../services/control/controlConfig';
+import { ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
 import { buildDraftApproved, buildRunFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 import { createCertificate } from '../../services/control/certificate';
@@ -66,6 +66,15 @@ describe('InboxMediaStore', () => {
     expect(third.some((r) => r.status === 'rejected' && (r.reason as any).code === 'LIMIT_REACHED')).toBe(true);
   });
 
+  test('overlapping uploads: bytes committed by a save that finished meanwhile still count toward the cap', async () => {
+    const store = new InboxMediaStore(path.join(dir, 'inbox'), { maxBytes: 10, maxFiles: 50 });
+    const late = new Readable({ read() { setTimeout(() => { this.push(Buffer.from('123456')); this.push(null); }, 60); } });
+    const b = store.save('b.jpg', 'image/jpeg', late); // bắt đầu trước, khi inbox còn trống
+    await store.save('a.jpg', 'image/jpeg', Readable.from([Buffer.from('123456')])); // xong trước b
+    await expect(b).rejects.toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
+    expect(fs.readdirSync(path.join(dir, 'inbox'))).toHaveLength(1);
+  });
+
   test('cleanup removes only files older than the limit', async () => {
     const store = new InboxMediaStore(path.join(dir, 'inbox'));
     const old = await store.save('a.jpg', 'image/jpeg', Readable.from([Buffer.from('1')]));
@@ -98,6 +107,16 @@ describe('controlConfig', () => {
     expect(parseStoredConfig('{"enabled":true,"port":47321,"allowList":[]}').enabled).toBe(false);
     expect(parseStoredConfig('{"enabled":true,"port":50000,"allowList":["10.0.0.1"]}')).toEqual({ enabled: true, port: 50000, allowList: ['10.0.0.1'] });
   });
+  test('resolveAppVersion: keeps a real version, else first readable package.json, else the reported value', () => {
+    const files: Record<string, string> = { '/b/package.json': '{"version":"26.17.0"}', '/c/package.json': '{"version":"9.9.9"}' };
+    const readFile = (f: string) => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; };
+    expect(resolveAppVersion({ reported: '1.2.3', packageJsonPaths: ['/b/package.json'], readFile })).toBe('1.2.3');
+    expect(resolveAppVersion({ reported: '0.0', packageJsonPaths: ['/a/package.json', '/b/package.json', '/c/package.json'], readFile })).toBe('26.17.0');
+    expect(resolveAppVersion({ reported: '0.0', packageJsonPaths: ['/a/package.json'], readFile })).toBe('0.0');
+    files['/bad/package.json'] = 'not json';
+    expect(resolveAppVersion({ reported: '0.0', packageJsonPaths: ['/bad/package.json', '/c/package.json'], readFile })).toBe('9.9.9');
+  });
+
   test('firewall command', () => {
     expect(buildFirewallCommand({ port: 47321, allowList: ['10.0.0.1', '10.0.0.2'] }))
       .toBe('netsh advfirewall firewall delete rule name="MaiHub Control API"\nnetsh advfirewall firewall add rule name="MaiHub Control API" dir=in action=allow protocol=TCP localport=47321 remoteip=10.0.0.1,10.0.0.2');

@@ -145,3 +145,9 @@ export class AuthLockout {
         this.failures.delete(ip);
     }
 }
+
+/** Logger ghép đối số bằng JSON.stringify nên Error thành `{}`; chỉ ghi thông điệp (không ghi khoá hay nội dung bài). */
+export function errorText(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+}
+

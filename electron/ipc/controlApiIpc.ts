@@ -15,7 +15,7 @@ import { CertificateKeyUnreadableError, CertificateStore } from '../../src/servi
 import { InboxMediaStore } from '../../src/services/control/InboxMediaStore';
 import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
-    CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, parseStoredConfig, validateConfigInput, type ControlConfig,
+    CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
 import { isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations } from './facebookPosterIpc';
 import { getBrowserEngineStatus, getBrowserProfileService, getBrowserSandboxState } from './browserProfileIpc';
@@ -42,14 +42,12 @@ const poster: PosterPort = posterOperations;
 
 const db = () => DatabaseService.getInstance();
 const controlDir = () => path.join(app.getPath('userData'), 'control-api');
-/** `app.getVersion()` trả '0.0' khi chạy `electron .` ở chế độ dev; lúc đó đọc version từ package.json của app. */
-function resolveAppVersion(): string {
-    const version = app.getVersion();
-    if (version !== '0.0') return version;
-    try {
-        return JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')).version ?? version;
-    } catch { return version; }
-}
+const appVersion = () => resolveAppVersion({
+    reported: app.getVersion(),
+    // __dirname = dist-electron/electron/ipc khi build: ba cấp lên là gốc repo. Bản đóng gói đọc package.json trong app.
+    packageJsonPaths: [path.join(__dirname, '..', '..', '..', 'package.json'), path.join(app.getAppPath(), 'package.json')],
+    readFile: (file) => fs.readFileSync(file, 'utf8'),
+});
 
 const inbox = () => new InboxMediaStore(path.join(controlDir(), 'inbox'));
 const currentStore = () => new ControlStore(db());
@@ -109,7 +107,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
         systemStatus: async () => {
             const ws = WorkspaceManager.getInstance().getActiveWorkspace();
             return {
-                appVersion: resolveAppVersion(),
+                appVersion: appVersion(),
                 workspace: ws ? { id: ws.id, name: ws.name } : null,
                 browserEngine: getBrowserEngineStatus(),
                 sandbox: await getBrowserSandboxState().catch(() => 'unknown' as const),

@@ -7,7 +7,7 @@ import { IMAGE_EXTENSIONS, MAX_IMAGE_BYTES, VIDEO_EXTENSIONS, extensionOf } from
 import type { ControlStore } from './ControlStore';
 import type { IdempotencyCache } from './IdempotencyCache';
 import { ControlError, describe, toControlError, type ControlErrorCode, type ControlMethod } from './ControlMethods';
-import { hashKey, ipAllowed, normalizeIp, type AuthLockout, type RateLimiter } from './controlSecurity';
+import { errorText, hashKey, ipAllowed, normalizeIp, type AuthLockout, type RateLimiter } from './controlSecurity';
 
 export const DEFAULT_CONTROL_PORT = 47321;
 export const MAX_CALL_BODY_BYTES = 1_048_576;
@@ -134,7 +134,7 @@ export class ControlApiServer {
         try {
             await this.pipeline(req, res);
         } catch (err) {
-            Logger.error('[control] Lỗi xử lý yêu cầu:', err);
+            Logger.error('[control] Lỗi xử lý yêu cầu:', errorText(err));
             this.sendError(res, new ControlError('INTERNAL', INTERNAL_MESSAGE));
         }
     }
@@ -223,7 +223,7 @@ export class ControlApiServer {
         try {
             this.opts.store.addAudit({ at: this.now(), keyName, ip, method, paramsSummary: null, ok: false, errorCode, durationMs: 0 });
         } catch (err) {
-            Logger.error('[control] Không ghi được nhật ký:', err);
+            Logger.error('[control] Không ghi được nhật ký:', errorText(err));
         }
     }
 
@@ -262,7 +262,7 @@ export class ControlApiServer {
             try {
                 result = await this.opts.idempotency.run(keyId, method.name, idem, () => method.run(params as Record<string, any>, { keyName, signal: abort.signal }));
             } catch (err) {
-                if (!(err instanceof ControlError)) { Logger.error(`[control] Thao tác ${methodName} lỗi:`, err); }
+                if (!(err instanceof ControlError)) { Logger.error(`[control] Thao tác ${methodName} lỗi:`, errorText(err)); }
                 throw toControlError(err);
             }
             this.send(res, 200, { ok: true, result: result ?? null });
@@ -283,7 +283,7 @@ export class ControlApiServer {
                     ok: errorCode === null, errorCode, durationMs: this.now() - startedAt,
                 });
             } catch (err) {
-                Logger.error('[control] Không ghi được nhật ký:', err);
+                Logger.error('[control] Không ghi được nhật ký:', errorText(err));
             }
         }
     }
@@ -322,8 +322,11 @@ export class ControlApiServer {
                 saved = await this.opts.saveMedia(name, contentType, counter);
             } catch (err) {
                 if (!exceeded) {
+                    // Từ chối trước khi đọc thân (hộp thư đầy...): rút cạn phần còn lại để client đang gửi không bị treo tới hết hạn.
+                    req.unpipe(counter);
+                    req.resume();
                     if (err instanceof ControlError) throw err;
-                    Logger.error('[control] Lưu media lỗi:', err);
+                    Logger.error('[control] Lưu media lỗi:', errorText(err));
                     throw new ControlError('INTERNAL', 'Không lưu được tệp, thử lại sau');
                 }
             }
@@ -339,7 +342,7 @@ export class ControlApiServer {
             try {
                 this.opts.store.addAudit({ at: startedAt, keyName, ip, method: 'media.upload', paramsSummary: summary, ok: errorCode === null, errorCode, durationMs: this.now() - startedAt });
             } catch (err) {
-                Logger.error('[control] Không ghi được nhật ký:', err);
+                Logger.error('[control] Không ghi được nhật ký:', errorText(err));
             }
         }
     }

@@ -1,4 +1,5 @@
 import Logger from '../../utils/Logger';
+import { errorText } from './controlSecurity';
 import type { FbPosterResult, FbPosterRun, FbPosterSchedule } from '../../models/facebookPoster';
 
 export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved';
@@ -41,6 +42,6 @@ export function emitControlEvent(type: ControlEventType, payload: unknown): void
     try {
         sink?.(type, payload);
     } catch (err) {
-        Logger.error('[control] Không ghi được sự kiện:', err);
+        Logger.error('[control] Không ghi được sự kiện:', errorText(err));
     }
 }

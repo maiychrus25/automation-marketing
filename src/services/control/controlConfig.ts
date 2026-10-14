@@ -51,3 +51,23 @@ export function buildFirewallCommand(config: Pick<ControlConfig, 'port' | 'allow
     if (config.allowList.length === 0) throw new ControlConfigError('Chưa có địa chỉ IP nào trong danh sách được phép');
     return `netsh advfirewall firewall delete rule name="${FIREWALL_RULE_NAME}"\nnetsh advfirewall firewall add rule name="${FIREWALL_RULE_NAME}" dir=in action=allow protocol=TCP localport=${config.port} remoteip=${config.allowList.join(',')}`;
 }
+
+export interface AppVersionSources {
+    /** `app.getVersion()` */
+    reported: string;
+    /** Các đường dẫn package.json thử lần lượt (gốc repo khi chạy dev, rồi thư mục app đóng gói). */
+    packageJsonPaths: string[];
+    readFile(file: string): string;
+}
+
+/** `app.getVersion()` trả '0.0' khi chạy dev (`electron .` từ dist-electron): lúc đó đọc `version` trong package.json đầu tiên đọc được. */
+export function resolveAppVersion(src: AppVersionSources): string {
+    if (src.reported !== '0.0') return src.reported;
+    for (const file of src.packageJsonPaths) {
+        try {
+            const version = JSON.parse(src.readFile(file)).version;
+            if (typeof version === 'string' && version) return version;
+        } catch { /* thử đường dẫn kế tiếp */ }
+    }
+    return src.reported;
+}

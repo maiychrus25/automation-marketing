@@ -1,5 +1,6 @@
 import Logger from '../../utils/Logger';
 import { ControlError } from './ControlMethods';
+import { errorText } from './controlSecurity';
 import { IDEMPOTENCY_TTL_MS, type ControlStore } from './ControlStore';
 
 /** Khử trùng lặp theo (keyId, idemKey), khoá gắn với một thao tác: dùng lại idemKey cho thao tác khác trong 24 giờ bị từ chối. Gọi đồng thời dùng chung một promise; kết quả lưu 24 giờ. Kết quả phải JSON-serializable. */
@@ -30,7 +31,7 @@ export class IdempotencyCache {
             try {
                 this.store.putIdempotent(keyId, idemKey, method, JSON.stringify(result ?? null), this.now());
             } catch (err) {
-                Logger.warn('[control] Không lưu được kết quả idempotency:', err);
+                Logger.warn('[control] Không lưu được kết quả idempotency:', errorText(err));
             }
             return result;
         })();

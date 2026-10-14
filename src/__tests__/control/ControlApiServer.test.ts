@@ -1,4 +1,8 @@
 import Logger from '../../utils/Logger';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import https from 'https';
 import tls from 'tls';
 import { Readable } from 'stream';
@@ -303,6 +307,35 @@ describe('ControlApiServer /v1/media', () => {
     expect(ctx.saved).toEqual([{ name: 'ảnh 1.PNG', contentType: 'image/png', size: 1234 }]);
   });
 
+  it('full inbox: 422 LIMIT_REACHED promptly while the multi-MB body is still drained', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-media-'));
+    try {
+      const inbox = new InboxMediaStore(dir, { maxBytes: 1_000_000_000, maxFiles: 1 });
+      ctx = await setup({ saveMedia: (n: string, t: string, st: Readable) => inbox.save(n, t, st) });
+      expect((await upload('a.png', 'image/png', Buffer.alloc(10, 1))).status).toBe(200);
+      const started = Date.now();
+      // Như bridge: ghi hết thân rồi mới đọc phản hồi; thân không được rút cạn thì 'finish' của yêu cầu không bao giờ tới.
+      const r = await new Promise<{ status: number; body: any }>((resolve, reject) => {
+        let sent = false;
+        let reply: { status: number; body: any } | null = null;
+        const done = () => { if (sent && reply) resolve(reply); };
+        const req = https.request({ host: '127.0.0.1', port: ctx.port, method: 'POST', path: '/v1/media', rejectUnauthorized: false, agent: false,
+          headers: { authorization: `Bearer ${ctx.key.key}`, 'content-type': 'video/mp4', 'x-filename': 'b.mp4' } }, (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => { reply = { status: res.statusCode!, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }; done(); });
+        });
+        req.on('error', reject);
+        req.on('finish', () => { sent = true; done(); });
+        req.end(Buffer.alloc(64 * 1024 * 1024, 2));
+      });
+      expect(r.status).toBe(422);
+      expect(r.body.error.code).toBe('LIMIT_REACHED');
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(fs.readdirSync(dir)).toHaveLength(1);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('accepts video by extension', async () => {
     ctx = await setup();
     const r = await upload('clip.mp4', 'video/mp4', Buffer.alloc(10));
@@ -483,7 +516,7 @@ describe('ControlApiServer hardening', () => {
     expect(r.status).toBe(500);
     expect(r.body.error.code).toBe('INTERNAL');
     expect(r.raw).not.toContain('wrapped secret');
-    expect(spy.mock.calls.some((a) => String(a[0]).includes('runs.current') && a[1] instanceof TypeError)).toBe(true);
+    expect(spy.mock.calls.some((a) => String(a[0]).includes('runs.current') && typeof a[1] === 'string')).toBe(true);
   });
 
   it('caps concurrent events.wait long-polls per key at 4', async () => {
