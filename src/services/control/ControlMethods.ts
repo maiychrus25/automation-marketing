@@ -32,7 +32,8 @@ export function toControlError(err: unknown): ControlError {
     return new ControlError('INVALID_PARAMS', message);
 }
 
-export interface ControlContext { keyName?: string }
+/** `signal` huỷ khi client ngắt kết nối (dùng cho long-poll). */
+export interface ControlContext { keyName?: string; signal?: AbortSignal }
 export type ControlParams = Record<string, any>;
 
 export interface ControlMethod {
@@ -72,7 +73,7 @@ export interface ControlMethodDeps {
     resolveMedia(mediaIds: string[]): string[];
     events: {
         listEventsAfter(seq: number, limit: number): ControlEventRow[];
-        waitForEvent(afterSeq: number, timeoutMs: number): Promise<void>;
+        waitForEvent(afterSeq: number, timeoutMs: number, signal?: AbortSignal): Promise<void>;
     };
 }
 
@@ -338,14 +339,14 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                 timeoutSec: int('Chờ tối đa bao nhiêu giây (0–25)', { minimum: 0, maximum: EVENTS_MAX_TIMEOUT_SEC }),
             }, ['after']),
             resultSchema: obj({ events: { type: 'array', items: obj({ seq: int('Số thứ tự'), type: str('Loại sự kiện'), payload: { type: 'object' }, createdAt: int('Thời điểm (mili giây epoch)') }, ['seq', 'type']), description: 'Sự kiện có seq > after (tối đa 100)' } }, ['events']),
-            run: async (p) => {
+            run: async (p, ctx) => {
                 if (!Number.isInteger(p.after) || p.after < 0) {
                     throw new ControlError('INVALID_PARAMS', 'after phải là số nguyên ≥ 0', { field: 'after' });
                 }
                 const timeoutSec = Math.min(EVENTS_MAX_TIMEOUT_SEC, Math.max(0, Number.isFinite(p.timeoutSec) ? p.timeoutSec : 0));
                 let events = deps.events.listEventsAfter(p.after, EVENTS_PAGE_LIMIT);
                 if (!events.length && timeoutSec > 0) {
-                    await deps.events.waitForEvent(p.after, timeoutSec * 1000);
+                    await deps.events.waitForEvent(p.after, timeoutSec * 1000, ctx.signal);
                     events = deps.events.listEventsAfter(p.after, EVENTS_PAGE_LIMIT);
                 }
                 return { events };
@@ -363,7 +364,10 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             try {
                 return await method.run(p, ctx);
             } catch (err) {
-                throw toControlError(err);
+                const mapped = toControlError(err);
+                // Lỗi nội bộ không lộ ra client nên phải để lại dấu vết để chẩn đoán.
+                if (mapped.code === 'INTERNAL' && !(err instanceof ControlError)) console.error(`[control] ${method.name} lỗi nội bộ:`, err);
+                throw mapped;
             }
         },
     }));

@@ -34,7 +34,7 @@ function ipv4ToInt(ip: string): number | null {
     return n;
 }
 
-function normalizeIp(ip: string): string {
+export function normalizeIp(ip: string): string {
     const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip.trim());
     return m ? m[1] : ip.trim();
 }

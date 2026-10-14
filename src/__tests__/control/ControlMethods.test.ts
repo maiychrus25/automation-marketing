@@ -156,7 +156,7 @@ describe('createControlMethods', () => {
 
         deps.events.listEventsAfter.mockReturnValueOnce([]).mockReturnValueOnce([{ seq: 9 }]);
         expect(await call('events.wait', { after: 8, timeoutSec: 99 })).toEqual({ events: [{ seq: 9 }] });
-        expect(deps.events.waitForEvent).toHaveBeenCalledWith(8, 25_000);
+        expect(deps.events.waitForEvent).toHaveBeenCalledWith(8, 25_000, undefined);
 
         deps.events.waitForEvent.mockClear();
         await call('events.wait', { after: 0, timeoutSec: 0 });
