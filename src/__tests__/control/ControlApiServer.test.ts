@@ -35,7 +35,7 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
     listProfiles: () => [],
     systemStatus: () => ({}),
     resolveMedia: (ids) => ids,
-    events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, s) => notifier.waitForEvent(a, t, s) },
+    events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, s) => notifier.waitForEvent(a, t, s), workspaceId: () => 'ws-test' },
   });
   const saved: any[] = [];
   const saveMedia = opts.saveMedia ?? (async (name: string, contentType: string, stream: Readable) => {
@@ -399,6 +399,16 @@ describe('ControlApiServer rejected-call audit', () => {
     expect(rows[0]).toMatchObject({ keyName: null, ip: '127.0.0.1', method: '(unauthenticated)', ok: false, errorCode: 'RATE_LIMITED' });
     expect(rows[1]).toMatchObject({ keyName: null, method: '(unauthenticated)', ok: false, errorCode: 'UNAUTHORIZED' });
     expect(rows.filter((r) => r.errorCode === 'UNAUTHORIZED')).toHaveLength(10);
+  });
+
+  it('audits lockout 429 only once per IP per window', async () => {
+    ctx = await setup();
+    const bad = (k: string) => ctx.send('POST', '/v1/call', { key: k, body: JSON.stringify({ method: 'echo' }) });
+    for (let i = 0; i < 10; i++) await bad('mh_bad' + i);
+    for (let i = 0; i < 5; i++) expect((await bad('mh_bad')).status).toBe(429);
+    const rows = ctx.store.listAudit(30);
+    expect(rows.filter((r) => r.errorCode === 'RATE_LIMITED')).toHaveLength(1);
+    expect(rows).toHaveLength(11);
   });
 
   it('audits rate-limit 429 only once per key per window', async () => {

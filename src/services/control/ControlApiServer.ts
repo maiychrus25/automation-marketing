@@ -85,6 +85,7 @@ export class ControlApiServer {
     private readonly now: () => number;
     private readonly activeWaits = new Map<string, number>();
     private readonly rateAuditedAt = new Map<string, number>();
+    private readonly lockoutAuditedAt = new Map<string, number>();
 
     constructor(private readonly opts: ControlApiServerOptions) {
         this.now = opts.now ?? Date.now;
@@ -155,7 +156,12 @@ export class ControlApiServer {
 
         // (3) IP đang bị khoá do sai khoá quá nhiều.
         if (lockout.isBlocked(ip)) {
-            this.auditRejected(path, null, ip, '(unauthenticated)', 'RATE_LIMITED');
+            // Như hạn mức theo khoá: IP đang bị khoá và cứ gọi dồn dập chỉ để lại một dòng nhật ký mỗi cửa sổ.
+            const last = this.lockoutAuditedAt.get(ip);
+            if (last === undefined || this.now() - last >= RATE_AUDIT_WINDOW_MS) {
+                this.lockoutAuditedAt.set(ip, this.now());
+                this.auditRejected(path, null, ip, '(unauthenticated)', 'RATE_LIMITED');
+            }
             this.sendError(res, new ControlError('RATE_LIMITED', 'Quá nhiều lần sai khoá, IP này tạm thời bị chặn'), true);
             return;
         }

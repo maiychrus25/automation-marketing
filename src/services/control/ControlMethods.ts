@@ -75,6 +75,8 @@ export interface ControlMethodDeps {
     events: {
         listEventsAfter(seq: number, limit: number): ControlEventRow[];
         waitForEvent(afterSeq: number, timeoutMs: number, signal?: AbortSignal): Promise<void>;
+        /** Workspace đang mở: `seq` là của DB workspace nên bot phải về `after = 0` khi giá trị này đổi. */
+        workspaceId(): string | null;
     };
 }
 
@@ -339,7 +341,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                 after: int('Số thứ tự sự kiện cuối đã nhận (0 để lấy từ đầu)', { minimum: 0 }),
                 timeoutSec: int('Chờ tối đa bao nhiêu giây (0–25)', { minimum: 0, maximum: EVENTS_MAX_TIMEOUT_SEC }),
             }, ['after']),
-            resultSchema: obj({ events: { type: 'array', items: obj({ seq: int('Số thứ tự'), type: str('Loại sự kiện'), payload: { type: 'object' }, createdAt: int('Thời điểm (mili giây epoch)') }, ['seq', 'type']), description: 'Sự kiện có seq > after (tối đa 100)' } }, ['events']),
+            resultSchema: obj({ events: { type: 'array', items: obj({ seq: int('Số thứ tự'), type: str('Loại sự kiện'), payload: { type: 'object' }, createdAt: int('Thời điểm (mili giây epoch)') }, ['seq', 'type']), description: 'Sự kiện có seq > after (tối đa 100)' }, workspaceId: { type: ['string', 'null'], description: 'Workspace đang mở; đổi giá trị này thì đặt lại after = 0' } }, ['events', 'workspaceId']),
             run: async (p, ctx) => {
                 if (!Number.isInteger(p.after) || p.after < 0) {
                     throw new ControlError('INVALID_PARAMS', 'after phải là số nguyên ≥ 0', { field: 'after' });
@@ -350,7 +352,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                     await deps.events.waitForEvent(p.after, timeoutSec * 1000, ctx.signal);
                     events = deps.events.listEventsAfter(p.after, EVENTS_PAGE_LIMIT);
                 }
-                return { events };
+                return { events, workspaceId: deps.events.workspaceId() };
             },
         },
     ];

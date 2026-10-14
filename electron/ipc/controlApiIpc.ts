@@ -1,4 +1,5 @@
 import { app, ipcMain, safeStorage } from 'electron';
+import * as fs from 'fs';
 import * as path from 'path';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
@@ -41,6 +42,15 @@ const poster: PosterPort = posterOperations;
 
 const db = () => DatabaseService.getInstance();
 const controlDir = () => path.join(app.getPath('userData'), 'control-api');
+/** `app.getVersion()` trả '0.0' khi chạy `electron .` ở chế độ dev; lúc đó đọc version từ package.json của app. */
+function resolveAppVersion(): string {
+    const version = app.getVersion();
+    if (version !== '0.0') return version;
+    try {
+        return JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')).version ?? version;
+    } catch { return version; }
+}
+
 const inbox = () => new InboxMediaStore(path.join(controlDir(), 'inbox'));
 const currentStore = () => new ControlStore(db());
 
@@ -99,7 +109,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
         systemStatus: async () => {
             const ws = WorkspaceManager.getInstance().getActiveWorkspace();
             return {
-                appVersion: app.getVersion(),
+                appVersion: resolveAppVersion(),
                 workspace: ws ? { id: ws.id, name: ws.name } : null,
                 browserEngine: getBrowserEngineStatus(),
                 sandbox: await getBrowserSandboxState().catch(() => 'unknown' as const),
@@ -108,7 +118,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             };
         },
         resolveMedia: (ids) => mediaStore.resolve(ids),
-        events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, sig) => notifier.waitForEvent(a, t, sig) },
+        events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, sig) => notifier.waitForEvent(a, t, sig), workspaceId: () => WorkspaceManager.getInstance().getActiveWorkspace()?.id ?? null },
     });
     const tls = await certStoreOf().ensure();
     if (quitting) return;

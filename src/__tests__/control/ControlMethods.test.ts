@@ -19,6 +19,7 @@ function makeDeps() {
     const events = {
         listEventsAfter: jest.fn((_seq: number, _limit: number): any[] => []),
         waitForEvent: jest.fn(async (_seq: number, _ms: number) => undefined),
+        workspaceId: jest.fn((): string | null => 'ws1'),
     };
     const deps = {
         poster, events,
@@ -150,17 +151,19 @@ describe('createControlMethods', () => {
     it('events.wait returns immediately when events exist, long-polls otherwise, and clamps timeout', async () => {
         const { deps, call } = setup();
         deps.events.listEventsAfter.mockReturnValueOnce([{ seq: 4 }]);
-        expect(await call('events.wait', { after: 3, timeoutSec: 10 })).toEqual({ events: [{ seq: 4 }] });
+        expect(await call('events.wait', { after: 3, timeoutSec: 10 })).toEqual({ events: [{ seq: 4 }], workspaceId: 'ws1' });
         expect(deps.events.listEventsAfter).toHaveBeenCalledWith(3, 100);
         expect(deps.events.waitForEvent).not.toHaveBeenCalled();
 
         deps.events.listEventsAfter.mockReturnValueOnce([]).mockReturnValueOnce([{ seq: 9 }]);
-        expect(await call('events.wait', { after: 8, timeoutSec: 99 })).toEqual({ events: [{ seq: 9 }] });
+        expect(await call('events.wait', { after: 8, timeoutSec: 99 })).toEqual({ events: [{ seq: 9 }], workspaceId: 'ws1' });
         expect(deps.events.waitForEvent).toHaveBeenCalledWith(8, 25_000, undefined);
 
         deps.events.waitForEvent.mockClear();
         await call('events.wait', { after: 0, timeoutSec: 0 });
         expect(deps.events.waitForEvent).not.toHaveBeenCalled();
+        deps.events.workspaceId.mockReturnValue(null);
+        expect(await call('events.wait', { after: 0 })).toEqual({ events: [], workspaceId: null });
         await expect(call('events.wait', { after: -1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     });
 
