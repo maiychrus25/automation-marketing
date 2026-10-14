@@ -256,6 +256,50 @@ class UploadTests(BridgeTestCase):
         self.assertEqual(len(req["body"]), 5000)
 
 
+class MediaTypeAndStdioTests(BridgeTestCase):
+    def upload_named(self, name):
+        directory = tempfile.mkdtemp()
+        path = os.path.join(directory, name)
+        with open(path, "wb") as handle:
+            handle.write(b"abc")
+        self.addCleanup(lambda: (os.remove(path), os.rmdir(directory)))
+        return self.client.upload(path)
+
+    def test_fixed_media_types(self):
+        expected = {"a.webp": "image/webp", "a.JPG": "image/jpeg", "a.mov": "video/quicktime", "a.webm": "video/webm", "a.mp4": "video/mp4"}
+        for name, ctype in expected.items():
+            self.hub.requests[:] = []
+            self.upload_named(name)
+            self.assertEqual(self.hub.requests[0]["headers"]["Content-Type"], ctype)
+
+    def test_unknown_extension_fails_locally(self):
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            self.upload_named("a.txt")
+        self.assertEqual(ctx.exception.code, "INVALID_PARAMS")
+        self.assertEqual(self.hub.requests, [])
+
+    def test_utf8_stream_wrapper(self):
+        raw = io.BytesIO()
+        raw.close = lambda: None
+        fake = io.TextIOWrapper(raw, encoding="ascii")
+        out = bridge.utf8_stream(fake, True)
+        out.write(u"Xin chào\n")
+        out.flush()
+        self.assertEqual(raw.getvalue(), u"Xin chào\n".encode("utf-8"))
+        src = io.TextIOWrapper(io.BytesIO(u"é\n".encode("utf-8")), encoding="ascii", errors="replace")
+        self.assertEqual(bridge.utf8_stream(src).readline(), u"é\n")
+
+    def test_tools_call_notification_ignored(self):
+        replies = self.mcp([json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "maihub_system_status"}})])
+        self.assertEqual(replies, [])
+        self.assertEqual(self.hub.requests, [])
+
+    def test_non_string_idempotency_key(self):
+        replies = self.mcp([json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "maihub_system_status", "arguments": {"idempotencyKey": 5}}})])
+        self.assertTrue(replies[0]["result"]["isError"])
+        self.assertIn("INVALID_PARAMS", replies[0]["result"]["content"][0]["text"])
+
+
 class CliTests(BridgeTestCase):
     def test_call_success(self):
         code, out, _ = self.run_cli(["call", "system.status", "{}", "--idempotency-key", "abc"])

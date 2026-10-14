@@ -10,9 +10,9 @@ from __future__ import print_function
 import argparse
 import hashlib
 import hmac
+import io
 import http.client
 import json
-import mimetypes
 import os
 import re
 import socket
@@ -25,6 +25,11 @@ VERSION = "1.0.0"
 MCP_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18"]
 DEFAULT_TIMEOUT = 30
 UPLOAD_TOOL = "maihub_upload_media"
+# Đúng các đuôi MaiHub nhận (mediaRules): kiểu nội dung cố định, không phụ thuộc mimetypes của hệ điều hành.
+MEDIA_TYPES = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp",
+    "mp4": "video/mp4", "mov": "video/quicktime", "webm": "video/webm",
+}
 CONFIRM_GUIDANCE = "Hãy hỏi người dùng xác nhận rồi gọi lại với confirm: true"
 DESTRUCTIVE_NOTE = "Cần confirm: true (hỏi người dùng trước)"
 
@@ -111,6 +116,10 @@ class MaiHubClient(object):
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+        if hasattr(ctx, "minimum_version"):  # Python >= 3.7
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        else:
+            ctx.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
         conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
         try:
             conn.connect()
@@ -172,7 +181,9 @@ class MaiHubClient(object):
 
     def upload(self, path):
         name = os.path.basename(path)
-        ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        ctype = MEDIA_TYPES.get(os.path.splitext(name)[1].lstrip(".").lower())
+        if ctype is None:
+            raise BridgeError("INVALID_PARAMS", "Chỉ tải được ảnh/video: %s" % ", ".join(sorted(MEDIA_TYPES)))
         size = os.path.getsize(path)
         with open(path, "rb") as handle:
             headers = {"Content-Type": ctype, "Content-Length": str(size), "X-Filename": urllib.parse.quote(name, safe="")}
@@ -271,6 +282,8 @@ class McpServer(object):
                 return
             self.reply(msg, {"tools": tools})
         elif method == "tools/call":
+            if not is_request:
+                return
             self.reply(msg, self.call_tool(params.get("name"), params.get("arguments")))
         elif is_request:
             self.send({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "Method not found: %s" % method}})
@@ -298,7 +311,9 @@ class McpServer(object):
                 if tool is None:
                     raise BridgeError("UNKNOWN_METHOD", "Không có tool %s" % name)
                 idem = args.pop("idempotencyKey", None)
-                result = self.client.call(tool["_method"], args, idem if isinstance(idem, str) and idem else None)
+                if idem is not None and (not isinstance(idem, str) or not idem or len(idem) > 64):
+                    raise BridgeError("INVALID_PARAMS", "idempotencyKey phải là chuỗi 1-64 ký tự")
+                result = self.client.call(tool["_method"], args, idem)
             return self._text(json.dumps(result, ensure_ascii=False, indent=2))
         except BridgeError as err:
             text = "%s: %s" % (err.code, err.message)
@@ -309,14 +324,22 @@ class McpServer(object):
 
 # ---------------------------------------------------------------- CLI
 
+def utf8_stream(stream, write=False):
+    """Bọc luồng nhị phân thành UTF-8, tránh lỗi mã hoá khi locale là ASCII (Python 3.6)."""
+    buffer = getattr(stream, "buffer", None)
+    if buffer is None:
+        return stream
+    if write:
+        return io.TextIOWrapper(buffer, encoding="utf-8", errors="replace", newline="\n", line_buffering=True)
+    return io.TextIOWrapper(buffer, encoding="utf-8", errors="replace", newline="\n")
+
+
 def print_json(obj):
     sys.stdout.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
 
 
 def cmd_doctor(config_loader):
     """Chạy tuần tự các bước; dừng ở bước hỏng đầu tiên."""
-    ok = True
-
     def report(good, label, detail=""):
         print("[%s] %s%s" % ("OK" if good else "LỖI", label, (" - " + detail) if detail else ""))
         return good
@@ -354,7 +377,7 @@ def cmd_doctor(config_loader):
     except BridgeError as err:
         report(False, "Xác thực khoá (/v1/describe)", "%s: %s" % (err.code, err.message))
         return EXIT_SERVER_ERROR if err.status else EXIT_NETWORK
-    return 0 if ok else EXIT_SERVER_ERROR
+    return 0
 
 
 def build_parser():
@@ -380,6 +403,8 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if argv is None:  # chạy thật (không phải trong test): ép UTF-8 cho stdin/stdout/stderr
+        sys.stdin, sys.stdout, sys.stderr = utf8_stream(sys.stdin), utf8_stream(sys.stdout, True), utf8_stream(sys.stderr, True)
 
     def loader():
         return Config.load(args.env_file)

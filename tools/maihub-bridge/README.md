@@ -54,13 +54,15 @@ Danh sách tool sinh tự động từ `GET /v1/describe` (`maihub_<thao_tac>`, 
 python3 maihub_bridge.py --env-file .env describe
 python3 maihub_bridge.py --env-file .env call system.status
 python3 maihub_bridge.py --env-file .env call drafts.list '{"limit": 5}'
-python3 maihub_bridge.py --env-file .env call drafts.create '{"text": "Xin chào"}' --idempotency-key bai-001
+python3 maihub_bridge.py --env-file .env call drafts.create '{"mode":"group","text":"Xin chào"}' --idempotency-key bai-001
+python3 maihub_bridge.py --env-file .env call drafts.approve '{"id":"<ma-nhap>","when":{"kind":"once","runAt":1790000000000}}'
+python3 maihub_bridge.py --env-file .env call drafts.approve '{"id":"<ma-nhap>","when":"now","confirm":true}'
 python3 maihub_bridge.py --env-file .env call runs.cancel '{"confirm": true}' --auto-idem
 python3 maihub_bridge.py --env-file .env upload /duong/dan/anh.jpg
 python3 maihub_bridge.py --env-file .env wait --after 0 --timeout 25
 ```
 
-Kết quả JSON ra stdout. Lỗi ra stderr dạng `MA_LOI: thông báo`; mã thoát 1 là lỗi từ MaiHub, 2 là thiếu hoặc sai cấu hình, 3 là lỗi mạng hoặc ghim chứng chỉ. Khoá chống gọi trùng chỉ gửi khi có `--idempotency-key` hoặc `--auto-idem`. `wait` ghi nhớ `after` là việc của bot: lấy `seq` lớn nhất đã nhận.
+`runAt` là mili giây epoch; `when: "now"` đăng ngay nên bắt buộc `confirm: true`. `upload` chỉ nhận đuôi jpg, jpeg, png, gif, webp, mp4, mov, webm. Kết quả JSON ra stdout. Lỗi ra stderr dạng `MA_LOI: thông báo`; mã thoát 1 là lỗi từ MaiHub, 2 là thiếu hoặc sai cấu hình, 3 là lỗi mạng hoặc ghim chứng chỉ. Khoá chống gọi trùng chỉ gửi khi có `--idempotency-key` hoặc `--auto-idem`. `wait` ghi nhớ `after` là việc của bot: lấy `seq` lớn nhất đã nhận.
 
 ## Bảo mật
 
