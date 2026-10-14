@@ -161,11 +161,16 @@ function offsetOf(value: any): number {
     return Number.isInteger(n) && n >= 0 ? n : 0;
 }
 
+/** True when the Facebook Poster is unavailable because the app runs in employee mode. Shared by IPC and the control API. */
+export function isFacebookPosterEmployeeBlocked(): boolean {
+    return AppModeManager.getInstance().isEmployeeMode();
+}
+
 /** Same employee-mode guard and error envelope as browserProfileIpc. */
 function handle(channel: string, handler: (params: any) => Promise<Record<string, any> | void> | Record<string, any> | void): void {
     ipcMain.handle(channel, async (_event, params) => {
         try {
-            if (AppModeManager.getInstance().isEmployeeMode()) {
+            if (isFacebookPosterEmployeeBlocked()) {
                 return { success: false, error: 'Tính năng Đăng Facebook chỉ dùng được ở chế độ Boss/Standalone' };
             }
             const result = await handler(params || {});
@@ -177,16 +182,17 @@ function handle(channel: string, handler: (params: any) => Promise<Record<string
     });
 }
 
-export function registerFacebookPosterIpc(): void {
-    handle('facebookPoster:start', (params) => {
+/** Handler bodies, shared verbatim by the IPC channels and the control API. Callers handle the employee-mode guard and envelope. */
+export const posterOperations = {
+    start: (params: any) => {
         const startParams = validateStartParams(params, startEnv);
         if (!isBrowserEngineInstalled()) {
             throw new Error(ENGINE_MISSING_ERROR);
         }
         return getService().start(startParams);
-    });
+    },
 
-    handle('facebookPoster:scheduleCreate', (params) => {
+    scheduleCreate: (params: any) => {
         const now = Date.now();
         if (params.kind !== 'once' && params.kind !== 'recurring') throw new Error('Loại lịch không hợp lệ');
         const kind: 'once' | 'recurring' = params.kind;
@@ -215,14 +221,14 @@ export function registerFacebookPosterIpc(): void {
         scheduler?.reschedule();
         emitSchedulesChanged();
         return { schedule: theStore.getSchedule(id) };
-    });
+    },
 
-    handle('facebookPoster:scheduleList', () => ({
+    scheduleList: (_params?: any) => ({
         schedules: store().listSchedules(),
         queuedIds: scheduler?.queuedIds() ?? [],
-    }));
+    }),
 
-    handle('facebookPoster:scheduleUpdate', (params) => {
+    scheduleUpdate: (params: any) => {
         const now = Date.now();
         const theStore = store();
         const current = typeof params.id === 'string' ? theStore.getSchedule(params.id) : null;
@@ -231,9 +237,9 @@ export function registerFacebookPosterIpc(): void {
         scheduler?.reschedule();
         emitSchedulesChanged();
         return { schedule: theStore.getSchedule(current.id) };
-    });
+    },
 
-    handle('facebookPoster:scheduleDelete', (params) => {
+    scheduleDelete: (params: any) => {
         const id = typeof params.id === 'string' ? params.id : '';
         if (service?.current()?.run.scheduleId === id) {
             throw new Error('Lịch này đang chạy, hãy dừng lượt đăng trước khi xoá');
@@ -242,72 +248,72 @@ export function registerFacebookPosterIpc(): void {
         removeScheduleMedia(scheduleBaseDir(), id);
         scheduler?.reschedule();
         emitSchedulesChanged();
-    });
+    },
 
-    handle('facebookPoster:draftSave', (params) => {
+    draftSave: (params: any) => {
         const schedule = saveDraft(draftDeps(), params);
         emitSchedulesChanged();
         return { schedule };
-    });
+    },
 
-    handle('facebookPoster:draftGet', (params) => getDraft(draftDeps(), params.id));
+    draftGet: (params: any) => getDraft(draftDeps(), params.id),
 
-    handle('facebookPoster:draftApprove', (params) => {
+    draftApprove: (params: any) => {
         const schedule = approveDraft(draftDeps(), params);
         scheduler?.reschedule(); // "Đăng ngay" đặt nextRunAt = now → scheduler chạy qua hàng đợi
         emitSchedulesChanged();
         return { schedule };
-    });
+    },
 
-    handle('facebookPoster:takeMissed', () => {
+    takeMissed: (_params?: any) => {
         uiReady = true;
         const notices = pendingMissed;
         pendingMissed = [];
         return { notices };
-    });
+    },
 
-    handle('facebookPoster:cancel', () => {
+    cancel: (_params?: any) => {
         service?.cancel();
-    });
+    },
 
-    handle('facebookPoster:current', () => {
+    current: (_params?: any) => {
         const current = getService().current();
         return { run: current?.run ?? null, progress: current?.progress ?? null };
-    });
+    },
 
-    handle('facebookPoster:listGroups', (params) => {
+    listGroups: (params: any) => {
         const ids = Array.isArray(params.profileIds) ? params.profileIds.filter((id: unknown) => typeof id === 'string') : [];
         return { groups: store().listGroups(ids) };
-    });
+    },
 
-    handle('facebookPoster:listRuns', (params) => {
+    listRuns: (params: any) => {
         const kind = ['post', 'join', 'scan_groups', 'collect_comments'].includes(params.kind) ? params.kind : undefined;
         return store().listRuns({ limit: clampLimit(params.limit, 50, 200), offset: offsetOf(params.offset), kind });
-    });
+    },
 
-    handle('facebookPoster:getRun', (params) => {
+    getRun: (params: any) => {
         const found = typeof params.runId === 'string' ? store().getRun(params.runId) : null;
         if (!found) throw new Error('Không tìm thấy lần chạy');
         return found;
-    });
+    },
 
-    handle('facebookPoster:listComments', (params) => {
+    listComments: (params: any) => {
         const postUrl = typeof params.postUrl === 'string' && params.postUrl ? params.postUrl : undefined;
         return store().listComments({ postUrl, limit: clampLimit(params.limit, 100, 500), offset: offsetOf(params.offset) });
-    });
+    },
 
-    handle('facebookPoster:listPostedUrls', () => ({ posts: store().listPostedUrls(200) }));
+    listPostedUrls: (_params?: any) => ({ posts: store().listPostedUrls(200) }),
 
-    handle('facebookPoster:pickMedia', async () => {
+    pickMedia: async (_params?: any) => {
         const result = await dialog.showOpenDialog({
             properties: ['openFile', 'multiSelections'],
             filters: [{ name: 'Ảnh/video', extensions: [...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS] }],
         });
         if (result.canceled) return { items: [] };
         return { items: result.filePaths.map((path) => ({ path, size: fs.statSync(path).size })) };
-    });
+    },
 
-    handle('facebookPoster:exportRunCsv', async (params) => {
+    exportRunCsv: async (params: any) => {
         const found = typeof params.runId === 'string' ? store().getRun(params.runId) : null;
         if (!found) throw new Error('Không tìm thấy lần chạy');
         const result = await dialog.showSaveDialog({
@@ -317,5 +323,26 @@ export function registerFacebookPosterIpc(): void {
         if (result.canceled || !result.filePath) return { path: null };
         fs.writeFileSync(result.filePath, buildRunCsv(found.results), 'utf8');
         return { path: result.filePath };
-    });
+    },
+};
+
+export function registerFacebookPosterIpc(): void {
+    handle('facebookPoster:start', posterOperations.start);
+    handle('facebookPoster:scheduleCreate', posterOperations.scheduleCreate);
+    handle('facebookPoster:scheduleList', posterOperations.scheduleList);
+    handle('facebookPoster:scheduleUpdate', posterOperations.scheduleUpdate);
+    handle('facebookPoster:scheduleDelete', posterOperations.scheduleDelete);
+    handle('facebookPoster:draftSave', posterOperations.draftSave);
+    handle('facebookPoster:draftGet', posterOperations.draftGet);
+    handle('facebookPoster:draftApprove', posterOperations.draftApprove);
+    handle('facebookPoster:takeMissed', posterOperations.takeMissed);
+    handle('facebookPoster:cancel', posterOperations.cancel);
+    handle('facebookPoster:current', posterOperations.current);
+    handle('facebookPoster:listGroups', posterOperations.listGroups);
+    handle('facebookPoster:listRuns', posterOperations.listRuns);
+    handle('facebookPoster:getRun', posterOperations.getRun);
+    handle('facebookPoster:listComments', posterOperations.listComments);
+    handle('facebookPoster:listPostedUrls', posterOperations.listPostedUrls);
+    handle('facebookPoster:pickMedia', posterOperations.pickMedia);
+    handle('facebookPoster:exportRunCsv', posterOperations.exportRunCsv);
 }
