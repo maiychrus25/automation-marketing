@@ -69,6 +69,34 @@ function summarizeParams(params: unknown): string {
     return text.length <= MAX_SUMMARY_CHARS ? text : JSON.stringify({ truncated: true, keyCount: entries.length });
 }
 
+/**
+ * Đọc bỏ phần thân yêu cầu còn lại tới hết. Trả false (và ngừng đọc) khi phần còn lại vượt `budget` byte;
+ * khi đó người gọi trả 413 và đóng kết nối như các nhánh vượt giới hạn khác.
+ */
+function drainRequest(req: IncomingMessage, budget: number): Promise<boolean> {
+    if (req.readableEnded || req.destroyed) return Promise.resolve(true);
+    return new Promise((resolve) => {
+        let received = 0;
+        const finish = (ok: boolean) => {
+            req.removeListener('data', onData);
+            req.removeListener('end', onEnd);
+            req.removeListener('error', onEnd);
+            req.removeListener('close', onEnd);
+            resolve(ok);
+        };
+        const onData = (chunk: Buffer) => {
+            received += chunk.length;
+            if (received > budget) { req.pause(); finish(false); }
+        };
+        const onEnd = () => finish(true);
+        req.on('data', onData);
+        req.once('end', onEnd);
+        req.once('error', onEnd);
+        req.once('close', onEnd);
+        req.resume();
+    });
+}
+
 /** Chỉ lấy tên tệp: bỏ thư mục, ký tự điều khiển; null nếu rỗng. */
 function sanitizeFilename(header: string | undefined): string | null {
     if (!header) return null;
@@ -322,9 +350,10 @@ export class ControlApiServer {
                 saved = await this.opts.saveMedia(name, contentType, counter);
             } catch (err) {
                 if (!exceeded) {
-                    // Từ chối trước khi đọc thân (hộp thư đầy...): rút cạn phần còn lại để client đang gửi không bị treo tới hết hạn.
+                    // Từ chối trước khi đọc thân (hộp thư đầy...): nhận hết phần còn lại RỒI mới trả lời, để client
+                    // ghi-hết-rồi-đọc (như bridge) không bị treo và không gặp EPIPE vì socket đóng khi nó còn đang ghi.
                     req.unpipe(counter);
-                    req.resume();
+                    if (!(await drainRequest(req, limit - total))) throw tooLarge;
                     if (err instanceof ControlError) throw err;
                     Logger.error('[control] Lưu media lỗi:', errorText(err));
                     throw new ControlError('INTERNAL', 'Không lưu được tệp, thử lại sau');

@@ -336,6 +336,42 @@ describe('ControlApiServer /v1/media', () => {
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it('rejected upload: the reply comes only after the whole body was received (no EPIPE race)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-media-'));
+    try {
+      const inbox = new InboxMediaStore(dir, { maxBytes: 1_000_000_000, maxFiles: 0 });
+      ctx = await setup({ saveMedia: (n: string, t: string, st: Readable) => inbox.save(n, t, st) });
+      // Thân gửi thành nhiều đoạn có khoảng nghỉ: server trả lời trước khi nhận hết thì client còn đang ghi khi phản hồi tới.
+      const events: string[] = [];
+      const r = await new Promise<{ status: number; body: any }>((resolve, reject) => {
+        let reply: { status: number; body: any } | null = null;
+        let sent = false;
+        const done = () => { if (sent && reply) resolve(reply); };
+        const req = https.request({ host: '127.0.0.1', port: ctx.port, method: 'POST', path: '/v1/media', rejectUnauthorized: false, agent: false,
+          headers: { authorization: `Bearer ${ctx.key.key}`, 'content-type': 'video/mp4', 'x-filename': 'c.mp4', 'content-length': String(4 * 256 * 1024) } }, (res) => {
+          events.push('response');
+          const chunks: Buffer[] = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => { reply = { status: res.statusCode!, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }; done(); });
+        });
+        req.on('error', reject);
+        req.on('finish', () => { events.push('finish'); sent = true; done(); });
+        let n = 0;
+        const writeNext = () => {
+          n += 1;
+          const chunk = Buffer.alloc(256 * 1024, 3);
+          if (n === 4) { req.end(chunk); return; } // đoạn cuối kết thúc luôn yêu cầu
+          req.write(chunk);
+          setTimeout(writeNext, 80);
+        };
+        writeNext();
+      });
+      expect(r.status).toBe(422);
+      expect(r.body.error.code).toBe('LIMIT_REACHED');
+      expect(events).toEqual(['finish', 'response']);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('accepts video by extension', async () => {
     ctx = await setup();
     const r = await upload('clip.mp4', 'video/mp4', Buffer.alloc(10));
