@@ -13,6 +13,7 @@ import { IdempotencyCache } from '../../services/control/IdempotencyCache';
 import { EventNotifier } from '../../services/control/EventNotifier';
 import { ControlError, createControlMethods, type ControlMethod } from '../../services/control/ControlMethods';
 import { ControlApiServer, DEFAULT_CONTROL_PORT } from '../../services/control/ControlApiServer';
+import { PairingTickets } from '../../services/control/PairingTickets';
 import { createCertificate } from '../../services/control/certificate';
 
 interface Reply { status: number; headers: any; body: any; raw: string; fingerprint: string }
@@ -29,7 +30,7 @@ const fakeMethods: ControlMethod[] = [
   { name: 'crash', description: 'x', destructive: false, paramsSchema: obj, resultSchema: obj, run: async () => { throw new TypeError('secret internal detail'); } },
 ];
 
-async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any; poster?: any; isBlocked?: () => boolean } = {}) {
+async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any; poster?: any; isBlocked?: () => boolean; bridgeScript?: () => Buffer | null } = {}) {
   const db = memoryDb();
   db.exec(CONTROL_SCHEMA_SQL);
   const store = new ControlStore(db);
@@ -49,11 +50,15 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
     return { mediaId: 'm1', name, size, kind: contentType.startsWith('video/') ? 'video' : 'image' };
   });
   const lockout = new AuthLockout();
+  const tickets = new PairingTickets();
+  const paired: any[] = [];
   const server = new ControlApiServer({
     tls: { key: cert.key, cert: cert.cert }, port: 0, host: '127.0.0.1',
     allowList: opts.allowList ?? ['127.0.0.1'],
     store, methods: [...real, ...fakeMethods], idempotency: new IdempotencyCache(store),
     rateLimiter: new RateLimiter(opts.rate ?? 60), lockout, saveMedia, isBlocked: opts.isBlocked,
+    pairing: { consume: (t, ip) => tickets.consume(t, ip), onPaired: (i) => { paired.push(i); } },
+    bridgeScript: opts.bridgeScript,
   });
   const { port } = await server.start();
   const key = store.createKey('Claude bot');
@@ -77,7 +82,7 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
     });
   const call = (method: string, params: any = {}, extra: any = {}, o: any = {}) =>
     send('POST', '/v1/call', { ...o, body: JSON.stringify({ method, params, ...extra }), headers: { 'content-type': 'application/json' } });
-  return { server, store, notifier, db, key, port, send, call, saved, lockout };
+  return { server, store, notifier, db, key, port, send, call, saved, lockout, tickets, paired };
 }
 
 let ctx: Awaited<ReturnType<typeof setup>>;
@@ -586,5 +591,102 @@ describe('ControlApiServer employee-mode guard', () => {
     expect((await ctx.send('GET', '/v1/health', { key: null })).status).toBe(200);
     blocked = false;
     expect((await ctx.call('echo', {})).status).toBe(200);
+  });
+});
+
+describe('ControlApiServer pairing and bridge script', () => {
+  const pair = (body: string, o: any = {}) => ctx.send('POST', '/v1/pair', { key: null, body, headers: { 'content-type': 'application/json' }, ...o });
+  const BAD = 'Mã ghép nối không hợp lệ hoặc đã hết hạn';
+
+  it('pair: valid ticket returns a working key', async () => {
+    ctx = await setup();
+    const { ticket } = ctx.tickets.create('Bot Một', '127.0.0.1');
+    const r = await pair(JSON.stringify({ ticket }));
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.result.keyName).toBe('Bot Một');
+    expect(r.body.result.apiKey).toMatch(/^mh_/);
+    const d = await ctx.send('GET', '/v1/describe', { key: r.body.result.apiKey });
+    expect(d.status).toBe(200);
+    expect(ctx.paired).toEqual([expect.objectContaining({ keyName: 'Bot Một', ip: '127.0.0.1' })]);
+  });
+
+  it('pair: reused or wrong-ip ticket is 401 and counts toward lockout', async () => {
+    ctx = await setup();
+    const other = ctx.tickets.create('Khác IP', '10.1.1.1');
+    expect((await pair(JSON.stringify({ ticket: other.ticket }))).status).toBe(401);
+    const { ticket } = ctx.tickets.create('Bot', '127.0.0.1');
+    expect((await pair(JSON.stringify({ ticket }))).status).toBe(200);
+    const again = await pair(JSON.stringify({ ticket }));
+    expect(again.status).toBe(401);
+    expect(again.body.error.message).toBe(BAD);
+    expect(ctx.store.listKeys().filter((k: any) => k.name === 'Khác IP')).toHaveLength(0);
+    for (let i = 0; i < 7; i++) expect((await pair(JSON.stringify({ ticket: 'x' + i }))).status).toBe(401);
+    expect((await pair(JSON.stringify({ ticket: 'last' }))).status).toBe(401);
+    expect((await pair(JSON.stringify({ ticket: 'blocked' }))).status).toBe(429);
+  });
+
+  it('pair: malformed JSON or missing ticket is 401; non-POST is 405', async () => {
+    ctx = await setup();
+    expect((await pair('{nope')).status).toBe(401);
+    expect((await pair('{}')).status).toBe(401);
+    expect((await pair(JSON.stringify({ ticket: 5 }))).status).toBe(401);
+    expect((await ctx.send('GET', '/v1/pair', { key: null })).status).toBe(405);
+  });
+
+  it('pair: employee mode is 503', async () => {
+    ctx = await setup({ isBlocked: () => true });
+    const { ticket } = ctx.tickets.create('Bot', '127.0.0.1');
+    const r = await pair(JSON.stringify({ ticket }));
+    expect(r.status).toBe(503);
+    expect(r.body.error.code).toBe('BUSY');
+    expect(ctx.paired).toHaveLength(0);
+  });
+
+  it('pair: body over 1 KiB is 413', async () => {
+    ctx = await setup();
+    const r = await pair(JSON.stringify({ ticket: 'a'.repeat(2000) }));
+    expect(r.status).toBe(413);
+    expect(r.body.error.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  it('pair: audited', async () => {
+    ctx = await setup();
+    await pair(JSON.stringify({ ticket: 'bad' }));
+    const { ticket } = ctx.tickets.create('Bot Hai', '127.0.0.1');
+    await pair(JSON.stringify({ ticket }));
+    const rows = ctx.store.listAudit(10);
+    expect(rows[0]).toMatchObject({ method: 'pair', keyName: 'Bot Hai', ok: true, errorCode: null });
+    expect(rows[1]).toMatchObject({ method: 'pair', keyName: null, ok: false, errorCode: 'UNAUTHORIZED' });
+    expect(JSON.stringify(rows)).not.toContain(ticket);
+  });
+
+  it('pair: no Authorization header needed', async () => {
+    ctx = await setup();
+    const { ticket } = ctx.tickets.create('Bot', '127.0.0.1');
+    const r = await pair(JSON.stringify({ ticket }), { key: null });
+    expect(r.status).toBe(200);
+  });
+
+  it('bridge.py: served with python mime, no key needed', async () => {
+    ctx = await setup({ bridgeScript: () => Buffer.from('print(1)\n') });
+    const r = await ctx.send('GET', '/v1/bridge.py', { key: null });
+    expect(r.status).toBe(200);
+    expect(r.headers['content-type']).toBe('text/x-python; charset=utf-8');
+    expect(r.raw).toBe('print(1)\n');
+    expect((await ctx.send('POST', '/v1/bridge.py', { key: null })).status).toBe(405);
+  });
+
+  it('bridge.py: 404 when script missing', async () => {
+    ctx = await setup({ bridgeScript: () => null });
+    expect((await ctx.send('GET', '/v1/bridge.py', { key: null })).status).toBe(404);
+    await ctx.server.stop();
+    ctx = await setup();
+    expect((await ctx.send('GET', '/v1/bridge.py', { key: null })).status).toBe(404);
+  });
+
+  it('non-allow-listed ip is closed before TLS for /v1/pair', async () => {
+    ctx = await setup({ allowList: ['10.9.9.9'] });
+    await expect(pair(JSON.stringify({ ticket: 'x' }))).rejects.toBeDefined();
   });
 });

@@ -82,7 +82,7 @@ Cấu hình `{ enabled, port, allowList }` nằm trong `app_settings` của work
 
 Thứ tự xử lý mỗi yêu cầu: (1) IP có trong danh sách? (2) IP đang bị khoá? (3) `GET /v1/health` trả ngay (không cần khoá, không tốn hạn mức) (4) xác thực khoá (5) giới hạn tốc độ (6) chế độ nhân viên (7) định tuyến và đọc thân.
 
-**Nhật ký ghi gì.** Mọi lời gọi `/v1/call` và `/v1/media` đã vào tới thao tác. Lời gọi `/v1/call` bị từ chối trước đó (sai khoá, IP bị khoá, quá tốc độ, chế độ nhân viên) cũng được ghi, không đọc thân yêu cầu; quá tốc độ chỉ ghi lần đầu của mỗi khoá trong mỗi cửa sổ 60 giây. Tóm tắt tham số chỉ gồm tên trường, `id`/`runId`/`scheduleId`/`kind`/`when`/`mode` ngắn, và số phần tử của mảng; **không bao giờ có nội dung bài, bình luận hay khoá**.
+**Nhật ký ghi gì.** Mọi lời gọi `/v1/call`, `/v1/media` đã vào tới thao tác. Lời gọi `/v1/call` bị từ chối trước đó (sai khoá, IP bị khoá, quá tốc độ, chế độ nhân viên) cũng được ghi, không đọc thân yêu cầu; quá tốc độ chỉ ghi lần đầu của mỗi khoá trong mỗi cửa sổ 60 giây. Tóm tắt tham số chỉ gồm tên trường, `id`/`runId`/`scheduleId`/`kind`/`when`/`mode` ngắn, và số phần tử của mảng; **không bao giờ có nội dung bài, bình luận hay khoá**.
 
 ## 4. Điểm cuối
 
@@ -90,8 +90,14 @@ Thứ tự xử lý mỗi yêu cầu: (1) IP có trong danh sách? (2) IP đang 
 |---|---|---|---|
 | `GET` | `/v1/health` | không | Trả `{ "ok": true, "protocol": 1 }`; vẫn chịu danh sách IP và khoá IP |
 | `GET` | `/v1/describe` | có | Phiên bản giao thức và mọi thao tác kèm `description`, `destructive`, `destructiveWhen?`, `paramsSchema`, `resultSchema` (JSON Schema) |
+| `POST` | `/v1/pair` | không (vé một lần) | Đổi mã vé ghép nối lấy khoá mới, xem mục 4.1 |
+| `GET` | `/v1/bridge.py` | không | Tải `maihub_bridge.py` của chính bản MaiHub này (`text/x-python; charset=utf-8`); `404` khi MaiHub không có tệp |
 | `POST` | `/v1/call` | có | Gọi một thao tác: `{ "method": "drafts.create", "params": {…}, "idempotencyKey": "…" }` |
 | `POST` | `/v1/media` | có | Tải một ảnh/video (thân nhị phân), xem mục 8 |
+
+### 4.1 Ghép nối
+
+Cả `/v1/pair` và `/v1/bridge.py` nằm sau bước kiểm tra danh sách IP, khoá IP và `/v1/health`, nhưng trước xác thực khoá. Chủ máy tạo vé trong MaiHub (gắn với IP của bot, sống 15 phút, dùng một lần); bot gửi `POST /v1/pair` thân JSON `{ "ticket": "…" }` (tối đa 1024 byte, quá thì `413`) và nhận `200 { "ok": true, "result": { "apiKey": "mh_…", "keyName": "…" } }`. Khoá nhận được dùng ngay được. Vé sai, đã dùng, hết hạn, gửi từ IP khác, JSON hỏng hoặc thiếu `ticket` đều trả `401` cùng thông báo `Mã ghép nối không hợp lệ hoặc đã hết hạn` và tính vào khoá IP (10 lần sai thì IP bị chặn như khoá sai). Chế độ nhân viên trả `503 BUSY`. Mọi lần ghép nối được ghi nhật ký với `method = "pair"` (không ghi vé).
 
 Sai phương thức HTTP trên đường dẫn đã biết trả `405` kèm `Allow`, mã `INVALID_PARAMS`, `details.field = "httpMethod"`. Đường dẫn lạ trả `404 NOT_FOUND`. Mọi phản hồi có `Cache-Control: no-store`.
 

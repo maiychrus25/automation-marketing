@@ -12,6 +12,7 @@ import { errorText, hashKey, ipAllowed, normalizeIp, type AuthLockout, type Rate
 export const DEFAULT_CONTROL_PORT = 47321;
 export const MAX_CALL_BODY_BYTES = 1_048_576;
 export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+export const MAX_PAIR_BODY_BYTES = 1024;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 64;
 const MAX_FILENAME_LENGTH = 200;
 const MAX_SUMMARY_KEYS = 20;
@@ -52,6 +53,13 @@ export interface ControlApiServerOptions {
     saveMedia(name: string, contentType: string, stream: Readable): Promise<SavedMedia>;
     /** Chế độ nhân viên: mọi lời gọi đã xác thực bị từ chối 503 BUSY, kể cả khi server chưa kịp dừng. */
     isBlocked?: () => boolean;
+    /** Ghép nối bằng vé một lần (không cần khoá Bearer). `consume` kiểm vé + IP; `onPaired` báo cho app sau khi đã tạo khoá. */
+    pairing?: {
+        consume(ticket: string, ip: string): { name: string } | null;
+        onPaired(info: { keyId: string; keyName: string; ip: string }): void;
+    };
+    /** Nội dung maihub_bridge.py phục vụ ở GET /v1/bridge.py; null thì 404. */
+    bridgeScript?: () => Buffer | null;
     now?: () => number;
 }
 
@@ -200,6 +208,20 @@ export class ControlApiServer {
             return;
         }
 
+        if (path === '/v1/pair') {
+            if (req.method !== 'POST') { this.sendMethodNotAllowed(res, 'POST'); return; }
+            await this.handlePair(req, res, ip);
+            return;
+        }
+        if (path === '/v1/bridge.py') {
+            if (req.method !== 'GET') { this.sendMethodNotAllowed(res, 'GET'); return; }
+            const script = this.opts.bridgeScript?.() ?? null;
+            if (!script) { this.sendError(res, new ControlError('NOT_FOUND', 'Không có đường dẫn này')); return; }
+            res.writeHead(200, { 'Content-Type': 'text/x-python; charset=utf-8', 'Content-Length': script.length, 'Cache-Control': 'no-store' });
+            res.end(script);
+            return;
+        }
+
         // (4) Xác thực: băm khoá nhận được rồi tra theo hash, không bao giờ tra bằng khoá thô.
         const match = /^bearer\s+(\S+)$/i.exec(String(req.headers.authorization ?? ''));
         const keyInfo = match ? store.findActiveKeyByHash(hashKey(match[1])) : null;
@@ -245,13 +267,53 @@ export class ControlApiServer {
         }
     }
 
-    /** Ghi nhật ký lời gọi /v1/call bị từ chối trước khi vào thao tác; không đọc thân yêu cầu. */
+    /** Ghi nhật ký lời gọi /v1/call và /v1/pair bị từ chối trước khi vào thao tác; không đọc thân yêu cầu. */
     private auditRejected(path: string, keyName: string | null, ip: string, method: string, errorCode: string): void {
-        if (path !== '/v1/call') return;
+        if (path !== '/v1/call' && path !== '/v1/pair') return;
         try {
             this.opts.store.addAudit({ at: this.now(), keyName, ip, method, paramsSummary: null, ok: false, errorCode, durationMs: 0 });
         } catch (err) {
             Logger.error('[control] Không ghi được nhật ký:', errorText(err));
+        }
+    }
+
+    /** Đổi vé ghép nối lấy khoá mới. Mọi lỗi về vé đều là 401 cùng một thông báo để không lộ vé nào tồn tại. */
+    private async handlePair(req: IncomingMessage, res: ServerResponse, ip: string): Promise<void> {
+        const { lockout, store, pairing } = this.opts;
+        if (this.opts.isBlocked?.()) {
+            this.auditRejected('/v1/pair', null, ip, 'pair', 'BUSY');
+            await drainRequest(req, MAX_PAIR_BODY_BYTES);
+            this.send(res, 503, { ok: false, error: { code: 'BUSY', message: 'MaiHub đang ở chế độ nhân viên, không nhận lệnh điều khiển' } }, true);
+            return;
+        }
+        let raw: Buffer;
+        try {
+            raw = await this.readBody(req, MAX_PAIR_BODY_BYTES);
+        } catch (err) {
+            if (!(err instanceof PayloadTooLargeError)) throw err;
+            this.auditRejected('/v1/pair', null, ip, 'pair', 'PAYLOAD_TOO_LARGE');
+            this.sendError(res, new ControlError('PAYLOAD_TOO_LARGE', 'Thân yêu cầu vượt quá 1 KB'), true);
+            return;
+        }
+        let ticket: unknown;
+        try { ticket = JSON.parse(raw.toString('utf8'))?.ticket; } catch { ticket = undefined; }
+        const info = pairing && typeof ticket === 'string' && ticket ? pairing.consume(ticket, ip) : null;
+        if (!pairing || !info) {
+            lockout.recordFailure(ip);
+            this.auditRejected('/v1/pair', null, ip, 'pair', 'UNAUTHORIZED');
+            this.sendError(res, new ControlError('UNAUTHORIZED', 'Mã ghép nối không hợp lệ hoặc đã hết hạn'), true);
+            return;
+        }
+        const startedAt = this.now();
+        const created = store.createKey(info.name);
+        try {
+            store.addAudit({ at: startedAt, keyName: created.name, ip, method: 'pair', paramsSummary: null, ok: true, errorCode: null, durationMs: this.now() - startedAt });
+        } catch (err) {
+            Logger.error('[control] Không ghi được nhật ký:', errorText(err));
+        }
+        this.send(res, 200, { ok: true, result: { apiKey: created.key, keyName: created.name } });
+        try { pairing.onPaired({ keyId: created.id, keyName: created.name, ip }); } catch (err) {
+            Logger.error('[control] onPaired lỗi:', errorText(err));
         }
     }
 
