@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 15/10/2026 |
-| Trạng thái | Đã duyệt (15/10/2026) |
+| Trạng thái | Đã phát hành 26.19.0 (15/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-15-bot-pairing-notify-health.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-15-bot-pairing-notify-health.md` (đã duyệt) |
 | Nhánh | `feat/bot-pairing-notify-health` |
@@ -422,3 +422,35 @@ Mọi chuỗi lấy từ MaiHub được cắt còn tối đa 200 ký tự; cả
 | Không tới được Telegram (chặn mạng) | Dùng đúng proxy bot đang dùng (xác minh trước khi code); `watch` báo lỗi gửi ra journal |
 | Báo dồn dập | Chỉ báo khi chuyển trạng thái; mất liên lạc chỉ báo 1 lần; không báo `run.started` |
 | `pair --install` sửa cấu hình CLI của bot | Sao lưu một lần trước khi sửa, in lệnh gỡ; 2 bot đang chạy không bị đụng |
+
+## Ghi chú sau phát hành (26.19.0, 15/10/2026)
+
+Những chỗ code khác thân spec ở trên (chi tiết ở mục "Điều chỉnh khi triển khai" của plan):
+
+- **§4.2 Đường tới Telegram:**
+  - `watch` không tự đọc `/opt/bot/telegram-proxy.url`. Đường đi lấy từ khoá tường minh trong `.env` MaiHub:
+    - `TELEGRAM_API_BASE`: bắt buộc `https://`;
+    - `TELEGRAM_PROXY`: proxy HTTP/HTTPS.
+  - `install-watch` cảnh báo khi có file proxy mà chưa đặt khoá nào, và chạy `watch --check-telegram` (gọi `getMe`). Kiểm tra lỗi thì dừng cài, trừ khi có `--skip-telegram-check`.
+- **§2.3 Ghép nối:**
+  - Thân `/v1/pair` hỏng (JSON sai, thiếu vé) cũng trả `401` với cùng thông báo.
+  - Audit ghi `keyName` của khoá mới, không có cột `keyId`.
+  - Vé ghép nối bị xoá khi đổi workspace.
+- **§2.5 Bridge:**
+  - `.env` được gộp: chỉ thay ba khoá `MAIHUB_*`, giữ các dòng khác.
+  - `pair` thường từ chối ghi vào file có `TG_TOKEN`.
+  - Bộ cài từ chối thư mục là symlink, hoặc thư mục cha không thuộc root hay nhóm/người khác ghi được.
+- **§4.3 `watch`:**
+  - Khi khoá bị từ chối hoặc ghim chứng chỉ sai, mỗi lần thử lại đều đọc lại `.env`.
+  - `workspaceId = null` (không mở workspace nào) không bị coi là đổi workspace.
+  - 429 chờ tối đa 300 giây.
+  - `--dry-run` không ghi trạng thái.
+- **§4.4 `install-watch`:**
+  - Dùng `enable` + `restart`, không dùng `enable --now`.
+  - Bước chạy thử 5 giây chỉ chứng minh hai tệp `.env` đọc được và có chat nhận tin; khả năng tới Telegram do `--check-telegram` kiểm tra.
+- **§4.5 Nội dung tin:**
+  - `status = failed` mà `failed = 0` gửi "⚠️ <nhãn>: xong p/t, lượt chạy bị lỗi".
+  - Lượt có tổng 0 gửi "✅ <nhãn>: xong", không kèm số.
+- **§3.2 Kiểm tra đăng nhập:** `/two_step_verification` và `/auth_platform` cũng tính là `checkpoint`.
+- **§3.5 `profiles.check`:** `profileIds: []` trả `INVALID_PARAMS`; bỏ trống tham số mới là kiểm tra mọi profile.
+- **Chưa đổi, chờ quyết định:** lần kiểm tra hằng ngày đầu tiên sau khi nâng cấp báo 🔒 cho mọi profile chưa đăng nhập Facebook, vì chuyển từ `unknown` sang hỏng là đúng §3.5.

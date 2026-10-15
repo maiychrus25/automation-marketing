@@ -15,6 +15,34 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.19.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🔗 Ghép nối bot với MaiHub bằng một lệnh: không còn gửi khoá hay dấu vân tay qua chat',
+      '🔔 Bot tự nhắn Telegram khi đăng xong, có bài lỗi, lỡ lịch, tài khoản hỏng hoặc mất liên lạc MaiHub',
+      '🩺 Biết trước tài khoản Facebook nào hết phiên hoặc bị checkpoint',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Cài đặt → Điều khiển từ bot → Ghép nối bot mới: tự thêm IP bot, hiện lệnh tường lửa và lệnh cài một dòng cho VPS bot; mã dùng một lần, hết hạn sau 15 phút',
+          'Lệnh cài trên VPS bot tự tải bridge (kiểm tra SHA-256), lấy khoá, đăng ký MCP cho Claude hoặc Codex và cài dịch vụ thông báo',
+          'Thông báo Telegram qua chính bot: lượt đăng xong, bài lỗi kèm lý do, lỡ lịch, tài khoản hỏng, MaiHub mất liên lạc và kết nối lại',
+          'Đăng Facebook: huy hiệu Hết phiên / Checkpoint / Đăng nhập ổn cạnh từng profile, nút Kiểm tra đăng nhập và tự kiểm tra mỗi ngày (mặc định 07:00)',
+          'Bot kiểm tra được trạng thái đăng nhập của profile (profiles.check)',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Kiểm tra đăng nhập dùng chung lượt với việc đăng: lịch đến giờ trong lúc kiểm tra sẽ chờ rồi chạy ngay sau đó',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.18.0',
     date: '10/2026',
     type: 'minor',
