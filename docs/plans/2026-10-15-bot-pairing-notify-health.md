@@ -508,3 +508,25 @@ Ghi kết luận vào mục "Điều chỉnh khi triển khai" của plan. Kết
   - Hồi quy: tạo khoá tay, `doctor`/`mcp` với `.env` cũ, Đăng ngay, lên lịch, huỷ lượt.
 - [ ] **Step 5:** Review toàn nhánh bằng Opus. Merge vào `main`, gắn tag `v26.19.0`; anh push.
 - [ ] **Step 6 (cần anh duyệt và cấp SSH):** cài `watch` cho `.164` và `.38` bằng `install-watch` (spec §8).
+
+## Điều chỉnh khi triển khai (15/10/2026)
+
+1. **Sự cố 15/10 09:18:** một phiên Codex xoá nhầm cả thư mục repo và clone lại `main`. Nhánh chưa push (spec, plan, Task 1) được dựng lại từ transcript: tài liệu phát lại đúng số dòng, code Task 1 khớp từng byte (hash blob). Task 2 làm lại từ đầu.
+2. **Đường tới Telegram (Task 10, 13):** chưa có định dạng `/opt/bot/telegram-proxy.url`, nên `watch` **không tự đọc file này**. Thay vào đó dùng khoá tường minh trong `.env` MaiHub: `TELEGRAM_API_BASE` (bắt buộc `https://`) hoặc `TELEGRAM_PROXY` (proxy HTTP/HTTPS; SOCKS báo lỗi). `install-watch` cảnh báo khi có file proxy mà chưa đặt khoá nào, và chạy `watch --check-telegram` (gọi `getMe`) trước khi cài; lỗi thì dừng, trừ khi có `--skip-telegram-check`.
+3. **Ghép nối:** thân `/v1/pair` hỏng cũng trả `401`. `setConfig` giữ `publicHost` đã lưu khi đầu vào không có khoá này (`withStoredPublicHost`). `createPairing` kiểm tra file bridge **trước** khi lưu cấu hình. Vé bị xoá khi đổi workspace.
+4. **Bridge `pair`/`install`:**
+   - `.env` được **gộp**: chỉ thay ba khoá `MAIHUB_*`, giữ các dòng khác. `pair` thường từ chối ghi vào file có `TG_TOKEN`.
+   - `doctor` chạy dưới quyền user của bot.
+   - Bộ cài chạy root từ chối thư mục là symlink, hoặc thư mục cha không thuộc root hay nhóm/người khác ghi được.
+   - Mọi lệnh con đều có giới hạn thời gian.
+5. **`watch`:**
+   - `workspaceId = null` không bị coi là đổi workspace.
+   - 429 chờ tối đa 300 giây; có chặn vòng lặp quay liên tục; payload `events.wait` được kiểm tra; `--dry-run` không ghi trạng thái.
+   - Khi khoá bị từ chối hoặc chứng chỉ không khớp, mỗi lần thử lại đều đọc lại `.env`, nên ghép nối lại là tự hồi phục.
+   - `install-watch` dùng `enable` + `restart`.
+6. **Kiểm tra đăng nhập:**
+   - `/two_step_verification` và `/auth_platform` cũng được tính là checkpoint.
+   - `profiles.check` với `profileIds: []` trả `INVALID_PARAMS` (bỏ trống mới là mọi profile).
+   - Có tiến độ `0/N` ngay khi bắt đầu.
+7. **Thông báo:** quét nhóm hoặc tham gia nhóm xong với tổng 0 thì gửi "✅ <nhãn>: xong", không kèm số. Thông báo đổi workspace dùng tên workspace lấy từ `system.status`.
+8. **Chưa đổi, chờ anh quyết:** lần kiểm tra hằng ngày đầu tiên sau khi nâng cấp sẽ báo 🔒 cho mọi profile chưa đăng nhập Facebook, vì chuyển từ `unknown` sang hỏng là theo đúng spec.
