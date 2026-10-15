@@ -5,6 +5,7 @@ import io
 import json
 import os
 import ssl
+import subprocess
 import sys
 import tempfile
 import threading
@@ -95,7 +96,7 @@ class FakeMaiHub(object):
                     ticket = json.loads(body.decode("utf-8")).get("ticket")
                     if ticket in outer.pair_tickets:
                         outer.pair_tickets.discard(ticket)  # dùng một lần
-                        return self._reply(200, {"ok": True, "result": {"apiKey": API_KEY, "keyName": "bot-test"}})
+                        return self._reply(200, {"ok": True, "result": {"apiKey": getattr(outer, "pair_api_key", API_KEY), "keyName": "bot-test"}})
                     return self._reply(401, {"ok": False, "error": {"code": "UNAUTHORIZED", "message": "Vé không hợp lệ"}})
                 if self.path == "/v1/media":
                     return self._reply(200, {"ok": True, "result": {"mediaId": "m1", "name": urllib.parse.unquote(self.headers["X-Filename"]), "size": len(body), "kind": "image"}})
@@ -511,14 +512,17 @@ ExecStart=/usr/local/sbin/ahv-bot-run-linux.sh x
 
 
 class FakeRun(object):
-    def __init__(self, fail_on=None):
+    def __init__(self, fail_on=None, timeout_on=None):
+        self.timeout_on = timeout_on
         self.calls = []
         self.fail_on = fail_on
 
     def __call__(self, cmd, **kwargs):
         self.calls.append((list(cmd), kwargs))
+        if self.timeout_on and self.timeout_on in cmd:
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
         code = 1 if self.fail_on and self.fail_on in cmd else 0
-        return mock.Mock(returncode=code)
+        return mock.Mock(returncode=code, stdout="[OK] doctor\n")
 
 
 class InstallTests(BridgeTestCase):
@@ -660,10 +664,15 @@ class InstallTests(BridgeTestCase):
         self.assertEqual(chowned[os.path.join(install_dir, "state")], (1234, 5678))
         self.assertTrue(any(c[0][1:] == (1234, 5678) and ".env." in c[0][0] for c in self.chown.call_args_list))
         self.assertTrue(os.path.exists(os.path.join(install_dir, ".claude.json.before-maihub")))
-        self.assertEqual(len(run.calls), 2)
-        self.assertEqual(run.calls[1][1]["cwd"], self.home)
-        self.assertIn(os.path.join(install_dir, "maihub_bridge.py"), run.calls[1][0])
+        self.assertEqual(len(run.calls), 3)
+        self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "python3", "-I", os.path.join(install_dir, "maihub_bridge.py"), "doctor", "--env-file", env_path])
+        self.assertEqual(run.calls[0][1]["cwd"], self.home)
+        self.assertEqual(run.calls[2][1]["cwd"], self.home)
+        self.assertIn(os.path.join(install_dir, "maihub_bridge.py"), run.calls[2][0])
+        for call in run.calls:
+            self.assertEqual(call[1]["timeout"], bridge.RUN_TIMEOUT)
         self.assertIn("mcp remove maihub -s user", out)
+        self.assertIn("sudo rm -rf " + install_dir, out)
         self.assertIn(install_dir, out)
         self.assertNotIn(API_KEY, out + err)
         self.assertNotIn("secret-token", out + err)
@@ -674,7 +683,7 @@ class InstallTests(BridgeTestCase):
         run = FakeRun()
         code, out, err = self.install(run)
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(run.calls[1][0][4], "codex")
+        self.assertEqual(run.calls[2][0][4], "codex")
 
     def test_install_unknown_user_changes_nothing(self):
         self.add_bot("tg-codex-bot", "ghostuser")
@@ -690,6 +699,70 @@ class InstallTests(BridgeTestCase):
         code, _, err = self.install(FakeRun(fail_on="add"))
         self.assertNotEqual(code, 0)
         self.assertIn("đăng ký MCP", err)
+
+    def test_install_relative_dir_registers_absolute_paths(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        cwd = os.getcwd()
+        os.chdir(self.tmp.name)
+        self.addCleanup(os.chdir, cwd)
+        run = FakeRun()
+        code, out, err = self.install(run, dir="rel/inst")
+        self.assertEqual(code, 0, out + err)
+        absolute = os.path.join(os.path.realpath(self.tmp.name), "rel", "inst")
+        add = run.calls[2][0]
+        self.assertTrue(os.path.realpath(add[add.index("-I") + 1]) == os.path.join(absolute, "maihub_bridge.py"))
+        self.assertTrue(os.path.isabs(add[-1]))
+        self.assertTrue(os.path.isabs(run.calls[0][0][6]))
+
+    def test_install_rerun_replaces_env_and_keeps_backup(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        config = os.path.join(self.home, ".claude.json")
+        with open(config, "w") as handle:
+            handle.write("original")
+        run = FakeRun()
+        code, out, err = self.install(run)
+        self.assertEqual(code, 0, out + err)
+        install_dir = self.args().dir
+        with open(config, "w") as handle:
+            handle.write("modified-by-mcp-add")
+        self.hub.pair_tickets.add(PAIR_TICKET)
+        self.hub.pair_api_key = "mh_second_key_1234567890"
+        code, out, err = self.install(run)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(sorted(os.listdir(install_dir)), [".claude.json.before-maihub", ".env", "maihub_bridge.py", "state"])
+        with open(os.path.join(install_dir, ".claude.json.before-maihub")) as handle:
+            self.assertEqual(handle.read(), "original")
+        self.assertEqual(len(run.calls), 6)
+        verbs = [c[0][6] for c in run.calls if c[0][5] == "mcp"]
+        self.assertEqual(verbs, ["remove", "add", "remove", "add"])
+        self.assertEqual(bridge.parse_env_file(os.path.join(install_dir, ".env"))["MAIHUB_API_KEY"], "mh_second_key_1234567890")
+
+    def test_install_doctor_failure_and_timeout_stop_before_mcp(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        run = FakeRun(fail_on="doctor")
+        code, _, err = self.install(run)
+        self.assertNotEqual(code, 0)
+        self.assertIn("doctor", err)
+        self.assertEqual(len(run.calls), 1)
+        self.hub.pair_tickets.add(PAIR_TICKET)
+        run = FakeRun(timeout_on="add")
+        code, _, err = self.install(run)
+        self.assertEqual(code, bridge.EXIT_NETWORK)
+        self.assertIn("đăng ký MCP", err)
+
+    def test_backup_created_0600_and_refuses_symlink(self):
+        install_dir = os.path.join(self.tmp.name, "inst2")
+        os.mkdir(install_dir)
+        with open(os.path.join(self.home, ".codex_cfg"), "w") as handle:
+            handle.write("x")
+        os.mkdir(os.path.join(self.home, ".codex"))
+        with open(os.path.join(self.home, ".codex", "config.toml"), "w") as handle:
+            handle.write("c")
+        os.symlink(os.path.join(self.tmp.name, "victim"), os.path.join(install_dir, "config.toml.before-maihub"))
+        self.assertFalse(bridge.backup_cli_config("codex", self.home, install_dir))  # liên kết đã tồn tại thì bỏ qua
+        os.unlink(os.path.join(install_dir, "config.toml.before-maihub"))
+        self.assertTrue(bridge.backup_cli_config("codex", self.home, install_dir))
+        self.assertEqual(os.stat(os.path.join(install_dir, "config.toml.before-maihub")).st_mode & 0o777, 0o600)
 
 
 class PairHardeningTests(BridgeTestCase):

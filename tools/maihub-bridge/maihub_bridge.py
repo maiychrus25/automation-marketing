@@ -46,6 +46,7 @@ SYSTEMD_DIR = "/etc/systemd/system"
 DEFAULT_INSTALL_ROOT = "/opt/bot/maihub"
 BRIDGE_NAME = "maihub_bridge.py"
 BACKUP_SUFFIX = ".before-maihub"
+RUN_TIMEOUT = 120
 
 EXIT_SERVER_ERROR = 1
 EXIT_CONFIG = 2
@@ -554,10 +555,11 @@ def backup_cli_config(cli, home, install_dir):
     """Sao lưu cấu hình CLI vào <dir>/<tên>.before-maihub, chỉ lần đầu. Trả True nếu vừa sao lưu."""
     src = cli_config_path(cli, home)
     dst = os.path.join(install_dir, os.path.basename(src) + BACKUP_SUFFIX)
-    if os.path.exists(dst) or not os.path.isfile(src):
+    if os.path.lexists(dst) or not os.path.isfile(src):
         return False
-    shutil.copyfile(src, dst)
-    os.chmod(dst, 0o600)
+    fd = os.open(dst, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, "wb") as out, open(src, "rb") as source:
+        shutil.copyfileobj(source, out)
     return True
 
 
@@ -567,8 +569,11 @@ def register_mcp(cli, user, bridge_path, env_path, run, home):
     server = ["python3", "-I", bridge_path, "mcp", "--env-file", env_path]
     remove = prefix + ["remove", "maihub"] + (["-s", "user"] if cli == "claude" else [])
     add = prefix + (["add", "--scope", "user", "maihub", "--"] if cli == "claude" else ["add", "maihub", "--"]) + server
-    kwargs = {"cwd": home, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
-    run(remove, **kwargs)
+    kwargs = {"cwd": home, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "timeout": RUN_TIMEOUT}
+    try:
+        run(remove, **kwargs)
+    except subprocess.TimeoutExpired:
+        pass  # gỡ bản cũ chỉ là dọn dẹp; lệnh add bên dưới mới quyết định thành công
     result = run(add, **kwargs)
     if getattr(result, "returncode", 0) != 0:
         raise BridgeError("CONFIG", "Lệnh đăng ký MCP thất bại (mã %s)" % result.returncode)
@@ -605,7 +610,7 @@ def cmd_install(args, run, geteuid, systemd_dir, getpwnam):
             account = getpwnam(bot["user"])
         except KeyError:
             raise BridgeError("CONFIG", "Không có user %s trên máy" % bot["user"])
-        install_dir = args.dir or os.path.join(DEFAULT_INSTALL_ROOT, bot["service"])
+        install_dir = os.path.abspath(args.dir or os.path.join(DEFAULT_INSTALL_ROOT, bot["service"]))
         env_path = os.path.join(install_dir, ".env")
         home = account.pw_dir
 
@@ -623,10 +628,13 @@ def cmd_install(args, run, geteuid, systemd_dir, getpwnam):
         for key, val in values.items():
             print("%s=%s" % (key, mask_key(val) if key == "MAIHUB_API_KEY" else val))
         step = "doctor"
-        doctor_code = cmd_doctor(lambda: Config.load(env_path, {}))
-        if doctor_code != 0:
-            sys.stderr.write("Bước lỗi: %s\n" % step)
-            return doctor_code
+        doctor = run(["sudo", "-u", bot["user"], "-H", "python3", "-I", bridge_path, "doctor", "--env-file", env_path],
+                     cwd=home, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=RUN_TIMEOUT)
+        doctor_out = getattr(doctor, "stdout", None)
+        if isinstance(doctor_out, str) and doctor_out:
+            print(doctor_out.rstrip("\n"))
+        if doctor.returncode != 0:
+            raise BridgeError("CONFIG", "doctor dưới quyền %s thất bại (mã %s)" % (bot["user"], doctor.returncode))
         step = "sao lưu cấu hình CLI"
         backup_cli_config(cli, home, install_dir)
         step = "đăng ký MCP"
@@ -637,11 +645,14 @@ def cmd_install(args, run, geteuid, systemd_dir, getpwnam):
     except (IOError, OSError) as err:
         sys.stderr.write("Bước lỗi: %s\n%s\n" % (step, err))
         return EXIT_CONFIG
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("Bước lỗi: %s\nLệnh chạy quá %d giây\n" % (step, RUN_TIMEOUT))
+        return EXIT_NETWORK
     print("")
     print("Tóm tắt: thư mục %s, CLI %s, user %s, doctor OK, MCP \"maihub\" đã đăng ký." % (install_dir, cli, bot["user"]))
     print("Lệnh gỡ:")
     print("  sudo -u %s -H %s mcp remove maihub%s" % (bot["user"], cli, " -s user" if cli == "claude" else ""))
-    print("  rm -rf %s" % shlex.quote(install_dir))
+    print("  sudo rm -rf %s" % shlex.quote(install_dir))
     return 0
 
 
