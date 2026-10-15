@@ -50,6 +50,9 @@ DEFAULT_INSTALL_ROOT = "/opt/bot/maihub"
 BRIDGE_NAME = "maihub_bridge.py"
 BACKUP_SUFFIX = ".before-maihub"
 RUN_TIMEOUT = 120
+WATCH_DRY_RUN_SEC = 5
+WATCH_UNIT_PREFIX = "maihub-watch-"
+SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9@._-]+\Z")
 TELEGRAM_BASE = "https://api.telegram.org"
 SEND_RETRY_DELAYS = (2, 10, 30)  # giây chờ trước lần thử lại thứ 1, 2, 3
 WATCH_WAIT_SEC = 25
@@ -654,6 +657,11 @@ def cmd_install(args, run, geteuid, systemd_dir, getpwnam):
         backup_cli_config(cli, home, install_dir)
         step = "đăng ký MCP"
         register_mcp(cli, bot["user"], bridge_path, env_path, run, home)
+        watch_unit = None
+        if not args.no_watch:
+            step = "cài watch"
+            watch_unit = install_watch(env_path, os.path.join(bot["data_dir"], ".env"), bot["user"], bot["service"],
+                                       os.path.join(install_dir, "state"), run, systemd_dir, getpwnam)
     except BridgeError as err:
         sys.stderr.write("Bước lỗi: %s\n" % step)
         return exit_code_for(err)
@@ -664,10 +672,114 @@ def cmd_install(args, run, geteuid, systemd_dir, getpwnam):
         sys.stderr.write("Bước lỗi: %s\nLệnh chạy quá %d giây\n" % (step, RUN_TIMEOUT))
         return EXIT_NETWORK
     print("")
-    print("Tóm tắt: thư mục %s, CLI %s, user %s, doctor OK, MCP \"maihub\" đã đăng ký." % (install_dir, cli, bot["user"]))
+    print("Tóm tắt: thư mục %s, CLI %s, user %s, doctor OK, MCP \"maihub\" đã đăng ký%s." % (
+        install_dir, cli, bot["user"], ", service %s" % os.path.basename(watch_unit) if watch_unit else ""))
     print("Lệnh gỡ:")
     print("  sudo -u %s -H %s mcp remove maihub%s" % (bot["user"], cli, " -s user" if cli == "claude" else ""))
+    if watch_unit:
+        print("  sudo systemctl disable --now %s" % os.path.basename(watch_unit))
+        print("  sudo rm %s" % shlex.quote(watch_unit))
     print("  sudo rm -rf %s" % shlex.quote(install_dir))
+    return 0
+
+
+def render_watch_unit(name, user, bridge, env_file, notify_env, state_dir):
+    """Nội dung unit systemd của watch (spec 4.4). Đường dẫn có khoảng trắng không được hỗ trợ."""
+    for value in (bridge, env_file, notify_env, state_dir):
+        if re.search(r"\s", value):
+            raise BridgeError("CONFIG", "Đường dẫn không được chứa khoảng trắng: %s" % value)
+    return "\n".join([
+        "[Unit]",
+        "Description=MaiHub watch (thông báo Telegram) cho %s.service" % name,
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "",
+        "[Service]",
+        "Type=simple",
+        "User=%s" % user,
+        "ExecStart=/usr/bin/python3 -I %s watch --env-file %s --notify-env %s --state %s" % (
+            bridge, env_file, notify_env, os.path.join(state_dir, "watch-state.json")),
+        "Restart=always",
+        "RestartSec=10",
+        "NoNewPrivileges=yes",
+        "ProtectSystem=strict",
+        "ReadWritePaths=%s" % state_dir,
+        "PrivateTmp=yes",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        "",
+    ])
+
+
+def _write_unit_atomic(unit_path, text):
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(unit_path), prefix=".maihub-watch-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, unit_path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def install_watch(env_file, notify_env, user, name, state_dir, run, systemd_dir, getpwnam):
+    """Kiểm tra, chạy thử watch --dry-run dưới quyền user, ghi unit rồi bật service. Trả đường dẫn unit."""
+    env_file, notify_env = os.path.abspath(env_file), os.path.abspath(notify_env)
+    for path in (env_file, notify_env):
+        if not os.path.isfile(path):
+            raise BridgeError("CONFIG", "Không thấy tệp %s" % path)
+    if not SERVICE_NAME_RE.match(name):
+        raise BridgeError("CONFIG", "Tên service không hợp lệ: %s" % name)
+    try:
+        account = getpwnam(user)
+    except KeyError:
+        raise BridgeError("CONFIG", "Không có user %s trên máy" % user)
+    env_dir = os.path.dirname(env_file)
+    local_bridge = os.path.join(env_dir, BRIDGE_NAME)
+    bridge = local_bridge if os.path.isfile(local_bridge) else os.path.abspath(__file__)
+    state_dir = os.path.abspath(state_dir or os.path.join(env_dir, "state"))
+    unit_name = "%s%s.service" % (WATCH_UNIT_PREFIX, name)
+    unit_path = os.path.join(systemd_dir, unit_name)
+    text = render_watch_unit(name, user, bridge, env_file, notify_env, state_dir)  # kiểm đường dẫn trước khi đụng hệ thống
+
+    os.makedirs(state_dir, exist_ok=True)
+    os.chown(state_dir, account.pw_uid, account.pw_gid)
+    os.chmod(state_dir, 0o700)
+    dry = ["sudo", "-u", user, "-H", "python3", "-I", bridge, "watch", "--env-file", env_file, "--notify-env", notify_env, "--dry-run"]
+    try:
+        result = run(dry, cwd=account.pw_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=WATCH_DRY_RUN_SEC)
+    except subprocess.TimeoutExpired:
+        result = None  # còn chạy sau 5 giây nghĩa là cấu hình đọc được và kết nối được
+    if result is not None and result.returncode != 0:
+        detail = getattr(result, "stderr", "")
+        raise BridgeError("CONFIG", "watch --dry-run dưới quyền %s thất bại (mã %s)%s" % (
+            user, result.returncode, ": " + detail.strip() if isinstance(detail, str) and detail.strip() else ""))
+    _write_unit_atomic(unit_path, text)
+    for cmd in (["systemctl", "daemon-reload"], ["systemctl", "enable", "--now", unit_name]):
+        result = run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=RUN_TIMEOUT)
+        if result.returncode != 0:
+            raise BridgeError("CONFIG", "%s thất bại (mã %s)" % (" ".join(cmd), result.returncode))
+    print("Đã cài service %s (watch gửi thông báo Telegram)." % unit_name)
+    return unit_path
+
+
+def cmd_install_watch(args, run=subprocess.run, geteuid=os.geteuid, systemd_dir=SYSTEMD_DIR, getpwnam=pwd.getpwnam):
+    try:
+        if geteuid() != 0:
+            raise BridgeError("CONFIG", "Cần chạy bằng root")
+        install_watch(args.env_file, args.notify_env, args.user, args.name, args.state_dir, run, systemd_dir, getpwnam)
+    except BridgeError as err:
+        sys.stderr.write("%s\n" % err.message)
+        return exit_code_for(err)
+    except (IOError, OSError) as err:
+        sys.stderr.write("%s\n" % err)
+        return EXIT_CONFIG
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("Lệnh chạy quá %d giây\n" % RUN_TIMEOUT)
+        return EXIT_NETWORK
     return 0
 
 
@@ -1051,10 +1163,17 @@ def build_parser():
     p_pair.add_argument("--install", action="store_true", help="Cài cho bot AHV trên máy này (cần root): thư mục, .env, đăng ký MCP")
     p_pair.add_argument("--bot", help="Tên service của bot (bắt buộc khi có nhiều bot)")
     p_pair.add_argument("--cli", choices=["claude", "codex"], help="Loại CLI (mặc định suy ra từ user hoặc tên service)")
+    p_pair.add_argument("--no-watch", action="store_true", help="Không cài service watch (thông báo Telegram)")
     p_watch = sub.add_parser("watch", parents=[shared], help="Gửi sự kiện MaiHub tới Telegram bằng token của bot")
     p_watch.add_argument("--notify-env", required=True, help=".env của bot (TG_TOKEN, ALLOWED_CHAT_ID, ...)")
     p_watch.add_argument("--state", help="Tệp trạng thái (mặc định: state/watch-state.json cạnh --env-file)")
     p_watch.add_argument("--dry-run", action="store_true", help="In tin ra stdout, không gửi Telegram")
+    p_iw = sub.add_parser("install-watch", help="Cài watch thành service systemd (cần root)")
+    p_iw.add_argument("--env-file", required=True, help=".env MaiHub")
+    p_iw.add_argument("--notify-env", required=True, help=".env của bot (TG_TOKEN, ALLOWED_CHAT_ID, ...)")
+    p_iw.add_argument("--user", required=True, help="User chạy service (thường là user của bot)")
+    p_iw.add_argument("--name", required=True, help="Tên service của bot (đặt tên maihub-watch-<name>.service)")
+    p_iw.add_argument("--state-dir", default=None, help="Thư mục trạng thái (mặc định: state/ cạnh --env-file)")
     return parser
 
 
@@ -1072,6 +1191,8 @@ def main(argv=None):
         return cmd_pair(args)
     if args.command == "watch":
         return cmd_watch(args)
+    if args.command == "install-watch":
+        return cmd_install_watch(args)
     try:
         client = MaiHubClient(loader())
         if args.command == "describe":

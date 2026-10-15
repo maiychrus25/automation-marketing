@@ -309,6 +309,14 @@ $B call runs.get '{"runId":"<ma-run>"}'
 
 Mã thoát của CLI: 0 thành công; 1 lỗi từ MaiHub (stderr `<MÃ_LỖI>: thông báo`); 2 thiếu hoặc sai cấu hình; 3 lỗi mạng hoặc sai ghim chứng chỉ. Qua MCP, cùng các thao tác này là các tool `maihub_drafts_create`, `maihub_drafts_approve`, `maihub_events_wait`, `maihub_upload_media`… (tham số như bảng mục 7, thêm `idempotencyKey` tuỳ chọn).
 
+### Thông báo Telegram (`watch`)
+
+Bridge có lệnh `watch` chạy liên tục: chờ `events.wait` (25 giây một lượt) rồi gửi tin tiếng Việt qua Telegram bằng token của bot (`TG_TOKEN` trong `.env` của bot). Tin gửi: lượt đăng/tham gia/quét/thu bình luận xong, có lỗi hoặc bị huỷ (`run.finished`), lỡ lịch (`schedule.missed`), profile hết phiên hoặc bị checkpoint (`profile.loginProblem`), mất và có lại liên lạc với MaiHub, khoá bị từ chối hoặc sai ghim chứng chỉ. Không báo `run.started`, `draft.approved`, `profiles.checkFinished`.
+
+Khoá `.env` liên quan: `MAIHUB_NOTIFY_CHAT_ID` (`.env` MaiHub; mặc định lấy `ALLOWED_CHAT_ID`/`ADMIN_USER_ID` của bot), `TELEGRAM_API_BASE` và `TELEGRAM_PROXY` (`.env` MaiHub; đường tới Telegram khi VPS cần proxy; SOCKS không hỗ trợ). Trạng thái (con trỏ sự kiện) lưu ở `state/watch-state.json`; `--dry-run` in tin ra stdout và không lưu gì.
+
+Cài thành service systemd: `pair --install` tự cài (trừ khi có `--no-watch`); bot cài từ trước dùng `sudo python3 maihub_bridge.py install-watch --env-file <.env MaiHub> --notify-env <.env bot> --user <user> --name <tên-service-bot>`. Chi tiết trong `tools/maihub-bridge/README.md`.
+
 ## 11. Mẹo cho bot
 
 - Gọi `GET /v1/describe` (hoặc tool MCP) để biết thao tác hiện có; đừng mã cứng danh sách.

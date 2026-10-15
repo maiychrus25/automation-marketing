@@ -77,17 +77,19 @@ Mã ghép nối lấy từ giao diện MaiHub (sống 15 phút, dùng một lầ
 ### Cài cho bot AHV (`pair --install`)
 
 ```bash
-sudo python3 maihub_bridge.py pair 'mhp1.…' --install [--bot <tên-service>] [--cli claude|codex] [--dir <thư mục>]
+sudo python3 maihub_bridge.py pair 'mhp1.…' --install [--bot <tên-service>] [--cli claude|codex] [--dir <thư mục>] [--no-watch]
 ```
 
 Bắt buộc chạy bằng root. Lệnh quét `/etc/systemd/system/*.service` tìm unit bot AHV (có `User=` và `Environment=AHV_BOT_DATA_DIR=<dir>` với `<dir>/.env` chứa `TG_TOKEN`). Có đúng một bot thì dùng bot đó; nhiều bot thì bắt buộc `--bot <tên-service>` (lỗi liệt kê tên các unit và không sửa gì); không có bot nào thì báo lỗi. `--cli` mặc định suy ra từ `User=` (`claudeproxy` là claude, `codexproxy` là codex) hoặc tên service. `--dir` mặc định `/opt/bot/maihub/<tên-service>/`.
 
-Thứ tự: kiểm tra mọi thứ trước (bot, CLI, user) rồi mới tạo thư mục (`root:<user>` 750, bridge 640, `.env` `<user>:<user>` 600, `state/` 700), ghép nối, ghi `.env`, chạy `doctor`, sao lưu cấu hình CLI vào `<dir>/<tên file>.before-maihub` (chỉ lần đầu), đăng ký MCP `maihub` dưới quyền user của bot. Bước nào lỗi thì dừng và in tên bước; các bước đã xong không tự hoàn tác. Nếu ghi `.env` lỗi sau khi vé đã dùng thì MaiHub đã tạo một khoá: hãy thu hồi khoá đó rồi tạo mã ghép nối mới.
+Thứ tự: kiểm tra mọi thứ trước (bot, CLI, user) rồi mới tạo thư mục (`root:<user>` 750, bridge 640, `.env` `<user>:<user>` 600, `state/` 700), ghép nối, ghi `.env`, chạy `doctor`, sao lưu cấu hình CLI vào `<dir>/<tên file>.before-maihub` (chỉ lần đầu), đăng ký MCP `maihub` dưới quyền user của bot, rồi cài service `watch` (`install-watch` bên dưới; bỏ qua bằng `--no-watch`). Bước nào lỗi thì dừng và in tên bước; các bước đã xong không tự hoàn tác. Nếu ghi `.env` lỗi sau khi vé đã dùng thì MaiHub đã tạo một khoá: hãy thu hồi khoá đó rồi tạo mã ghép nối mới.
 
 Gỡ cài đặt (lệnh cũng được in cuối lần cài):
 
 ```bash
 sudo -u <user> -H claude mcp remove maihub -s user   # Codex: sudo -u <user> -H codex mcp remove maihub
+sudo systemctl disable --now maihub-watch-<tên-service>.service
+sudo rm /etc/systemd/system/maihub-watch-<tên-service>.service
 sudo rm -rf /opt/bot/maihub/<tên-service>
 ```
 
@@ -106,6 +108,14 @@ python3 maihub_bridge.py watch --env-file <.env MaiHub> --notify-env <.env của
 - Gửi lỗi thì thử lại sau 2, 10, 30 giây (HTTP 429 thì chờ `retry_after`), vẫn lỗi thì ghi stderr và bỏ tin đó.
 
 Các loại tin: `✅` lượt xong; `⚠️` lượt có lỗi (kèm tối đa 3 dòng `• đích: lỗi`); `⏹` lượt bị huỷ; `⏰` lỡ lịch; `🔒` profile hết phiên hoặc bị checkpoint; `⚠️` mất liên lạc MaiHub từ 300 giây (một tin) và `✅` khi kết nối lại; `🔑` khoá bị từ chối và `🔐` sai ghim chứng chỉ (một tin, thử lại mỗi 5 phút); "Đã chuyển workspace" khi MaiHub đổi workspace. Không báo `run.started`, `draft.approved`, `profiles.checkFinished`.
+
+### Cài `watch` thành service (`install-watch`)
+
+```bash
+sudo python3 maihub_bridge.py install-watch --env-file <.env MaiHub> --notify-env <.env của bot> --user <user> --name <tên-service-bot> [--state-dir <thư mục>]
+```
+
+`pair --install` tự gọi lệnh này; hai bot cài từ trước (`/opt/bot/maihub/.env`) thì chạy tay. Bắt buộc root. Thứ tự: kiểm tra đầu vào (tệp tồn tại, user có thật, tên service chỉ gồm `A-Za-z0-9@._-`, đường dẫn không có khoảng trắng) → tạo `--state-dir` (mặc định `state/` cạnh `--env-file`, `<user>:<user>` 700) → chạy thử `watch --dry-run` dưới quyền user khoảng 5 giây (còn chạy sau 5 giây là cấu hình dùng được; thoát lỗi sớm thì dừng, chưa ghi gì) → ghi `/etc/systemd/system/maihub-watch-<tên-service>.service` (0644, ghi nguyên tử) → `systemctl daemon-reload` → `systemctl enable --now`. Unit chạy `python3 -I <bridge> watch ...` với `Restart=always`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ReadWritePaths=<state-dir>`, `PrivateTmp=yes`. Bridge dùng bản nằm cạnh `--env-file` nếu có, không thì chính tệp đang chạy.
 
 ## Bảo mật
 

@@ -547,7 +547,7 @@ class InstallTests(BridgeTestCase):
         return data_dir
 
     def args(self, **over):
-        ns = dict(code=make_pair_code(self.hub.url, PIN), install=True, bot=None, cli=None, dir=os.path.join(self.install_root, "bot1"))
+        ns = dict(code=make_pair_code(self.hub.url, PIN), install=True, bot=None, cli=None, no_watch=False, dir=os.path.join(self.install_root, "bot1"))
         ns.update(over)
         return mock.Mock(**ns)
 
@@ -664,12 +664,12 @@ class InstallTests(BridgeTestCase):
         self.assertEqual(chowned[os.path.join(install_dir, "state")], (1234, 5678))
         self.assertTrue(any(c[0][1:] == (1234, 5678) and ".env." in c[0][0] for c in self.chown.call_args_list))
         self.assertTrue(os.path.exists(os.path.join(install_dir, ".claude.json.before-maihub")))
-        self.assertEqual(len(run.calls), 3)
+        self.assertEqual(len(run.calls), 6)  # doctor, mcp remove/add, watch dry-run, daemon-reload, enable
         self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "python3", "-I", os.path.join(install_dir, "maihub_bridge.py"), "doctor", "--env-file", env_path])
         self.assertEqual(run.calls[0][1]["cwd"], self.home)
         self.assertEqual(run.calls[2][1]["cwd"], self.home)
         self.assertIn(os.path.join(install_dir, "maihub_bridge.py"), run.calls[2][0])
-        for call in run.calls:
+        for call in run.calls[:3] + run.calls[4:]:
             self.assertEqual(call[1]["timeout"], bridge.RUN_TIMEOUT)
         self.assertIn("mcp remove maihub -s user", out)
         self.assertIn("sudo rm -rf " + install_dir, out)
@@ -732,8 +732,8 @@ class InstallTests(BridgeTestCase):
         self.assertEqual(sorted(os.listdir(install_dir)), [".claude.json.before-maihub", ".env", "maihub_bridge.py", "state"])
         with open(os.path.join(install_dir, ".claude.json.before-maihub")) as handle:
             self.assertEqual(handle.read(), "original")
-        self.assertEqual(len(run.calls), 6)
-        verbs = [c[0][6] for c in run.calls if c[0][5] == "mcp"]
+        self.assertEqual(len(run.calls), 12)
+        verbs = [c[0][6] for c in run.calls if len(c[0]) > 6 and c[0][5] == "mcp"]
         self.assertEqual(verbs, ["remove", "add", "remove", "add"])
         self.assertEqual(bridge.parse_env_file(os.path.join(install_dir, ".env"))["MAIHUB_API_KEY"], "mh_second_key_1234567890")
 
@@ -1310,6 +1310,157 @@ class WatchCommandTests(BridgeTestCase):
         with mock.patch("sys.stderr", err):
             sender.send("x")
         self.assertNotIn(TG_TOKEN, err.getvalue())
+
+
+class InstallWatchTests(InstallTests):
+    # Kế thừa InstallTests để dùng lại fixture; chạy lại cả các test cài đặt cũ trong lớp này là chấp nhận được.
+    def setUp(self):
+        InstallTests.setUp(self)
+        self.env_dir = os.path.join(self.tmp.name, "mh dir".replace(" ", "-"))
+        os.mkdir(self.env_dir)
+        self.env_file = os.path.join(self.env_dir, ".env")
+        self.notify_env = os.path.join(self.tmp.name, "bot.env")
+        for path in (self.env_file, self.notify_env):
+            with open(path, "w") as handle:
+                handle.write("X=1\n")
+
+    def watch_args(self, **over):
+        ns = dict(env_file=self.env_file, notify_env=self.notify_env, user="claudeproxy", state_dir=None)
+        ns.update(over)
+        service = ns.pop("name", "tg-bot")
+        args = mock.Mock(**ns)
+        args.name = service  # Mock(name=...) nhận tên của mock, không phải thuộc tính
+        return args
+
+    def install_watch(self, run, euid=0, **over):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch("os.chown") as chown:
+            code = bridge.cmd_install_watch(self.watch_args(**over), run=run, geteuid=lambda: euid, systemd_dir=self.systemd, getpwnam=self.pw)
+        self.chown = chown
+        return code, out.getvalue(), err.getvalue()
+
+    def unit_path(self, name="tg-bot"):
+        return os.path.join(self.systemd, "maihub-watch-%s.service" % name)
+
+    def test_unit_content(self):
+        text = bridge.render_watch_unit("tg-bot", "claudeproxy", "/o/maihub_bridge.py", "/o/.env", "/d/.env", "/o/state")
+        for line in ["After=network-online.target", "Wants=network-online.target", "Type=simple", "User=claudeproxy",
+                     "ExecStart=/usr/bin/python3 -I /o/maihub_bridge.py watch --env-file /o/.env --notify-env /d/.env --state /o/state/watch-state.json",
+                     "Restart=always", "RestartSec=10", "NoNewPrivileges=yes", "ProtectSystem=strict",
+                     "ReadWritePaths=/o/state", "PrivateTmp=yes", "WantedBy=multi-user.target"]:
+            self.assertIn(line + "\n", text)
+        self.assertIn("tg-bot.service", text)
+
+    def test_whitespace_path_rejected(self):
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            bridge.render_watch_unit("b", "u", "/o/b.py", "/o d/.env", "/d/.env", "/o/state")
+        self.assertEqual(ctx.exception.code, "CONFIG")
+
+    def test_install_watch_flow(self):
+        run = FakeRun()
+        code, out, err = self.install_watch(run)
+        self.assertEqual(code, 0, out + err)
+        state = os.path.join(self.env_dir, "state")
+        self.assertEqual(os.stat(state).st_mode & 0o777, 0o700)
+        self.assertEqual(self.chown.call_args_list[0][0], (state, 1234, 5678))
+        bridge_path = os.path.abspath(bridge.__file__)  # không có maihub_bridge.py cạnh .env
+        self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "python3", "-I", bridge_path, "watch",
+                                           "--env-file", self.env_file, "--notify-env", self.notify_env, "--dry-run"])
+        self.assertEqual(run.calls[0][1]["timeout"], bridge.WATCH_DRY_RUN_SEC)
+        self.assertEqual(run.calls[1][0], ["systemctl", "daemon-reload"])
+        self.assertEqual(run.calls[2][0], ["systemctl", "enable", "--now", "maihub-watch-tg-bot.service"])
+        self.assertEqual(os.stat(self.unit_path()).st_mode & 0o777, 0o644)
+        with open(self.unit_path()) as handle:
+            self.assertIn("ReadWritePaths=" + state + "\n", handle.read())
+        self.assertEqual(os.listdir(self.systemd), ["maihub-watch-tg-bot.service"])
+
+    def test_install_watch_prefers_bridge_next_to_env(self):
+        local = os.path.join(self.env_dir, "maihub_bridge.py")
+        open(local, "w").close()
+        run = FakeRun()
+        code, out, err = self.install_watch(run, state_dir=os.path.join(self.tmp.name, "st"))
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(run.calls[0][0][6], local)
+        with open(self.unit_path()) as handle:
+            self.assertIn("-I %s watch" % local, handle.read())
+        self.assertTrue(os.path.isdir(os.path.join(self.tmp.name, "st")))
+
+    def test_install_watch_requires_root(self):
+        run = FakeRun()
+        code, _, err = self.install_watch(run, euid=1000)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("root", err)
+        self.assertEqual(run.calls, [])
+        self.assertEqual(os.listdir(self.systemd), [])
+
+    def test_dry_run_failure_aborts_before_writing_unit(self):
+        run = FakeRun(fail_on="--dry-run")
+        code, _, err = self.install_watch(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("dry-run", err)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(os.listdir(self.systemd), [])
+
+    def test_dry_run_timeout_counts_as_success(self):
+        run = FakeRun(timeout_on="--dry-run")
+        code, out, err = self.install_watch(run)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(len(run.calls), 3)
+        self.assertTrue(os.path.exists(self.unit_path()))
+
+    def test_install_watch_validates_inputs_before_side_effects(self):
+        for over in (dict(name="bad name"), dict(user="ghost"), dict(env_file=os.path.join(self.tmp.name, "nope"))):
+            run = FakeRun()
+            code, _, err = self.install_watch(run, **over)
+            self.assertEqual(code, bridge.EXIT_CONFIG, over)
+            self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(os.path.join(self.env_dir, "state")))
+        self.assertEqual(os.listdir(self.systemd), [])
+
+    def test_install_watch_whitespace_state_dir_changes_nothing(self):
+        run = FakeRun()
+        code, _, _ = self.install_watch(run, state_dir=os.path.join(self.tmp.name, "a b"))
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "a b")))
+
+    def test_install_watch_systemctl_failure(self):
+        code, _, err = self.install_watch(FakeRun(fail_on="enable"))
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("enable", err)
+
+    def test_pair_install_runs_watch_steps_after_mcp(self):
+        data_dir = self.add_bot("tg-claude-bot-a", "claudeproxy")
+        run = FakeRun()
+        code, out, err = self.install(run)
+        self.assertEqual(code, 0, out + err)
+        install_dir = self.args().dir
+        self.assertEqual([c[0][7] if c[0][5] == "-I" else c[0][5] for c in run.calls[:3]], ["doctor", "mcp", "mcp"])
+        dry = run.calls[3][0]
+        self.assertEqual(dry[dry.index("--notify-env") + 1], os.path.join(data_dir, ".env"))
+        self.assertEqual(dry[dry.index("--env-file") + 1], os.path.join(install_dir, ".env"))
+        self.assertEqual(run.calls[5][0], ["systemctl", "enable", "--now", "maihub-watch-tg-claude-bot-a.service"])
+        with open(os.path.join(self.systemd, "maihub-watch-tg-claude-bot-a.service")) as handle:
+            unit = handle.read()
+        self.assertIn("ReadWritePaths=" + os.path.join(install_dir, "state") + "\n", unit)
+        self.assertIn("sudo systemctl disable --now maihub-watch-tg-claude-bot-a.service", out)
+        self.assertIn("sudo rm " + os.path.join(self.systemd, "maihub-watch-tg-claude-bot-a.service"), out)
+        self.assertNotIn("secret-token", out + err)
+
+    def test_pair_install_no_watch_skips_watch_steps(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        run = FakeRun()
+        code, out, err = self.install(run, no_watch=True)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(len(run.calls), 3)
+        self.assertEqual(os.listdir(self.systemd), ["tg-claude-bot-a.service"])
+        self.assertNotIn("systemctl", out)
+
+    def test_pair_install_watch_failure_reports_step(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        code, _, err = self.install(FakeRun(fail_on="--dry-run"))
+        self.assertNotEqual(code, 0)
+        self.assertIn("cài watch", err)
 
 
 if __name__ == "__main__":
