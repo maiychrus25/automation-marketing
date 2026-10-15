@@ -673,7 +673,7 @@ declare global {
         installEngine: () => Promise<{ success: boolean; supported?: boolean; installed?: boolean; version?: string; error?: string }>;
       };
       controlApi: {
-        getConfig:             () => Promise<{ success: boolean; enabled?: boolean; port?: number; allowList?: string[]; fingerprint?: string | null; running?: boolean; error?: string; warning?: string }>;
+        getConfig:             () => Promise<{ success: boolean; enabled?: boolean; port?: number; allowList?: string[]; fingerprint?: string | null; publicHost?: string | null; detectedPublicHost?: string | null; bridgeSha256?: string | null; running?: boolean; error?: string; warning?: string }>;
         setConfig:             (config: { enabled: boolean; port: number; allowList: string[] | string }) => Promise<{ success: boolean; enabled?: boolean; port?: number; allowList?: string[]; fingerprint?: string | null; running?: boolean; warning?: string; invalid?: string[]; error?: string }>;
         createKey:             (name: string) => Promise<{ success: boolean; key?: string; id?: string; name?: string; error?: string }>;
         listKeys:              () => Promise<{ success: boolean; keys?: { id: string; name: string; createdAt: number; lastUsedAt: number | null; revokedAt: number | null }[]; error?: string }>;
@@ -681,6 +681,8 @@ declare global {
         listAudit:             (limit?: number) => Promise<{ success: boolean; audit?: { at: number; keyName: string | null; ip: string | null; method: string | null; paramsSummary: string | null; ok: boolean; errorCode: string | null; durationMs: number | null }[]; error?: string }>;
         firewallCommand:       () => Promise<{ success: boolean; command?: string; error?: string }>;
         regenerateCertificate: () => Promise<{ success: boolean; fingerprint?: string | null; running?: boolean; error?: string }>;
+        createPairing:         (input: { name: string; botIp: string; publicHost: string }) => Promise<{ success: boolean; code?: string; command?: string; firewall?: string; expiresAt?: number; publicHost?: string | null; detectedPublicHost?: string | null; bridgeSha256?: string | null; fingerprint?: string | null; running?: boolean; error?: string }>;
+        cancelPairing:         (botIp: string) => Promise<{ success: boolean; error?: string }>;
       };
       facebookPoster: {
         start:          (kind: FbPosterKind, params: Record<string, unknown>) => Promise<{ success: boolean; runId?: string; error?: string }>;

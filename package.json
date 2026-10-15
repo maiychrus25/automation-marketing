@@ -121,6 +121,10 @@
         ]
       },
       {
+        "from": "tools/maihub-bridge/maihub_bridge.py",
+        "to": "maihub-bridge/maihub_bridge.py"
+      },
+      {
         "from": "node_modules/@ngrok/ngrok/",
         "to": "node_modules/@ngrok/ngrok/",
         "filter": [

@@ -1,12 +1,16 @@
 import { app, ipcMain, safeStorage } from 'electron';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import Logger from '../../src/utils/Logger';
 import { ControlStore } from '../../src/services/control/ControlStore';
 import { ControlEventRecorder } from '../../src/services/control/ControlEventRecorder';
 import { IdempotencyCache } from '../../src/services/control/IdempotencyCache';
+import EventBroadcaster from '../../src/services/event/EventBroadcaster';
+import { PairingTickets } from '../../src/services/control/PairingTickets';
 import { AuthLockout, RateLimiter } from '../../src/services/control/controlSecurity';
 import { ControlApiServer } from '../../src/services/control/ControlApiServer';
 import { createControlMethods, type PosterPort } from '../../src/services/control/ControlMethods';
@@ -15,7 +19,7 @@ import { CertificateKeyUnreadableError, CertificateStore } from '../../src/servi
 import { InboxMediaStore } from '../../src/services/control/InboxMediaStore';
 import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
-    CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput, type ControlConfig,
+    CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
 import { isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations } from './facebookPosterIpc';
 import { getBrowserEngineStatus, getBrowserProfileService, getBrowserSandboxState } from './browserProfileIpc';
@@ -39,6 +43,9 @@ let lastBlocked = false;
 let quitting = false;
 const recorder = new ControlEventRecorder();
 const poster: PosterPort = posterOperations;
+/** Mức module: vé ghép nối phải sống qua mọi lần apply() dừng/chạy lại server. */
+const pairing = new PairingTickets();
+let bridge: { buffer: Buffer; sha256: string } | null = null;
 
 const db = () => DatabaseService.getInstance();
 const controlDir = () => path.join(app.getPath('userData'), 'control-api');
@@ -48,6 +55,23 @@ const appVersion = () => resolveAppVersion({
     packageJsonPaths: [path.join(__dirname, '..', '..', '..', 'package.json'), path.join(app.getAppPath(), 'package.json')],
     readFile: (file) => fs.readFileSync(file, 'utf8'),
 });
+
+/** Bản đóng gói: resources/maihub-bridge; chạy dev: gốc repo (cùng cách dò package.json ở appVersion). */
+function loadBridge(): void {
+    const candidates = [
+        ...(process.resourcesPath ? [path.join(process.resourcesPath, 'maihub-bridge', 'maihub_bridge.py')] : []),
+        path.join(__dirname, '..', '..', '..', 'tools', 'maihub-bridge', 'maihub_bridge.py'),
+    ];
+    bridge = null;
+    for (const file of candidates) {
+        try {
+            const buffer = fs.readFileSync(file);
+            bridge = { buffer, sha256: createHash('sha256').update(buffer).digest('hex') };
+            return;
+        } catch { /* thử đường dẫn kế tiếp */ }
+    }
+    Logger.error('[controlApi] không tìm thấy tệp maihub_bridge.py đi kèm');
+}
 
 const inbox = () => new InboxMediaStore(path.join(controlDir(), 'inbox'));
 const currentStore = () => new ControlStore(db());
@@ -118,6 +142,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
         resolveMedia: (ids) => mediaStore.resolve(ids),
         events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, sig) => notifier.waitForEvent(a, t, sig), workspaceId: () => WorkspaceManager.getInstance().getActiveWorkspace()?.id ?? null },
     });
+    loadBridge();
     const tls = await certStoreOf().ensure();
     if (quitting) return;
     const server = new ControlApiServer({
@@ -125,6 +150,11 @@ async function startRuntime(config: ControlConfig): Promise<void> {
         idempotency: new IdempotencyCache(store), rateLimiter: new RateLimiter(60), lockout: new AuthLockout(),
         saveMedia: (name, contentType, stream) => mediaStore.save(name, contentType, stream),
         isBlocked: isFacebookPosterEmployeeBlocked,
+        pairing: {
+            consume: (ticket, ip) => pairing.consume(ticket, ip),
+            onPaired: (info) => EventBroadcaster.emit('controlApi:paired', { keyName: info.keyName, ip: info.ip }),
+        },
+        bridgeScript: () => bridge?.buffer ?? null,
     });
     await server.start();
     if (quitting) { await server.stop(); return; }
@@ -215,6 +245,8 @@ function getConfigView() {
     return {
         ...config,
         fingerprint: certStoreOf().fingerprint(),
+        detectedPublicHost: detectPublicIpv4(os.networkInterfaces()),
+        bridgeSha256: bridge?.sha256 ?? null,
         running: runtime !== null,
         ...(lastError ? { error: lastError } : {}),
         ...(certStoreOf().warning ? { warning: certStoreOf().warning } : {}),
@@ -240,10 +272,37 @@ export function registerControlApiIpc(): void {
     handle('controlApi:getConfig', () => getConfigView());
 
     handle('controlApi:setConfig', async (params) => {
-        const next = validateConfigInput(params);
+        // validateConfigInput đặt publicHost = null khi thiếu: giữ địa chỉ đã nhớ để lưu form cũ không xoá nó
+        const next = validateConfigInput('publicHost' in params ? params : { ...params, publicHost: readConfig().publicHost });
         db().setSetting(CONTROL_CONFIG_SETTING_KEY, JSON.stringify(next));
         await apply(); // always stop then start: reused keep-alive sockets must not outlive a new allow-list
         return getConfigView();
+    });
+
+    handle('controlApi:createPairing', async (params) => {
+        const name = typeof params.name === 'string' ? params.name.trim() : '';
+        if (!name || name.length > MAX_KEY_NAME) throw new Error(`Tên khoá phải có 1–${MAX_KEY_NAME} ký tự`);
+        const botIp = parseBotIp(params.botIp);
+        const publicHost = validatePublicHost(params.publicHost);
+        const current = readConfig();
+        const next = validateConfigInput({
+            enabled: true, port: current.port, publicHost,
+            allowList: current.allowList.includes(botIp) ? current.allowList : [...current.allowList, botIp],
+        });
+        db().setSetting(CONTROL_CONFIG_SETTING_KEY, JSON.stringify(next));
+        await apply();
+        if (!runtime) throw new Error(lastError ?? 'Không khởi động được Control API');
+        if (!bridge) throw new Error('Không tìm thấy tệp bridge đi kèm MaiHub');
+        const fingerprint = certStoreOf().fingerprint();
+        if (!fingerprint) throw new Error('Chưa có chứng chỉ Control API');
+        const { ticket, expiresAt } = pairing.create(name, botIp);
+        const code = buildPairingCode({ url: `https://${publicHost}:${next.port}`, fingerprint, ticket, name });
+        const command = buildInstallCommand({ host: publicHost, port: next.port, sha256: bridge.sha256, code });
+        return { code, command, firewall: buildFirewallCommand(next), expiresAt, ...getConfigView() };
+    });
+
+    handle('controlApi:cancelPairing', (params) => {
+        pairing.cancel(parseBotIp(params.botIp));
     });
 
     handle('controlApi:createKey', (params) => {

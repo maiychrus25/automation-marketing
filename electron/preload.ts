@@ -847,6 +847,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'facebookPoster:runFinished',
       'facebookPoster:scheduleMissed',
       'facebookPoster:schedulesChanged',
+      'controlApi:paired',
     ];
     if (validChannels.includes(channel)) {
       const subscription = (_event: any, ...args: any[]) => callback(...args);
@@ -897,6 +898,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listAudit:             (limit?: number)      => ipcRenderer.invoke('controlApi:listAudit', { limit }),
     firewallCommand:       ()                    => ipcRenderer.invoke('controlApi:firewallCommand'),
     regenerateCertificate: ()                    => ipcRenderer.invoke('controlApi:regenerateCertificate'),
+    createPairing:         (input: { name: string; botIp: string; publicHost: string }) => ipcRenderer.invoke('controlApi:createPairing', input),
+    cancelPairing:         (botIp: string)       => ipcRenderer.invoke('controlApi:cancelPairing', { botIp }),
   },
 
   // ─── Facebook poster ─────────────────────────────────────────────────────

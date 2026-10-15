@@ -83,6 +83,16 @@ export function validatePublicHost(host: string): string {
     return value;
 }
 
+/** `botIp` của ghép nối: đúng một IPv4 đơn (không CIDR, không IPv6, không nhiều địa chỉ). */
+export function parseBotIp(text: unknown): string {
+    const { entries, invalid } = parseAllowList(typeof text === 'string' ? text : '');
+    const ip = entries[0];
+    if (invalid.length || entries.length !== 1 || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+        throw new ControlConfigError('Địa chỉ IP của bot phải là đúng một IPv4 (không dùng dải CIDR)');
+    }
+    return ip;
+}
+
 /** Mã ghép nối: `mhp1.` + base64url (không padding) của JSON `{u,f,t,n}`. Không chứa API key. */
 export function buildPairingCode(input: { url: string; fingerprint: string; ticket: string; name: string }): string {
     const json = JSON.stringify({ u: input.url, f: input.fingerprint, t: input.ticket, n: input.name });
