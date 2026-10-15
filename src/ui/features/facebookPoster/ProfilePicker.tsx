@@ -4,6 +4,9 @@ import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import { SearchIcon } from '@/components/common/icons';
 import type { BrowserProfile, BrowserProfileGroup } from '../../../models/browserProfile';
+import type { ProfileLoginState } from '../../../models/facebookPoster';
+import LoginStateBadge from './LoginStateBadge';
+import LoginCheckControls from './LoginCheckControls';
 
 interface Props {
   mode: 'multi' | 'single';
@@ -18,6 +21,7 @@ export default function ProfilePicker({ mode, selected, onChange, disabled }: Pr
   const [groups, setGroups] = useState<BrowserProfileGroup[]>([]);
   const [proxyNames, setProxyNames] = useState<Map<number, string>>(new Map());
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
+  const [loginStates, setLoginStates] = useState<Map<string, ProfileLoginState>>(new Map());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
@@ -47,6 +51,14 @@ export default function ProfilePicker({ mode, selected, onChange, disabled }: Pr
     const off = ipc.on?.('browserProfile:statusChanged', (data: { runningIds: string[] }) => setRunningIds(new Set(data?.runningIds || [])));
     return () => off?.();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const apply = (states?: ProfileLoginState[]) => setLoginStates(new Map((states || []).map((s) => [s.profileId, s])));
+    ipc.facebookPoster?.getLoginStates().then((res) => { if (!cancelled && res?.success) apply(res.states); }).catch(() => {});
+    const off = ipc.on?.('facebookPoster:loginStateChanged', (states: ProfileLoginState[]) => apply(states));
+    return () => { cancelled = true; off?.(); };
+  }, []);
 
   const filtered = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -102,6 +114,7 @@ export default function ProfilePicker({ mode, selected, onChange, disabled }: Pr
             {allFilteredSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
           </button>
         )}
+        <LoginCheckControls selected={selected} />
       </div>
       {filtered.length === 0 ? (
         <p className="text-center py-4 text-sm text-gray-400">Không có profile nào khớp bộ lọc</p>
@@ -116,6 +129,7 @@ export default function ProfilePicker({ mode, selected, onChange, disabled }: Pr
                   {p.proxy_id !== null ? proxyNames.get(p.proxy_id) || 'Proxy đã xóa' : 'Không proxy'}
                 </span>
                 {runningIds.has(p.id) && <span className="text-xs text-yellow-400 whitespace-nowrap">Đang mở</span>}
+                <LoginStateBadge state={loginStates.get(p.id)} />
               </label>
             </li>
           ))}
