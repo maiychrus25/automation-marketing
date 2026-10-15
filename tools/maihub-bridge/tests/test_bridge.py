@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import base64
 import hashlib
 import io
 import json
@@ -20,6 +21,7 @@ import maihub_bridge as bridge  # noqa: E402
 CERT = os.path.join(HERE, "fixtures", "cert.pem")
 KEY = os.path.join(HERE, "fixtures", "key.pem")
 API_KEY = "mh_testkey_1234567890"
+PAIR_TICKET = "A" * 43
 
 
 def cert_fingerprint():
@@ -56,6 +58,7 @@ class FakeMaiHub(object):
     def __init__(self):
         self.requests = []
         self.describe_fail = False
+        self.pair_tickets = {PAIR_TICKET}
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -88,6 +91,12 @@ class FakeMaiHub(object):
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 self._record(body)
+                if self.path == "/v1/pair":
+                    ticket = json.loads(body.decode("utf-8")).get("ticket")
+                    if ticket in outer.pair_tickets:
+                        outer.pair_tickets.discard(ticket)  # dùng một lần
+                        return self._reply(200, {"ok": True, "result": {"apiKey": API_KEY, "keyName": "bot-test"}})
+                    return self._reply(401, {"ok": False, "error": {"code": "UNAUTHORIZED", "message": "Vé không hợp lệ"}})
                 if self.path == "/v1/media":
                     return self._reply(200, {"ok": True, "result": {"mediaId": "m1", "name": urllib.parse.unquote(self.headers["X-Filename"]), "size": len(body), "kind": "image"}})
                 req = json.loads(body.decode("utf-8"))
@@ -397,6 +406,99 @@ class EnvFileAndDoctorTests(BridgeTestCase):
         code, out, _ = self.run_cli(["doctor"], {})
         self.assertEqual(code, bridge.EXIT_CONFIG)
         self.assertIn("Cấu hình", out)
+
+
+def make_pair_code(url, pin, ticket=PAIR_TICKET, name="bot-test"):
+    raw = json.dumps({"u": url, "f": pin, "t": ticket, "n": name}).encode("utf-8")
+    return "mhp1." + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+class PairTests(BridgeTestCase):
+    def pair_requests(self):
+        return [r for r in self.hub.requests if r["path"] == "/v1/pair"]
+
+    def run_pair(self, code, directory):
+        return self.run_cli(["pair", code, "--dir", directory], {})
+
+    def test_decode_pairing_code_roundtrip_and_errors(self):
+        info = bridge.decode_pairing_code(make_pair_code("https://h.example:47321", PIN))
+        self.assertEqual(info, {"url": "https://h.example:47321", "pin": PIN, "ticket": PAIR_TICKET, "name": "bot-test"})
+
+        def b64(obj):
+            return "mhp1." + base64.urlsafe_b64encode(json.dumps(obj).encode("utf-8")).decode("ascii").rstrip("=")
+
+        good = {"u": "https://h:1", "f": PIN, "t": PAIR_TICKET, "n": "x"}
+        bad_codes = [
+            "xyz." + make_pair_code("https://h:1", PIN)[5:],
+            "mhp1.!!!not-base64!!!",
+            "mhp1." + base64.urlsafe_b64encode(b"not json").decode("ascii"),
+            b64([1, 2]),
+            b64(dict(good, u="http://h:1")),
+            b64(dict(good, f="zz")),
+            b64(dict(good, t="short")),
+            b64(dict(good, n=5)),
+            b64(dict((k, v) for k, v in good.items() if k != "t")),
+        ]
+        for code in bad_codes:
+            with self.assertRaises(bridge.BridgeError) as ctx:
+                bridge.decode_pairing_code(code)
+            self.assertEqual(ctx.exception.code, "CONFIG", code)
+
+    def test_pair_sends_no_authorization_and_pins_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _, _ = self.run_pair(make_pair_code(self.hub.url, "1" * 64), tmp)
+            self.assertEqual(code, bridge.EXIT_NETWORK)
+            self.assertEqual(self.pair_requests(), [])
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".env")))
+            code, _, _ = self.run_pair(make_pair_code(self.hub.url, PIN), tmp)
+            self.assertEqual(code, 0)
+        sent = self.pair_requests()
+        self.assertEqual(len(sent), 1)
+        self.assertNotIn("Authorization", sent[0]["headers"])
+        self.assertEqual(json.loads(sent[0]["body"].decode("utf-8")), {"ticket": PAIR_TICKET})
+
+    def test_pair_writes_env_0600(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _, _ = self.run_pair(make_pair_code(self.hub.url, PIN), tmp)
+            self.assertEqual(code, 0)
+            path = os.path.join(tmp, ".env")
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            self.assertEqual(bridge.parse_env_file(path), {"MAIHUB_URL": self.hub.url, "MAIHUB_CERT_SHA256": PIN, "MAIHUB_API_KEY": API_KEY})
+            self.assertEqual(os.listdir(tmp), [".env"])  # không để lại tệp tạm
+
+    def test_pair_output_masks_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out, err = self.run_pair(make_pair_code(self.hub.url, PIN), tmp)
+        self.assertEqual(code, 0)
+        self.assertNotIn(API_KEY, out + err)
+        self.assertIn("MAIHUB_API_KEY=" + bridge.mask_key(API_KEY), out)
+        self.assertIn("MAIHUB_URL=" + self.hub.url, out)
+
+    def test_pair_401_exit_code(self):
+        self.hub.pair_tickets.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _, err = self.run_pair(make_pair_code(self.hub.url, PIN), tmp)
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".env")))
+        self.assertEqual(code, bridge.EXIT_SERVER_ERROR)
+        self.assertIn("UNAUTHORIZED", err)
+        self.assertIn("Vé không hợp lệ", err)
+
+    def test_pair_bad_code_is_config_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _, err = self.run_pair("garbage", tmp)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("CONFIG", err)
+
+    def test_write_env_file_chowns_only_with_uid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".env")
+            with mock.patch("os.chown") as chown:
+                bridge.write_env_file(path, {"A": "1"})
+                chown.assert_not_called()
+                bridge.write_env_file(path, {"A": "2"}, uid=1234, gid=5678)
+                chown.assert_called_once()
+                self.assertEqual(chown.call_args[0][1:], (1234, 5678))
+            self.assertEqual(bridge.parse_env_file(path), {"A": "2"})
 
 
 if __name__ == "__main__":

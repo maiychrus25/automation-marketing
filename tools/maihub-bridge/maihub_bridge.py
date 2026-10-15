@@ -8,6 +8,8 @@ Cấu hình: MAIHUB_URL, MAIHUB_API_KEY, MAIHUB_CERT_SHA256 (biến môi trườ
 from __future__ import print_function
 
 import argparse
+import base64
+import binascii
 import hashlib
 import hmac
 import io
@@ -33,6 +35,9 @@ MEDIA_TYPES = {
 CONFIRM_GUIDANCE = "Hãy hỏi người dùng xác nhận rồi gọi lại với confirm: true"
 DESTRUCTIVE_NOTE = "Cần confirm: true (hỏi người dùng trước)"
 
+PAIR_PREFIX = "mhp1."
+PAIR_TICKET_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+
 EXIT_SERVER_ERROR = 1
 EXIT_CONFIG = 2
 EXIT_NETWORK = 3
@@ -55,6 +60,56 @@ def normalize_fingerprint(value):
     if not re.match(r"^[0-9a-f]{64}$", text):
         raise BridgeError("CONFIG", "MAIHUB_CERT_SHA256 phải là SHA-256 dạng hex (64 ký tự)")
     return text
+
+
+def decode_pairing_code(code):
+    """Giải mã mã ghép nối `mhp1.<base64url JSON {u,f,t,n}>` thành dict(url, pin, ticket, name)."""
+    def bad(reason):
+        return BridgeError("CONFIG", "Mã ghép nối không hợp lệ: %s" % reason)
+
+    text = (code or "").strip()
+    if not text.startswith(PAIR_PREFIX):
+        raise bad("thiếu tiền tố %s" % PAIR_PREFIX)
+    payload = text[len(PAIR_PREFIX):]
+    try:
+        obj = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode("utf-8"))
+    except (ValueError, binascii.Error):  # UnicodeDecodeError và JSONDecodeError đều là ValueError
+        raise bad("không giải mã được")
+    if not isinstance(obj, dict):
+        raise bad("nội dung không phải đối tượng JSON")
+    fields = {}
+    for key in ("u", "f", "t", "n"):
+        if not isinstance(obj.get(key), str) or not obj[key]:
+            raise bad("thiếu trường %s" % key)
+        fields[key] = obj[key]
+    if not fields["u"].startswith("https://"):
+        raise bad("địa chỉ phải là https://")
+    if not PAIR_TICKET_RE.match(fields["t"]):
+        raise bad("vé sai định dạng")
+    try:
+        pin = normalize_fingerprint(fields["f"])
+    except BridgeError:
+        raise bad("dấu vân tay sai định dạng")
+    return {"url": fields["u"], "pin": pin, "ticket": fields["t"], "name": fields["n"]}
+
+
+def write_env_file(path, values, uid=None, gid=None):
+    """Ghi tệp KEY=VALUE quyền 0600 ngay từ lúc tạo (tệp tạm cùng thư mục rồi os.replace)."""
+    tmp_path = "%s.tmp.%d" % (path, os.getpid())
+    fd = os.open(tmp_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for key, val in values.items():
+                handle.write("%s=%s\n" % (key, val))
+        if uid is not None:
+            os.chown(tmp_path, uid, gid if gid is not None else -1)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def parse_env_file(path):
@@ -135,11 +190,13 @@ class MaiHubClient(object):
             raise BridgeError("UNREACHABLE", "Không kết nối được MaiHub: %s" % err)
         return conn
 
-    def request(self, method, path, body=None, headers=None, timeout=None):
-        """Kết nối và kiểm ghim TRƯỚC, rồi mới gửi tiêu đề có khoá. Trả về (status, đối tượng JSON)."""
+    def request(self, method, path, body=None, headers=None, timeout=None, auth=True):
+        """Kết nối và kiểm ghim TRƯỚC, rồi mới gửi tiêu đề có khoá. Trả về (status, đối tượng JSON).
+
+        auth=False: không gửi Authorization (dùng cho /v1/pair, lúc chưa có khoá)."""
         conn = self._connect(timeout or self.timeout)
         try:
-            hdrs = {"Authorization": "Bearer " + self.config.api_key}
+            hdrs = {"Authorization": "Bearer " + self.config.api_key} if auth else {}
             hdrs.update(headers or {})
             try:
                 conn.request(method, path, body=body, headers=hdrs)
@@ -168,6 +225,10 @@ class MaiHubClient(object):
 
     def describe(self):
         return self._unwrap(*self.request("GET", "/v1/describe"))
+
+    def pair(self, ticket):
+        payload = json.dumps({"ticket": ticket}).encode("utf-8")
+        return self._unwrap(*self.request("POST", "/v1/pair", payload, {"Content-Type": "application/json"}, auth=False))
 
     def call(self, method, params=None, idempotency_key=None):
         body = {"method": method, "params": params if params is not None else {}}
@@ -380,6 +441,38 @@ def cmd_doctor(config_loader):
     return 0
 
 
+def exit_code_for(err):
+    """In lỗi ra stderr và trả mã thoát tương ứng."""
+    sys.stderr.write("%s: %s\n" % (err.code, err.message))
+    if err.details:
+        sys.stderr.write(json.dumps(err.details, ensure_ascii=False) + "\n")
+    if err.code == "CONFIG":
+        return EXIT_CONFIG
+    return EXIT_NETWORK if err.code in ("UNREACHABLE", "PIN_MISMATCH", "BAD_RESPONSE") else EXIT_SERVER_ERROR
+
+
+def cmd_pair(args):
+    """Giải mã mã ghép nối, đổi vé lấy khoá (đã ghim chứng chỉ trước khi gửi vé), ghi .env rồi chạy doctor."""
+    try:
+        info = decode_pairing_code(args.code)
+        paired = MaiHubClient(Config(info["url"], None, info["pin"])).pair(info["ticket"])
+        api_key = paired.get("apiKey") if isinstance(paired, dict) else None
+        if not isinstance(api_key, str) or not api_key:
+            raise BridgeError("BAD_RESPONSE", "MaiHub không trả về khoá API")
+        values = {"MAIHUB_URL": info["url"], "MAIHUB_CERT_SHA256": info["pin"], "MAIHUB_API_KEY": api_key}
+        env_path = os.path.join(args.dir, ".env")
+        try:
+            write_env_file(env_path, values)
+        except (IOError, OSError) as err:
+            raise BridgeError("CONFIG", "Không ghi được %s: %s" % (env_path, err))
+    except BridgeError as err:
+        return exit_code_for(err)
+    print("Đã ghép nối bot \"%s\" (khoá %s). Đã ghi %s (quyền 600):" % (info["name"], paired.get("keyName", ""), env_path))
+    for key, val in values.items():
+        print("%s=%s" % (key, mask_key(val) if key == "MAIHUB_API_KEY" else val))
+    return cmd_doctor(lambda: Config.load(env_path, {}))
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="maihub_bridge.py", description="Cầu nối CLI / MCP tới giao thức điều khiển MaiHub")
     env_help = "Tệp KEY=VALUE chứa MAIHUB_URL, MAIHUB_API_KEY, MAIHUB_CERT_SHA256"
@@ -402,6 +495,9 @@ def build_parser():
     p_wait.add_argument("--timeout", type=int, default=25, help="Giây, tối đa 25")
     sub.add_parser("doctor", parents=[shared], help="Kiểm tra cấu hình, kết nối, ghim chứng chỉ, khoá")
     sub.add_parser("mcp", parents=[shared], help="Chạy MCP server qua stdio")
+    p_pair = sub.add_parser("pair", help="Ghép nối với MaiHub bằng mã ghép nối, ghi .env")
+    p_pair.add_argument("code", help="Mã ghép nối (mhp1.…) lấy từ giao diện MaiHub")
+    p_pair.add_argument("--dir", default=".", help="Thư mục ghi .env (mặc định: thư mục hiện tại)")
     return parser
 
 
@@ -415,6 +511,8 @@ def main(argv=None):
 
     if args.command == "doctor":
         return cmd_doctor(loader)
+    if args.command == "pair":
+        return cmd_pair(args)
     try:
         client = MaiHubClient(loader())
         if args.command == "describe":
@@ -439,12 +537,7 @@ def main(argv=None):
             McpServer(client).run()
         return 0
     except BridgeError as err:
-        sys.stderr.write("%s: %s\n" % (err.code, err.message))
-        if err.details:
-            sys.stderr.write(json.dumps(err.details, ensure_ascii=False) + "\n")
-        if err.code == "CONFIG":
-            return EXIT_CONFIG
-        return EXIT_NETWORK if err.code in ("UNREACHABLE", "PIN_MISMATCH", "BAD_RESPONSE") else EXIT_SERVER_ERROR
+        return exit_code_for(err)
 
 
 if __name__ == "__main__":
