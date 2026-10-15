@@ -217,6 +217,7 @@ export function startControlApi(): Promise<void> {
 /** Workspace switch: stop serving and recording until restartControlApi(). */
 export function stopControlApi(): Promise<void> {
     recorder.deactivate();
+    pairing.clear(); // vé ghép nối thuộc workspace cũ; chỉ đường chuyển workspace đi qua đây (lưu cấu hình thường không dừng server)
     const run = () => stopRuntime();
     queue = queue.then(run, run);
     return queue;

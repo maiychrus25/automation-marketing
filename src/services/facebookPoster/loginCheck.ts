@@ -7,6 +7,8 @@ import { FB_HOME, isLoggedIn } from './loginState';
 
 const GOTO_TIMEOUT_MS = 45000;
 const PROFILE_OPEN_PREFIX = 'Profile đang mở';
+/** Các luồng xác minh của Facebook (checkpoint cũ và xác minh hai bước / auth_platform mới). */
+const CHECKPOINT_PATHS = ['/checkpoint', '/two_step_verification', '/auth_platform'];
 
 /** Tải đúng một trang chủ Facebook rồi xem đường dẫn; không bấm, không gõ, không cuộn. Lỗi điều hướng thì ném. */
 export async function classifyLogin(session: Pick<AutomationSession, 'context'>, timeoutMs = GOTO_TIMEOUT_MS): Promise<LoginState> {
@@ -15,7 +17,7 @@ export async function classifyLogin(session: Pick<AutomationSession, 'context'>,
     const page = ctx.pages()[0] ?? await ctx.newPage();
     await page.goto(FB_HOME, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     const path = new URL(page.url()).pathname;
-    if (path.startsWith('/checkpoint')) return 'checkpoint';
+    if (CHECKPOINT_PATHS.some((prefix) => path.startsWith(prefix))) return 'checkpoint';
     if (path.startsWith('/login') || !(await isLoggedIn(ctx))) return 'logged_out';
     return 'ok';
 }
@@ -74,6 +76,7 @@ export class LoginChecker {
     private async run(checkId: string, profileIds: string[], source: LoginCheckSource): Promise<void> {
         const results: LoginCheckResult[] = [];
         try {
+            this.deps.onProgress({ done: 0, total: profileIds.length });
             for (const profileId of profileIds) {
                 if (this.stopping) break;
                 results.push(await this.checkOne(profileId));

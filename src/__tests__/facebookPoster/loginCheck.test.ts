@@ -29,6 +29,10 @@ describe('classifyLogin', () => {
     await expect(classifyLogin(s)).resolves.toBe('checkpoint');
     expect(s.goto).toHaveBeenCalledWith('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 45000 });
   });
+  test.each(['/two_step_verification/authentication/?encrypted_context=x', '/auth_platform/afad/'])('%s → checkpoint', async (path) => {
+    const s = fakeSession({ cookiesSeq: [true], url: `https://www.facebook.com${path}` });
+    await expect(classifyLogin(s)).resolves.toBe('checkpoint');
+  });
   test('/login.php → logged_out', async () => {
     const s = fakeSession({ cookiesSeq: [true], url: 'https://www.facebook.com/login.php?next=x' });
     await expect(classifyLogin(s)).resolves.toBe('logged_out');
@@ -158,7 +162,7 @@ describe('LoginChecker', () => {
         { profileId: 'ghost', profileName: 'ghost', outcome: 'checkpoint' },
       ],
     }]);
-    expect(events.progress).toEqual([{ done: 1, total: 2 }, { done: 2, total: 2 }, null]);
+    expect(events.progress).toEqual([{ done: 0, total: 2 }, { done: 1, total: 2 }, { done: 2, total: 2 }, null]);
     expect(checker.isRunning()).toBe(false);
   });
 });

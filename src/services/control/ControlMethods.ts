@@ -201,17 +201,16 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             description: 'Kiểm tra đăng nhập Facebook của các profile (chạy nền, từng profile một; kết quả qua sự kiện profiles.checkFinished). Bỏ trống profileIds để kiểm tra mọi profile. BUSY nếu đang có việc chạy.',
             destructive: false,
             paramsSchema: obj({
-                profileIds: { type: 'array', items: { type: 'string', minLength: 1 }, maxItems: 50, description: 'Mã các profile (tối đa 50); bỏ trống = mọi profile' },
+                profileIds: { type: 'array', items: { type: 'string', minLength: 1 }, maxItems: 50, description: 'Mã các profile (1–50); bỏ trống = mọi profile; mảng rỗng bị từ chối' },
             }),
             resultSchema: obj({ checkId: str('Mã lượt kiểm tra'), profileIds: { type: 'array', items: { type: 'string' }, description: 'Các profile sẽ được kiểm tra' } }, ['checkId', 'profileIds']),
             run: async (p) => {
                 const raw = p.profileIds;
                 if (raw === undefined || raw === null) return deps.checkLogins(null);
-                if (!Array.isArray(raw) || raw.length > 50 || raw.some((id) => typeof id !== 'string' || !id)) {
-                    throw new ControlError('INVALID_PARAMS', 'profileIds phải là danh sách tối đa 50 mã (chuỗi không rỗng)', { field: 'profileIds' });
+                if (!Array.isArray(raw) || raw.length === 0 || raw.length > 50 || raw.some((id) => typeof id !== 'string' || !id)) {
+                    throw new ControlError('INVALID_PARAMS', 'profileIds phải là danh sách 1–50 mã (chuỗi không rỗng); bỏ trống tham số này để kiểm tra mọi profile', { field: 'profileIds' });
                 }
                 const ids = [...new Set(raw as string[])];
-                if (!ids.length) return deps.checkLogins(null);
                 const known = new Set(((await deps.listProfiles()) as { id: string }[]).map((x) => x.id));
                 const missing = ids.filter((id) => !known.has(id));
                 if (missing.length) throw new ControlError('NOT_FOUND', 'Có profile không tồn tại', { missing });

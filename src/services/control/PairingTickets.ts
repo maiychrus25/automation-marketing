@@ -51,6 +51,11 @@ export class PairingTickets {
         for (const [hash, rec] of this.records) if (rec.botIp === ip) this.records.delete(hash);
     }
 
+    /** Bỏ mọi vé đang chờ (đổi workspace: vé tạo ở workspace cũ không được tạo khoá ở workspace mới). */
+    clear(): void {
+        this.records.clear();
+    }
+
     pending(): { name: string; botIp: string; expiresAt: number }[] {
         this.prune();
         return [...this.records.values()].map(({ name, botIp, expiresAt }) => ({ name, botIp, expiresAt }));

@@ -22,6 +22,15 @@ describe('PairingTickets', () => {
     expect(tickets.consume(ticket, '1.2.3.4')).toBeNull();
   });
 
+  test('clear drops every pending ticket', () => {
+    const { tickets } = make();
+    const a = tickets.create('a', '1.2.3.4');
+    tickets.create('b', '5.6.7.8');
+    tickets.clear();
+    expect(tickets.pending()).toEqual([]);
+    expect(tickets.consume(a.ticket, '1.2.3.4')).toBeNull();
+  });
+
   test('wrong IP returns null but keeps the ticket', () => {
     const { tickets } = make();
     const { ticket } = tickets.create('bot', '1.2.3.4');

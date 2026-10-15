@@ -269,8 +269,11 @@ describe('profiles.check', () => {
         expect(deps.checkLogins).toHaveBeenLastCalledWith(['p1', 'p2']);
         await call('profiles.check', {});
         expect(deps.checkLogins).toHaveBeenLastCalledWith(null);
-        await call('profiles.check', { profileIds: [] });
-        expect(deps.checkLogins).toHaveBeenLastCalledWith(null);
+    });
+    it('empty profileIds → INVALID_PARAMS (absent means all)', async () => {
+        const { deps, call } = setupTwo();
+        expect(await call('profiles.check', { profileIds: [] }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'profileIds' } });
+        expect(deps.checkLogins).not.toHaveBeenCalled();
     });
     it('missing ids → NOT_FOUND with details.missing', async () => {
         const { deps, call } = setupTwo();
