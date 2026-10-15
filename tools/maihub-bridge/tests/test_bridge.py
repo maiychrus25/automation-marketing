@@ -19,6 +19,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 import maihub_bridge as bridge  # noqa: E402
 
+REAL_IS_TRUSTED_DIR = bridge._is_root_trusted_dir  # InstallFixture thay bản này trong từng test
+
 CERT = os.path.join(HERE, "fixtures", "cert.pem")
 KEY = os.path.join(HERE, "fixtures", "key.pem")
 API_KEY = "mh_testkey_1234567890"
@@ -538,6 +540,14 @@ class InstallFixture(BridgeTestCase):
         self.home = os.path.join(self.tmp.name, "home")
         os.mkdir(self.home)
         self.install_root = os.path.join(self.tmp.name, "opt")
+        # Thư mục tạm thuộc user thường: mặc định coi là "đáng tin" (root sở hữu); test từ chối ghi đè lại.
+        trusted = mock.patch.object(bridge, "_is_root_trusted_dir", return_value=True)
+        self.trusted = trusted.start()
+        self.addCleanup(trusted.stop)
+        self.proxy_file = os.path.join(self.tmp.name, "telegram-proxy.url")  # không tồn tại theo mặc định
+        proxy = mock.patch.object(bridge, "TELEGRAM_PROXY_FILE", self.proxy_file)
+        proxy.start()
+        self.addCleanup(proxy.stop)
 
     def add_bot(self, service, user, quoted=False, token=True):
         data_dir = os.path.join(self.tmp.name, "data-" + service)
@@ -550,7 +560,7 @@ class InstallFixture(BridgeTestCase):
         return data_dir
 
     def args(self, **over):
-        ns = dict(code=make_pair_code(self.hub.url, PIN), install=True, bot=None, cli=None, no_watch=False, dir=os.path.join(self.install_root, "bot1"))
+        ns = dict(code=make_pair_code(self.hub.url, PIN), install=True, bot=None, cli=None, no_watch=False, skip_telegram_check=False, dir=os.path.join(self.install_root, "bot1"))
         ns.update(over)
         return mock.Mock(**ns)
 
@@ -669,12 +679,13 @@ class InstallTests(InstallFixture):
         self.assertEqual(chowned[os.path.join(install_dir, "state")], (1234, 5678))
         self.assertTrue(any(c[0][1:] == (1234, 5678) and ".env." in c[0][0] for c in self.chown.call_args_list))
         self.assertTrue(os.path.exists(os.path.join(install_dir, ".claude.json.before-maihub")))
-        self.assertEqual(len(run.calls), 6)  # doctor, mcp remove/add, watch dry-run, daemon-reload, enable
+        self.assertEqual(len(run.calls), 8)  # doctor, mcp remove/add, watch dry-run, check-telegram, daemon-reload, enable, restart
         self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "python3", "-I", os.path.join(install_dir, "maihub_bridge.py"), "doctor", "--env-file", env_path])
         self.assertEqual(run.calls[0][1]["cwd"], self.home)
         self.assertEqual(run.calls[2][1]["cwd"], self.home)
         self.assertIn(os.path.join(install_dir, "maihub_bridge.py"), run.calls[2][0])
-        for call in run.calls[:3] + run.calls[4:]:
+        self.assertEqual(run.calls[4][1]["timeout"], bridge.TELEGRAM_CHECK_SAFETY_SEC)
+        for call in run.calls[:3] + run.calls[5:]:
             self.assertEqual(call[1]["timeout"], bridge.RUN_TIMEOUT)
         self.assertIn("mcp remove maihub -s user", out)
         self.assertIn("sudo rm -rf " + install_dir, out)
@@ -737,7 +748,7 @@ class InstallTests(InstallFixture):
         self.assertEqual(sorted(os.listdir(install_dir)), [".claude.json.before-maihub", ".env", "maihub_bridge.py", "state"])
         with open(os.path.join(install_dir, ".claude.json.before-maihub")) as handle:
             self.assertEqual(handle.read(), "original")
-        self.assertEqual(len(run.calls), 12)
+        self.assertEqual(len(run.calls), 16)
         verbs = [c[0][6] for c in run.calls if len(c[0]) > 6 and c[0][5] == "mcp"]
         self.assertEqual(verbs, ["remove", "add", "remove", "add"])
         self.assertEqual(bridge.parse_env_file(os.path.join(install_dir, ".env"))["MAIHUB_API_KEY"], "mh_second_key_1234567890")
@@ -796,6 +807,44 @@ class PairHardeningTests(BridgeTestCase):
         self.assertIn("mã ghép nối mới", err)
 
 
+    def test_repair_merges_env_keeping_other_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".env")
+            with open(path, "w") as handle:
+                handle.write("# ghi chú\nTELEGRAM_PROXY=http://u:p@px:3128\nMAIHUB_API_KEY=old\nexport MAIHUB_URL=https://old\n"
+                             "MAIHUB_NOTIFY_CHAT_ID=-100\nMAIHUB_API_KEY=dup\n")
+            code, _, err = self.run_cli(["pair", make_pair_code(self.hub.url, PIN), "--dir", tmp], {})
+            self.assertEqual(code, 0, err)
+            with open(path) as handle:
+                lines = handle.read().splitlines()
+            self.assertEqual(lines, ["# ghi chú", "TELEGRAM_PROXY=http://u:p@px:3128", "MAIHUB_API_KEY=" + API_KEY,
+                                     "MAIHUB_URL=" + self.hub.url, "MAIHUB_NOTIFY_CHAT_ID=-100", "MAIHUB_CERT_SHA256=" + PIN])
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_pair_refuses_env_with_tg_token_before_using_ticket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".env")
+            with open(path, "w") as handle:
+                handle.write("TG_TOKEN=123:abc\nALLOWED_CHAT_ID=1\n")
+            code, _, err = self.run_cli(["pair", make_pair_code(self.hub.url, PIN), "--dir", tmp], {})
+            self.assertEqual(code, bridge.EXIT_CONFIG)
+            self.assertIn("TG_TOKEN", err)
+            self.assertNotIn("123:abc", err)
+            with open(path) as handle:
+                self.assertEqual(handle.read(), "TG_TOKEN=123:abc\nALLOWED_CHAT_ID=1\n")
+        self.assertEqual([r for r in self.hub.requests if r["path"] == "/v1/pair"], [])
+
+    def test_pair_tells_to_restart_existing_watch_service(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as systemd:
+            open(os.path.join(systemd, "maihub-watch-tg-bot.service"), "w").close()
+            open(os.path.join(systemd, "other.service"), "w").close()
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                bridge.cmd_pair(mock.Mock(install=False, code=make_pair_code(self.hub.url, PIN), dir=tmp), systemd_dir=systemd)
+        self.assertIn("systemctl restart maihub-watch-tg-bot.service", out.getvalue())
+        self.assertNotIn("other.service", out.getvalue())
+
+
 # ---------------------------------------------------------------- watch
 
 TG_TOKEN = "123456:SECRET-token-ABC"
@@ -821,9 +870,14 @@ class FakeWatchClient(object):
         self.script = list(script)
         self.calls = []
         self.runs = runs or {}
+        self.status = {"workspace": None}  # trả lời system.status (không lấy từ script events.wait)
 
     def call(self, method, params=None, idempotency_key=None):
         self.calls.append((method, params))
+        if method == "system.status":
+            if isinstance(self.status, Exception):
+                raise self.status
+            return self.status
         if method == "runs.get":
             item = self.runs.get(params["runId"])
             if isinstance(item, Exception):
@@ -919,6 +973,13 @@ class FormatEventTests(unittest.TestCase):
         self.assertEqual(len(bridge.clip("y" * 5000, 3500)), 3500)
 
 
+class FormatDoneWithoutCountsTests(unittest.TestCase):
+    def test_done_with_zero_total_has_no_counts(self):
+        text = bridge.format_event(finished(1, kind="scan_groups", posted=0, failed=0, skipped=0), lambda r: None)
+        self.assertEqual(text, "✅ Quét nhóm: xong")
+        self.assertEqual(bridge.format_event(finished(2), lambda r: None), "✅ Đăng ngay: xong 2/2")
+
+
 class NotifyTargetTests(unittest.TestCase):
     def test_notify_target_priority(self):
         bot = {"TG_TOKEN": TG_TOKEN, "ALLOWED_CHAT_ID": "-100,-200", "ALLOWED_TOPIC_ID": "7", "ADMIN_USER_ID": "9"}
@@ -947,6 +1008,14 @@ class NotifyTargetTests(unittest.TestCase):
             bridge.resolve_telegram_route({"TELEGRAM_PROXY": "socks5://127.0.0.1:1080"})
         self.assertEqual(ctx.exception.code, "CONFIG")
         self.assertIn("SOCKS", str(ctx.exception))
+
+    def test_api_base_must_be_https(self):
+        for bad in ("http://tg.example", "tg.example", "ftp://x"):
+            with self.assertRaises(bridge.BridgeError) as ctx:
+                bridge.resolve_telegram_route({"TELEGRAM_API_BASE": bad})
+            self.assertEqual(ctx.exception.code, "CONFIG")
+            self.assertIn("https://", ctx.exception.message)
+        self.assertEqual(bridge.resolve_telegram_route({"TELEGRAM_API_BASE": "HTTPS://tg.example"})["api_base"], "HTTPS://tg.example")
 
 
 class FakeResponse(object):
@@ -989,6 +1058,18 @@ class TelegramSenderTests(unittest.TestCase):
         opener = FakeOpener(script)
         target = {"token": TG_TOKEN, "chat_id": "42", "thread_id": thread_id}
         return bridge.TelegramSender(target, ROUTE, sleep=clock.sleep, opener=opener), opener, clock
+
+    def test_check_calls_get_me_once_and_masks_token(self):
+        sender, opener, clock = self.make([OK_BODY])
+        self.assertEqual(sender.check(), (True, ""))
+        self.assertEqual(opener.requests[0].full_url, "https://api.telegram.org/bot%s/getMe" % TG_TOKEN)
+        sender, opener, clock = self.make([OSError("conn %s refused" % TG_TOKEN)])
+        ok, detail = sender.check()
+        self.assertFalse(ok)
+        self.assertNotIn(TG_TOKEN, detail)
+        self.assertEqual(clock.slept, [])  # không thử lại
+        sender, _, _ = self.make([FakeResponse(b'{"ok": false}')])
+        self.assertFalse(sender.check()[0])
 
     def test_request_shape(self):
         sender, opener, _ = self.make([OK_BODY], thread_id=7)
@@ -1220,6 +1301,58 @@ class WatcherTests(unittest.TestCase):
         w.step()
         self.assertFalse(self.state()["authAlerted"])
 
+    def test_auth_retry_reloads_client_so_repair_recovers(self):
+        err = bridge.BridgeError("UNAUTHORIZED", "Khoá không hợp lệ", status=401)
+        fresh = FakeWatchClient([page([finished(1)])])
+        reloads = []
+        w = self.watcher([page([]), err])
+        w.reload_client = lambda: reloads.append(1) or fresh
+        w.step()
+        w.step()  # lỗi UNAUTHORIZED: báo, chờ 300 giây rồi nạp lại .env
+        self.assertEqual(reloads, [1])
+        self.assertIs(w.client, fresh)
+        w.step()  # client mới (khoá mới) chạy được: gửi tin và xoá cờ
+        self.assertEqual(len(self.sender.sent), 2)
+        self.assertTrue(self.sender.sent[1].startswith("✅"))
+        self.assertFalse(self.state()["authAlerted"])
+
+    def test_auth_retry_keeps_old_client_when_reload_fails(self):
+        err = bridge.BridgeError("PIN_MISMATCH", "lệch")
+        w = self.watcher([page([]), err])
+        old = w.client
+
+        def broken():
+            raise bridge.BridgeError("CONFIG", "Thiếu cấu hình")
+        w.reload_client = broken
+        w.step()
+        w.step()
+        self.assertIs(w.client, old)
+        self.assertEqual(self.clock.slept, [300])
+
+    def test_save_failure_keeps_cursor_and_does_not_crash(self):
+        w = self.watcher([page([]), page([finished(1)])])
+        w.step()
+        err = io.StringIO()
+        with mock.patch("tempfile.mkstemp", side_effect=OSError("No space left")), mock.patch("sys.stderr", err):
+            w.step()
+        self.assertEqual(w.state["cursor"], 1)
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertIn("No space left", err.getvalue())
+
+    def test_workspace_notice_uses_name_from_system_status(self):
+        w = self.watcher([page([finished(5)]), page([]), page([finished(1)], "ws2"), page([finished(9)], "ws2"), page([], "ws2")])
+        self.client.status = {"workspace": {"id": "ws2", "name": "Cửa hàng B"}}
+        w.step()
+        w.step()
+        self.assertEqual(self.sender.sent, ["Đã chuyển workspace: Cửa hàng B"])
+
+    def test_workspace_notice_falls_back_to_id_when_status_fails(self):
+        w = self.watcher([page([finished(5)]), page([]), page([finished(1)], "ws2"), page([finished(9)], "ws2"), page([], "ws2")])
+        self.client.status = bridge.BridgeError("UNREACHABLE", "x")
+        w.step()
+        w.step()
+        self.assertEqual(self.sender.sent, ["Đã chuyển workspace: ws2"])
+
     def test_pin_mismatch_alert(self):
         w = self.watcher([page([]), bridge.BridgeError("PIN_MISMATCH", "lệch")])
         w.step()
@@ -1295,6 +1428,41 @@ class WatchCommandTests(BridgeTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(watcher.call_args[0][0].config.url, self.hub.url)
 
+    def test_check_telegram_exit_codes_and_no_watcher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            maihub_env = os.path.join(tmp, "maihub.env")
+            bot_env = os.path.join(tmp, "bot.env")
+            with open(maihub_env, "w") as handle:
+                handle.write("MAIHUB_URL=%s\nMAIHUB_API_KEY=%s\nMAIHUB_CERT_SHA256=%s\n" % (self.hub.url, API_KEY, PIN))
+            with open(bot_env, "w") as handle:
+                handle.write("TG_TOKEN=%s\nADMIN_USER_ID=9\n" % TG_TOKEN)
+            argv = ["watch", "--env-file", maihub_env, "--notify-env", bot_env, "--check-telegram"]
+            with mock.patch("maihub_bridge.Watcher") as watcher:
+                with mock.patch.object(bridge.TelegramSender, "check", return_value=(True, "")):
+                    code, o, e = self.run_cli(argv, {})
+                self.assertEqual(code, 0)
+                self.assertNotIn(TG_TOKEN, o + e)
+                with mock.patch.object(bridge.TelegramSender, "check", return_value=(False, "URLError: down")):
+                    code, o, e = self.run_cli(argv, {})
+                self.assertEqual(code, bridge.EXIT_NETWORK)
+                self.assertIn("down", e)
+                self.assertNotIn(TG_TOKEN, o + e)
+                watcher.assert_not_called()
+
+    def test_watch_passes_reload_client_that_rereads_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            maihub_env = os.path.join(tmp, "maihub.env")
+            bot_env = os.path.join(tmp, "bot.env")
+            with open(maihub_env, "w") as handle:
+                handle.write("MAIHUB_URL=%s\nMAIHUB_API_KEY=old\nMAIHUB_CERT_SHA256=%s\n" % (self.hub.url, PIN))
+            with open(bot_env, "w") as handle:
+                handle.write("TG_TOKEN=%s\nADMIN_USER_ID=9\n" % TG_TOKEN)
+            with mock.patch("maihub_bridge.Watcher") as watcher:
+                self.run_cli(["watch", "--env-file", maihub_env, "--notify-env", bot_env], {})
+            with open(maihub_env, "w") as handle:
+                handle.write("MAIHUB_URL=%s\nMAIHUB_API_KEY=new\nMAIHUB_CERT_SHA256=%s\n" % (self.hub.url, PIN))
+            self.assertEqual(watcher.call_args[1]["reload_client"]().config.api_key, "new")
+
     def test_missing_notify_target_is_config_error_without_token(self):
         with tempfile.TemporaryDirectory() as tmp:
             maihub_env = os.path.join(tmp, "maihub.env")
@@ -1329,7 +1497,7 @@ class InstallWatchTests(InstallFixture):
                 handle.write("X=1\n")
 
     def watch_args(self, **over):
-        ns = dict(env_file=self.env_file, notify_env=self.notify_env, user="claudeproxy", state_dir=None)
+        ns = dict(env_file=self.env_file, notify_env=self.notify_env, user="claudeproxy", state_dir=None, skip_telegram_check=False)
         ns.update(over)
         service = ns.pop("name", "tg-bot")
         args = mock.Mock(**ns)
@@ -1371,8 +1539,11 @@ class InstallWatchTests(InstallFixture):
         self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "timeout", "5", "python3", "-I", bridge_path, "watch",
                                            "--env-file", self.env_file, "--notify-env", self.notify_env, "--dry-run"])
         self.assertEqual(run.calls[0][1]["timeout"], bridge.WATCH_DRY_RUN_SAFETY_SEC)
-        self.assertEqual(run.calls[1][0], ["systemctl", "daemon-reload"])
-        self.assertEqual(run.calls[2][0], ["systemctl", "enable", "--now", "maihub-watch-tg-bot.service"])
+        self.assertEqual(run.calls[1][0], ["sudo", "-u", "claudeproxy", "-H", "timeout", "30", "python3", "-I", bridge_path, "watch",
+                                           "--env-file", self.env_file, "--notify-env", self.notify_env, "--check-telegram"])
+        self.assertEqual(run.calls[2][0], ["systemctl", "daemon-reload"])
+        self.assertEqual(run.calls[3][0], ["systemctl", "enable", "maihub-watch-tg-bot.service"])
+        self.assertEqual(run.calls[4][0], ["systemctl", "restart", "maihub-watch-tg-bot.service"])
         self.assertEqual(os.stat(self.unit_path()).st_mode & 0o777, 0o644)
         with open(self.unit_path()) as handle:
             self.assertIn("ReadWritePaths=" + state + "\n", handle.read())
@@ -1416,7 +1587,7 @@ class InstallWatchTests(InstallFixture):
         run = FakeRun(fail_on="--dry-run", fail_code=124)
         code, out, err = self.install_watch(run)
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(len(run.calls), 3)
+        self.assertEqual(len(run.calls), 5)
         self.assertTrue(os.path.exists(self.unit_path()))
 
     def test_install_watch_validates_inputs_before_side_effects(self):
@@ -1450,13 +1621,82 @@ class InstallWatchTests(InstallFixture):
         dry = run.calls[3][0]
         self.assertEqual(dry[dry.index("--notify-env") + 1], os.path.join(data_dir, ".env"))
         self.assertEqual(dry[dry.index("--env-file") + 1], os.path.join(install_dir, ".env"))
-        self.assertEqual(run.calls[5][0], ["systemctl", "enable", "--now", "maihub-watch-tg-claude-bot-a.service"])
+        self.assertEqual(run.calls[6][0], ["systemctl", "enable", "maihub-watch-tg-claude-bot-a.service"])
+        self.assertEqual(run.calls[7][0], ["systemctl", "restart", "maihub-watch-tg-claude-bot-a.service"])
         with open(os.path.join(self.systemd, "maihub-watch-tg-claude-bot-a.service")) as handle:
             unit = handle.read()
         self.assertIn("ReadWritePaths=" + os.path.join(install_dir, "state") + "\n", unit)
         self.assertIn("sudo systemctl disable --now maihub-watch-tg-claude-bot-a.service", out)
         self.assertIn("sudo rm " + os.path.join(self.systemd, "maihub-watch-tg-claude-bot-a.service"), out)
         self.assertNotIn("secret-token", out + err)
+
+    def test_check_telegram_failure_aborts_before_unit_and_hides_token(self):
+        run = FakeRun(fail_on="--check-telegram")
+        code, _, err = self.install_watch(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("Telegram", err)
+        self.assertIn("--skip-telegram-check", err)
+        self.assertEqual(len(run.calls), 2)
+        self.assertEqual(os.listdir(self.systemd), [])
+
+    def test_check_telegram_timeout_aborts(self):
+        run = FakeRun(timeout_on="--check-telegram")
+        code, _, _ = self.install_watch(run)
+        self.assertEqual(code, bridge.EXIT_NETWORK)
+        self.assertEqual(os.listdir(self.systemd), [])
+
+    def test_skip_telegram_check_omits_probe(self):
+        run = FakeRun(fail_on="--check-telegram")
+        code, out, err = self.install_watch(run, skip_telegram_check=True)
+        self.assertEqual(code, 0, out + err)
+        self.assertFalse(any("--check-telegram" in c[0] for c in run.calls))
+        self.assertEqual([c[0][:2] for c in run.calls[1:]], [["systemctl", "daemon-reload"], ["systemctl", "enable"], ["systemctl", "restart"]])
+
+    def test_warns_when_proxy_file_exists_but_no_route_in_env(self):
+        with open(self.proxy_file, "w") as handle:
+            handle.write("http://127.0.0.1:3128\n")
+        code, out, err = self.install_watch(FakeRun())
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("CẢNH BÁO", err)
+        self.assertIn("TELEGRAM_PROXY", err)
+        self.assertIn("TELEGRAM_API_BASE", err)
+        self.assertNotIn("127.0.0.1", err)  # không in nội dung tệp proxy (có thể chứa mật khẩu)
+
+    def test_no_warning_when_route_set_or_no_proxy_file(self):
+        code, out, err = self.install_watch(FakeRun())
+        self.assertNotIn("CẢNH BÁO", err)
+        with open(self.proxy_file, "w") as handle:
+            handle.write("http://127.0.0.1:3128\n")
+        with open(self.env_file, "w") as handle:
+            handle.write("TELEGRAM_PROXY=http://127.0.0.1:3128\n")
+        code, out, err = self.install_watch(FakeRun())
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("CẢNH BÁO", err)
+
+    def test_install_watch_refuses_symlinks_and_untrusted_parent(self):
+        victim = os.path.join(self.tmp.name, "victim")
+        os.mkdir(victim)
+        state = os.path.join(self.env_dir, "state")
+        os.symlink(victim, state)
+        run = FakeRun()
+        code, _, err = self.install_watch(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("symlink", err)
+        self.assertEqual(run.calls, [])
+        self.chown.assert_not_called()
+        os.unlink(state)
+        link_dir = os.path.join(self.tmp.name, "linkdir")
+        os.symlink(self.env_dir, link_dir)
+        code, _, err = self.install_watch(run, env_file=os.path.join(link_dir, ".env"))
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("symlink", err)
+        self.trusted.return_value = False
+        code, _, err = self.install_watch(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("root", err)
+        self.assertEqual(run.calls, [])
+        self.assertEqual(os.listdir(self.systemd), [])
+        self.assertFalse(os.path.lexists(state))
 
     def test_pair_install_no_watch_skips_watch_steps(self):
         self.add_bot("tg-claude-bot-a", "claudeproxy")
@@ -1472,6 +1712,93 @@ class InstallWatchTests(InstallFixture):
         code, _, err = self.install(FakeRun(fail_on="--dry-run"))
         self.assertNotEqual(code, 0)
         self.assertIn("cài watch", err)
+
+
+class InstallHardeningTests(InstallFixture):
+    def test_install_refuses_symlinked_install_dir_before_any_side_effect(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        victim = os.path.join(self.tmp.name, "victim")
+        os.mkdir(victim)
+        os.makedirs(self.install_root)
+        os.symlink(victim, os.path.join(self.install_root, "bot1"))
+        run = FakeRun()
+        code, out, err = self.install(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("symlink", err)
+        self.assertEqual(run.calls, [])
+        self.chown.assert_not_called()
+        self.assertEqual(os.listdir(victim), [])
+        self.assertEqual([r for r in self.hub.requests if r["path"] == "/v1/pair"], [])
+
+    def test_install_refuses_symlinked_state_dir(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        victim = os.path.join(self.tmp.name, "victim")
+        os.mkdir(victim)
+        install_dir = self.args().dir
+        os.makedirs(install_dir)
+        os.symlink(victim, os.path.join(install_dir, "state"))
+        code, _, err = self.install(FakeRun())
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("symlink", err)
+        self.chown.assert_not_called()
+        self.assertEqual(os.listdir(victim), [])
+
+    def test_install_refuses_untrusted_parent(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        self.trusted.return_value = False
+        run = FakeRun()
+        code, _, err = self.install(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("root", err)
+        self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(self.install_root))
+
+    def test_is_root_trusted_dir_rules(self):
+        self.assertFalse(REAL_IS_TRUSTED_DIR(self.tmp.name))  # thuộc user thường, không phải root
+
+        def fake(uid, mode):
+            return mock.Mock(st_uid=uid, st_mode=mode)
+        with mock.patch("os.lstat", return_value=fake(0, 0o40755)):
+            self.assertTrue(REAL_IS_TRUSTED_DIR("/x"))
+        for uid, mode in ((0, 0o40775), (0, 0o40757), (1000, 0o40755), (0, 0o100644), (0, 0o120777)):
+            with mock.patch("os.lstat", return_value=fake(uid, mode)):
+                self.assertFalse(REAL_IS_TRUSTED_DIR("/x"), (uid, oct(mode)))
+
+    def test_env_file_has_key_reads_only_bounded_regular_files(self):
+        regular = os.path.join(self.tmp.name, "a.env")
+        with open(regular, "w") as handle:
+            handle.write("export TG_TOKEN=x\n")
+        self.assertTrue(bridge._env_file_has_key(regular, "TG_TOKEN"))
+        link = os.path.join(self.tmp.name, "link.env")
+        os.symlink(regular, link)
+        self.assertFalse(bridge._env_file_has_key(link, "TG_TOKEN"))
+        fifo = os.path.join(self.tmp.name, "fifo.env")
+        os.mkfifo(fifo)
+        self.assertFalse(bridge._env_file_has_key(fifo, "TG_TOKEN"))  # không treo
+        big = os.path.join(self.tmp.name, "big.env")
+        with open(big, "w") as handle:
+            handle.write("#" * (bridge.ENV_READ_LIMIT + 10) + "\nTG_TOKEN=x\n")
+        self.assertFalse(bridge._env_file_has_key(big, "TG_TOKEN"))
+        self.assertFalse(bridge._env_file_has_key(os.path.join(self.tmp.name, "missing"), "TG_TOKEN"))
+
+    def test_mcp_failure_prints_stderr_tail(self):
+        stderr = b"\n".join(b"line %d" % i for i in range(10)) + b"\nsudo: claude: command not found\n"
+        run = mock.Mock(return_value=mock.Mock(returncode=1, stderr=stderr))
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            bridge.register_mcp("claude", "u", "/b", "/e", run, self.home)
+        self.assertIn("command not found", ctx.exception.message)
+        self.assertIn("mã 1", ctx.exception.message)
+        self.assertNotIn("line 0", ctx.exception.message)
+
+    def test_summary_prints_backup_path_and_warns_rm_deletes_it(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        with open(os.path.join(self.home, ".claude.json"), "w") as handle:
+            handle.write("original")
+        code, out, err = self.install(FakeRun(), no_watch=True)
+        self.assertEqual(code, 0, out + err)
+        backup = os.path.join(self.args().dir, ".claude.json.before-maihub")
+        self.assertIn(backup, out)
+        self.assertLess(out.index(backup), out.index("sudo rm -rf"))
 
 
 if __name__ == "__main__":

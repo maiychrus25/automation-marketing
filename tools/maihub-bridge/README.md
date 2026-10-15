@@ -72,7 +72,7 @@ python3 maihub_bridge.py --env-file .env wait --after 0 --timeout 25
 python3 maihub_bridge.py pair 'mhp1.…' --dir /duong/dan/thu-muc
 ```
 
-Mã ghép nối lấy từ giao diện MaiHub (sống 15 phút, dùng một lần, không chứa khoá API). Lệnh giải mã mã, kết nối và so ghim chứng chỉ TRƯỚC, rồi mới gửi vé tới `POST /v1/pair` (không gửi `Authorization`). Thành công thì ghi `MAIHUB_URL`, `MAIHUB_CERT_SHA256`, `MAIHUB_API_KEY` vào `<dir>/.env` (mặc định thư mục hiện tại, quyền 600 ngay từ lúc tạo), in khối `.env` với khoá đã che, rồi chạy `doctor`. Vé sai, hết hạn hoặc đã dùng thì thoát mã 1; mã sai định dạng thoát mã 2; ghim lệch hoặc không kết nối được thoát mã 3 và vé không được gửi đi.
+Mã ghép nối lấy từ giao diện MaiHub (sống 15 phút, dùng một lần, không chứa khoá API). Lệnh giải mã mã, kết nối và so ghim chứng chỉ TRƯỚC, rồi mới gửi vé tới `POST /v1/pair` (không gửi `Authorization`). Thành công thì ghi `MAIHUB_URL`, `MAIHUB_CERT_SHA256`, `MAIHUB_API_KEY` vào `<dir>/.env` (mặc định thư mục hiện tại, quyền 600 ngay từ lúc tạo), in khối `.env` với khoá đã che, rồi chạy `doctor`. Nếu `.env` đã có thì chỉ thay/nối đúng 3 khoá đó, giữ nguyên mọi dòng khác (`TELEGRAM_PROXY`, `MAIHUB_NOTIFY_CHAT_ID`, ...). `pair` (không `--install`) từ chối ghi vào tệp có `TG_TOKEN=` (đó là `.env` của bot) và không dùng vé; khi có service `maihub-watch-*` thì in lệnh `systemctl restart` (watch cũng tự nạp lại `.env` sau mỗi lần chờ khi bị từ chối khoá). Vé sai, hết hạn hoặc đã dùng thì thoát mã 1; mã sai định dạng thoát mã 2; ghim lệch hoặc không kết nối được thoát mã 3 và vé không được gửi đi.
 
 ### Cài cho bot AHV (`pair --install`)
 
@@ -82,7 +82,7 @@ sudo python3 maihub_bridge.py pair 'mhp1.…' --install [--bot <tên-service>] [
 
 Bắt buộc chạy bằng root. Lệnh quét `/etc/systemd/system/*.service` tìm unit bot AHV (có `User=` và `Environment=AHV_BOT_DATA_DIR=<dir>` với `<dir>/.env` chứa `TG_TOKEN`). Có đúng một bot thì dùng bot đó; nhiều bot thì bắt buộc `--bot <tên-service>` (lỗi liệt kê tên các unit và không sửa gì); không có bot nào thì báo lỗi. `--cli` mặc định suy ra từ `User=` (`claudeproxy` là claude, `codexproxy` là codex) hoặc tên service. `--dir` mặc định `/opt/bot/maihub/<tên-service>/`.
 
-Thứ tự: kiểm tra mọi thứ trước (bot, CLI, user) rồi mới tạo thư mục (`root:<user>` 750, bridge 640, `.env` `<user>:<user>` 600, `state/` 700), ghép nối, ghi `.env`, chạy `doctor`, sao lưu cấu hình CLI vào `<dir>/<tên file>.before-maihub` (chỉ lần đầu), đăng ký MCP `maihub` dưới quyền user của bot, rồi cài service `watch` (`install-watch` bên dưới; bỏ qua bằng `--no-watch`). Bước nào lỗi thì dừng và in tên bước; các bước đã xong không tự hoàn tác. Nếu ghi `.env` lỗi sau khi vé đã dùng thì MaiHub đã tạo một khoá: hãy thu hồi khoá đó rồi tạo mã ghép nối mới.
+Thứ tự: kiểm tra mọi thứ trước (bot, CLI, user) rồi mới tạo thư mục (`root:<user>` 750, bridge 640, `.env` `<user>:<user>` 600, `state/` 700), ghép nối, ghi `.env`, chạy `doctor`, sao lưu cấu hình CLI vào `<dir>/<tên file>.before-maihub` (chỉ lần đầu), đăng ký MCP `maihub` dưới quyền user của bot, rồi cài service `watch` (`install-watch` bên dưới; bỏ qua bằng `--no-watch`). Trước khi đụng hệ thống, lệnh từ chối (lỗi cấu hình) nếu thư mục cài, `state/` hoặc thư mục `.env` là symlink, hoặc thư mục cha của thư mục cài không do root sở hữu / nhóm-người khác ghi được. Tóm tắt cuối in đường dẫn bản sao lưu cấu hình CLI (`.before-maihub`); lệnh `rm -rf <dir>` in ở phần gỡ cũng xoá luôn tệp này. Bước nào lỗi thì dừng và in tên bước; các bước đã xong không tự hoàn tác. Nếu ghi `.env` lỗi sau khi vé đã dùng thì MaiHub đã tạo một khoá: hãy thu hồi khoá đó rồi tạo mã ghép nối mới.
 
 Gỡ cài đặt (lệnh cũng được in cuối lần cài):
 
@@ -102,7 +102,7 @@ python3 maihub_bridge.py watch --env-file <.env MaiHub> --notify-env <.env của
 `watch` chờ sự kiện MaiHub (`events.wait`, 25 giây một lượt) rồi gửi tin tiếng Việt qua Telegram bằng chính token của bot (`TG_TOKEN` trong `--notify-env`; token chỉ đọc lúc chạy, không ghi ra đâu cả).
 
 - Chat nhận tin, theo thứ tự: `MAIHUB_NOTIFY_CHAT_ID` (`.env` MaiHub), `ALLOWED_CHAT_ID` (kèm `ALLOWED_TOPIC_ID` nếu có; nhiều giá trị cách nhau dấu phẩy thì lấy giá trị đầu), `ADMIN_USER_ID` (`.env` bot). Không có giá trị nào thì dừng với lỗi cấu hình.
-- Đường tới Telegram: đặt `TELEGRAM_API_BASE` (thay cho `https://api.telegram.org`) hoặc `TELEGRAM_PROXY` (`http://` hoặc `https://`; SOCKS không được hỗ trợ) trong `.env` MaiHub nếu VPS cần đi qua proxy để tới Telegram. Bridge không tự đọc `/opt/bot/telegram-proxy.url`.
+- Đường tới Telegram: đặt `TELEGRAM_API_BASE` (thay cho `https://api.telegram.org`) hoặc `TELEGRAM_PROXY` (`http://` hoặc `https://`; SOCKS không được hỗ trợ) trong `.env` MaiHub nếu VPS cần đi qua proxy để tới Telegram. `TELEGRAM_API_BASE` bắt buộc `https://` (token nằm trong đường dẫn). Bridge không tự đọc `/opt/bot/telegram-proxy.url`: `install-watch` in CẢNH BÁO nếu tệp đó tồn tại mà `.env` MaiHub chưa đặt cả hai khoá trên. `watch --check-telegram` gọi Telegram `getMe` một lần qua tuyến đã chọn rồi thoát (mã 0 = được; không in token).
 - `--state`: mặc định `state/watch-state.json` cạnh `--env-file` (ghi nguyên tử, lưu con trỏ sự kiện). Lần chạy đầu bỏ qua sự kiện cũ. Gửi ít nhất một lần: tiến trình chết giữa lúc gửi và lưu thì có thể trùng một tin.
 - `--dry-run`: in tin ra stdout, không gửi Telegram.
 - Gửi lỗi thì thử lại sau 2, 10, 30 giây (HTTP 429 thì chờ `retry_after`), vẫn lỗi thì ghi stderr và bỏ tin đó.
@@ -112,10 +112,10 @@ Các loại tin: `✅` lượt xong; `⚠️` lượt có lỗi (kèm tối đa 
 ### Cài `watch` thành service (`install-watch`)
 
 ```bash
-sudo python3 maihub_bridge.py install-watch --env-file <.env MaiHub> --notify-env <.env của bot> --user <user> --name <tên-service-bot> [--state-dir <thư mục>]
+sudo python3 maihub_bridge.py install-watch --env-file <.env MaiHub> --notify-env <.env của bot> --user <user> --name <tên-service-bot> [--state-dir <thư mục>] [--skip-telegram-check]
 ```
 
-`pair --install` tự gọi lệnh này; hai bot cài từ trước (`/opt/bot/maihub/.env`) thì chạy tay. Bắt buộc root. Thứ tự: kiểm tra đầu vào (tệp tồn tại, user có thật, tên service chỉ gồm `A-Za-z0-9@._-`, đường dẫn không có khoảng trắng) → tạo `--state-dir` (mặc định `state/` cạnh `--env-file`, `<user>:<user>` 700) → chạy thử `watch --dry-run` dưới quyền user khoảng 5 giây (còn chạy sau 5 giây là cấu hình dùng được; thoát lỗi sớm thì dừng, chưa ghi gì) → ghi `/etc/systemd/system/maihub-watch-<tên-service>.service` (0644, ghi nguyên tử) → `systemctl daemon-reload` → `systemctl enable --now`. Unit chạy `python3 -I <bridge> watch ...` với `Restart=always`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ReadWritePaths=<state-dir>`, `PrivateTmp=yes`. Bridge dùng bản nằm cạnh `--env-file` nếu có, không thì chính tệp đang chạy.
+`pair --install` tự gọi lệnh này; hai bot cài từ trước (`/opt/bot/maihub/.env`) thì chạy tay. Bắt buộc root. Thứ tự: kiểm tra đầu vào (tệp tồn tại, user có thật, tên service chỉ gồm `A-Za-z0-9@._-`, đường dẫn không có khoảng trắng) → tạo `--state-dir` (mặc định `state/` cạnh `--env-file`, `<user>:<user>` 700) → chạy thử `watch --dry-run` dưới quyền user khoảng 5 giây (chỉ chứng minh hai tệp `.env` đọc được và có chat nhận tin; không chứng minh MaiHub hoặc Telegram với tới được; thoát lỗi sớm thì dừng, chưa ghi gì) → chạy `watch --check-telegram` dưới quyền user (gọi Telegram `getMe`; lỗi thì dừng, chưa ghi unit; bỏ qua bằng `--skip-telegram-check`) → ghi `/etc/systemd/system/maihub-watch-<tên-service>.service` (0644, ghi nguyên tử) → `systemctl daemon-reload` → `systemctl enable` rồi `systemctl restart` (chạy lại lệnh sẽ áp dụng unit, bridge hoặc khoá mới cho service đang chạy). Unit chạy `python3 -I <bridge> watch ...` với `Restart=always`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ReadWritePaths=<state-dir>`, `PrivateTmp=yes`. Bridge dùng bản nằm cạnh `--env-file` nếu có, không thì chính tệp đang chạy.
 
 ## Bảo mật
 

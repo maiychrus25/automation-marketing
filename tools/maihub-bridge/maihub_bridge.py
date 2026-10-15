@@ -22,6 +22,7 @@ import shlex
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,11 @@ BACKUP_SUFFIX = ".before-maihub"
 RUN_TIMEOUT = 120
 WATCH_DRY_RUN_SEC = 5
 WATCH_DRY_RUN_SAFETY_SEC = 30
+TELEGRAM_CHECK_SEC = 30
+TELEGRAM_CHECK_SAFETY_SEC = 45
+TELEGRAM_PROXY_FILE = "/opt/bot/telegram-proxy.url"
+ENV_READ_LIMIT = 65536
+MCP_STDERR_LINES = 5
 TIMEOUT_EXIT_CODE = 124  # mã thoát của coreutils timeout khi phải kill tiến trình
 WATCH_UNIT_PREFIX = "maihub-watch-"
 SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9@._-]+\Z")
@@ -123,13 +129,51 @@ def decode_pairing_code(code):
     return {"url": fields["u"], "pin": pin, "ticket": fields["t"], "name": fields["n"]}
 
 
+def _read_regular_text(path, limit):
+    """Đọc tối đa limit byte của tệp thường (không theo symlink, không mở FIFO/thiết bị); không phải tệp thường thì trả None."""
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return None
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            return None
+        return handle.read(limit).decode("utf-8", errors="replace")
+
+
+def _merged_env_lines(path, values):
+    """Giữ nguyên mọi dòng của tệp cũ; chỉ thay (hoặc nối thêm) các khoá trong values."""
+    existing = _read_regular_text(path, 4 * ENV_READ_LIMIT) or ""
+    lines, written = [], set()
+    for raw in existing.splitlines():
+        text = raw.strip()
+        if text.startswith("export "):
+            text = text[len("export "):]
+        key = text.partition("=")[0].strip() if "=" in text and not text.startswith("#") else None
+        if key in values:
+            if key not in written:
+                lines.append("%s=%s" % (key, values[key]))
+                written.add(key)
+            continue
+        lines.append(raw)
+    for key, val in values.items():
+        if key not in written:
+            lines.append("%s=%s" % (key, val))
+    return lines
+
+
 def write_env_file(path, values, uid=None, gid=None):
-    """Ghi tệp KEY=VALUE quyền 0600 ngay từ lúc tạo (mkstemp cùng thư mục: tên khó đoán, không theo symlink; rồi os.replace)."""
+    """Ghi tệp KEY=VALUE quyền 0600 ngay từ lúc tạo (mkstemp cùng thư mục: tên khó đoán, không theo symlink; rồi os.replace).
+
+    Gộp với tệp cũ: giữ mọi dòng khác (TELEGRAM_PROXY, MAIHUB_NOTIFY_CHAT_ID, ...), chỉ thay các khoá trong values."""
+    lines = _merged_env_lines(path, values)
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".env.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            for key, val in values.items():
-                handle.write("%s=%s\n" % (key, val))
+            for line in lines:
+                handle.write(line + "\n")
         if uid is not None:
             os.chown(tmp_path, uid, gid if gid is not None else -1)
         os.replace(tmp_path, path)
@@ -499,18 +543,34 @@ def _unit_environment(text):
 
 
 def _env_file_has_key(path, key):
-    """Chỉ kiểm tra khoá có tồn tại; không giữ hay in giá trị."""
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            for raw in handle:
-                line = raw.strip()
-                if line.startswith("export "):
-                    line = line[len("export "):]
-                if line.startswith(key + "="):
-                    return True
-    except (IOError, OSError):
-        pass
+    """Chỉ kiểm tra khoá có tồn tại; không giữ hay in giá trị. Chỉ đọc tệp thường, tối đa 64 KiB (tệp do user bot kiểm soát)."""
+    text = _read_regular_text(path, ENV_READ_LIMIT)
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[len("export "):]
+        if line.startswith(key + "="):
+            return True
     return False
+
+
+def _is_root_trusted_dir(path):
+    """Thư mục thật (không symlink), do root sở hữu, nhóm/người khác không ghi được."""
+    info = os.lstat(path)
+    return stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022
+
+
+def _require_safe_dir(path, check_parent=True):
+    """Từ chối (CONFIG) khi path là symlink hoặc thư mục cha có sẵn gần nhất không đáng tin; chạy trước mọi thay đổi."""
+    if os.path.islink(path):
+        raise BridgeError("CONFIG", "Từ chối: %s là symlink" % path)
+    if not check_parent:
+        return
+    parent = os.path.dirname(path)
+    while parent and not os.path.lexists(parent) and parent != os.path.dirname(parent):
+        parent = os.path.dirname(parent)
+    if not _is_root_trusted_dir(parent):
+        raise BridgeError("CONFIG", "Từ chối: thư mục cha %s phải do root sở hữu và nhóm/người khác không được ghi" % parent)
 
 
 def find_ahv_bots(systemd_dir=SYSTEMD_DIR):
@@ -553,6 +613,8 @@ def infer_cli(bot, explicit=None):
 
 def install_layout(install_dir, user, uid, gid):
     """Tạo thư mục cài + state/, chép bridge, đặt chủ sở hữu và quyền theo spec 2.5."""
+    _require_safe_dir(install_dir)
+    _require_safe_dir(os.path.join(install_dir, "state"), check_parent=False)  # cha là install_dir: ngay sau đây chuyển cho root
     os.makedirs(install_dir, exist_ok=True)
     os.chown(install_dir, 0, gid)
     os.chmod(install_dir, 0o750)
@@ -583,6 +645,15 @@ def backup_cli_config(cli, home, install_dir):
     return True
 
 
+def _stderr_tail(result):
+    """Vài dòng cuối của stderr đã bắt được (nội dung của lệnh con, không phải của .env), để thấy nguyên nhân."""
+    raw = getattr(result, "stderr", None)
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    lines = [l.strip() for l in raw.splitlines() if l.strip()] if isinstance(raw, str) else []
+    return ":\n" + "\n".join(clip(l, MAX_FIELD_CHARS) for l in lines[-MCP_STDERR_LINES:]) if lines else ""
+
+
 def register_mcp(cli, user, bridge_path, env_path, run, home):
     """Gỡ server maihub cũ (bỏ qua lỗi) rồi thêm lại, dưới quyền user, cwd là home."""
     prefix = ["sudo", "-u", user, "-H", cli, "mcp"]
@@ -596,7 +667,7 @@ def register_mcp(cli, user, bridge_path, env_path, run, home):
         pass  # gỡ bản cũ chỉ là dọn dẹp; lệnh add bên dưới mới quyết định thành công
     result = run(add, **kwargs)
     if getattr(result, "returncode", 0) != 0:
-        raise BridgeError("CONFIG", "Lệnh đăng ký MCP thất bại (mã %s)" % result.returncode)
+        raise BridgeError("CONFIG", "Lệnh đăng ký MCP thất bại (mã %s)%s" % (result.returncode, _stderr_tail(result)))
 
 
 def _write_paired_env(env_path, values, uid=None, gid=None):
@@ -663,7 +734,8 @@ def cmd_install(args, run, geteuid, systemd_dir, getpwnam):
         if not args.no_watch:
             step = "cài watch"
             watch_unit = install_watch(env_path, os.path.join(bot["data_dir"], ".env"), bot["user"], bot["service"],
-                                       os.path.join(install_dir, "state"), run, systemd_dir, getpwnam)
+                                       os.path.join(install_dir, "state"), run, systemd_dir, getpwnam,
+                                       skip_telegram_check=args.skip_telegram_check)
     except BridgeError as err:
         sys.stderr.write("Bước lỗi: %s\n" % step)
         return exit_code_for(err)
@@ -676,6 +748,9 @@ def cmd_install(args, run, geteuid, systemd_dir, getpwnam):
     print("")
     print("Tóm tắt: thư mục %s, CLI %s, user %s, doctor OK, MCP \"maihub\" đã đăng ký%s." % (
         install_dir, cli, bot["user"], ", service %s" % os.path.basename(watch_unit) if watch_unit else ""))
+    backup = os.path.join(install_dir, os.path.basename(cli_config_path(cli, home)) + BACKUP_SUFFIX)
+    if os.path.lexists(backup):
+        print("Bản sao lưu cấu hình CLI: %s (lệnh `rm -rf` bên dưới xoá luôn tệp này; chép ra nơi khác nếu muốn giữ)" % backup)
     print("Lệnh gỡ:")
     print("  sudo -u %s -H %s mcp remove maihub%s" % (bot["user"], cli, " -s user" if cli == "claude" else ""))
     if watch_unit:
@@ -727,8 +802,19 @@ def _write_unit_atomic(unit_path, text):
         raise
 
 
-def install_watch(env_file, notify_env, user, name, state_dir, run, systemd_dir, getpwnam):
-    """Kiểm tra, chạy thử watch --dry-run dưới quyền user, ghi unit rồi bật service. Trả đường dẫn unit."""
+def _warn_missing_telegram_route(env_file):
+    """Cảnh báo (không chặn) khi .env MaiHub chưa có tuyến Telegram mà máy có tệp proxy dùng chung của bot."""
+    try:
+        values = parse_env_file(env_file)
+    except (IOError, OSError):
+        return
+    if not values.get("TELEGRAM_API_BASE") and not values.get("TELEGRAM_PROXY") and os.path.isfile(TELEGRAM_PROXY_FILE):
+        sys.stderr.write("CẢNH BÁO: máy này có %s nhưng %s chưa đặt TELEGRAM_API_BASE hoặc TELEGRAM_PROXY; "
+                         "nếu api.telegram.org bị chặn thì thông báo sẽ không tới. Thêm một trong hai khoá đó (ví dụ TELEGRAM_PROXY=<nội dung tệp proxy>).\n" % (TELEGRAM_PROXY_FILE, env_file))
+
+
+def install_watch(env_file, notify_env, user, name, state_dir, run, systemd_dir, getpwnam, skip_telegram_check=False):
+    """Kiểm tra, chạy thử watch --dry-run và --check-telegram dưới quyền user, ghi unit rồi bật + khởi động lại service. Trả đường dẫn unit."""
     env_file, notify_env = os.path.abspath(env_file), os.path.abspath(notify_env)
     for path in (env_file, notify_env):
         if not os.path.isfile(path):
@@ -746,6 +832,9 @@ def install_watch(env_file, notify_env, user, name, state_dir, run, systemd_dir,
     unit_name = "%s%s.service" % (WATCH_UNIT_PREFIX, name)
     unit_path = os.path.join(systemd_dir, unit_name)
     text = render_watch_unit(name, user, bridge, env_file, notify_env, state_dir)  # kiểm đường dẫn trước khi đụng hệ thống
+    _require_safe_dir(env_dir, check_parent=False)
+    _require_safe_dir(state_dir)
+    _warn_missing_telegram_route(env_file)
 
     os.makedirs(state_dir, exist_ok=True)
     os.chown(state_dir, account.pw_uid, account.pw_gid)
@@ -754,12 +843,21 @@ def install_watch(env_file, notify_env, user, name, state_dir, run, systemd_dir,
     dry = ["sudo", "-u", user, "-H", "timeout", str(WATCH_DRY_RUN_SEC), "python3", "-I", bridge, "watch",
            "--env-file", env_file, "--notify-env", notify_env, "--dry-run"]
     result = run(dry, cwd=account.pw_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=WATCH_DRY_RUN_SAFETY_SEC)
-    if result.returncode not in (0, TIMEOUT_EXIT_CODE):  # 124: còn chạy đến hết 5 giây nghĩa là cấu hình dùng được
+    if result.returncode not in (0, TIMEOUT_EXIT_CODE):  # 124: còn chạy đến hết 5 giây = hai tệp .env đọc được và có chat nhận tin (chưa chứng minh MaiHub/Telegram với tới được)
         detail = getattr(result, "stderr", "")
         raise BridgeError("CONFIG", "watch --dry-run dưới quyền %s thất bại (mã %s)%s" % (
             user, result.returncode, ": " + detail.strip() if isinstance(detail, str) and detail.strip() else ""))
+    if not skip_telegram_check:
+        check = ["sudo", "-u", user, "-H", "timeout", str(TELEGRAM_CHECK_SEC), "python3", "-I", bridge, "watch",
+                 "--env-file", env_file, "--notify-env", notify_env, "--check-telegram"]
+        result = run(check, cwd=account.pw_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=TELEGRAM_CHECK_SAFETY_SEC)
+        if result.returncode != 0:
+            detail = getattr(result, "stderr", "")
+            raise BridgeError("CONFIG", "Không gọi được Telegram (getMe) dưới quyền %s (mã %s)%s. Đặt TELEGRAM_API_BASE hoặc TELEGRAM_PROXY trong %s, hoặc dùng --skip-telegram-check" % (
+                user, result.returncode, ": " + detail.strip() if isinstance(detail, str) and detail.strip() else "", env_file))
     _write_unit_atomic(unit_path, text)
-    for cmd in (["systemctl", "daemon-reload"], ["systemctl", "enable", "--now", unit_name]):
+    # enable rồi restart (không dùng enable --now): chạy lại phải áp dụng unit/bridge/khoá mới cho service đang chạy
+    for cmd in (["systemctl", "daemon-reload"], ["systemctl", "enable", unit_name], ["systemctl", "restart", unit_name]):
         result = run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=RUN_TIMEOUT)
         if result.returncode != 0:
             raise BridgeError("CONFIG", "%s thất bại (mã %s)" % (" ".join(cmd), result.returncode))
@@ -771,7 +869,8 @@ def cmd_install_watch(args, run=subprocess.run, geteuid=os.geteuid, systemd_dir=
     try:
         if geteuid() != 0:
             raise BridgeError("CONFIG", "Cần chạy bằng root")
-        install_watch(args.env_file, args.notify_env, args.user, args.name, args.state_dir, run, systemd_dir, getpwnam)
+        install_watch(args.env_file, args.notify_env, args.user, args.name, args.state_dir, run, systemd_dir, getpwnam,
+                      skip_telegram_check=args.skip_telegram_check)
     except BridgeError as err:
         sys.stderr.write("%s\n" % err.message)
         return exit_code_for(err)
@@ -784,24 +883,35 @@ def cmd_install_watch(args, run=subprocess.run, geteuid=os.geteuid, systemd_dir=
     return 0
 
 
+def _watch_units(systemd_dir):
+    try:
+        return sorted(n for n in os.listdir(systemd_dir) if n.startswith(WATCH_UNIT_PREFIX) and n.endswith(".service"))
+    except OSError:
+        return []
+
+
 def cmd_pair(args, run=subprocess.run, geteuid=os.geteuid, systemd_dir=SYSTEMD_DIR, getpwnam=pwd.getpwnam):
     """Giải mã mã ghép nối, đổi vé lấy khoá (đã ghim chứng chỉ trước khi gửi vé), ghi .env rồi chạy doctor."""
     if args.install:
         return cmd_install(args, run, geteuid, systemd_dir, getpwnam)
     try:
         info = decode_pairing_code(args.code)
+        env_path = os.path.join(args.dir or ".", ".env")
+        if _env_file_has_key(env_path, "TG_TOKEN"):  # trước khi dùng vé: không ghi đè .env của bot (đang đứng trong thư mục dữ liệu bot)
+            raise BridgeError("CONFIG", "Từ chối: %s chứa TG_TOKEN (có vẻ là .env của bot). Dùng --dir trỏ tới thư mục riêng cho MaiHub" % env_path)
         paired = MaiHubClient(Config(info["url"], None, info["pin"])).pair(info["ticket"])
         api_key = paired.get("apiKey") if isinstance(paired, dict) else None
         if not isinstance(api_key, str) or not api_key:
             raise BridgeError("BAD_RESPONSE", "MaiHub không trả về khoá API")
         values = {"MAIHUB_URL": info["url"], "MAIHUB_CERT_SHA256": info["pin"], "MAIHUB_API_KEY": api_key}
-        env_path = os.path.join(args.dir or ".", ".env")
         _write_paired_env(env_path, values)
     except BridgeError as err:
         return exit_code_for(err)
     print("Đã ghép nối bot \"%s\" (khoá %s). Đã ghi %s (quyền 600):" % (info["name"], paired.get("keyName", ""), env_path))
     for key, val in values.items():
         print("%s=%s" % (key, mask_key(val) if key == "MAIHUB_API_KEY" else val))
+    for unit in _watch_units(systemd_dir):
+        print("Đang có service %s: chạy `sudo systemctl restart %s` để áp dụng khoá mới ngay (watch cũng tự nạp lại .env sau tối đa %d giây)." % (unit, unit, WATCH_AUTH_RETRY_SEC))
     return cmd_doctor(lambda: Config.load(env_path, {}))
 
 
@@ -842,6 +952,8 @@ def resolve_telegram_route(maihub_env):
     """TELEGRAM_API_BASE thay gốc api.telegram.org; không thì TELEGRAM_PROXY (http/https); không thì đi thẳng."""
     base = (maihub_env.get("TELEGRAM_API_BASE") or "").strip().rstrip("/")
     if base:
+        if not base.lower().startswith("https://"):
+            raise BridgeError("CONFIG", "TELEGRAM_API_BASE phải là https:// (token bot nằm trong đường dẫn, không được gửi qua http)")
         return {"api_base": base, "proxy": None}
     proxy = (maihub_env.get("TELEGRAM_PROXY") or "").strip()
     if proxy:
@@ -865,6 +977,7 @@ class TelegramSender(object):
         self.chat_id = target["chat_id"]
         self.thread_id = target.get("thread_id")
         self.url = "%s/bot%s/sendMessage" % (route["api_base"], self._token)
+        self.check_url = "%s/bot%s/getMe" % (route["api_base"], self._token)
         self.sleep = sleep
         if opener is None:
             proxy = route.get("proxy")
@@ -879,7 +992,18 @@ class TelegramSender(object):
         body = {"chat_id": self.chat_id, "text": text, "disable_web_page_preview": True}
         if self.thread_id is not None:
             body["message_thread_id"] = self.thread_id
-        request = urllib.request.Request(self.url, json.dumps(body).encode("utf-8"),
+        self._call(self.url, body)
+
+    def check(self):
+        """getMe một lần qua tuyến đã chọn (không thử lại). Trả (True, "") hoặc (False, mô tả lỗi đã che token)."""
+        try:
+            self._call(self.check_url, {})
+            return True, ""
+        except Exception as err:
+            return False, self._describe(err)
+
+    def _call(self, url, body):
+        request = urllib.request.Request(url, json.dumps(body).encode("utf-8"),
                                          {"Content-Type": "application/json"}, method="POST")
         resp = self.opener.open(request, timeout=DEFAULT_TIMEOUT)
         try:
@@ -957,7 +1081,7 @@ def format_event(event, fetch_run):
         elif status == "failed":  # lỗi cấp lượt chạy, không có đích nào ghi lỗi
             lines = ["⚠️ %s: xong %d/%d, lượt chạy bị lỗi" % (label, posted, total)] + _failure_lines(payload.get("runId"), fetch_run)
         elif status == "done":
-            lines = ["✅ %s: xong %d/%d" % (label, posted, total)]
+            lines = ["✅ %s: xong %d/%d" % (label, posted, total)] if total else ["✅ %s: xong" % label]
     elif etype == "schedule.missed":
         lines = ["⏰ Lỡ lịch \"%s\": %s" % (clip(payload.get("name") or "", MAX_FIELD_CHARS), clip(payload.get("reason") or "", MAX_FIELD_CHARS))]
     elif etype == "profile.loginProblem":
@@ -969,7 +1093,8 @@ def format_event(event, fetch_run):
 class Watcher(object):
     """Long-poll events.wait và gửi tin; trạng thái {cursor, workspaceId, downSince, downAlerted, authAlerted} lưu nguyên tử."""
 
-    def __init__(self, client, sender, state_path, clock=time.time, sleep=time.sleep, persist=True):
+    def __init__(self, client, sender, state_path, clock=time.time, sleep=time.sleep, persist=True, reload_client=None):
+        self.reload_client = reload_client  # gọi lại sau mỗi lần chờ UNAUTHORIZED/PIN_MISMATCH để nhận .env mới (ghép nối lại)
         self.persist = persist  # False (--dry-run): không ghi tệp trạng thái
         self.client = client
         self.sender = sender
@@ -995,18 +1120,21 @@ class Watcher(object):
         if self.state is None or not self.persist:  # chưa xác định được con trỏ thì không ghi: lần sau vẫn là "lần đầu"
             return
         directory = os.path.dirname(self.state_path) or "."
-        os.makedirs(directory, mode=0o700, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".watch-state.")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(dict(self.state, **self.flags), handle)
-            os.replace(tmp_path, self.state_path)
-        except BaseException:
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".watch-state.")
             try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(dict(self.state, **self.flags), handle)
+                os.replace(tmp_path, self.state_path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except OSError as err:  # đĩa đầy...: giữ con trỏ trong bộ nhớ, đừng sập (sập + khởi động lại sẽ gửi trùng tin)
+            print("Không ghi được trạng thái watch (%s); tiếp tục với con trỏ trong bộ nhớ" % err, file=sys.stderr)
 
     def _wait(self, after, timeout_sec):
         """events.wait đã kiểm định dạng: events là danh sách dict có seq (int, không phải bool) và type (str)."""
@@ -1049,6 +1177,22 @@ class Watcher(object):
             st.update({"downSince": None, "downAlerted": False, "authAlerted": False})
             self._save()
 
+    def _workspace_name(self, workspace_id):
+        try:
+            current = (self.client.call("system.status", {}) or {}).get("workspace")
+            name = current.get("name") if isinstance(current, dict) else None
+            return name if isinstance(name, str) and name else workspace_id
+        except Exception:
+            return workspace_id
+
+    def _reload(self):
+        if self.reload_client is None:
+            return
+        try:
+            self.client = self.reload_client()
+        except (BridgeError, IOError, OSError):
+            pass  # .env đang hỏng/thiếu: giữ client cũ, vòng sau thử lại
+
     def _on_error(self, err):
         st = self.flags
         if err.code in ("UNAUTHORIZED", "PIN_MISMATCH"):
@@ -1060,6 +1204,7 @@ class Watcher(object):
                     self.sender.send("🔐 Chứng chỉ MaiHub không khớp dấu vân tay đã ghim. Nếu MaiHub vừa đổi chứng chỉ, hãy tạo mã ghép nối mới rồi ghép nối lại bằng `maihub_bridge.py pair`.")
                 self._save()
             self.sleep(WATCH_AUTH_RETRY_SEC)
+            self._reload()
             return
         now = self.clock()
         if st["downSince"] is None:
@@ -1088,7 +1233,7 @@ class Watcher(object):
             if workspace is not None and known is not None and workspace != known:  # workspaceId null = chưa mở workspace, không phải đổi
                 self.state["cursor"], _ = self._latest(0)
                 self.state["workspaceId"] = workspace
-                self.sender.send("Đã chuyển workspace: %s" % clip(workspace, MAX_FIELD_CHARS))
+                self.sender.send("Đã chuyển workspace: %s" % clip(self._workspace_name(workspace), MAX_FIELD_CHARS))
                 self._save()
                 return
             if known is None and workspace is not None:
@@ -1123,11 +1268,20 @@ def cmd_watch(args):
             raise BridgeError("CONFIG", "Không đọc được --notify-env: %s" % err)
         config = Config.load(args.env_file)
         target = resolve_notify_target(maihub_env, bot_env)
-        sender = PrintSender() if args.dry_run else TelegramSender(target, resolve_telegram_route(maihub_env))
+        route = resolve_telegram_route(maihub_env)
+        if args.check_telegram:
+            ok, detail = TelegramSender(target, route).check()
+            if not ok:
+                print("Telegram getMe thất bại: %s" % detail, file=sys.stderr)
+                return EXIT_NETWORK
+            print("Telegram OK (getMe)")
+            return 0
+        sender = PrintSender() if args.dry_run else TelegramSender(target, route)
         state_path = args.state or os.path.join(os.path.dirname(os.path.abspath(args.env_file)), "state", "watch-state.json")
         if not args.dry_run:
             os.makedirs(os.path.dirname(state_path), mode=0o700, exist_ok=True)
-        Watcher(MaiHubClient(config), sender, state_path, persist=not args.dry_run).run_forever()
+        Watcher(MaiHubClient(config), sender, state_path, persist=not args.dry_run,
+                reload_client=lambda: MaiHubClient(Config.load(args.env_file))).run_forever()
     except BridgeError as err:
         return exit_code_for(err)
     except (IOError, OSError) as err:
@@ -1165,15 +1319,18 @@ def build_parser():
     p_pair.add_argument("--bot", help="Tên service của bot (bắt buộc khi có nhiều bot)")
     p_pair.add_argument("--cli", choices=["claude", "codex"], help="Loại CLI (mặc định suy ra từ user hoặc tên service)")
     p_pair.add_argument("--no-watch", action="store_true", help="Không cài service watch (thông báo Telegram)")
+    p_pair.add_argument("--skip-telegram-check", action="store_true", help="Với --install: bỏ qua bước kiểm tra Telegram getMe của watch")
     p_watch = sub.add_parser("watch", parents=[shared], help="Gửi sự kiện MaiHub tới Telegram bằng token của bot")
     p_watch.add_argument("--notify-env", required=True, help=".env của bot (TG_TOKEN, ALLOWED_CHAT_ID, ...)")
     p_watch.add_argument("--state", help="Tệp trạng thái (mặc định: state/watch-state.json cạnh --env-file)")
     p_watch.add_argument("--dry-run", action="store_true", help="In tin ra stdout, không gửi Telegram")
+    p_watch.add_argument("--check-telegram", action="store_true", help="Gọi Telegram getMe một lần qua tuyến đã chọn rồi thoát (0 = được)")
     p_iw = sub.add_parser("install-watch", help="Cài watch thành service systemd (cần root)")
     p_iw.add_argument("--env-file", required=True, help=".env MaiHub")
     p_iw.add_argument("--notify-env", required=True, help=".env của bot (TG_TOKEN, ALLOWED_CHAT_ID, ...)")
     p_iw.add_argument("--user", required=True, help="User chạy service (thường là user của bot)")
     p_iw.add_argument("--name", required=True, help="Tên service của bot (đặt tên maihub-watch-<name>.service)")
+    p_iw.add_argument("--skip-telegram-check", action="store_true", help="Bỏ qua bước kiểm tra Telegram getMe")
     p_iw.add_argument("--state-dir", default=None, help="Thư mục trạng thái (mặc định: state/ cạnh --env-file)")
     return parser
 
