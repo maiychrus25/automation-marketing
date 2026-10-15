@@ -25,7 +25,10 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 
 VERSION = "1.0.0"
@@ -47,6 +50,16 @@ DEFAULT_INSTALL_ROOT = "/opt/bot/maihub"
 BRIDGE_NAME = "maihub_bridge.py"
 BACKUP_SUFFIX = ".before-maihub"
 RUN_TIMEOUT = 120
+TELEGRAM_BASE = "https://api.telegram.org"
+SEND_RETRY_DELAYS = (2, 10, 30)  # giây chờ trước lần thử lại thứ 1, 2, 3
+WATCH_WAIT_SEC = 25
+WATCH_RETRY_SEC = 15
+WATCH_DOWN_ALERT_SEC = 300
+WATCH_AUTH_RETRY_SEC = 300
+MAX_FIELD_CHARS = 200
+MAX_MESSAGE_CHARS = 3500
+MAX_ERROR_LINES = 3
+KIND_LABELS = {"join": "Tham gia nhóm", "scan_groups": "Quét nhóm", "collect_comments": "Thu bình luận"}
 
 EXIT_SERVER_ERROR = 1
 EXIT_CONFIG = 2
@@ -677,6 +690,315 @@ def cmd_pair(args, run=subprocess.run, geteuid=os.geteuid, systemd_dir=SYSTEMD_D
     return cmd_doctor(lambda: Config.load(env_path, {}))
 
 
+# ---------------------------------------------------------------- watch
+
+def clip(text, limit):
+    text = text if isinstance(text, str) else str(text)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _first_item(value):
+    for part in (value or "").split(","):
+        if part.strip():
+            return part.strip()
+    return ""
+
+
+def resolve_notify_target(maihub_env, bot_env):
+    """Token từ TG_TOKEN của bot; chat theo thứ tự MAIHUB_NOTIFY_CHAT_ID, ALLOWED_CHAT_ID (+ topic), ADMIN_USER_ID."""
+    token = (bot_env.get("TG_TOKEN") or "").strip()
+    if not token:
+        raise BridgeError("CONFIG", "Thiếu TG_TOKEN trong --notify-env")
+    thread_id = None
+    chat_id = _first_item(maihub_env.get("MAIHUB_NOTIFY_CHAT_ID"))
+    if not chat_id:
+        chat_id = _first_item(bot_env.get("ALLOWED_CHAT_ID"))
+        topic = (bot_env.get("ALLOWED_TOPIC_ID") or "").strip()
+        if chat_id and topic.isdigit():
+            thread_id = int(topic)
+    if not chat_id:
+        chat_id = _first_item(bot_env.get("ADMIN_USER_ID"))
+    if not chat_id:
+        raise BridgeError("CONFIG", "Không có chat nhận tin: đặt MAIHUB_NOTIFY_CHAT_ID (.env MaiHub) hoặc ALLOWED_CHAT_ID / ADMIN_USER_ID (.env bot)")
+    return {"token": token, "chat_id": chat_id, "thread_id": thread_id}
+
+
+def resolve_telegram_route(maihub_env):
+    """TELEGRAM_API_BASE thay gốc api.telegram.org; không thì TELEGRAM_PROXY (http/https); không thì đi thẳng."""
+    base = (maihub_env.get("TELEGRAM_API_BASE") or "").strip().rstrip("/")
+    if base:
+        return {"api_base": base, "proxy": None}
+    proxy = (maihub_env.get("TELEGRAM_PROXY") or "").strip()
+    if proxy:
+        if not re.match(r"^https?://", proxy, re.I):
+            raise BridgeError("CONFIG", "TELEGRAM_PROXY phải là http:// hoặc https:// (thư viện chuẩn không hỗ trợ proxy SOCKS)")
+        return {"api_base": TELEGRAM_BASE, "proxy": proxy}
+    return {"api_base": TELEGRAM_BASE, "proxy": None}
+
+
+class PrintSender(object):
+    """--dry-run: in tin ra stdout thay vì gửi Telegram."""
+
+    def send(self, text):
+        print(text)
+        return True
+
+
+class TelegramSender(object):
+    def __init__(self, target, route, sleep=time.sleep, opener=None):
+        self._token = target["token"]
+        self.chat_id = target["chat_id"]
+        self.thread_id = target.get("thread_id")
+        self.url = "%s/bot%s/sendMessage" % (route["api_base"], self._token)
+        self.sleep = sleep
+        if opener is None:
+            proxy = route.get("proxy")
+            handlers = [urllib.request.ProxyHandler({"http": proxy, "https": proxy})] if proxy else []
+            opener = urllib.request.build_opener(*handlers)
+        self.opener = opener
+
+    def __repr__(self):
+        return "TelegramSender(chat_id=%r)" % (self.chat_id,)
+
+    def _post(self, text):
+        body = {"chat_id": self.chat_id, "text": text, "disable_web_page_preview": True}
+        if self.thread_id is not None:
+            body["message_thread_id"] = self.thread_id
+        request = urllib.request.Request(self.url, json.dumps(body).encode("utf-8"),
+                                         {"Content-Type": "application/json"}, method="POST")
+        resp = self.opener.open(request, timeout=DEFAULT_TIMEOUT)
+        try:
+            data = json.loads(resp.read().decode("utf-8"))
+        finally:
+            resp.close()
+        if not isinstance(data, dict) or data.get("ok") is not True:
+            raise BridgeError("BAD_RESPONSE", "Telegram trả về ok=false")
+
+    def _describe(self, err):
+        if isinstance(err, urllib.error.HTTPError):
+            return "HTTP %d" % err.code
+        return ("%s: %s" % (type(err).__name__, err)).replace(self._token, "***")
+
+    @staticmethod
+    def _retry_after(err):
+        if isinstance(err, urllib.error.HTTPError) and err.code == 429:
+            try:
+                value = json.loads(err.read().decode("utf-8")).get("parameters", {}).get("retry_after")
+                if isinstance(value, (int, float)) and value >= 0:
+                    return value
+            except (ValueError, AttributeError, OSError):
+                pass
+        return None
+
+    def send(self, text):
+        """Gửi văn bản thuần; thử lại sau 2, 10, 30 giây (429: chờ retry_after). Hết lượt thì ghi log, trả False."""
+        for attempt in range(len(SEND_RETRY_DELAYS) + 1):
+            try:
+                self._post(text)
+                return True
+            except Exception as err:
+                if attempt == len(SEND_RETRY_DELAYS):
+                    print("Không gửi được tin Telegram sau %d lần thử (%s); bỏ tin này" % (attempt + 1, self._describe(err)), file=sys.stderr)
+                    return False
+                wait = self._retry_after(err)
+                self.sleep(SEND_RETRY_DELAYS[attempt] if wait is None else wait)
+
+
+def _run_label(payload):
+    if payload.get("scheduleName"):
+        return clip(payload["scheduleName"], MAX_FIELD_CHARS)
+    kind = payload.get("kind")
+    if kind and kind != "post":
+        return KIND_LABELS.get(kind, clip(kind, MAX_FIELD_CHARS))
+    return "Đăng ngay"
+
+
+def _failure_lines(run_id, fetch_run):
+    try:
+        results = (fetch_run(run_id) or {}).get("results") or []
+        failed = [r for r in results if isinstance(r, dict) and (r.get("outcome") == "failed" or r.get("error"))]
+    except Exception:
+        return []
+    return ["• %s: %s" % (clip(r.get("targetName") or r.get("targetUrl") or "?", MAX_FIELD_CHARS), clip(r.get("error") or "lỗi không rõ", MAX_FIELD_CHARS))
+            for r in failed[:MAX_ERROR_LINES]]
+
+
+def format_event(event, fetch_run):
+    """Tin tiếng Việt (văn bản thuần) cho một sự kiện, hoặc None nếu không cần báo. fetch_run(runId) có thể ném lỗi."""
+    etype, payload = event.get("type"), event.get("payload") or {}
+    lines = None
+    if etype == "run.finished":
+        label = _run_label(payload)
+        posted, failed, skipped = (int(payload.get(k) or 0) for k in ("posted", "failed", "skipped"))
+        total = posted + failed + skipped
+        status = payload.get("status")
+        if status == "cancelled":
+            lines = ["⏹ %s: đã huỷ (%d/%d)" % (label, posted, total)]
+        elif failed > 0:
+            lines = ["⚠️ %s: xong %d/%d, lỗi %d" % (label, posted, total, failed)] + _failure_lines(payload.get("runId"), fetch_run)
+        elif status == "failed":  # lỗi cấp lượt chạy, không có đích nào ghi lỗi
+            lines = ["⚠️ %s: xong %d/%d, lượt chạy bị lỗi" % (label, posted, total)] + _failure_lines(payload.get("runId"), fetch_run)
+        elif status == "done":
+            lines = ["✅ %s: xong %d/%d" % (label, posted, total)]
+    elif etype == "schedule.missed":
+        lines = ["⏰ Lỡ lịch \"%s\": %s" % (clip(payload.get("name") or "", MAX_FIELD_CHARS), clip(payload.get("reason") or "", MAX_FIELD_CHARS))]
+    elif etype == "profile.loginProblem":
+        what = "bị checkpoint" if payload.get("state") == "checkpoint" else "hết phiên đăng nhập"
+        lines = ["🔒 Profile \"%s\": %s" % (clip(payload.get("profileName") or "", MAX_FIELD_CHARS), what), "Mở MaiHub để đăng nhập lại."]
+    return clip("\n".join(lines), MAX_MESSAGE_CHARS) if lines else None
+
+
+class Watcher(object):
+    """Long-poll events.wait và gửi tin; trạng thái {cursor, workspaceId, downSince, downAlerted, authAlerted} lưu nguyên tử."""
+
+    def __init__(self, client, sender, state_path, clock=time.time, sleep=time.sleep):
+        self.client = client
+        self.sender = sender
+        self.state_path = state_path
+        self.clock = clock
+        self.sleep = sleep
+        self.flags = {"downSince": None, "downAlerted": False, "authAlerted": False}
+        self.state = self._load()  # {cursor, workspaceId}; None = chưa có tệp (lần chạy đầu)
+
+    def _load(self):
+        try:
+            with open(self.state_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (IOError, OSError, ValueError):
+            return None
+        if not isinstance(data, dict) or not isinstance(data.get("cursor"), int):
+            return None
+        self.flags = {"downSince": data.get("downSince"), "downAlerted": bool(data.get("downAlerted")),
+                      "authAlerted": bool(data.get("authAlerted"))}
+        return {"cursor": data["cursor"], "workspaceId": data.get("workspaceId")}
+
+    def _save(self):
+        if self.state is None:  # chưa xác định được con trỏ thì không ghi: lần sau vẫn là "lần đầu"
+            return
+        directory = os.path.dirname(self.state_path) or "."
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".watch-state.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(dict(self.state, **self.flags), handle)
+            os.replace(tmp_path, self.state_path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    def _wait(self, after, timeout_sec):
+        return self.client.call("events.wait", {"after": after, "timeoutSec": timeout_sec})
+
+    def _latest(self, after):
+        """Duyệt hết các trang (timeoutSec=0) tới trang rỗng; trả (seq lớn nhất, workspaceId)."""
+        seq, workspace = after, None
+        while True:
+            result = self._wait(seq, 0)
+            workspace = result.get("workspaceId")
+            events = result.get("events") or []
+            if not events:
+                return seq, workspace
+            seq = max(seq, max(e["seq"] for e in events))
+
+    def _host(self):
+        try:
+            return self.client.config.host_port()[0]
+        except Exception:
+            return "MaiHub"
+
+    def _recovered(self):
+        st = self.flags
+        if st["downAlerted"]:
+            minutes = int(round((self.clock() - st["downSince"]) / 60.0))
+            self.sender.send("✅ MaiHub đã kết nối lại sau %d phút" % minutes)
+        if st["downSince"] is not None or st["downAlerted"] or st["authAlerted"]:
+            st.update({"downSince": None, "downAlerted": False, "authAlerted": False})
+            self._save()
+
+    def _on_error(self, err):
+        st = self.flags
+        if err.code in ("UNAUTHORIZED", "PIN_MISMATCH"):
+            if not st["authAlerted"]:
+                st["authAlerted"] = True
+                if err.code == "UNAUTHORIZED":
+                    self.sender.send("🔑 MaiHub từ chối khoá truy cập (có thể khoá đã bị thu hồi). Hãy tạo mã ghép nối mới trong MaiHub rồi ghép nối lại bằng `maihub_bridge.py pair`.")
+                else:
+                    self.sender.send("🔐 Chứng chỉ MaiHub không khớp dấu vân tay đã ghim. Nếu MaiHub vừa đổi chứng chỉ, hãy tạo mã ghép nối mới rồi ghép nối lại bằng `maihub_bridge.py pair`.")
+                self._save()
+            self.sleep(WATCH_AUTH_RETRY_SEC)
+            return
+        now = self.clock()
+        if st["downSince"] is None:
+            st["downSince"] = now
+        if not st["downAlerted"] and now - st["downSince"] >= WATCH_DOWN_ALERT_SEC:
+            st["downAlerted"] = True
+            since = time.strftime("%H:%M", time.localtime(st["downSince"]))
+            self.sender.send("⚠️ Không liên lạc được MaiHub (%s) từ %s. Lỗi: %s" % (self._host(), since, clip(err.message or err.code, MAX_FIELD_CHARS)))
+        self._save()
+        self.sleep(WATCH_RETRY_SEC)
+
+    def step(self):
+        """Một vòng events.wait (hoặc một lần xử lý lỗi)."""
+        try:
+            if self.state is None:
+                seq, workspace = self._latest(0)
+                self.state = {"cursor": seq, "workspaceId": workspace}
+                self._recovered()
+                self._save()
+                return
+            result = self._wait(self.state["cursor"], WATCH_WAIT_SEC)
+            self._recovered()
+            workspace = result.get("workspaceId")
+            known = self.state["workspaceId"]
+            if known is not None and workspace != known:
+                self.state["cursor"], _ = self._latest(0)
+                self.state["workspaceId"] = workspace
+                self.sender.send("Đã chuyển workspace: %s" % clip(workspace, MAX_FIELD_CHARS))
+                self._save()
+                return
+            if known is None and workspace is not None:
+                self.state["workspaceId"] = workspace
+            for event in result.get("events") or []:
+                text = format_event(event, lambda run_id: self.client.call("runs.get", {"runId": run_id}))
+                if text:
+                    self.sender.send(text)
+                self.state["cursor"] = event["seq"]
+                self._save()
+        except BridgeError as err:
+            self._on_error(err)
+
+    def run_forever(self):
+        try:
+            while True:
+                self.step()
+        except KeyboardInterrupt:
+            return
+
+
+def cmd_watch(args):
+    try:
+        maihub_env = parse_env_file(args.env_file) if args.env_file else {}
+        try:
+            bot_env = parse_env_file(args.notify_env)
+        except (IOError, OSError) as err:
+            raise BridgeError("CONFIG", "Không đọc được --notify-env: %s" % err)
+        config = Config.load(args.env_file)
+        target = resolve_notify_target(maihub_env, bot_env)
+        sender = PrintSender() if args.dry_run else TelegramSender(target, resolve_telegram_route(maihub_env))
+        state_path = args.state or os.path.join(os.path.dirname(os.path.abspath(args.env_file)), "state", "watch-state.json")
+        os.makedirs(os.path.dirname(state_path), mode=0o700, exist_ok=True)
+        Watcher(MaiHubClient(config), sender, state_path).run_forever()
+    except BridgeError as err:
+        return exit_code_for(err)
+    except (IOError, OSError) as err:
+        print("CONFIG: %s" % err, file=sys.stderr)
+        return EXIT_CONFIG
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="maihub_bridge.py", description="Cầu nối CLI / MCP tới giao thức điều khiển MaiHub")
     env_help = "Tệp KEY=VALUE chứa MAIHUB_URL, MAIHUB_API_KEY, MAIHUB_CERT_SHA256"
@@ -705,6 +1027,10 @@ def build_parser():
     p_pair.add_argument("--install", action="store_true", help="Cài cho bot AHV trên máy này (cần root): thư mục, .env, đăng ký MCP")
     p_pair.add_argument("--bot", help="Tên service của bot (bắt buộc khi có nhiều bot)")
     p_pair.add_argument("--cli", choices=["claude", "codex"], help="Loại CLI (mặc định suy ra từ user hoặc tên service)")
+    p_watch = sub.add_parser("watch", parents=[shared], help="Gửi sự kiện MaiHub tới Telegram bằng token của bot")
+    p_watch.add_argument("--notify-env", required=True, help=".env của bot (TG_TOKEN, ALLOWED_CHAT_ID, ...)")
+    p_watch.add_argument("--state", help="Tệp trạng thái (mặc định: state/watch-state.json cạnh --env-file)")
+    p_watch.add_argument("--dry-run", action="store_true", help="In tin ra stdout, không gửi Telegram")
     return parser
 
 
@@ -720,6 +1046,8 @@ def main(argv=None):
         return cmd_doctor(loader)
     if args.command == "pair":
         return cmd_pair(args)
+    if args.command == "watch":
+        return cmd_watch(args)
     try:
         client = MaiHubClient(loader())
         if args.command == "describe":

@@ -791,5 +791,417 @@ class PairHardeningTests(BridgeTestCase):
         self.assertIn("mã ghép nối mới", err)
 
 
+# ---------------------------------------------------------------- watch
+
+TG_TOKEN = "123456:SECRET-token-ABC"
+
+
+class FakeClock(object):
+    def __init__(self, now=1000000.0):
+        self.now = now
+        self.slept = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+class FakeWatchClient(object):
+    """events.wait theo kịch bản: phần tử là dict kết quả hoặc Exception."""
+
+    def __init__(self, script, runs=None):
+        self.script = list(script)
+        self.calls = []
+        self.runs = runs or {}
+
+    def call(self, method, params=None, idempotency_key=None):
+        self.calls.append((method, params))
+        if method == "runs.get":
+            item = self.runs.get(params["runId"])
+            if isinstance(item, Exception):
+                raise item
+            return item
+        item = self.script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class FakeSender(object):
+    def __init__(self, fail_after=None):
+        self.sent = []
+        self.fail_after = fail_after
+
+    def send(self, text):
+        if self.fail_after is not None and len(self.sent) >= self.fail_after:
+            raise RuntimeError("crash")
+        self.sent.append(text)
+        return True
+
+
+def finished(seq, **over):
+    payload = {"runId": "r%d" % seq, "kind": "post", "status": "done", "scheduleId": None, "scheduleName": None,
+               "posted": 2, "failed": 0, "skipped": 0}
+    payload.update(over)
+    return {"seq": seq, "type": "run.finished", "payload": payload, "createdAt": 1}
+
+
+def page(events, workspace="ws1"):
+    return {"events": events, "workspaceId": workspace}
+
+
+class FormatEventTests(unittest.TestCase):
+    def fmt(self, event, runs=None):
+        def fetch(run_id):
+            item = (runs or {}).get(run_id)
+            if item is None or isinstance(item, Exception):
+                raise item or RuntimeError("no run")
+            return item
+        return bridge.format_event(event, fetch)
+
+    def test_done_labels(self):
+        self.assertEqual(self.fmt(finished(1)), "✅ Đăng ngay: xong 2/2")
+        self.assertEqual(self.fmt(finished(1, scheduleName="Sáng", skipped=1)), "✅ Sáng: xong 2/3")
+        self.assertEqual(self.fmt(finished(1, kind="join")), "✅ Tham gia nhóm: xong 2/2")
+        self.assertEqual(self.fmt(finished(1, kind="scan_groups")), "✅ Quét nhóm: xong 2/2")
+        self.assertEqual(self.fmt(finished(1, kind="collect_comments")), "✅ Thu bình luận: xong 2/2")
+        self.assertEqual(self.fmt(finished(1, kind="join", scheduleName="Lịch A")), "✅ Lịch A: xong 2/2")
+
+    def test_failed_includes_up_to_three_error_lines(self):
+        results = [{"outcome": "failed", "targetName": "Nhóm %d" % i, "error": "Lỗi %d" % i} for i in range(5)]
+        results.insert(0, {"outcome": "posted", "targetName": "OK", "error": ""})
+        text = self.fmt(finished(1, posted=1, failed=5), {"r1": {"run": {}, "results": results}})
+        lines = text.split("\n")
+        self.assertEqual(lines[0], "⚠️ Đăng ngay: xong 1/6, lỗi 5")
+        self.assertEqual(lines[1:], ["• Nhóm 0: Lỗi 0", "• Nhóm 1: Lỗi 1", "• Nhóm 2: Lỗi 2"])
+
+    def test_failed_when_runs_get_raises_sends_head_only(self):
+        text = self.fmt(finished(1, posted=0, failed=2), {"r1": bridge.BridgeError("UNREACHABLE", "x")})
+        self.assertEqual(text, "⚠️ Đăng ngay: xong 0/2, lỗi 2")
+
+    def test_run_level_failure_without_failed_targets(self):
+        text = self.fmt(finished(1, status="failed", posted=0))
+        self.assertTrue(text.startswith("⚠️ Đăng ngay: "))
+
+    def test_cancelled(self):
+        self.assertEqual(self.fmt(finished(1, status="cancelled", posted=1, failed=1)), "⏹ Đăng ngay: đã huỷ (1/2)")
+
+    def test_missed_and_login_problem(self):
+        missed = {"seq": 1, "type": "schedule.missed", "payload": {"name": "Tối", "reason": "App tắt lúc đến giờ"}}
+        self.assertEqual(self.fmt(missed), "⏰ Lỡ lịch \"Tối\": App tắt lúc đến giờ")
+        out = {"seq": 2, "type": "profile.loginProblem", "payload": {"profileName": "Mai", "state": "logged_out"}}
+        self.assertEqual(self.fmt(out), "🔒 Profile \"Mai\": hết phiên đăng nhập\nMở MaiHub để đăng nhập lại.")
+        cp = {"seq": 3, "type": "profile.loginProblem", "payload": {"profileName": "Mai", "state": "checkpoint"}}
+        self.assertEqual(self.fmt(cp), "🔒 Profile \"Mai\": bị checkpoint\nMở MaiHub để đăng nhập lại.")
+
+    def test_silent_types(self):
+        for kind in ("run.started", "draft.approved", "profiles.checkFinished", "something.new"):
+            self.assertIsNone(self.fmt({"seq": 1, "type": kind, "payload": {}}))
+
+    def test_truncation(self):
+        long = "x" * 500
+        missed = {"seq": 1, "type": "schedule.missed", "payload": {"name": long, "reason": long}}
+        text = self.fmt(missed)
+        self.assertLessEqual(len(text), 3500)
+        self.assertNotIn("x" * 201, text)
+        results = [{"outcome": "failed", "targetName": long, "error": long}] * 3
+        text = self.fmt(finished(1, posted=0, failed=3), {"r1": {"results": results}})
+        self.assertNotIn("x" * 201, text)
+        self.assertLessEqual(len(text), 3500)
+        self.assertEqual(len(bridge.clip("y" * 5000, 3500)), 3500)
+
+
+class NotifyTargetTests(unittest.TestCase):
+    def test_notify_target_priority(self):
+        bot = {"TG_TOKEN": TG_TOKEN, "ALLOWED_CHAT_ID": "-100,-200", "ALLOWED_TOPIC_ID": "7", "ADMIN_USER_ID": "9"}
+        self.assertEqual(bridge.resolve_notify_target({"MAIHUB_NOTIFY_CHAT_ID": "55"}, bot),
+                         {"token": TG_TOKEN, "chat_id": "55", "thread_id": None})
+        self.assertEqual(bridge.resolve_notify_target({}, bot), {"token": TG_TOKEN, "chat_id": "-100", "thread_id": 7})
+        del bot["ALLOWED_CHAT_ID"]
+        self.assertEqual(bridge.resolve_notify_target({}, bot), {"token": TG_TOKEN, "chat_id": "9", "thread_id": None})
+
+    def test_notify_target_errors_never_contain_token(self):
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            bridge.resolve_notify_target({}, {"TG_TOKEN": TG_TOKEN})
+        self.assertEqual(ctx.exception.code, "CONFIG")
+        self.assertNotIn(TG_TOKEN, str(ctx.exception))
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            bridge.resolve_notify_target({}, {"ADMIN_USER_ID": "1"})
+        self.assertIn("TG_TOKEN", str(ctx.exception))
+
+    def test_route(self):
+        self.assertEqual(bridge.resolve_telegram_route({}), {"api_base": "https://api.telegram.org", "proxy": None})
+        self.assertEqual(bridge.resolve_telegram_route({"TELEGRAM_API_BASE": "https://tg.example/"}),
+                         {"api_base": "https://tg.example", "proxy": None})
+        self.assertEqual(bridge.resolve_telegram_route({"TELEGRAM_PROXY": "http://127.0.0.1:3128"})["proxy"], "http://127.0.0.1:3128")
+        self.assertEqual(bridge.resolve_telegram_route({"TELEGRAM_API_BASE": "https://a", "TELEGRAM_PROXY": "http://p"})["proxy"], None)
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            bridge.resolve_telegram_route({"TELEGRAM_PROXY": "socks5://127.0.0.1:1080"})
+        self.assertEqual(ctx.exception.code, "CONFIG")
+        self.assertIn("SOCKS", str(ctx.exception))
+
+
+class FakeResponse(object):
+    def __init__(self, body):
+        self.body = body
+
+    def read(self):
+        return self.body
+
+    def close(self):
+        pass
+
+
+class FakeOpener(object):
+    def __init__(self, script):
+        self.script = list(script)
+        self.requests = []
+
+    def open(self, request, timeout=None):
+        self.requests.append(request)
+        item = self.script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+def http_429(retry_after):
+    import urllib.error
+    body = json.dumps({"ok": False, "parameters": {"retry_after": retry_after}}).encode("utf-8")
+    return urllib.error.HTTPError("https://x/bot%s/sendMessage" % TG_TOKEN, 429, "Too Many Requests", {}, io.BytesIO(body))
+
+
+OK_BODY = FakeResponse(b'{"ok": true}')
+ROUTE = {"api_base": "https://api.telegram.org", "proxy": None}
+
+
+class TelegramSenderTests(unittest.TestCase):
+    def make(self, script, thread_id=None):
+        clock = FakeClock()
+        opener = FakeOpener(script)
+        target = {"token": TG_TOKEN, "chat_id": "42", "thread_id": thread_id}
+        return bridge.TelegramSender(target, ROUTE, sleep=clock.sleep, opener=opener), opener, clock
+
+    def test_request_shape(self):
+        sender, opener, _ = self.make([OK_BODY], thread_id=7)
+        self.assertTrue(sender.send("xin chào"))
+        req = opener.requests[0]
+        self.assertEqual(req.full_url, "https://api.telegram.org/bot%s/sendMessage" % TG_TOKEN)
+        body = json.loads(req.data.decode("utf-8"))
+        self.assertEqual(body, {"chat_id": "42", "text": "xin chào", "disable_web_page_preview": True, "message_thread_id": 7})
+
+    def test_retries_then_succeeds(self):
+        sender, opener, clock = self.make([OSError("boom"), OSError("boom"), OK_BODY])
+        self.assertTrue(sender.send("a"))
+        self.assertEqual(clock.slept, [2, 10])
+
+    def test_drops_after_3_failures(self):
+        sender, opener, clock = self.make([OSError("down %s" % TG_TOKEN)] * 4)
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            self.assertFalse(sender.send("a"))
+        self.assertEqual(clock.slept, [2, 10, 30])
+        self.assertEqual(len(opener.requests), 4)
+        self.assertNotIn(TG_TOKEN, err.getvalue())
+        self.assertNotIn(TG_TOKEN, repr(sender))
+
+    def test_sender_429_retry_after(self):
+        sender, opener, clock = self.make([http_429(17), OK_BODY])
+        self.assertTrue(sender.send("a"))
+        self.assertEqual(clock.slept, [17])
+
+    def test_ok_false_counts_as_failure(self):
+        sender, _, clock = self.make([FakeResponse(b'{"ok": false}')] * 4)
+        with mock.patch("sys.stderr", io.StringIO()):
+            self.assertFalse(sender.send("a"))
+
+
+class WatcherTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state_path = os.path.join(self.tmp.name, "state", "watch-state.json")
+        self.clock = FakeClock()
+        self.sender = FakeSender()
+
+    def watcher(self, script, runs=None, sender=None):
+        self.client = FakeWatchClient(script, runs)
+        return bridge.Watcher(self.client, sender or self.sender, self.state_path, clock=self.clock, sleep=self.clock.sleep)
+
+    def state(self):
+        with open(self.state_path, "r") as handle:
+            return json.load(handle)
+
+    def test_first_run_skips_history(self):
+        full = [finished(i) for i in range(1, 101)]
+        w = self.watcher([page(full), page([finished(101)]), page([])])
+        w.step()
+        self.assertEqual(self.sender.sent, [])
+        self.assertEqual(self.state()["cursor"], 101)
+        self.assertEqual(self.state()["workspaceId"], "ws1")
+        self.assertEqual([c[1] for c in self.client.calls], [
+            {"after": 0, "timeoutSec": 0}, {"after": 100, "timeoutSec": 0}, {"after": 101, "timeoutSec": 0}])
+
+    def test_cursor_saved_after_each_send(self):
+        w = self.watcher([page([]), page([finished(1), finished(2)])])
+        w.step()
+        w.step()
+        self.assertEqual(len(self.sender.sent), 2)
+        self.assertEqual(self.state()["cursor"], 2)
+        self.assertEqual(self.client.calls[-1][1], {"after": 0, "timeoutSec": 25})
+        self.assertEqual(os.listdir(os.path.dirname(self.state_path)), ["watch-state.json"])
+
+    def test_crash_between_send_and_save_resends(self):
+        w = self.watcher([page([]), page([finished(1), finished(2)])], sender=FakeSender(fail_after=1))
+        w.step()
+        with self.assertRaises(RuntimeError):
+            w.step()  # gửi tin 1 xong, chết lúc gửi tin 2
+        self.assertEqual(self.state()["cursor"], 1)
+        # chết ngay sau khi gửi, trước khi lưu: con trỏ vẫn cũ nên gửi lại (ít nhất một lần)
+        again = FakeSender()
+        w2 = self.watcher([page([finished(2)])], sender=again)
+        w2.step()
+        self.assertEqual(len(again.sent), 1)
+        self.assertEqual(self.state()["cursor"], 2)
+
+    def test_silent_events_still_advance_cursor(self):
+        w = self.watcher([page([]), page([{"seq": 1, "type": "run.started", "payload": {}}])])
+        w.step()
+        w.step()
+        self.assertEqual(self.sender.sent, [])
+        self.assertEqual(self.state()["cursor"], 1)
+
+    def test_workspace_change_jumps_to_latest_with_one_notice(self):
+        w = self.watcher([page([finished(5)]), page([]), page([finished(1)], "ws2"), page([finished(9)], "ws2"), page([], "ws2")])
+        w.step()  # lần đầu: cursor=5
+        w.step()  # đổi workspace
+        self.assertEqual(self.sender.sent, ["Đã chuyển workspace: ws2"])
+        self.assertEqual(self.state()["cursor"], 9)
+        self.assertEqual(self.state()["workspaceId"], "ws2")
+
+    def test_unreachable_299_no_alert_300_one_alert_recovery_one_message(self):
+        err = bridge.BridgeError("UNREACHABLE", "Không kết nối được MaiHub")
+        w = self.watcher([page([])] + [err] * 20 + [page([])])
+        w.step()
+        start = self.clock.now
+        w.step()  # lỗi đầu: downSince = start
+        self.assertEqual(self.state()["downSince"], start)
+        self.clock.now = start + 299
+        w.step()
+        self.assertEqual(self.sender.sent, [])
+        self.clock.now = start + 300
+        w.step()
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertTrue(self.sender.sent[0].startswith("⚠️ Không liên lạc được MaiHub"))
+        self.assertIn("Không kết nối được MaiHub", self.sender.sent[0])
+        self.clock.now = start + 400
+        w.step()
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertEqual(self.clock.slept[-1], 15)
+        self.clock.now = start + 600
+        self.client.script = [page([])]
+        w.step()
+        self.assertEqual(self.sender.sent[1], "✅ MaiHub đã kết nối lại sau 10 phút")
+        self.assertIsNone(self.state()["downSince"])
+        self.assertFalse(self.state()["downAlerted"])
+        self.client.script = [page([])]
+        w.step()
+        self.assertEqual(len(self.sender.sent), 2)
+
+    def test_first_run_failure_does_not_create_state_or_replay_history(self):
+        w = self.watcher([bridge.BridgeError("UNREACHABLE", "x"), page([finished(1), finished(2)]), page([])])
+        w.step()
+        self.assertFalse(os.path.exists(self.state_path))
+        w.step()
+        self.assertEqual(self.sender.sent, [])
+        self.assertEqual(self.state()["cursor"], 2)
+
+    def test_short_outage_recovers_silently(self):
+        err = bridge.BridgeError("UNREACHABLE", "x")
+        w = self.watcher([page([]), err, page([])])
+        w.step()
+        w.step()
+        w.step()
+        self.assertEqual(self.sender.sent, [])
+        self.assertIsNone(self.state()["downSince"])
+
+    def test_unauthorized_one_alert_then_300s(self):
+        err = bridge.BridgeError("UNAUTHORIZED", "Khoá không hợp lệ", status=401)
+        w = self.watcher([page([]), err, err, page([])])
+        w.step()
+        w.step()
+        w.step()
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertTrue(self.sender.sent[0].startswith("🔑"))
+        self.assertEqual(self.clock.slept, [300, 300])
+        w.step()
+        self.assertFalse(self.state()["authAlerted"])
+
+    def test_pin_mismatch_alert(self):
+        w = self.watcher([page([]), bridge.BridgeError("PIN_MISMATCH", "lệch")])
+        w.step()
+        w.step()
+        self.assertTrue(self.sender.sent[0].startswith("🔐"))
+
+    def test_failure_details_fetched_via_runs_get(self):
+        runs = {"r1": {"results": [{"outcome": "failed", "targetName": "N", "error": "E"}]}}
+        w = self.watcher([page([]), page([finished(1, posted=0, failed=1)])], runs)
+        w.step()
+        w.step()
+        self.assertEqual(self.sender.sent, ["⚠️ Đăng ngay: xong 0/1, lỗi 1\n• N: E"])
+
+    def test_state_file_is_private_json(self):
+        w = self.watcher([page([])])
+        w.step()
+        self.assertEqual(sorted(self.state()), ["authAlerted", "cursor", "downAlerted", "downSince", "workspaceId"])
+
+
+class WatchCommandTests(BridgeTestCase):
+    def test_dry_run_prints_and_never_leaks_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            maihub_env = os.path.join(tmp, "maihub.env")
+            bot_env = os.path.join(tmp, "bot.env")
+            with open(maihub_env, "w") as handle:
+                handle.write("MAIHUB_URL=%s\nMAIHUB_API_KEY=%s\nMAIHUB_CERT_SHA256=%s\n" % (self.hub.url, API_KEY, PIN))
+            with open(bot_env, "w") as handle:
+                handle.write("TG_TOKEN=%s\nADMIN_USER_ID=9\n" % TG_TOKEN)
+            sender = bridge.PrintSender()
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out):
+                sender.send("xin chào")
+            self.assertEqual(out.getvalue(), "xin chào\n")
+            target = bridge.resolve_notify_target({}, bridge.parse_env_file(bot_env))
+            self.assertEqual(target["chat_id"], "9")
+            with mock.patch("maihub_bridge.Watcher.run_forever"):
+                code, o, e = self.run_cli(["watch", "--env-file", maihub_env, "--notify-env", bot_env, "--dry-run"], {})
+            self.assertEqual(code, 0)
+            self.assertNotIn(TG_TOKEN, o + e)
+            self.assertTrue(os.path.isdir(os.path.join(tmp, "state")))
+
+    def test_missing_notify_target_is_config_error_without_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            maihub_env = os.path.join(tmp, "maihub.env")
+            bot_env = os.path.join(tmp, "bot.env")
+            with open(maihub_env, "w") as handle:
+                handle.write("MAIHUB_URL=%s\nMAIHUB_API_KEY=%s\nMAIHUB_CERT_SHA256=%s\n" % (self.hub.url, API_KEY, PIN))
+            with open(bot_env, "w") as handle:
+                handle.write("TG_TOKEN=%s\n" % TG_TOKEN)
+            code, o, e = self.run_cli(["watch", "--env-file", maihub_env, "--notify-env", bot_env], {})
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertNotIn(TG_TOKEN, o + e)
+
+    def test_token_never_in_stderr_when_sending_fails(self):
+        clock = FakeClock()
+        opener = FakeOpener([OSError("conn %s" % TG_TOKEN)] * 4)
+        sender = bridge.TelegramSender({"token": TG_TOKEN, "chat_id": "1", "thread_id": None}, ROUTE, sleep=clock.sleep, opener=opener)
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            sender.send("x")
+        self.assertNotIn(TG_TOKEN, err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

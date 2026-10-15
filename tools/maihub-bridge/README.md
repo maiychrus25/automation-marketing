@@ -91,6 +91,22 @@ sudo -u <user> -H claude mcp remove maihub -s user   # Codex: sudo -u <user> -H 
 sudo rm -rf /opt/bot/maihub/<tên-service>
 ```
 
+### Thông báo chủ động (`watch`)
+
+```bash
+python3 maihub_bridge.py watch --env-file <.env MaiHub> --notify-env <.env của bot> [--state <tệp>] [--dry-run]
+```
+
+`watch` chờ sự kiện MaiHub (`events.wait`, 25 giây một lượt) rồi gửi tin tiếng Việt qua Telegram bằng chính token của bot (`TG_TOKEN` trong `--notify-env`; token chỉ đọc lúc chạy, không ghi ra đâu cả).
+
+- Chat nhận tin, theo thứ tự: `MAIHUB_NOTIFY_CHAT_ID` (`.env` MaiHub), `ALLOWED_CHAT_ID` (kèm `ALLOWED_TOPIC_ID` nếu có; nhiều giá trị cách nhau dấu phẩy thì lấy giá trị đầu), `ADMIN_USER_ID` (`.env` bot). Không có giá trị nào thì dừng với lỗi cấu hình.
+- Đường tới Telegram: đặt `TELEGRAM_API_BASE` (thay cho `https://api.telegram.org`) hoặc `TELEGRAM_PROXY` (`http://` hoặc `https://`; SOCKS không được hỗ trợ) trong `.env` MaiHub nếu VPS cần đi qua proxy để tới Telegram. Bridge không tự đọc `/opt/bot/telegram-proxy.url`.
+- `--state`: mặc định `state/watch-state.json` cạnh `--env-file` (ghi nguyên tử, lưu con trỏ sự kiện). Lần chạy đầu bỏ qua sự kiện cũ. Gửi ít nhất một lần: tiến trình chết giữa lúc gửi và lưu thì có thể trùng một tin.
+- `--dry-run`: in tin ra stdout, không gửi Telegram.
+- Gửi lỗi thì thử lại sau 2, 10, 30 giây (HTTP 429 thì chờ `retry_after`), vẫn lỗi thì ghi stderr và bỏ tin đó.
+
+Các loại tin: `✅` lượt xong; `⚠️` lượt có lỗi (kèm tối đa 3 dòng `• đích: lỗi`); `⏹` lượt bị huỷ; `⏰` lỡ lịch; `🔒` profile hết phiên hoặc bị checkpoint; `⚠️` mất liên lạc MaiHub từ 300 giây (một tin) và `✅` khi kết nối lại; `🔑` khoá bị từ chối và `🔐` sai ghim chứng chỉ (một tin, thử lại mỗi 5 phút); "Đã chuyển workspace" khi MaiHub đổi workspace. Không báo `run.started`, `draft.approved`, `profiles.checkFinished`.
+
 ## Bảo mật
 
 - Ghim chứng chỉ: bridge không kiểm CA hay tên miền, mà so SHA-256 chứng chỉ đầu cuối với `MAIHUB_CERT_SHA256` bằng so sánh hằng thời gian. Bắt tay TLS xong và khớp ghim thì mới gửi yêu cầu; lệch thì dừng, khoá API không rời máy.
