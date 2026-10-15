@@ -74,6 +74,23 @@ python3 maihub_bridge.py pair 'mhp1.…' --dir /duong/dan/thu-muc
 
 Mã ghép nối lấy từ giao diện MaiHub (sống 15 phút, dùng một lần, không chứa khoá API). Lệnh giải mã mã, kết nối và so ghim chứng chỉ TRƯỚC, rồi mới gửi vé tới `POST /v1/pair` (không gửi `Authorization`). Thành công thì ghi `MAIHUB_URL`, `MAIHUB_CERT_SHA256`, `MAIHUB_API_KEY` vào `<dir>/.env` (mặc định thư mục hiện tại, quyền 600 ngay từ lúc tạo), in khối `.env` với khoá đã che, rồi chạy `doctor`. Vé sai, hết hạn hoặc đã dùng thì thoát mã 1; mã sai định dạng thoát mã 2; ghim lệch hoặc không kết nối được thoát mã 3 và vé không được gửi đi.
 
+### Cài cho bot AHV (`pair --install`)
+
+```bash
+sudo python3 maihub_bridge.py pair 'mhp1.…' --install [--bot <tên-service>] [--cli claude|codex] [--dir <thư mục>]
+```
+
+Bắt buộc chạy bằng root. Lệnh quét `/etc/systemd/system/*.service` tìm unit bot AHV (có `User=` và `Environment=AHV_BOT_DATA_DIR=<dir>` với `<dir>/.env` chứa `TG_TOKEN`). Có đúng một bot thì dùng bot đó; nhiều bot thì bắt buộc `--bot <tên-service>` (lỗi liệt kê tên các unit và không sửa gì); không có bot nào thì báo lỗi. `--cli` mặc định suy ra từ `User=` (`claudeproxy` là claude, `codexproxy` là codex) hoặc tên service. `--dir` mặc định `/opt/bot/maihub/<tên-service>/`.
+
+Thứ tự: kiểm tra mọi thứ trước (bot, CLI, user) rồi mới tạo thư mục (`root:<user>` 750, bridge 640, `.env` `<user>:<user>` 600, `state/` 700), ghép nối, ghi `.env`, chạy `doctor`, sao lưu cấu hình CLI vào `<dir>/<tên file>.before-maihub` (chỉ lần đầu), đăng ký MCP `maihub` dưới quyền user của bot. Bước nào lỗi thì dừng và in tên bước; các bước đã xong không tự hoàn tác. Nếu ghi `.env` lỗi sau khi vé đã dùng thì MaiHub đã tạo một khoá: hãy thu hồi khoá đó rồi tạo mã ghép nối mới.
+
+Gỡ cài đặt (lệnh cũng được in cuối lần cài):
+
+```bash
+sudo -u <user> -H claude mcp remove maihub -s user   # Codex: sudo -u <user> -H codex mcp remove maihub
+sudo rm -rf /opt/bot/maihub/<tên-service>
+```
+
 ## Bảo mật
 
 - Ghim chứng chỉ: bridge không kiểm CA hay tên miền, mà so SHA-256 chứng chỉ đầu cuối với `MAIHUB_CERT_SHA256` bằng so sánh hằng thời gian. Bắt tay TLS xong và khớp ghim thì mới gửi yêu cầu; lệch thì dừng, khoá API không rời máy.

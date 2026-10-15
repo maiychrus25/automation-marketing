@@ -16,10 +16,15 @@ import io
 import http.client
 import json
 import os
+import pwd
 import re
+import shlex
+import shutil
 import socket
 import ssl
+import subprocess
 import sys
+import tempfile
 import urllib.parse
 import uuid
 
@@ -36,7 +41,11 @@ CONFIRM_GUIDANCE = "Hãy hỏi người dùng xác nhận rồi gọi lại vớ
 DESTRUCTIVE_NOTE = "Cần confirm: true (hỏi người dùng trước)"
 
 PAIR_PREFIX = "mhp1."
-PAIR_TICKET_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+PAIR_TICKET_RE = re.compile(r"^[A-Za-z0-9_-]{43}\Z")
+SYSTEMD_DIR = "/etc/systemd/system"
+DEFAULT_INSTALL_ROOT = "/opt/bot/maihub"
+BRIDGE_NAME = "maihub_bridge.py"
+BACKUP_SUFFIX = ".before-maihub"
 
 EXIT_SERVER_ERROR = 1
 EXIT_CONFIG = 2
@@ -94,9 +103,8 @@ def decode_pairing_code(code):
 
 
 def write_env_file(path, values, uid=None, gid=None):
-    """Ghi tệp KEY=VALUE quyền 0600 ngay từ lúc tạo (tệp tạm cùng thư mục rồi os.replace)."""
-    tmp_path = "%s.tmp.%d" % (path, os.getpid())
-    fd = os.open(tmp_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    """Ghi tệp KEY=VALUE quyền 0600 ngay từ lúc tạo (mkstemp cùng thư mục: tên khó đoán, không theo symlink; rồi os.replace)."""
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".env.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             for key, val in values.items():
@@ -451,8 +459,196 @@ def exit_code_for(err):
     return EXIT_NETWORK if err.code in ("UNREACHABLE", "PIN_MISMATCH", "BAD_RESPONSE") else EXIT_SERVER_ERROR
 
 
-def cmd_pair(args):
+def _unit_environment(text):
+    """Gom các dòng Environment= (có hoặc không có dấu nháy, nhiều cặp trên một dòng) thành dict."""
+    env = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith("Environment="):
+            continue
+        try:
+            items = shlex.split(line[len("Environment="):])
+        except ValueError:
+            continue
+        for item in items:
+            key, sep, val = item.partition("=")
+            if sep:
+                env[key] = val
+    return env
+
+
+def _env_file_has_key(path, key):
+    """Chỉ kiểm tra khoá có tồn tại; không giữ hay in giá trị."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for raw in handle:
+                line = raw.strip()
+                if line.startswith("export "):
+                    line = line[len("export "):]
+                if line.startswith(key + "="):
+                    return True
+    except (IOError, OSError):
+        pass
+    return False
+
+
+def find_ahv_bots(systemd_dir=SYSTEMD_DIR):
+    """Các unit bot AHV: có User=, Environment=AHV_BOT_DATA_DIR=<dir> và <dir>/.env chứa TG_TOKEN."""
+    bots = []
+    try:
+        names = sorted(os.listdir(systemd_dir))
+    except (IOError, OSError):
+        return bots
+    for name in names:
+        if not name.endswith(".service"):
+            continue
+        try:
+            with open(os.path.join(systemd_dir, name), "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except (IOError, OSError):
+            continue
+        user = None
+        for raw in text.splitlines():
+            if raw.strip().startswith("User="):
+                user = raw.strip()[len("User="):].strip()
+        data_dir = _unit_environment(text).get("AHV_BOT_DATA_DIR")
+        if user and data_dir and _env_file_has_key(os.path.join(data_dir, ".env"), "TG_TOKEN"):
+            bots.append({"service": name[:-len(".service")], "user": user, "data_dir": data_dir})
+    return bots
+
+
+def infer_cli(bot, explicit=None):
+    """--cli thắng; không có thì suy từ User= rồi từ tên service."""
+    if explicit:
+        return explicit
+    by_user = {"claudeproxy": "claude", "codexproxy": "codex"}
+    if bot["user"] in by_user:
+        return by_user[bot["user"]]
+    for cli in ("claude", "codex"):
+        if cli in bot["service"]:
+            return cli
+    raise BridgeError("CONFIG", "Không suy ra được loại CLI của bot %s, hãy truyền --cli claude|codex" % bot["service"])
+
+
+def install_layout(install_dir, user, uid, gid):
+    """Tạo thư mục cài + state/, chép bridge, đặt chủ sở hữu và quyền theo spec 2.5."""
+    os.makedirs(install_dir, exist_ok=True)
+    os.chown(install_dir, 0, gid)
+    os.chmod(install_dir, 0o750)
+    state_dir = os.path.join(install_dir, "state")
+    os.makedirs(state_dir, exist_ok=True)
+    os.chown(state_dir, uid, gid)
+    os.chmod(state_dir, 0o700)
+    bridge_path = os.path.join(install_dir, BRIDGE_NAME)
+    shutil.copyfile(os.path.abspath(__file__), bridge_path)
+    os.chown(bridge_path, 0, gid)
+    os.chmod(bridge_path, 0o640)
+    return bridge_path
+
+
+def cli_config_path(cli, home):
+    return os.path.join(home, ".claude.json") if cli == "claude" else os.path.join(home, ".codex", "config.toml")
+
+
+def backup_cli_config(cli, home, install_dir):
+    """Sao lưu cấu hình CLI vào <dir>/<tên>.before-maihub, chỉ lần đầu. Trả True nếu vừa sao lưu."""
+    src = cli_config_path(cli, home)
+    dst = os.path.join(install_dir, os.path.basename(src) + BACKUP_SUFFIX)
+    if os.path.exists(dst) or not os.path.isfile(src):
+        return False
+    shutil.copyfile(src, dst)
+    os.chmod(dst, 0o600)
+    return True
+
+
+def register_mcp(cli, user, bridge_path, env_path, run, home):
+    """Gỡ server maihub cũ (bỏ qua lỗi) rồi thêm lại, dưới quyền user, cwd là home."""
+    prefix = ["sudo", "-u", user, "-H", cli, "mcp"]
+    server = ["python3", "-I", bridge_path, "mcp", "--env-file", env_path]
+    remove = prefix + ["remove", "maihub"] + (["-s", "user"] if cli == "claude" else [])
+    add = prefix + (["add", "--scope", "user", "maihub", "--"] if cli == "claude" else ["add", "maihub", "--"]) + server
+    kwargs = {"cwd": home, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+    run(remove, **kwargs)
+    result = run(add, **kwargs)
+    if getattr(result, "returncode", 0) != 0:
+        raise BridgeError("CONFIG", "Lệnh đăng ký MCP thất bại (mã %s)" % result.returncode)
+
+
+def _write_paired_env(env_path, values, uid=None, gid=None):
+    try:
+        write_env_file(env_path, values, uid, gid)
+    except (IOError, OSError) as err:
+        raise BridgeError(
+            "CONFIG",
+            "Không ghi được %s: %s. Vé đã bị dùng và MaiHub đã tạo một khoá API; hãy thu hồi khoá đó trong MaiHub rồi tạo mã ghép nối mới." % (env_path, err))
+
+
+def cmd_install(args, run, geteuid, systemd_dir, getpwnam):
+    """pair --install: tìm bot, dựng thư mục, ghép nối, ghi .env, doctor, sao lưu cấu hình, đăng ký MCP."""
+    step = "kiểm tra"
+    try:
+        if geteuid() != 0:
+            raise BridgeError("CONFIG", "Cần chạy bằng root")
+        info = decode_pairing_code(args.code)
+        bots = find_ahv_bots(systemd_dir)
+        if args.bot:
+            bots = [b for b in bots if b["service"] == args.bot]
+            if not bots:
+                raise BridgeError("CONFIG", "Không thấy bot %s trong %s" % (args.bot, systemd_dir))
+        elif not bots:
+            raise BridgeError("CONFIG", "Không tìm thấy bot AHV nào trong %s; chạy lại không có --install để ghi .env vào thư mục tuỳ chọn" % systemd_dir)
+        elif len(bots) > 1:
+            raise BridgeError("CONFIG", "Có nhiều bot, hãy chọn bằng --bot: %s" % ", ".join(b["service"] for b in bots))
+        bot = bots[0]
+        cli = infer_cli(bot, args.cli)
+        try:
+            account = getpwnam(bot["user"])
+        except KeyError:
+            raise BridgeError("CONFIG", "Không có user %s trên máy" % bot["user"])
+        install_dir = args.dir or os.path.join(DEFAULT_INSTALL_ROOT, bot["service"])
+        env_path = os.path.join(install_dir, ".env")
+        home = account.pw_dir
+
+        step = "tạo thư mục cài"
+        bridge_path = install_layout(install_dir, bot["user"], account.pw_uid, account.pw_gid)
+        step = "ghép nối (POST /v1/pair)"
+        paired = MaiHubClient(Config(info["url"], None, info["pin"])).pair(info["ticket"])
+        api_key = paired.get("apiKey") if isinstance(paired, dict) else None
+        if not isinstance(api_key, str) or not api_key:
+            raise BridgeError("BAD_RESPONSE", "MaiHub không trả về khoá API")
+        values = {"MAIHUB_URL": info["url"], "MAIHUB_CERT_SHA256": info["pin"], "MAIHUB_API_KEY": api_key}
+        step = "ghi .env"
+        _write_paired_env(env_path, values, account.pw_uid, account.pw_gid)
+        print("Đã ghép nối bot \"%s\" (khoá %s). Đã ghi %s:" % (info["name"], paired.get("keyName", ""), env_path))
+        for key, val in values.items():
+            print("%s=%s" % (key, mask_key(val) if key == "MAIHUB_API_KEY" else val))
+        step = "doctor"
+        doctor_code = cmd_doctor(lambda: Config.load(env_path, {}))
+        if doctor_code != 0:
+            sys.stderr.write("Bước lỗi: %s\n" % step)
+            return doctor_code
+        step = "sao lưu cấu hình CLI"
+        backup_cli_config(cli, home, install_dir)
+        step = "đăng ký MCP"
+        register_mcp(cli, bot["user"], bridge_path, env_path, run, home)
+    except BridgeError as err:
+        sys.stderr.write("Bước lỗi: %s\n" % step)
+        return exit_code_for(err)
+    except (IOError, OSError) as err:
+        sys.stderr.write("Bước lỗi: %s\n%s\n" % (step, err))
+        return EXIT_CONFIG
+    print("")
+    print("Tóm tắt: thư mục %s, CLI %s, user %s, doctor OK, MCP \"maihub\" đã đăng ký." % (install_dir, cli, bot["user"]))
+    print("Lệnh gỡ:")
+    print("  sudo -u %s -H %s mcp remove maihub%s" % (bot["user"], cli, " -s user" if cli == "claude" else ""))
+    print("  rm -rf %s" % shlex.quote(install_dir))
+    return 0
+
+
+def cmd_pair(args, run=subprocess.run, geteuid=os.geteuid, systemd_dir=SYSTEMD_DIR, getpwnam=pwd.getpwnam):
     """Giải mã mã ghép nối, đổi vé lấy khoá (đã ghim chứng chỉ trước khi gửi vé), ghi .env rồi chạy doctor."""
+    if args.install:
+        return cmd_install(args, run, geteuid, systemd_dir, getpwnam)
     try:
         info = decode_pairing_code(args.code)
         paired = MaiHubClient(Config(info["url"], None, info["pin"])).pair(info["ticket"])
@@ -460,11 +656,8 @@ def cmd_pair(args):
         if not isinstance(api_key, str) or not api_key:
             raise BridgeError("BAD_RESPONSE", "MaiHub không trả về khoá API")
         values = {"MAIHUB_URL": info["url"], "MAIHUB_CERT_SHA256": info["pin"], "MAIHUB_API_KEY": api_key}
-        env_path = os.path.join(args.dir, ".env")
-        try:
-            write_env_file(env_path, values)
-        except (IOError, OSError) as err:
-            raise BridgeError("CONFIG", "Không ghi được %s: %s" % (env_path, err))
+        env_path = os.path.join(args.dir or ".", ".env")
+        _write_paired_env(env_path, values)
     except BridgeError as err:
         return exit_code_for(err)
     print("Đã ghép nối bot \"%s\" (khoá %s). Đã ghi %s (quyền 600):" % (info["name"], paired.get("keyName", ""), env_path))
@@ -497,7 +690,10 @@ def build_parser():
     sub.add_parser("mcp", parents=[shared], help="Chạy MCP server qua stdio")
     p_pair = sub.add_parser("pair", help="Ghép nối với MaiHub bằng mã ghép nối, ghi .env")
     p_pair.add_argument("code", help="Mã ghép nối (mhp1.…) lấy từ giao diện MaiHub")
-    p_pair.add_argument("--dir", default=".", help="Thư mục ghi .env (mặc định: thư mục hiện tại)")
+    p_pair.add_argument("--dir", default=None, help="Thư mục ghi .env (mặc định: thư mục hiện tại; với --install: /opt/bot/maihub/<service>)")
+    p_pair.add_argument("--install", action="store_true", help="Cài cho bot AHV trên máy này (cần root): thư mục, .env, đăng ký MCP")
+    p_pair.add_argument("--bot", help="Tên service của bot (bắt buộc khi có nhiều bot)")
+    p_pair.add_argument("--cli", choices=["claude", "codex"], help="Loại CLI (mặc định suy ra từ user hoặc tên service)")
     return parser
 
 

@@ -501,5 +501,222 @@ class PairTests(BridgeTestCase):
             self.assertEqual(bridge.parse_env_file(path), {"A": "2"})
 
 
+UNIT_TEMPLATE = """[Service]
+Type=simple
+User=%(user)s
+Environment=HOME=/home/%(user)s
+%(env_line)s
+ExecStart=/usr/local/sbin/ahv-bot-run-linux.sh x
+"""
+
+
+class FakeRun(object):
+    def __init__(self, fail_on=None):
+        self.calls = []
+        self.fail_on = fail_on
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append((list(cmd), kwargs))
+        code = 1 if self.fail_on and self.fail_on in cmd else 0
+        return mock.Mock(returncode=code)
+
+
+class InstallTests(BridgeTestCase):
+    def setUp(self):
+        BridgeTestCase.setUp(self)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.systemd = os.path.join(self.tmp.name, "systemd")
+        os.mkdir(self.systemd)
+        self.home = os.path.join(self.tmp.name, "home")
+        os.mkdir(self.home)
+        self.install_root = os.path.join(self.tmp.name, "opt")
+
+    def add_bot(self, service, user, quoted=False, token=True):
+        data_dir = os.path.join(self.tmp.name, "data-" + service)
+        os.makedirs(data_dir, exist_ok=True)
+        with open(os.path.join(data_dir, ".env"), "w") as handle:
+            handle.write("TG_TOKEN=secret-token\n" if token else "OTHER=1\n")
+        line = 'Environment="AHV_BOT_DATA_DIR=%s"' % data_dir if quoted else "Environment=AHV_BOT_DATA_DIR=%s" % data_dir
+        with open(os.path.join(self.systemd, service + ".service"), "w") as handle:
+            handle.write(UNIT_TEMPLATE % {"user": user, "env_line": line})
+        return data_dir
+
+    def args(self, **over):
+        ns = dict(code=make_pair_code(self.hub.url, PIN), install=True, bot=None, cli=None, dir=os.path.join(self.install_root, "bot1"))
+        ns.update(over)
+        return mock.Mock(**ns)
+
+    def pw(self, name):
+        if name != "claudeproxy" and name != "codexproxy":
+            raise KeyError(name)
+        return mock.Mock(pw_dir=self.home, pw_uid=1234, pw_gid=5678)
+
+    def install(self, run, euid=0, **over):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch("os.chown") as chown:
+            code = bridge.cmd_pair(self.args(**over), run=run, geteuid=lambda: euid, systemd_dir=self.systemd, getpwnam=self.pw)
+        self.chown = chown
+        return code, out.getvalue(), err.getvalue()
+
+    def test_find_ahv_bots_zero_one_two(self):
+        self.assertEqual(bridge.find_ahv_bots(self.systemd), [])
+        data_dir = self.add_bot("tg-claude-bot-a", "claudeproxy")
+        self.add_bot("no-token", "claudeproxy", token=False)
+        with open(os.path.join(self.systemd, "other.service"), "w") as handle:
+            handle.write("[Service]\nUser=root\n")
+        self.assertEqual(bridge.find_ahv_bots(self.systemd), [{"service": "tg-claude-bot-a", "user": "claudeproxy", "data_dir": data_dir}])
+        self.add_bot("tg-codex-bot-b", "codexproxy", quoted=True)
+        self.assertEqual([b["service"] for b in bridge.find_ahv_bots(self.systemd)], ["tg-claude-bot-a", "tg-codex-bot-b"])
+
+    def test_infer_cli(self):
+        self.assertEqual(bridge.infer_cli({"user": "claudeproxy", "service": "x"}), "claude")
+        self.assertEqual(bridge.infer_cli({"user": "codexproxy", "service": "x"}), "codex")
+        self.assertEqual(bridge.infer_cli({"user": "u", "service": "tg-codex-bot"}), "codex")
+        self.assertEqual(bridge.infer_cli({"user": "u", "service": "tg-claude-bot"}), "claude")
+        self.assertEqual(bridge.infer_cli({"user": "claudeproxy", "service": "x"}, "codex"), "codex")
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            bridge.infer_cli({"user": "u", "service": "bot"})
+        self.assertEqual(ctx.exception.code, "CONFIG")
+        self.assertIn("--cli", ctx.exception.message)
+
+    def test_register_mcp_commands(self):
+        run = FakeRun()
+        bridge.register_mcp("claude", "claudeproxy", "/d/maihub_bridge.py", "/d/.env", run, "/home/c")
+        server = ["python3", "-I", "/d/maihub_bridge.py", "mcp", "--env-file", "/d/.env"]
+        self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "claude", "mcp", "remove", "maihub", "-s", "user"])
+        self.assertEqual(run.calls[1][0], ["sudo", "-u", "claudeproxy", "-H", "claude", "mcp", "add", "--scope", "user", "maihub", "--"] + server)
+        self.assertEqual(run.calls[1][1]["cwd"], "/home/c")
+        run = FakeRun()
+        bridge.register_mcp("codex", "codexproxy", "/d/maihub_bridge.py", "/d/.env", run, "/home/x")
+        self.assertEqual(run.calls[0][0], ["sudo", "-u", "codexproxy", "-H", "codex", "mcp", "remove", "maihub"])
+        self.assertEqual(run.calls[1][0], ["sudo", "-u", "codexproxy", "-H", "codex", "mcp", "add", "maihub", "--"] + server)
+
+    def test_register_mcp_ignores_remove_failure_but_not_add_failure(self):
+        bridge.register_mcp("codex", "u", "/b", "/e", FakeRun(fail_on="remove"), self.home)
+        with self.assertRaises(bridge.BridgeError):
+            bridge.register_mcp("codex", "u", "/b", "/e", FakeRun(fail_on="add"), self.home)
+
+    def test_backup_does_not_overwrite(self):
+        install_dir = os.path.join(self.tmp.name, "inst")
+        os.mkdir(install_dir)
+        config = os.path.join(self.home, ".claude.json")
+        with open(config, "w") as handle:
+            handle.write("v1")
+        self.assertTrue(bridge.backup_cli_config("claude", self.home, install_dir))
+        with open(config, "w") as handle:
+            handle.write("v2")
+        self.assertFalse(bridge.backup_cli_config("claude", self.home, install_dir))
+        with open(os.path.join(install_dir, ".claude.json.before-maihub")) as handle:
+            self.assertEqual(handle.read(), "v1")
+        self.assertFalse(bridge.backup_cli_config("codex", self.home, install_dir))  # chưa có cấu hình codex
+
+    def test_install_requires_root(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        run = FakeRun()
+        code, _, err = self.install(run, euid=1000)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("Cần chạy bằng root", err)
+        self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(self.install_root))
+
+    def test_install_multiple_bots_without_bot_changes_nothing(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        self.add_bot("tg-codex-bot-b", "codexproxy")
+        run = FakeRun()
+        code, _, err = self.install(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("tg-claude-bot-a", err)
+        self.assertIn("tg-codex-bot-b", err)
+        self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(self.install_root))
+        self.assertEqual(self.hub.requests, [])
+
+    def test_install_no_bot_found(self):
+        run = FakeRun()
+        code, _, err = self.install(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("không có --install", err)
+        self.assertFalse(os.path.exists(self.install_root))
+
+    def test_install_full_flow(self):
+        data_dir = self.add_bot("tg-claude-bot-a", "claudeproxy")
+        self.add_bot("tg-codex-bot-b", "codexproxy")
+        with open(os.path.join(self.home, ".claude.json"), "w") as handle:
+            handle.write("{}")
+        run = FakeRun()
+        code, out, err = self.install(run, bot="tg-claude-bot-a")
+        self.assertEqual(code, 0, out + err)
+        install_dir = self.args().dir
+        env_path = os.path.join(install_dir, ".env")
+        self.assertEqual(bridge.parse_env_file(env_path)["MAIHUB_API_KEY"], API_KEY)
+        self.assertEqual(os.stat(env_path).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(install_dir).st_mode & 0o777, 0o750)
+        self.assertEqual(os.stat(os.path.join(install_dir, "state")).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(os.path.join(install_dir, "maihub_bridge.py")).st_mode & 0o777, 0o640)
+        chowned = dict((c[0][0], c[0][1:]) for c in self.chown.call_args_list)
+        self.assertEqual(chowned[install_dir], (0, 5678))
+        self.assertEqual(chowned[os.path.join(install_dir, "maihub_bridge.py")], (0, 5678))
+        self.assertEqual(chowned[os.path.join(install_dir, "state")], (1234, 5678))
+        self.assertTrue(any(c[0][1:] == (1234, 5678) and ".env." in c[0][0] for c in self.chown.call_args_list))
+        self.assertTrue(os.path.exists(os.path.join(install_dir, ".claude.json.before-maihub")))
+        self.assertEqual(len(run.calls), 2)
+        self.assertEqual(run.calls[1][1]["cwd"], self.home)
+        self.assertIn(os.path.join(install_dir, "maihub_bridge.py"), run.calls[1][0])
+        self.assertIn("mcp remove maihub -s user", out)
+        self.assertIn(install_dir, out)
+        self.assertNotIn(API_KEY, out + err)
+        self.assertNotIn("secret-token", out + err)
+        self.assertTrue(os.path.isdir(data_dir))
+
+    def test_install_codex_inferred_from_user_and_cli_override(self):
+        self.add_bot("bot-one", "codexproxy")
+        run = FakeRun()
+        code, out, err = self.install(run)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(run.calls[1][0][4], "codex")
+
+    def test_install_unknown_user_changes_nothing(self):
+        self.add_bot("tg-codex-bot", "ghostuser")
+        run = FakeRun()
+        code, _, err = self.install(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("ghostuser", err)
+        self.assertEqual(self.hub.requests, [])
+        self.assertFalse(os.path.exists(self.install_root))
+
+    def test_install_register_failure_reports_step(self):
+        self.add_bot("tg-claude-bot-a", "claudeproxy")
+        code, _, err = self.install(FakeRun(fail_on="add"))
+        self.assertNotEqual(code, 0)
+        self.assertIn("đăng ký MCP", err)
+
+
+class PairHardeningTests(BridgeTestCase):
+    def test_ticket_regex_rejects_trailing_newline(self):
+        self.assertIsNone(bridge.PAIR_TICKET_RE.match(PAIR_TICKET + "\n"))
+        self.assertIsNotNone(bridge.PAIR_TICKET_RE.match(PAIR_TICKET))
+
+    def test_write_env_file_uses_mkstemp_and_cleans_up(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".env")
+            with mock.patch("tempfile.mkstemp", wraps=tempfile.mkstemp) as mk:
+                bridge.write_env_file(path, {"A": "1"})
+            self.assertEqual(mk.call_args[1], {"dir": tmp, "prefix": ".env."})
+            with mock.patch("os.chown", side_effect=OSError("denied")):
+                with self.assertRaises(OSError):
+                    bridge.write_env_file(path, {"A": "2"}, uid=1, gid=1)
+            self.assertEqual(os.listdir(tmp), [".env"])
+            self.assertEqual(bridge.parse_env_file(path), {"A": "1"})
+
+    def test_env_write_failure_after_consume_mentions_revoke(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = os.path.join(tmp, "nope")
+            code, _, err = self.run_cli(["pair", make_pair_code(self.hub.url, PIN), "--dir", missing], {})
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("thu hồi", err)
+        self.assertIn("mã ghép nối mới", err)
+
+
 if __name__ == "__main__":
     unittest.main()
