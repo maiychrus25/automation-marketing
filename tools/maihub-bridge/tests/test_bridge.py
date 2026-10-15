@@ -1183,6 +1183,17 @@ class WatcherTests(unittest.TestCase):
         w.step()
         self.assertEqual(os.stat(self.state_path).st_mode & 0o777, 0o600)
 
+    def test_malformed_events_are_bad_response_not_crash(self):
+        bad_pages = [page([{"type": "run.finished", "payload": {}}]), page(["oops"]), page([{"seq": True, "type": "x"}]),
+                     page([{"seq": 3}]), {"events": "nope", "workspaceId": "ws1"}, "garbage"]
+        w = self.watcher([page([finished(1)]), page([])] + bad_pages)
+        w.step()
+        for _ in bad_pages:
+            w.step()
+        self.assertEqual(self.sender.sent, [])
+        self.assertEqual(self.state()["cursor"], 1)
+        self.assertIsNotNone(self.state()["downSince"])
+
     def test_short_outage_recovers_silently(self):
         err = bridge.BridgeError("UNREACHABLE", "x")
         w = self.watcher([page([]), err, page([])])
@@ -1268,6 +1279,16 @@ class WatchCommandTests(BridgeTestCase):
             code, o, e = self.run_cli(["watch", "--notify-env", bot_env], {})
         self.assertEqual(code, bridge.EXIT_CONFIG)
         self.assertNotIn(TG_TOKEN, o + e)
+
+    def test_watch_with_only_state_reads_maihub_from_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bot_env = os.path.join(tmp, "bot.env")
+            with open(bot_env, "w") as handle:
+                handle.write("TG_TOKEN=%s\nADMIN_USER_ID=9\n" % TG_TOKEN)
+            with mock.patch("maihub_bridge.Watcher") as watcher:
+                code, _, _ = self.run_cli(["watch", "--notify-env", bot_env, "--state", os.path.join(tmp, "s", "w.json"), "--dry-run"])
+        self.assertEqual(code, 0)
+        self.assertEqual(watcher.call_args[0][0].config.url, self.hub.url)
 
     def test_missing_notify_target_is_config_error_without_token(self):
         with tempfile.TemporaryDirectory() as tmp:

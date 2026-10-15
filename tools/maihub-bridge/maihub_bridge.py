@@ -896,7 +896,16 @@ class Watcher(object):
             raise
 
     def _wait(self, after, timeout_sec):
-        return self.client.call("events.wait", {"after": after, "timeoutSec": timeout_sec})
+        """events.wait đã kiểm định dạng: events là danh sách dict có seq (int, không phải bool) và type (str)."""
+        result = self.client.call("events.wait", {"after": after, "timeoutSec": timeout_sec})
+        events = result.get("events") if isinstance(result, dict) else None
+        if events is None and isinstance(result, dict):
+            events = []
+        if not isinstance(events, list) or any(
+                not isinstance(e, dict) or not isinstance(e.get("seq"), int) or isinstance(e.get("seq"), bool)
+                or not isinstance(e.get("type"), str) for e in events):
+            raise BridgeError("BAD_RESPONSE", "events.wait trả về sự kiện sai định dạng")
+        return result
 
     def _latest(self, after):
         """Duyệt hết các trang (timeoutSec=0) tới trang rỗng; trả (seq lớn nhất, workspaceId)."""
@@ -907,8 +916,6 @@ class Watcher(object):
             events = result.get("events") or []
             if not events:
                 return seq, workspace
-            if any(not isinstance(e, dict) or not isinstance(e.get("seq"), int) for e in events):
-                raise BridgeError("BAD_RESPONSE", "Sự kiện thiếu seq")
             top = max(e["seq"] for e in events)
             if top <= seq:  # không tiến lên: dừng để khỏi lặp vô hạn
                 return seq, workspace
