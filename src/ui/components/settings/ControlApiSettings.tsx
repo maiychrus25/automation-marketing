@@ -4,34 +4,15 @@ import { useAppStore } from '@/store/appStore';
 import { showConfirm } from '../common/ConfirmDialog';
 import { Spinner } from '../common/PageLoading';
 import { findBroadCidrs } from './controlAllowList';
-import { BotIcon, CopyIcon, KeyIcon, RefreshIcon, TrashIcon } from '../common/icons';
+import { Card, CodeBox } from './controlApiParts';
+import PairingPanel from './PairingPanel';
+import { BotIcon, KeyIcon, RefreshIcon, TrashIcon } from '../common/icons';
 
-type ControlView = { enabled: boolean; port: number; allowList: string[]; fingerprint: string | null; running: boolean; error?: string; warning?: string };
+type ControlView = { enabled: boolean; port: number; allowList: string[]; fingerprint: string | null; running: boolean; error?: string; warning?: string; publicHost?: string | null; detectedPublicHost?: string | null };
 type KeyRow = { id: string; name: string; createdAt: number; lastUsedAt: number | null; revokedAt: number | null };
 type AuditRow = { at: number; keyName: string | null; ip: string | null; method: string | null; ok: boolean; errorCode: string | null; durationMs: number | null };
 
 const formatTime = (ms: number | null) => (ms ? new Date(ms).toLocaleString('vi-VN') : '—');
-
-function Card({ title, children }: { title?: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-gray-800 rounded-xl p-4 space-y-3 min-w-0">
-      {title && <h3 className="text-sm font-semibold text-white">{title}</h3>}
-      {children}
-    </div>
-  );
-}
-
-/** Ô mã nguồn: cuộn ngang bên trong ô, kèm nút sao chép. */
-function CodeBox({ text, onCopy, label }: { text: string; onCopy: (t: string) => void; label: string }) {
-  return (
-    <div className="flex flex-wrap items-start gap-2 min-w-0">
-      <pre className="flex-1 min-w-0 basis-[12rem] overflow-x-auto bg-gray-900/60 rounded-lg px-3 py-2 text-xs font-mono text-gray-200 select-all whitespace-pre">{text}</pre>
-      <button type="button" className="btn-secondary flex-shrink-0 flex items-center gap-1" onClick={() => onCopy(text)} aria-label={label}>
-        <CopyIcon className="w-4 h-4" /> Sao chép
-      </button>
-    </div>
-  );
-}
 
 export default function ControlApiSettings() {
   const { showNotification } = useAppStore();
@@ -95,6 +76,14 @@ export default function ControlApiSettings() {
       setAuditLoading(false);
     }
   }, []);
+
+  const reloadAfterPairing = useCallback(async () => {
+    try {
+      const res = await ipc.controlApi?.getConfig();
+      if (res?.success) applyView(res as ControlView);
+    } catch { /* giữ nguyên giao diện hiện tại */ }
+    await Promise.all([loadKeys(), loadAudit(), loadFirewall().catch(() => {})]);
+  }, [loadKeys, loadAudit, loadFirewall]);
 
   useEffect(() => {
     (async () => {
@@ -207,6 +196,13 @@ export default function ControlApiSettings() {
         <h2 className="text-base font-semibold text-white flex items-center gap-2"><BotIcon className="w-4 h-4" /> Điều khiển từ bot</h2>
         <p className="text-xs text-gray-400 mt-1 leading-relaxed">Bot AI (ví dụ bot Telegram trên VPS) điều khiển Đăng Facebook qua kết nối HTTPS có khoá.</p>
       </div>
+
+      <PairingPanel
+        publicHost={view.publicHost ?? view.detectedPublicHost ?? ''}
+        onCopy={copy}
+        onCreated={reloadAfterPairing}
+        onPaired={reloadAfterPairing}
+      />
 
       <Card>
         <div className="flex flex-wrap items-center gap-3">
