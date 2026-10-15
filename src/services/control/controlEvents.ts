@@ -1,8 +1,8 @@
 import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
-import type { FbPosterResult, FbPosterRun, FbPosterSchedule } from '../../models/facebookPoster';
+import type { FbPosterResult, FbPosterRun, FbPosterSchedule, LoginCheckOutcome, LoginCheckSource, LoginState } from '../../models/facebookPoster';
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished';
 
 export function buildRunStarted(run: { runId: string; kind: string; scheduleId: string | null }) {
     return { runId: run.runId, kind: run.kind, scheduleId: run.scheduleId };
@@ -23,6 +23,22 @@ export function buildScheduleMissed(notice: { scheduleId: string; name: string; 
 
 export function buildDraftApproved(schedule: Pick<FbPosterSchedule, 'id' | 'name' | 'kind' | 'nextRunAt'>, when: unknown) {
     return { scheduleId: schedule.id, name: schedule.name, when: when === 'now' ? 'now' : 'scheduled', kind: schedule.kind, nextRunAt: schedule.nextRunAt };
+}
+
+export function buildLoginProblem(e: { profileId: string; profileName: string; state: LoginState; source: 'check' | 'run' }) {
+    return { profileId: e.profileId, profileName: e.profileName, state: e.state, source: e.source };
+}
+
+/** `error` chỉ có khi lần kiểm tra của profile đó lỗi. */
+export function buildCheckFinished(e: { checkId: string; source: LoginCheckSource; results: { profileId: string; profileName: string; outcome: LoginCheckOutcome; error?: string }[] }) {
+    return {
+        checkId: e.checkId,
+        source: e.source,
+        results: e.results.map((r) => ({
+            profileId: r.profileId, profileName: r.profileName, outcome: r.outcome,
+            ...(r.error !== undefined ? { error: r.error } : {}),
+        })),
+    };
 }
 
 type Sink = (type: ControlEventType, payload: unknown) => void;

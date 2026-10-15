@@ -199,6 +199,8 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `run.finished` | Việc kết thúc | `{ runId, kind, status, scheduleId, posted, failed, skipped }` (đếm theo kết quả từng đích) |
 | `schedule.missed` | Lịch bị lỡ (app tắt/máy ngủ quá giờ, chờ quá 2 giờ, hoặc app đóng khi lượt đang chờ) | `{ scheduleId, name, reason, at }`; `reason` là một trong `App tắt lúc đến giờ`, `Chờ quá 2 giờ vì đang có việc khác`, `App đóng khi lượt đang chờ` (`MISSED_APP_QUIT`) |
 | `draft.approved` | Duyệt nháp (trong app hoặc qua API) | `{ scheduleId, name, when: "now"\|"scheduled", kind, nextRunAt }` |
+| `profile.loginProblem` | Trạng thái đăng nhập lưu của profile chuyển sang `logged_out` hoặc `checkpoint` (từ trạng thái khác, kể cả `unknown`); giữ nguyên thì không phát lại | `{ profileId, profileName, state, source }`; `source` là `check` hoặc `run` |
+| `profiles.checkFinished` | Một lượt kiểm tra đăng nhập kết thúc | `{ checkId, source: "manual"\|"api"\|"daily", results: [{ profileId, profileName, outcome, error? }] }`; `outcome` là `ok`, `logged_out`, `checkpoint`, `error`, `skipped`; `error` chỉ có khi `outcome = error` |
 
 Sau `run.finished`, gọi `runs.get` với `runId` để lấy link bài và chi tiết từng đích.
 

@@ -7,7 +7,7 @@ import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
 import { ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
-import { buildDraftApproved, buildRunFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
+import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildRunFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 import { createCertificate } from '../../services/control/certificate';
 import { parseBotIp, withStoredPublicHost } from '../../services/control/controlConfig';
 
@@ -226,4 +226,22 @@ describe('withStoredPublicHost', () => {
     test('undefined input does not throw', () => {
         expect(() => withStoredPublicHost(undefined, null)).not.toThrow();
     });
+});
+
+describe('control events: login checks', () => {
+  test('buildLoginProblem keeps only the spec fields', () => {
+    expect(buildLoginProblem({ profileId: 'p', profileName: 'Nick A', state: 'logged_out', source: 'check', extra: 1 } as any))
+      .toEqual({ profileId: 'p', profileName: 'Nick A', state: 'logged_out', source: 'check' });
+  });
+  test('buildCheckFinished omits error when absent', () => {
+    expect(buildCheckFinished({ checkId: 'c', source: 'daily', results: [
+      { profileId: 'a', profileName: 'A', outcome: 'ok' },
+      { profileId: 'b', profileName: 'B', outcome: 'error', error: 'timeout' },
+    ] })).toEqual({ checkId: 'c', source: 'daily', results: [
+      { profileId: 'a', profileName: 'A', outcome: 'ok' },
+      { profileId: 'b', profileName: 'B', outcome: 'error', error: 'timeout' },
+    ] });
+    const first = buildCheckFinished({ checkId: 'c', source: 'api', results: [{ profileId: 'a', profileName: 'A', outcome: 'skipped' }] }).results[0];
+    expect('error' in first).toBe(false);
+  });
 });

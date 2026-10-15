@@ -20,6 +20,7 @@ describe('isEmployeeChannelAllowed', () => {
   const bossOnly = [
     'browserProfile:list', 'browserProfile:open', 'browserProfile:create', 'browserProfile:delete',
     'facebookPoster:start', 'facebookPoster:stop',
+    'facebookPoster:checkLogins', 'facebookPoster:getLoginStates', 'facebookPoster:getLoginCheckConfig', 'facebookPoster:setLoginCheckConfig',
     'controlApi:createKey', 'controlApi:setConfig', 'controlApi:getConfig', 'controlApi:listKeys', 'controlApi:revokeKey',
     'controlApi:listAudit', 'controlApi:firewallCommand', 'controlApi:regenerateCertificate',
     'controlApi:createPairing', 'controlApi:cancelPairing',

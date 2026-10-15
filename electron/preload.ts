@@ -847,6 +847,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'facebookPoster:runFinished',
       'facebookPoster:scheduleMissed',
       'facebookPoster:schedulesChanged',
+      'facebookPoster:loginStateChanged',
+      'facebookPoster:loginCheckProgress',
       'controlApi:paired',
     ];
     if (validChannels.includes(channel)) {
@@ -922,5 +924,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     draftGet:       (id: string)                  => ipcRenderer.invoke('facebookPoster:draftGet', { id }),
     draftApprove:   (params: any)                 => ipcRenderer.invoke('facebookPoster:draftApprove', params),
     takeMissed:     ()                            => ipcRenderer.invoke('facebookPoster:takeMissed'),
+    checkLogins:    (profileIds?: string[])       => ipcRenderer.invoke('facebookPoster:checkLogins', { profileIds }),
+    getLoginStates: ()                            => ipcRenderer.invoke('facebookPoster:getLoginStates'),
+    getLoginCheckConfig: ()                       => ipcRenderer.invoke('facebookPoster:getLoginCheckConfig'),
+    setLoginCheckConfig: (config: { enabled: boolean; time: string }) => ipcRenderer.invoke('facebookPoster:setLoginCheckConfig', config),
   },
 });

@@ -12,17 +12,24 @@ import { buildRunCsv } from '../../src/services/facebookPoster/runCsv';
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from '../../src/services/facebookPoster/mediaRules';
 import { validateStartParams, type StartParamsEnv } from '../../src/services/facebookPoster/validateStartParams';
 import { FacebookPosterScheduler, type MissedNotice } from '../../src/services/facebookPoster/FacebookPosterScheduler';
+import { LoginChecker } from '../../src/services/facebookPoster/loginCheck';
+import {
+    LoginCheckScheduler, LOGIN_CHECK_SETTING_KEY, parseLoginCheckConfig, validateLoginCheckConfig,
+} from '../../src/services/facebookPoster/LoginCheckScheduler';
 import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
-import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved } from '../../src/services/control/controlEvents';
-import type { FbPosterRun } from '../../src/models/facebookPoster';
+import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished } from '../../src/services/control/controlEvents';
+import type { FbPosterRun, LoginCheckSource, ProfileLoginState } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 
 
 let service: FacebookPosterService | null = null;
 let lastDbPath: string | null = null;
+let checker: LoginChecker | null = null;
+let checkerDbPath: string | null = null;
+let loginScheduler: LoginCheckScheduler | null = null;
 let scheduler: FacebookPosterScheduler | null = null;
 let schedulerDbPath: string | null = null;
 // Missed-run notices not yet handed to the UI. Only the first takeMissed drains them; after that the UI is live
@@ -32,6 +39,7 @@ let uiReady = false;
 
 const MAX_PENDING_MISSED = 50;
 const MAX_SCHEDULES = 200;
+const CHECK_STOP_GRACE_MS = 45000; // same grace as FacebookPosterService.stopAndWait
 export const POSTER_NOT_STOPPED_ERROR = 'Việc Đăng Facebook chưa dừng được. Thử lại sau.';
 
 const startEnv: StartParamsEnv = {
@@ -52,7 +60,8 @@ function store(): FacebookPosterStore {
         s.failInterruptedRuns(Date.now());
         lastDbPath = dbPath;
         // The service binds to a store, so a new database needs a new service (never while a run is active).
-        if (service && !service.current()) service = null;
+        // isBusy (run or login check): the checker holds the service's work slot, so never swap the service under it.
+        if (service && !service.isBusy()) service = null;
     }
     return s;
 }
@@ -74,9 +83,64 @@ function getService(): FacebookPosterService {
                     scheduler?.onRunFinished();
                 }
             },
+            onLoginObserved: (profileId, state) => safely('onLoginObserved', () => getChecker().observe(profileId, state, 'run')),
         });
     }
     return service;
+}
+
+/** Listener callbacks must never throw: a broken listener cannot turn a determined state into an error or break a run. */
+function safely(label: string, fn: () => void): void {
+    try {
+        fn();
+    } catch (err) {
+        Logger.error(`[facebookPosterIpc] ${label} failed: ${(err as Error).message}`);
+    }
+}
+
+/** Login checker bound to the active workspace DB and the service's work slot; rebuilt when the DB changed and no check runs. */
+function getChecker(): LoginChecker {
+    const svc = getService();
+    const dbPath = db().getDbPath();
+    if (checker && checkerDbPath !== dbPath && !checker.isRunning()) checker = null;
+    if (!checker) {
+        checkerDbPath = dbPath;
+        checker = new LoginChecker({
+            store: store(),
+            getProfile: (id) => {
+                const p = db().getBrowserProfileById(id);
+                return p ? { id: p.id, name: p.name } : null;
+            },
+            openForAutomation: (id) => getBrowserProfileService().openForAutomation(id),
+            slot: { acquire: () => svc.acquireExclusive(), release: () => svc.releaseExclusive() },
+            onProblem: (e) => safely('loginProblem', () => {
+                emitControlEvent('profile.loginProblem', buildLoginProblem(e));
+                emitLoginStatesChanged();
+            }),
+            onFinished: (e) => {
+                safely('checkFinished', () => emitControlEvent('profiles.checkFinished', buildCheckFinished(e)));
+                safely('onRunFinished', () => scheduler?.onRunFinished());
+            },
+            onProgress: (p) => safely('loginCheckProgress', () => EventBroadcaster.emit('facebookPoster:loginCheckProgress', p)),
+            onStatesChanged: () => safely('loginStateChanged', emitLoginStatesChanged),
+        });
+    }
+    return checker;
+}
+
+function emitLoginStatesChanged(): void {
+    EventBroadcaster.emit('facebookPoster:loginStateChanged', listFacebookLoginStates());
+}
+
+/** Saved login state of every profile that has one (profiles never checked are absent = unknown). */
+export function listFacebookLoginStates(): ProfileLoginState[] {
+    return store().listLoginStates();
+}
+
+/** Starts a background login check (null = every profile). Throws BUSY_ERROR while a run or another check holds the slot. Shared by IPC and the control API. */
+export function checkFacebookLogins(profileIds: string[] | null, source: LoginCheckSource): { checkId: string; profileIds: string[] } {
+    const ids = profileIds ?? db().getBrowserProfiles().map((p) => p.id);
+    return getChecker().check(ids, source);
 }
 
 /** Control API event run.finished (additive; counts come from the stored results). Recorded before the scheduler may start the next run. */
@@ -103,24 +167,35 @@ export function isFacebookPosterSchedulerRunning(): boolean {
     return scheduler !== null;
 }
 
-/** True while a job is running; the updater refuses to restart then. */
+/** True while a run or a login check is active; the updater refuses to restart then. */
 export function isFacebookPosterBusy(): boolean {
-    return !!service?.current();
+    return service?.isBusy() ?? false;
 }
 
 /** Stops a running job (if any). Called on app quit and before the workspace database is switched. */
 export function cancelFacebookPosterJobs(): void {
     service?.cancelAll();
+    checker?.stop();
 }
 
 /** Cancels the running job and waits (bounded) for it to end, so it cannot write into the next workspace DB. True = no job runs anymore. Never throws. */
 export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
-    if (!service) return true;
+    const theChecker = checker;
+    theChecker?.stop(); // dừng sau profile đang dở
+    let ok = true;
     try {
-        return await service.stopAndWait();
+        if (service) ok = await service.stopAndWait();
     } catch {
-        return false;
+        ok = false;
     }
+    if (theChecker?.isRunning()) {
+        let timer: NodeJS.Timeout | undefined;
+        const timedOut = new Promise<void>((resolve) => { timer = setTimeout(resolve, CHECK_STOP_GRACE_MS); timer.unref?.(); });
+        await Promise.race([theChecker.whenIdle().catch(() => undefined), timedOut]);
+        clearTimeout(timer);
+        if (theChecker.isRunning()) ok = false;
+    }
+    return ok;
 }
 
 const emitSchedulesChanged = (): void => EventBroadcaster.emit('facebookPoster:schedulesChanged', undefined);
@@ -150,7 +225,7 @@ export function startFacebookPosterScheduler(): void {
             return handle;
         },
         clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
-        isBusy: () => !!service?.current(),
+        isBusy: () => service?.isBusy() ?? false,
         resolveParams: (s) => {
             const names = Array.isArray(s.params.mediaPaths) ? (s.params.mediaPaths as string[]) : [];
             const params = { ...s.params, mediaPaths: resolveScheduleMedia(scheduleBaseDir(), s.id, names) };
@@ -171,13 +246,30 @@ export function startFacebookPosterScheduler(): void {
         onChanged: emitSchedulesChanged,
     });
     scheduler.start();
+    loginScheduler = new LoginCheckScheduler({
+        now: Date.now,
+        setTimer: (fn, ms) => {
+            const handle = setTimeout(fn, ms);
+            handle.unref?.();
+            return handle;
+        },
+        clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+        readConfig: () => parseLoginCheckConfig(db().getSetting(LOGIN_CHECK_SETTING_KEY)),
+        isBusy: () => service?.isBusy() ?? false,
+        runCheck: () => { checkFacebookLogins(null, 'daily'); },
+        log: (msg) => Logger.warn(msg),
+    });
+    loginScheduler.start();
 }
 
 export function stopFacebookPosterScheduler(): void {
     const current = scheduler;
+    const currentLogin = loginScheduler;
     scheduler = null;
+    loginScheduler = null;
     schedulerDbPath = null;
     current?.stop();
+    currentLogin?.stop();
 }
 
 function clampLimit(value: any, fallback: number, max: number): number {
@@ -375,4 +467,20 @@ export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:listPostedUrls', posterOperations.listPostedUrls);
     handle('facebookPoster:pickMedia', posterOperations.pickMedia);
     handle('facebookPoster:exportRunCsv', posterOperations.exportRunCsv);
+    handle('facebookPoster:checkLogins', (params) => {
+        let ids: string[] | null = null;
+        if (Array.isArray(params.profileIds)) {
+            ids = params.profileIds.filter((id: unknown): id is string => typeof id === 'string');
+            if (ids.length === 0) throw new Error('Chưa chọn profile nào để kiểm tra');
+        }
+        return checkFacebookLogins(ids, 'manual');
+    });
+    handle('facebookPoster:getLoginStates', () => ({ states: listFacebookLoginStates() }));
+    handle('facebookPoster:getLoginCheckConfig', () => ({ config: parseLoginCheckConfig(db().getSetting(LOGIN_CHECK_SETTING_KEY)) }));
+    handle('facebookPoster:setLoginCheckConfig', (params) => {
+        const config = validateLoginCheckConfig(params);
+        db().setSetting(LOGIN_CHECK_SETTING_KEY, JSON.stringify(config));
+        loginScheduler?.reschedule();
+        return { config };
+    });
 }

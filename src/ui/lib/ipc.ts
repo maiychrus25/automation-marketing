@@ -5,7 +5,7 @@ import { useAppStore } from '../store/appStore';
 import type { TelegramForumTopicContext } from '../../models/telegram';
 import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
 import type { UpdateState, ActionResult as UpdateActionResult } from '../../services/update/UpdateService';
-import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView } from '../../models/facebookPoster';
+import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState } from '../../models/facebookPoster';
 
 
 declare global {
@@ -703,6 +703,10 @@ declare global {
         draftGet: (id: string) => Promise<{ success: boolean; draft?: FbPosterSchedule; media?: { path: string; size: number }[]; error?: string }>;
         draftApprove: (params: { id: string; when: 'now' } | { id: string; when: 'schedule'; kind: 'once' | 'recurring'; runAt?: number; days?: number[]; time?: string }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
         takeMissed:     () => Promise<{ success: boolean; notices?: { scheduleId: string; name: string; reason: string; at: number }[]; error?: string }>;
+        checkLogins:    (profileIds?: string[]) => Promise<{ success: boolean; checkId?: string; profileIds?: string[]; error?: string }>;
+        getLoginStates: () => Promise<{ success: boolean; states?: ProfileLoginState[]; error?: string }>;
+        getLoginCheckConfig: () => Promise<{ success: boolean; config?: { enabled: boolean; time: string }; error?: string }>;
+        setLoginCheckConfig: (config: { enabled: boolean; time: string }) => Promise<{ success: boolean; config?: { enabled: boolean; time: string }; error?: string }>;
       };
       erp: {
       projectList:         (params?: { archived?: boolean }) => Promise<{ success: boolean; projects: any[]; error?: string }>;
