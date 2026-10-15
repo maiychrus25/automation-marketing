@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 15/10/2026 |
-| Trạng thái | Chờ duyệt |
+| Trạng thái | Đã duyệt (15/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-15-bot-pairing-notify-health.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-15-bot-pairing-notify-health.md` (đã duyệt) |
 | Nhánh | `feat/bot-pairing-notify-health` |
