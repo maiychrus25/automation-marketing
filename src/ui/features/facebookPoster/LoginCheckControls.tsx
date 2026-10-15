@@ -12,29 +12,37 @@ export default function LoginCheckControls({ selected }: { selected: string[] })
   const [runActive, setRunActive] = useState(false);
   const [open, setOpen] = useState(false);
   const [config, setConfig] = useState<Config | null>(null);
+  const [saving, setSaving] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const gearRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const sawEventRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     ipc.facebookPoster?.current().then((res) => {
-      if (!cancelled && res?.success) setRunActive(res.run?.status === 'running');
+      if (!cancelled && !sawEventRef.current && res?.success) setRunActive(res.run?.status === 'running');
     }).catch(() => {});
     ipc.facebookPoster?.getLoginCheckConfig().then((res) => {
       if (!cancelled && res?.success && res.config) setConfig(res.config);
     }).catch(() => {});
-    const offProgress = ipc.on?.('facebookPoster:progress', () => setRunActive(true));
-    const offFinished = ipc.on?.('facebookPoster:runFinished', () => setRunActive(false));
+    const offProgress = ipc.on?.('facebookPoster:progress', () => { sawEventRef.current = true; setRunActive(true); });
+    const offFinished = ipc.on?.('facebookPoster:runFinished', () => { sawEventRef.current = true; setRunActive(false); });
     const offCheck = ipc.on?.('facebookPoster:loginCheckProgress', (data: { done: number; total: number } | null) => setProgress(data ?? null));
     return () => { cancelled = true; offProgress?.(); offFinished?.(); offCheck?.(); };
   }, []);
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); gearRef.current?.focus(); } };
     const onDown = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener('keydown', onKey);
     document.addEventListener('mousedown', onDown);
     return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onDown); };
+  }, [open]);
+
+  useEffect(() => {
+    if (open) popoverRef.current?.focus();
   }, [open]);
 
   const checking = starting || progress !== null;
@@ -52,7 +60,9 @@ export default function LoginCheckControls({ selected }: { selected: string[] })
   };
 
   const save = async (next: Config) => {
+    if (saving) return;
     const prev = config;
+    setSaving(true);
     setConfig(next);
     try {
       const res = await ipc.facebookPoster.setLoginCheckConfig(next);
@@ -61,6 +71,8 @@ export default function LoginCheckControls({ selected }: { selected: string[] })
     } catch (err) {
       setConfig(prev);
       showNotification(err instanceof Error && err.message ? err.message : 'Không lưu được cài đặt', 'error');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -71,20 +83,20 @@ export default function LoginCheckControls({ selected }: { selected: string[] })
         className={`px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-50 whitespace-nowrap ${FOCUS}`}>
         {checking ? `Đang kiểm tra… (${progress?.done ?? 0}/${progress?.total ?? 0})` : 'Kiểm tra đăng nhập'}
       </button>
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="dialog" aria-label="Cài đặt tự kiểm tra đăng nhập" title="Tự kiểm tra mỗi ngày"
+      <button ref={gearRef} type="button" onClick={() => { if (open) gearRef.current?.focus(); setOpen((v) => !v); }} aria-expanded={open} aria-haspopup="dialog" aria-label="Cài đặt tự kiểm tra đăng nhập" title="Tự kiểm tra mỗi ngày"
         className={`px-2 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 ${FOCUS}`}>⚙</button>
       {open && (
-        <div role="dialog" aria-label="Tự kiểm tra mỗi ngày" className="absolute right-0 top-full mt-1 z-20 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-gray-700 bg-gray-900 p-3 space-y-2 shadow-lg">
+        <div ref={popoverRef} tabIndex={-1} role="dialog" aria-label="Tự kiểm tra mỗi ngày" className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1 z-20 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-gray-700 bg-gray-900 p-3 focus:outline-none space-y-2 shadow-lg">
           <p className="text-sm text-gray-200">Tự kiểm tra mỗi ngày</p>
           {config ? (
             <>
               <label className="flex items-center gap-2 text-sm text-gray-300">
-                <input type="checkbox" checked={config.enabled} onChange={(e) => save({ ...config, enabled: e.target.checked })} className={FOCUS} />
+                <input type="checkbox" checked={config.enabled} disabled={saving} onChange={(e) => save({ ...config, enabled: e.target.checked })} className={FOCUS} />
                 Bật tự kiểm tra
               </label>
               <label className="block text-xs text-gray-400">
                 Giờ kiểm tra
-                <input type="time" value={config.time} disabled={!config.enabled} onChange={(e) => e.target.value && save({ ...config, time: e.target.value })} className={`input-field text-sm w-full mt-1 ${FOCUS}`} />
+                <input type="time" value={config.time} disabled={!config.enabled || saving} onChange={(e) => e.target.value && save({ ...config, time: e.target.value })} className={`input-field text-sm w-full mt-1 ${FOCUS}`} />
               </label>
             </>
           ) : <p className="text-xs text-gray-400">Đang tải…</p>}
