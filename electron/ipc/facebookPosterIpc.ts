@@ -29,6 +29,7 @@ let service: FacebookPosterService | null = null;
 let lastDbPath: string | null = null;
 let checker: LoginChecker | null = null;
 let checkerDbPath: string | null = null;
+let checkerService: FacebookPosterService | null = null;
 let loginScheduler: LoginCheckScheduler | null = null;
 let scheduler: FacebookPosterScheduler | null = null;
 let schedulerDbPath: string | null = null;
@@ -102,9 +103,10 @@ function safely(label: string, fn: () => void): void {
 function getChecker(): LoginChecker {
     const svc = getService();
     const dbPath = db().getDbPath();
-    if (checker && checkerDbPath !== dbPath && !checker.isRunning()) checker = null;
+    if (checker && (checkerDbPath !== dbPath || checkerService !== svc) && !checker.isRunning()) checker = null;
     if (!checker) {
         checkerDbPath = dbPath;
+        checkerService = svc;
         checker = new LoginChecker({
             store: store(),
             getProfile: (id) => {
@@ -149,7 +151,7 @@ function recordRunFinished(data: unknown): void {
     try {
         const { runId, status } = (data ?? {}) as { runId?: string; status?: FbPosterRun['status'] };
         const found = runId ? store().getRun(runId) : null;
-        if (found) emitControlEvent('run.finished', buildRunFinished({ ...found.run, status: status ?? found.run.status }, found.results));
+        if (found) emitControlEvent('run.finished', buildRunFinished({ ...found.run, status: status ?? found.run.status }, found.results, found.run.scheduleName));
     } catch (err) {
         Logger.error(`[facebookPosterIpc] control event run.finished failed: ${(err as Error).message}`);
     }

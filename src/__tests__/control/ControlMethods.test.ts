@@ -24,6 +24,7 @@ function makeDeps() {
     const deps = {
         poster, events,
         listProfiles: jest.fn(() => [{ id: 'p1' }]),
+        checkLogins: jest.fn((ids: string[] | null) => ({ checkId: 'c1', profileIds: ids ?? ['p1'] })),
         systemStatus: jest.fn(() => ({ version: '1' })),
         resolveMedia: jest.fn((ids: string[]) => ids.map((id) => `/inbox/${id}`)),
     };
@@ -232,7 +233,7 @@ describe('describe', () => {
         const d = describeMethods(methods);
         expect(d.protocol).toBe(1);
         expect(d.methods.map((m) => m.name)).toEqual([
-            'system.status', 'profiles.list', 'profiles.groups', 'profiles.scanGroups',
+            'system.status', 'profiles.list', 'profiles.groups', 'profiles.scanGroups', 'profiles.check',
             'drafts.list', 'drafts.get', 'drafts.create', 'drafts.update', 'drafts.delete', 'drafts.approve',
             'schedules.list', 'schedules.update', 'schedules.delete',
             'runs.current', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
@@ -253,5 +254,48 @@ describe('describe', () => {
         expect(byName['drafts.create'].paramsSchema.properties.name.maxLength).toBe(100);
         const text = JSON.stringify(d);
         for (const banned of ['pickMedia', 'exportRunCsv', 'takeMissed']) expect(text).not.toContain(banned);
+    });
+});
+
+describe('profiles.check', () => {
+    const setupTwo = () => {
+        const base = setup();
+        base.deps.listProfiles.mockReturnValue([{ id: 'p1' }, { id: 'p2' }]);
+        return base;
+    };
+    it('profiles.check: starts and returns checkId', async () => {
+        const { deps, call } = setupTwo();
+        expect(await call('profiles.check', { profileIds: ['p1', 'p1', 'p2'] })).toEqual({ checkId: 'c1', profileIds: ['p1', 'p2'] });
+        expect(deps.checkLogins).toHaveBeenLastCalledWith(['p1', 'p2']);
+        await call('profiles.check', {});
+        expect(deps.checkLogins).toHaveBeenLastCalledWith(null);
+        await call('profiles.check', { profileIds: [] });
+        expect(deps.checkLogins).toHaveBeenLastCalledWith(null);
+    });
+    it('missing ids → NOT_FOUND with details.missing', async () => {
+        const { deps, call } = setupTwo();
+        const err = await call('profiles.check', { profileIds: ['p1', 'zz'] }).catch((e) => e);
+        expect(err).toMatchObject({ code: 'NOT_FOUND', details: { missing: ['zz'] } });
+        expect(deps.checkLogins).not.toHaveBeenCalled();
+    });
+    it('>50 ids → INVALID_PARAMS', async () => {
+        const { deps, call } = setupTwo();
+        const ids = Array.from({ length: 51 }, (_, i) => `p${i}`);
+        expect(await call('profiles.check', { profileIds: ids }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'profileIds' } });
+        expect(await call('profiles.check', { profileIds: [''] }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'profileIds' } });
+        expect(await call('profiles.check', { profileIds: 'p1' }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'profileIds' } });
+        expect(deps.checkLogins).not.toHaveBeenCalled();
+    });
+    it('BUSY mapped', async () => {
+        const { deps, call } = setupTwo();
+        deps.checkLogins.mockImplementationOnce(() => { throw new Error(BUSY_ERROR); });
+        const err = await call('profiles.check', {}).catch((e) => toControlError(e));
+        expect(err).toMatchObject({ code: 'BUSY' });
+    });
+    it('describe lists profiles.check', () => {
+        const { methods } = setupTwo();
+        const m = describeMethods(methods).methods.find((x) => x.name === 'profiles.check') as any;
+        expect(m.destructive).toBe(false);
+        expect(m.paramsSchema.properties.profileIds.maxItems).toBe(50);
     });
 });

@@ -130,7 +130,7 @@ describe('toSafeProfiles', () => {
     const out = toSafeProfiles(
       [{ id: 'p1', name: 'A', group_id: 2, proxy_id: 9, fingerprint: { seed: 1, hardwareConcurrency: 4, language: 'vi', timezone: 'x' }, note: 'secret', last_opened_at: 5, created_at: 1, updated_at: 2 }],
       [{ id: 2, name: 'G', color: '', sort_order: 0, created_at: 0 }], ['p1']);
-    expect(out).toEqual([{ id: 'p1', name: 'A', groupId: 2, groupName: 'G', running: true, lastOpenedAt: 5, createdAt: 1, lastScannedAt: null }]);
+    expect(out).toEqual([{ id: 'p1', name: 'A', groupId: 2, groupName: 'G', running: true, lastOpenedAt: 5, createdAt: 1, lastScannedAt: null, loginState: 'unknown', loginCheckedAt: null, loginError: null }]);
     expect(JSON.stringify(out)).not.toMatch(/proxy|fingerprint|secret/);
   });
 
@@ -142,11 +142,25 @@ describe('toSafeProfiles', () => {
   });
 });
 
+describe('toSafeProfiles login fields', () => {
+  test('profiles.list has login fields with unknown default', () => {
+    const base = { group_id: null, proxy_id: null, fingerprint: { seed: 1, hardwareConcurrency: 4, language: 'vi', timezone: 'x' }, note: '', last_opened_at: null, created_at: 1, updated_at: 2 };
+    const out = toSafeProfiles([{ ...base, id: 'a', name: 'A' }, { ...base, id: 'b', name: 'B' }], [], [], {},
+      [{ profileId: 'a', state: 'logged_out', checkedAt: 99, source: 'check', lastError: 'x', lastErrorAt: 98 }]);
+    expect(out.map((p) => [p.loginState, p.loginCheckedAt, p.loginError])).toEqual([['logged_out', 99, 'x'], ['unknown', null, null]]);
+  });
+});
+
 describe('control events', () => {
   test('run.finished counts outcomes; draft.approved payload', () => {
     expect(buildRunFinished({ id: 'r', kind: 'post', status: 'done', scheduleId: 's' }, [{ outcome: 'posted' }, { outcome: 'posted' }, { outcome: 'failed' }, { outcome: 'skipped' }]))
-      .toEqual({ runId: 'r', kind: 'post', status: 'done', scheduleId: 's', posted: 2, failed: 1, skipped: 1 });
+      .toEqual({ runId: 'r', kind: 'post', status: 'done', scheduleId: 's', scheduleName: null, posted: 2, failed: 1, skipped: 1 });
     expect(buildDraftApproved({ id: 's', name: 'n', kind: 'once', nextRunAt: 5 }, 'now')).toMatchObject({ scheduleId: 's', when: 'now' });
+  });
+  test('run.finished carries scheduleName', () => {
+    const run = { id: 'r', kind: 'post' as const, status: 'done' as const, scheduleId: 's' };
+    expect(buildRunFinished(run, [])).toMatchObject({ scheduleName: null });
+    expect(buildRunFinished(run, [], 'Lịch sáng')).toMatchObject({ scheduleName: 'Lịch sáng' });
   });
   test('sink errors never propagate; no sink is a no-op', () => {
     emitControlEvent('run.started', {});

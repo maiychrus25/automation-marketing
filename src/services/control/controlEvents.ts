@@ -9,10 +9,10 @@ export function buildRunStarted(run: { runId: string; kind: string; scheduleId: 
 }
 
 /** `status` là trạng thái cuối của run; posted/failed/skipped đếm theo `outcome` của từng kết quả. */
-export function buildRunFinished(run: Pick<FbPosterRun, 'id' | 'kind' | 'status' | 'scheduleId'>, results: Pick<FbPosterResult, 'outcome'>[]) {
+export function buildRunFinished(run: Pick<FbPosterRun, 'id' | 'kind' | 'status' | 'scheduleId'>, results: Pick<FbPosterResult, 'outcome'>[], scheduleName: string | null = null) {
     const count = (outcome: string) => results.filter((r) => r.outcome === outcome).length;
     return {
-        runId: run.id, kind: run.kind, status: run.status, scheduleId: run.scheduleId,
+        runId: run.id, kind: run.kind, status: run.status, scheduleId: run.scheduleId, scheduleName,
         posted: count('posted'), failed: count('failed'), skipped: count('skipped'),
     };
 }

@@ -21,7 +21,7 @@ import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
     CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, withStoredPublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
-import { isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations } from './facebookPosterIpc';
+import { checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations } from './facebookPosterIpc';
 import { getBrowserEngineStatus, getBrowserProfileService, getBrowserSandboxState } from './browserProfileIpc';
 
 const HOUR_MS = 3_600_000;
@@ -126,8 +126,9 @@ async function startRuntime(config: ControlConfig): Promise<void> {
         listProfiles: () => {
             const list = db().getBrowserProfiles();
             const scanned = poster.listGroups({ profileIds: list.map((p) => p.id) }).groups;
-            return toSafeProfiles(list, db().getBrowserProfileGroups(), profiles().getRunningIds(), scanned);
+            return toSafeProfiles(list, db().getBrowserProfileGroups(), profiles().getRunningIds(), scanned, listFacebookLoginStates());
         },
+        checkLogins: (ids) => checkFacebookLogins(ids, 'api'),
         systemStatus: async () => {
             const ws = WorkspaceManager.getInstance().getActiveWorkspace();
             return {

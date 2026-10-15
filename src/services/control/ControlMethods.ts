@@ -70,6 +70,8 @@ export interface ControlEventRow { seq: number; type: string; payload: unknown; 
 export interface ControlMethodDeps {
     poster: PosterPort;
     listProfiles(): unknown | Promise<unknown>;
+    /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
+    checkLogins(profileIds: string[] | null): { checkId: string; profileIds: string[] };
     systemStatus(): unknown | Promise<unknown>;
     /** Đổi mediaId đã tải lên thành đường dẫn tệp; mediaId lạ thì ném lỗi hoặc trả thiếu phần tử. */
     resolveMedia(mediaIds: string[]): string[];
@@ -172,7 +174,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             run: async () => deps.systemStatus(),
         },
         {
-            name: 'profiles.list', description: 'Danh sách profile: mã, tên, nhóm, trạng thái mở, ngày quét nhóm gần nhất.',
+            name: 'profiles.list', description: 'Danh sách profile: mã, tên, nhóm, trạng thái mở, ngày quét nhóm gần nhất, trạng thái đăng nhập Facebook đã lưu (loginState, loginCheckedAt, loginError).',
             destructive: false, paramsSchema: noParams,
             resultSchema: obj({ profiles: { type: 'array', items: { type: 'object' }, description: 'Danh sách profile' } }, ['profiles']),
             run: async () => ({ profiles: await deps.listProfiles() }),
@@ -193,6 +195,28 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             }, ['profileIds']),
             resultSchema: anyResult,
             run: async (p) => poster.start({ kind: 'scan_groups', params: pick(p, ['profileIds', 'concurrency', 'staggerMinSec', 'staggerMaxSec']) }),
+        },
+        {
+            name: 'profiles.check',
+            description: 'Kiểm tra đăng nhập Facebook của các profile (chạy nền, từng profile một; kết quả qua sự kiện profiles.checkFinished). Bỏ trống profileIds để kiểm tra mọi profile. BUSY nếu đang có việc chạy.',
+            destructive: false,
+            paramsSchema: obj({
+                profileIds: { type: 'array', items: { type: 'string', minLength: 1 }, maxItems: 50, description: 'Mã các profile (tối đa 50); bỏ trống = mọi profile' },
+            }),
+            resultSchema: obj({ checkId: str('Mã lượt kiểm tra'), profileIds: { type: 'array', items: { type: 'string' }, description: 'Các profile sẽ được kiểm tra' } }, ['checkId', 'profileIds']),
+            run: async (p) => {
+                const raw = p.profileIds;
+                if (raw === undefined || raw === null) return deps.checkLogins(null);
+                if (!Array.isArray(raw) || raw.length > 50 || raw.some((id) => typeof id !== 'string' || !id)) {
+                    throw new ControlError('INVALID_PARAMS', 'profileIds phải là danh sách tối đa 50 mã (chuỗi không rỗng)', { field: 'profileIds' });
+                }
+                const ids = [...new Set(raw as string[])];
+                if (!ids.length) return deps.checkLogins(null);
+                const known = new Set(((await deps.listProfiles()) as { id: string }[]).map((x) => x.id));
+                const missing = ids.filter((id) => !known.has(id));
+                if (missing.length) throw new ControlError('NOT_FOUND', 'Có profile không tồn tại', { missing });
+                return deps.checkLogins(ids);
+            },
         },
         {
             name: 'drafts.list', description: 'Danh sách bản nháp.',

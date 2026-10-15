@@ -145,9 +145,10 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | Thao tác | Tham số | Kết quả | Nguy hiểm |
 |---|---|---|---|
 | `system.status` | không | `{ appVersion, workspace: {id,name}\|null, browserEngine, sandbox, schedulerRunning, currentRun }` | không |
-| `profiles.list` | không | `{ profiles: [{ id, name, groupId, groupName, running, lastOpenedAt, createdAt, lastScannedAt }] }` (chỉ trường an toàn: không fingerprint, proxy, cookie) | không |
+| `profiles.list` | không | `{ profiles: [{ id, name, groupId, groupName, running, lastOpenedAt, createdAt, lastScannedAt, loginState, loginCheckedAt, loginError }] }` (chỉ trường an toàn: không fingerprint, proxy, cookie). `loginState` là `ok`, `logged_out`, `checkpoint` hoặc `unknown` (chưa kiểm tra bao giờ); `loginCheckedAt` (epoch ms hoặc `null`) là lần xác định trạng thái gần nhất; `loginError` là lỗi của lần kiểm tra gần nhất (mạng, proxy…) hoặc `null` | không |
 | `profiles.groups` | **`profileIds`** (mảng chuỗi) | `{ groups }`: nhóm đã quét của từng profile (`url`, `name`…) | không |
 | `profiles.scanGroups` | **`profileIds`**, `concurrency`, `staggerMinSec`, `staggerMaxSec` | `{ runId }`. Bắt đầu việc quét như nút trong app; `BUSY` nếu đang có việc; không gửi concurrency/stagger thì dùng mặc định app | không |
+| `profiles.check` | `profileIds` (mảng chuỗi không rỗng, tối đa 50; bỏ trống = mọi profile) | `{ checkId, profileIds }`. Bắt đầu kiểm tra đăng nhập Facebook chạy nền, từng profile một; kết quả đến qua sự kiện `profiles.checkFinished` (cùng `checkId`). `INVALID_PARAMS` (`details.field = "profileIds"`) nếu quá 50 mã hoặc sai kiểu; `NOT_FOUND` với `details.missing` (mảng mã lạ); `BUSY` nếu đang có việc chạy hoặc đang kiểm tra | không |
 | `drafts.list` | `limit`, `offset` | `{ total, items }`: nháp (lịch `draft = true`) | không |
 | `drafts.get` | **`id`** | `{ draft, media: [{ path, size }] }` | không |
 | `drafts.create` | **`mode`**, **`text`**, và các tham số `D` còn lại | `{ schedule }`; `schedule.id` là mã nháp. Cùng kiểm tra với "Lưu nháp" trong app. `mediaIds` ánh xạ sang tệp đã tải (mục 8) | không |
@@ -196,7 +197,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `type` | Khi nào | `payload` |
 |---|---|---|
 | `run.started` | Bắt đầu một việc (đăng, quét nhóm, v.v.) | `{ runId, kind, scheduleId }` (`scheduleId` là `null` nếu không từ lịch) |
-| `run.finished` | Việc kết thúc | `{ runId, kind, status, scheduleId, posted, failed, skipped }` (đếm theo kết quả từng đích) |
+| `run.finished` | Việc kết thúc | `{ runId, kind, status, scheduleId, scheduleName, posted, failed, skipped }` (đếm theo kết quả từng đích; `scheduleName` là tên lịch, `null` nếu không từ lịch hoặc lịch đã bị xoá) |
 | `schedule.missed` | Lịch bị lỡ (app tắt/máy ngủ quá giờ, chờ quá 2 giờ, hoặc app đóng khi lượt đang chờ) | `{ scheduleId, name, reason, at }`; `reason` là một trong `App tắt lúc đến giờ`, `Chờ quá 2 giờ vì đang có việc khác`, `App đóng khi lượt đang chờ` (`MISSED_APP_QUIT`) |
 | `draft.approved` | Duyệt nháp (trong app hoặc qua API) | `{ scheduleId, name, when: "now"\|"scheduled", kind, nextRunAt }` |
 | `profile.loginProblem` | Trạng thái đăng nhập lưu của profile chuyển sang `logged_out` hoặc `checkpoint` (từ trạng thái khác, kể cả `unknown`); giữ nguyên thì không phát lại | `{ profileId, profileName, state, source }`; `source` là `check` hoặc `run` |
