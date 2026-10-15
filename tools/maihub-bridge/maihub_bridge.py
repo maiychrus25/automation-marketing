@@ -51,6 +51,8 @@ BRIDGE_NAME = "maihub_bridge.py"
 BACKUP_SUFFIX = ".before-maihub"
 RUN_TIMEOUT = 120
 WATCH_DRY_RUN_SEC = 5
+WATCH_DRY_RUN_SAFETY_SEC = 30
+TIMEOUT_EXIT_CODE = 124  # mã thoát của coreutils timeout khi phải kill tiến trình
 WATCH_UNIT_PREFIX = "maihub-watch-"
 SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9@._-]+\Z")
 TELEGRAM_BASE = "https://api.telegram.org"
@@ -748,12 +750,11 @@ def install_watch(env_file, notify_env, user, name, state_dir, run, systemd_dir,
     os.makedirs(state_dir, exist_ok=True)
     os.chown(state_dir, account.pw_uid, account.pw_gid)
     os.chmod(state_dir, 0o700)
-    dry = ["sudo", "-u", user, "-H", "python3", "-I", bridge, "watch", "--env-file", env_file, "--notify-env", notify_env, "--dry-run"]
-    try:
-        result = run(dry, cwd=account.pw_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=WATCH_DRY_RUN_SEC)
-    except subprocess.TimeoutExpired:
-        result = None  # còn chạy sau 5 giây nghĩa là cấu hình đọc được và kết nối được
-    if result is not None and result.returncode != 0:
+    # timeout nằm trong argv để chính watch bị kill (kill sudo từ ngoài sẽ bỏ mồ côi tiến trình python)
+    dry = ["sudo", "-u", user, "-H", "timeout", str(WATCH_DRY_RUN_SEC), "python3", "-I", bridge, "watch",
+           "--env-file", env_file, "--notify-env", notify_env, "--dry-run"]
+    result = run(dry, cwd=account.pw_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=WATCH_DRY_RUN_SAFETY_SEC)
+    if result.returncode not in (0, TIMEOUT_EXIT_CODE):  # 124: còn chạy đến hết 5 giây nghĩa là cấu hình dùng được
         detail = getattr(result, "stderr", "")
         raise BridgeError("CONFIG", "watch --dry-run dưới quyền %s thất bại (mã %s)%s" % (
             user, result.returncode, ": " + detail.strip() if isinstance(detail, str) and detail.strip() else ""))

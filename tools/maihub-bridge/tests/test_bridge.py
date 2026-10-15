@@ -512,7 +512,8 @@ ExecStart=/usr/local/sbin/ahv-bot-run-linux.sh x
 
 
 class FakeRun(object):
-    def __init__(self, fail_on=None, timeout_on=None):
+    def __init__(self, fail_on=None, timeout_on=None, fail_code=1):
+        self.fail_code = fail_code
         self.timeout_on = timeout_on
         self.calls = []
         self.fail_on = fail_on
@@ -521,11 +522,13 @@ class FakeRun(object):
         self.calls.append((list(cmd), kwargs))
         if self.timeout_on and self.timeout_on in cmd:
             raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
-        code = 1 if self.fail_on and self.fail_on in cmd else 0
+        code = self.fail_code if self.fail_on and self.fail_on in cmd else 0
         return mock.Mock(returncode=code, stdout="[OK] doctor\n")
 
 
-class InstallTests(BridgeTestCase):
+class InstallFixture(BridgeTestCase):
+    """Fixture dùng chung, không chứa test."""
+
     def setUp(self):
         BridgeTestCase.setUp(self)
         self.tmp = tempfile.TemporaryDirectory()
@@ -563,6 +566,8 @@ class InstallTests(BridgeTestCase):
         self.chown = chown
         return code, out.getvalue(), err.getvalue()
 
+
+class InstallTests(InstallFixture):
     def test_find_ahv_bots_zero_one_two(self):
         self.assertEqual(bridge.find_ahv_bots(self.systemd), [])
         data_dir = self.add_bot("tg-claude-bot-a", "claudeproxy")
@@ -1312,8 +1317,7 @@ class WatchCommandTests(BridgeTestCase):
         self.assertNotIn(TG_TOKEN, err.getvalue())
 
 
-class InstallWatchTests(InstallTests):
-    # Kế thừa InstallTests để dùng lại fixture; chạy lại cả các test cài đặt cũ trong lớp này là chấp nhận được.
+class InstallWatchTests(InstallFixture):
     def setUp(self):
         InstallTests.setUp(self)
         self.env_dir = os.path.join(self.tmp.name, "mh dir".replace(" ", "-"))
@@ -1364,9 +1368,9 @@ class InstallWatchTests(InstallTests):
         self.assertEqual(os.stat(state).st_mode & 0o777, 0o700)
         self.assertEqual(self.chown.call_args_list[0][0], (state, 1234, 5678))
         bridge_path = os.path.abspath(bridge.__file__)  # không có maihub_bridge.py cạnh .env
-        self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "python3", "-I", bridge_path, "watch",
+        self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "timeout", "5", "python3", "-I", bridge_path, "watch",
                                            "--env-file", self.env_file, "--notify-env", self.notify_env, "--dry-run"])
-        self.assertEqual(run.calls[0][1]["timeout"], bridge.WATCH_DRY_RUN_SEC)
+        self.assertEqual(run.calls[0][1]["timeout"], bridge.WATCH_DRY_RUN_SAFETY_SEC)
         self.assertEqual(run.calls[1][0], ["systemctl", "daemon-reload"])
         self.assertEqual(run.calls[2][0], ["systemctl", "enable", "--now", "maihub-watch-tg-bot.service"])
         self.assertEqual(os.stat(self.unit_path()).st_mode & 0o777, 0o644)
@@ -1380,7 +1384,7 @@ class InstallWatchTests(InstallTests):
         run = FakeRun()
         code, out, err = self.install_watch(run, state_dir=os.path.join(self.tmp.name, "st"))
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(run.calls[0][0][6], local)
+        self.assertEqual(run.calls[0][0][8], local)
         with open(self.unit_path()) as handle:
             self.assertIn("-I %s watch" % local, handle.read())
         self.assertTrue(os.path.isdir(os.path.join(self.tmp.name, "st")))
@@ -1401,8 +1405,15 @@ class InstallWatchTests(InstallTests):
         self.assertEqual(len(run.calls), 1)
         self.assertEqual(os.listdir(self.systemd), [])
 
-    def test_dry_run_timeout_counts_as_success(self):
+    def test_dry_run_safety_net_timeout_is_failure(self):
         run = FakeRun(timeout_on="--dry-run")
+        code, _, err = self.install_watch(run)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(os.listdir(self.systemd), [])
+
+    def test_dry_run_timeout_exit_124_counts_as_success(self):
+        run = FakeRun(fail_on="--dry-run", fail_code=124)
         code, out, err = self.install_watch(run)
         self.assertEqual(code, 0, out + err)
         self.assertEqual(len(run.calls), 3)
