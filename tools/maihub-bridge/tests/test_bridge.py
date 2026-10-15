@@ -1013,6 +1013,27 @@ class TelegramSenderTests(unittest.TestCase):
         self.assertTrue(sender.send("a"))
         self.assertEqual(clock.slept, [17])
 
+    def test_429_retry_after_is_capped(self):
+        sender, _, clock = self.make([http_429(99999), OK_BODY])
+        self.assertTrue(sender.send("a"))
+        self.assertEqual(clock.slept, [300])
+
+    def test_final_http_error_does_not_leak_token(self):
+        sender, _, _ = self.make([http_429(1)] * 4)
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            self.assertFalse(sender.send("a"))
+        self.assertIn("HTTP 429", err.getvalue())
+        self.assertNotIn(TG_TOKEN, err.getvalue())
+
+    def test_proxy_credentials_masked_in_log(self):
+        sender, _, _ = self.make([OSError("tunnel via http://user:pw@10.0.0.1:3128 failed")] * 4)
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            sender.send("a")
+        self.assertNotIn("user:pw", err.getvalue())
+        self.assertIn("//***@10.0.0.1", err.getvalue())
+
     def test_ok_false_counts_as_failure(self):
         sender, _, clock = self.make([FakeResponse(b'{"ok": false}')] * 4)
         with mock.patch("sys.stderr", io.StringIO()):
@@ -1119,6 +1140,49 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.sender.sent, [])
         self.assertEqual(self.state()["cursor"], 2)
 
+    def test_null_workspace_keeps_cursor_and_sends_nothing(self):
+        w = self.watcher([page([finished(5)]), page([]), page([], None), page([finished(6)], "ws1")])
+        w.step()
+        w.step()
+        self.assertEqual(self.sender.sent, [])
+        self.assertEqual(self.state()["cursor"], 5)
+        self.assertEqual(self.state()["workspaceId"], "ws1")
+        w.step()
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertEqual(self.state()["cursor"], 6)
+        self.assertNotIn("workspace", self.sender.sent[0])
+
+    def test_hot_loop_guard_sleeps_on_instant_empty_wait(self):
+        w = self.watcher([page([]), page([])])
+        w.step()
+        w.step()
+        self.assertEqual(self.clock.slept, [1])
+
+    def test_latest_stops_when_seq_does_not_advance(self):
+        w = self.watcher([page([finished(3)]), page([finished(3)])])
+        w.step()
+        self.assertEqual(self.state()["cursor"], 3)
+        self.assertEqual(len(self.client.calls), 2)
+
+    def test_latest_missing_seq_is_bad_response(self):
+        w = self.watcher([page([{"type": "run.finished", "payload": {}}])])
+        w.step()
+        self.assertFalse(os.path.exists(self.state_path))
+        self.assertEqual(self.clock.slept, [15])
+
+    def test_dry_run_does_not_persist_state(self):
+        w = bridge.Watcher(FakeWatchClient([page([finished(1)]), page([]), page([finished(2)])]), self.sender,
+                           self.state_path, clock=self.clock, sleep=self.clock.sleep, persist=False)
+        w.step()
+        w.step()
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertFalse(os.path.exists(os.path.dirname(self.state_path)))
+
+    def test_state_file_mode_is_0600(self):
+        w = self.watcher([page([])])
+        w.step()
+        self.assertEqual(os.stat(self.state_path).st_mode & 0o777, 0o600)
+
     def test_short_outage_recovers_silently(self):
         err = bridge.BridgeError("UNREACHABLE", "x")
         w = self.watcher([page([]), err, page([])])
@@ -1179,7 +1243,31 @@ class WatchCommandTests(BridgeTestCase):
                 code, o, e = self.run_cli(["watch", "--env-file", maihub_env, "--notify-env", bot_env, "--dry-run"], {})
             self.assertEqual(code, 0)
             self.assertNotIn(TG_TOKEN, o + e)
-            self.assertTrue(os.path.isdir(os.path.join(tmp, "state")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "state")))  # dry-run không tạo/ghi trạng thái
+
+    def test_dry_run_selects_print_sender(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            maihub_env = os.path.join(tmp, "maihub.env")
+            bot_env = os.path.join(tmp, "bot.env")
+            with open(maihub_env, "w") as handle:
+                handle.write("MAIHUB_URL=%s\nMAIHUB_API_KEY=%s\nMAIHUB_CERT_SHA256=%s\n" % (self.hub.url, API_KEY, PIN))
+            with open(bot_env, "w") as handle:
+                handle.write("TG_TOKEN=%s\nADMIN_USER_ID=9\n" % TG_TOKEN)
+            for flags, expected in (([], bridge.TelegramSender), (["--dry-run"], bridge.PrintSender)):
+                with mock.patch("maihub_bridge.Watcher") as watcher:
+                    code, _, _ = self.run_cli(["watch", "--env-file", maihub_env, "--notify-env", bot_env] + flags, {})
+                self.assertEqual(code, 0)
+                self.assertIsInstance(watcher.call_args[0][1], expected)
+                self.assertEqual(watcher.call_args[1]["persist"], not flags)
+
+    def test_watch_without_env_file_or_state_is_config_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bot_env = os.path.join(tmp, "bot.env")
+            with open(bot_env, "w") as handle:
+                handle.write("TG_TOKEN=%s\nADMIN_USER_ID=9\n" % TG_TOKEN)
+            code, o, e = self.run_cli(["watch", "--notify-env", bot_env], {})
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertNotIn(TG_TOKEN, o + e)
 
     def test_missing_notify_target_is_config_error_without_token(self):
         with tempfile.TemporaryDirectory() as tmp:

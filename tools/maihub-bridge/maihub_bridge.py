@@ -56,6 +56,8 @@ WATCH_WAIT_SEC = 25
 WATCH_RETRY_SEC = 15
 WATCH_DOWN_ALERT_SEC = 300
 WATCH_AUTH_RETRY_SEC = 300
+MAX_RETRY_AFTER_SEC = 300
+WATCH_MIN_POLL_SEC = 1
 MAX_FIELD_CHARS = 200
 MAX_MESSAGE_CHARS = 3500
 MAX_ERROR_LINES = 3
@@ -777,7 +779,8 @@ class TelegramSender(object):
     def _describe(self, err):
         if isinstance(err, urllib.error.HTTPError):
             return "HTTP %d" % err.code
-        return ("%s: %s" % (type(err).__name__, err)).replace(self._token, "***")
+        text = ("%s: %s" % (type(err).__name__, err)).replace(self._token, "***")
+        return re.sub(r"//[^/@\s]+@", "//***@", text)  # user:pass@ của URL proxy nếu có trong thông điệp lỗi
 
     @staticmethod
     def _retry_after(err):
@@ -785,9 +788,11 @@ class TelegramSender(object):
             try:
                 value = json.loads(err.read().decode("utf-8")).get("parameters", {}).get("retry_after")
                 if isinstance(value, (int, float)) and value >= 0:
-                    return value
+                    return min(value, MAX_RETRY_AFTER_SEC)
             except (ValueError, AttributeError, OSError):
                 pass
+            finally:
+                err.close()
         return None
 
     def send(self, text):
@@ -851,7 +856,8 @@ def format_event(event, fetch_run):
 class Watcher(object):
     """Long-poll events.wait và gửi tin; trạng thái {cursor, workspaceId, downSince, downAlerted, authAlerted} lưu nguyên tử."""
 
-    def __init__(self, client, sender, state_path, clock=time.time, sleep=time.sleep):
+    def __init__(self, client, sender, state_path, clock=time.time, sleep=time.sleep, persist=True):
+        self.persist = persist  # False (--dry-run): không ghi tệp trạng thái
         self.client = client
         self.sender = sender
         self.state_path = state_path
@@ -873,7 +879,7 @@ class Watcher(object):
         return {"cursor": data["cursor"], "workspaceId": data.get("workspaceId")}
 
     def _save(self):
-        if self.state is None:  # chưa xác định được con trỏ thì không ghi: lần sau vẫn là "lần đầu"
+        if self.state is None or not self.persist:  # chưa xác định được con trỏ thì không ghi: lần sau vẫn là "lần đầu"
             return
         directory = os.path.dirname(self.state_path) or "."
         os.makedirs(directory, mode=0o700, exist_ok=True)
@@ -901,7 +907,12 @@ class Watcher(object):
             events = result.get("events") or []
             if not events:
                 return seq, workspace
-            seq = max(seq, max(e["seq"] for e in events))
+            if any(not isinstance(e, dict) or not isinstance(e.get("seq"), int) for e in events):
+                raise BridgeError("BAD_RESPONSE", "Sự kiện thiếu seq")
+            top = max(e["seq"] for e in events)
+            if top <= seq:  # không tiến lên: dừng để khỏi lặp vô hạn
+                return seq, workspace
+            seq = top
 
     def _host(self):
         try:
@@ -949,11 +960,12 @@ class Watcher(object):
                 self._recovered()
                 self._save()
                 return
+            started = self.clock()
             result = self._wait(self.state["cursor"], WATCH_WAIT_SEC)
             self._recovered()
             workspace = result.get("workspaceId")
             known = self.state["workspaceId"]
-            if known is not None and workspace != known:
+            if workspace is not None and known is not None and workspace != known:  # workspaceId null = chưa mở workspace, không phải đổi
                 self.state["cursor"], _ = self._latest(0)
                 self.state["workspaceId"] = workspace
                 self.sender.send("Đã chuyển workspace: %s" % clip(workspace, MAX_FIELD_CHARS))
@@ -961,6 +973,8 @@ class Watcher(object):
                 return
             if known is None and workspace is not None:
                 self.state["workspaceId"] = workspace
+            if not result.get("events") and self.clock() - started < WATCH_MIN_POLL_SEC:
+                self.sleep(WATCH_MIN_POLL_SEC)  # trả rỗng ngay: tránh vòng lặp nóng
             for event in result.get("events") or []:
                 text = format_event(event, lambda run_id: self.client.call("runs.get", {"runId": run_id}))
                 if text:
@@ -980,6 +994,8 @@ class Watcher(object):
 
 def cmd_watch(args):
     try:
+        if not args.env_file and not args.state:
+            raise BridgeError("CONFIG", "Cần --env-file (hoặc --state) để biết nơi lưu trạng thái")
         maihub_env = parse_env_file(args.env_file) if args.env_file else {}
         try:
             bot_env = parse_env_file(args.notify_env)
@@ -989,8 +1005,9 @@ def cmd_watch(args):
         target = resolve_notify_target(maihub_env, bot_env)
         sender = PrintSender() if args.dry_run else TelegramSender(target, resolve_telegram_route(maihub_env))
         state_path = args.state or os.path.join(os.path.dirname(os.path.abspath(args.env_file)), "state", "watch-state.json")
-        os.makedirs(os.path.dirname(state_path), mode=0o700, exist_ok=True)
-        Watcher(MaiHubClient(config), sender, state_path).run_forever()
+        if not args.dry_run:
+            os.makedirs(os.path.dirname(state_path), mode=0o700, exist_ok=True)
+        Watcher(MaiHubClient(config), sender, state_path, persist=not args.dry_run).run_forever()
     except BridgeError as err:
         return exit_code_for(err)
     except (IOError, OSError) as err:
