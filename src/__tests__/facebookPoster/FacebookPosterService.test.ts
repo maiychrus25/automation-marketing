@@ -1119,3 +1119,62 @@ describe('FacebookPosterService cancel closes sessions', () => {
     });
   });
 });
+
+describe('exclusive slot and login observation', () => {
+  test('start throws BUSY while exclusive held', () => {
+    const h = harness({ postToTargets: postAll() });
+    h.service.acquireExclusive();
+    expect(() => h.service.start(postParams())).toThrow('Đang có việc chạy');
+    h.service.releaseExclusive();
+    expect(() => h.service.start(postParams())).not.toThrow();
+  });
+
+  test('acquireExclusive throws BUSY while run active', async () => {
+    const gate = deferred();
+    const h = harness({ postToTargets: postAll(() => gate.promise) });
+    h.service.start(postParams());
+    expect(() => h.service.acquireExclusive()).toThrow('Đang có việc chạy');
+    gate.resolve();
+    await h.service.whenIdle();
+  });
+
+  test('isBusy covers both', async () => {
+    const gate = deferred();
+    const h = harness({ postToTargets: postAll(() => gate.promise) });
+    expect(h.service.isBusy()).toBe(false);
+    h.service.acquireExclusive();
+    expect(h.service.isBusy()).toBe(true);
+    expect(() => h.service.acquireExclusive()).toThrow('Đang có việc chạy');
+    h.service.releaseExclusive();
+    expect(h.service.isBusy()).toBe(false);
+    h.service.start(postParams());
+    expect(h.service.isBusy()).toBe(true);
+    gate.resolve();
+    await h.service.whenIdle();
+    expect(h.service.isBusy()).toBe(false);
+  });
+
+  test('no c_user at launch → onLoginObserved logged_out', async () => {
+    const observed: any[] = [];
+    const h = harness({ postToTargets: postAll() }, { onLoginObserved: (id, st) => { observed.push([id, st]); } });
+    h.loggedIn.set('p1', false);
+    h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(observed).toEqual([['p1', 'logged_out']]);
+  });
+
+  test('posted result → ok', async () => {
+    const observed: any[] = [];
+    const h = harness({ postToTargets: postAll() }, { onLoginObserved: (id, st) => { observed.push([id, st]); } });
+    h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(observed).toEqual([['p1', 'ok']]);
+  });
+
+  test('observer throwing does not fail run', async () => {
+    const h = harness({ postToTargets: postAll() }, { onLoginObserved: () => { throw new Error('boom'); } });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(h.run(runId).status).toBe('done');
+  });
+});

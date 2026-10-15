@@ -2,7 +2,7 @@ import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from './schema';
 import { keyOf, type CollectedComment } from './collectComments';
 import type {
     FbPosterComment, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
-    FbPosterSchedule, FbPosterScheduleView,
+    FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
 } from '../../models/facebookPoster';
 
 /**
@@ -307,6 +307,33 @@ export class FacebookPosterStore {
             [...filter, opts.limit, opts.offset],
         );
         return { comments: rows.map(mapComment), total: this.count(`SELECT COUNT(*) AS n FROM fb_poster_comments ${where}`, filter) };
+    }
+
+    listLoginStates(): ProfileLoginState[] {
+        return this.db.query<any>('SELECT * FROM fb_poster_login_state ORDER BY profile_id').map((row) => ({
+            profileId: row.profile_id,
+            state: row.state,
+            checkedAt: row.checked_at ?? null,
+            source: row.source ?? null,
+            lastError: row.last_error ?? null,
+            lastErrorAt: row.last_error_at ?? null,
+        }));
+    }
+
+    /** Ghi trạng thái xác định được, xoá lỗi cũ; trả trạng thái trước đó (null nếu chưa có). */
+    setLoginState(profileId: string, state: LoginState, source: 'check' | 'run', at: number): LoginState | null {
+        const previous = this.db.queryOne<{ state: LoginState }>('SELECT state FROM fb_poster_login_state WHERE profile_id = ?', [profileId])?.state ?? null;
+        this.db.run(
+            `INSERT INTO fb_poster_login_state (profile_id, state, checked_at, source, last_error, last_error_at) VALUES (?, ?, ?, ?, NULL, NULL)
+             ON CONFLICT(profile_id) DO UPDATE SET state = excluded.state, checked_at = excluded.checked_at, source = excluded.source, last_error = NULL, last_error_at = NULL`,
+            [profileId, state, at, source],
+        );
+        return previous;
+    }
+
+    /** Chỉ ghi lỗi khi đã có dòng (cột state NOT NULL): chưa kiểm tra lần nào thì vẫn hiện 'unknown'. */
+    setLoginError(profileId: string, error: string, at: number): void {
+        this.db.run('UPDATE fb_poster_login_state SET last_error = ?, last_error_at = ? WHERE profile_id = ?', [error, at, profileId]);
     }
 
     private count(sql: string, params: any[] = []): number {

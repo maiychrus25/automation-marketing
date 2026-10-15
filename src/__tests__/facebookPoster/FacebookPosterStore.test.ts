@@ -319,3 +319,36 @@ describe('schedules', () => {
     assert.strictEqual(s.getSchedule('old')!.draft, false);
   });
 });
+
+describe('login state', () => {
+  test('setLoginState returns previous', () => {
+    const s = store();
+    expect(s.setLoginState('p1', 'ok', 'check', 10)).toBeNull();
+    expect(s.setLoginState('p1', 'logged_out', 'run', 20)).toBe('ok');
+  });
+
+  test('setLoginError keeps state', () => {
+    const s = store();
+    s.setLoginState('p1', 'ok', 'check', 10);
+    s.setLoginError('p1', 'timeout', 30);
+    expect(s.listLoginStates()).toEqual([
+      { profileId: 'p1', state: 'ok', checkedAt: 10, source: 'check', lastError: 'timeout', lastErrorAt: 30 },
+    ]);
+    s.setLoginState('p1', 'ok', 'check', 40);
+    expect(s.listLoginStates()[0]).toMatchObject({ lastError: null, lastErrorAt: null, checkedAt: 40 });
+  });
+
+  test('setLoginError without a row does not insert', () => {
+    const s = store();
+    s.setLoginError('p9', 'boom', 5);
+    expect(s.listLoginStates()).toEqual([]);
+  });
+
+  test('list maps rows', () => {
+    const s = store();
+    s.setLoginState('a', 'checkpoint', 'run', 7);
+    expect(s.listLoginStates()).toEqual([
+      { profileId: 'a', state: 'checkpoint', checkedAt: 7, source: 'run', lastError: null, lastErrorAt: null },
+    ]);
+  });
+});

@@ -30,6 +30,8 @@ export interface FacebookPosterServiceDeps {
     random?: () => number;
     sleep?: (ms: number, isStopping: () => boolean) => Promise<void>;
     newId?: () => string;
+    /** Báo trạng thái đăng nhập quan sát được trong lượt đăng (lỗi của hàm này bị bỏ qua). */
+    onLoginObserved?: (profileId: string, state: 'ok' | 'logged_out') => void;
     tasks?: Partial<{ postToTargets: typeof postToTargets; scanGroups: typeof scanGroups; searchAndJoinGroups: typeof searchAndJoinGroups; collectComments: typeof collectComments }>;
 }
 
@@ -55,6 +57,8 @@ interface ProfilePlan {
     critical: boolean;
     /** The result being recorded came from a step that was critical; a failure there is real, not a cancel side effect. */
     reachedCritical: boolean;
+    /** Có ít nhất một kết quả 'posted': tài khoản chắc chắn còn đăng nhập. */
+    posted: boolean;
 }
 interface ActiveRun { run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number }; }
 interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; identity?: string; }
@@ -84,6 +88,7 @@ export class FacebookPosterService {
     private readonly tasks: Required<NonNullable<FacebookPosterServiceDeps['tasks']>>;
 
     private active: ActiveRun | null = null;
+    private exclusive = false;
     private stopping = false;
     private forced = false;
     private idle: Promise<void> = Promise.resolve();
@@ -100,7 +105,7 @@ export class FacebookPosterService {
     }
 
     start(params: StartParams, scheduleId?: string): { runId: string } {
-        if (this.active) throw new Error(BUSY_ERROR);
+        if (this.active || this.exclusive) throw new Error(BUSY_ERROR);
         const plans = this.plan(params);
         const run: FbPosterRun = {
             id: this.newId(),
@@ -127,6 +132,24 @@ export class FacebookPosterService {
         this.active = { run, params, plans, concurrency, staggerMs };
         this.idle = this.execute(this.active);
         return { runId: run.id };
+    }
+
+    /** Giữ khe việc cho việc khác (kiểm tra đăng nhập): từ chối khi đang đăng hoặc đã có người giữ. */
+    acquireExclusive(): void {
+        if (this.active || this.exclusive) throw new Error(BUSY_ERROR);
+        this.exclusive = true;
+    }
+
+    releaseExclusive(): void {
+        this.exclusive = false;
+    }
+
+    isBusy(): boolean {
+        return this.active !== null || this.exclusive;
+    }
+
+    private observeLogin(profileId: string, state: 'ok' | 'logged_out'): void {
+        try { this.deps.onLoginObserved?.(profileId, state); } catch { /* quan sát không được làm hỏng lượt đăng */ }
     }
 
     cancel(): void {
@@ -189,6 +212,7 @@ export class FacebookPosterService {
             sessions: [],
             critical: false,
             reachedCritical: false,
+            posted: false,
         });
         switch (params.kind) {
             case 'post':
@@ -286,6 +310,7 @@ export class FacebookPosterService {
                     loginChecked = true;
                     if (!(await isLoggedIn(session.context))) {
                         await session.close().catch(() => undefined);
+                        this.observeLogin(profileId, 'logged_out');
                         throw new Error(NOT_LOGGED_IN_ERROR);
                     }
                 }
@@ -321,6 +346,7 @@ export class FacebookPosterService {
         } finally {
             await Promise.allSettled(plan.sessions.map((session) => session.close()));
         }
+        if (plan.posted) this.observeLogin(profileId, 'ok');
         // A failure caused by our own cancel is not a profile failure (a forced close still is).
         plan.progress.state = failed && !(this.stopping && !this.forced) ? 'failed' : this.stopping ? 'cancelled' : 'done';
         // The join total was only a cap (`limit`); settle it to what was actually reported.
@@ -428,6 +454,7 @@ export class FacebookPosterService {
         } catch (err) {
             this.rememberStoreError(err);
         }
+        if (row.outcome === 'posted') plan.posted = true;
         plan.reachedCritical = false;
         plan.progress.done += 1;
         this.emitProgress(active);

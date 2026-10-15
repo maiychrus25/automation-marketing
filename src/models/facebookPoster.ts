@@ -69,3 +69,16 @@ export interface FbPosterComment {
     commentedAt: string;
     collectedAt: number;
 }
+
+export type LoginState = 'ok' | 'logged_out' | 'checkpoint';
+export type LoginCheckOutcome = LoginState | 'error' | 'skipped';
+export type LoginCheckSource = 'manual' | 'api' | 'daily';
+
+export interface ProfileLoginState {
+    profileId: string;
+    state: LoginState | 'unknown';
+    checkedAt: number | null;
+    source: 'check' | 'run' | null;
+    lastError: string | null;
+    lastErrorAt: number | null;
+}

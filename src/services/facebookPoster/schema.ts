@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS fb_poster_schedules (
     updated_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fb_poster_schedules_next ON fb_poster_schedules(enabled, next_run_at);
+
+CREATE TABLE IF NOT EXISTS fb_poster_login_state (
+    profile_id    TEXT PRIMARY KEY,
+    state         TEXT NOT NULL,            -- ok / logged_out / checkpoint
+    checked_at    INTEGER NOT NULL,         -- lần cuối xác định được trạng thái (ms epoch)
+    source        TEXT NOT NULL,            -- 'check' (kiểm tra) hoặc 'run' (lượt đăng)
+    last_error    TEXT,                     -- lỗi của lần kiểm tra gần nhất nếu không xác định được
+    last_error_at INTEGER
+);
 `;
 
 // Chạy sau FB_POSTER_SCHEMA_SQL, từng câu trong try/catch (cột đã có thì ALTER ném lỗi, bỏ qua).
