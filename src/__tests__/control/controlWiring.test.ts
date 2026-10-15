@@ -95,7 +95,7 @@ describe('controlConfig', () => {
     catch (e: any) { expect(e.invalid).toEqual(['nope']); }
   });
   test('accepts valid input, dedupes, and allows disabled with empty list', () => {
-    expect(validateConfigInput({ enabled: true, port: 50000, allowList: '10.0.0.1 10.0.0.1 192.168.1.0/24' })).toEqual({ enabled: true, port: 50000, allowList: ['10.0.0.1', '192.168.1.0/24'] });
+    expect(validateConfigInput({ enabled: true, port: 50000, allowList: '10.0.0.1 10.0.0.1 192.168.1.0/24' })).toEqual({ enabled: true, port: 50000, allowList: ['10.0.0.1', '192.168.1.0/24'], publicHost: null });
     expect(validateConfigInput({ enabled: false, port: 47321, allowList: [] }).enabled).toBe(false);
   });
   test('rejects bad ports', () => {
@@ -105,7 +105,7 @@ describe('controlConfig', () => {
     expect(parseStoredConfig(null).enabled).toBe(false);
     expect(parseStoredConfig('{bad').enabled).toBe(false);
     expect(parseStoredConfig('{"enabled":true,"port":47321,"allowList":[]}').enabled).toBe(false);
-    expect(parseStoredConfig('{"enabled":true,"port":50000,"allowList":["10.0.0.1"]}')).toEqual({ enabled: true, port: 50000, allowList: ['10.0.0.1'] });
+    expect(parseStoredConfig('{"enabled":true,"port":50000,"allowList":["10.0.0.1"]}')).toEqual({ enabled: true, port: 50000, allowList: ['10.0.0.1'], publicHost: null });
   });
   test('resolveAppVersion: keeps a real version, else first readable package.json, else the reported value', () => {
     const files: Record<string, string> = { '/b/package.json': '{"version":"26.17.0"}', '/c/package.json': '{"version":"9.9.9"}' };
