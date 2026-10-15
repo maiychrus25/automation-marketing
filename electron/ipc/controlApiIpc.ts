@@ -19,7 +19,7 @@ import { CertificateKeyUnreadableError, CertificateStore } from '../../src/servi
 import { InboxMediaStore } from '../../src/services/control/InboxMediaStore';
 import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
-    CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
+    CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, withStoredPublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
 import { isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations } from './facebookPosterIpc';
 import { getBrowserEngineStatus, getBrowserProfileService, getBrowserSandboxState } from './browserProfileIpc';
@@ -70,7 +70,7 @@ function loadBridge(): void {
             return;
         } catch { /* thử đường dẫn kế tiếp */ }
     }
-    Logger.error('[controlApi] không tìm thấy tệp maihub_bridge.py đi kèm');
+    Logger.error(`[controlApi] không tìm thấy tệp maihub_bridge.py đi kèm, đã thử: ${candidates.join(' | ')}`);
 }
 
 const inbox = () => new InboxMediaStore(path.join(controlDir(), 'inbox'));
@@ -272,8 +272,7 @@ export function registerControlApiIpc(): void {
     handle('controlApi:getConfig', () => getConfigView());
 
     handle('controlApi:setConfig', async (params) => {
-        // validateConfigInput đặt publicHost = null khi thiếu: giữ địa chỉ đã nhớ để lưu form cũ không xoá nó
-        const next = validateConfigInput('publicHost' in params ? params : { ...params, publicHost: readConfig().publicHost });
+        const next = validateConfigInput(withStoredPublicHost(params, readConfig().publicHost));
         db().setSetting(CONTROL_CONFIG_SETTING_KEY, JSON.stringify(next));
         await apply(); // always stop then start: reused keep-alive sockets must not outlive a new allow-list
         return getConfigView();
@@ -284,6 +283,8 @@ export function registerControlApiIpc(): void {
         if (!name || name.length > MAX_KEY_NAME) throw new Error(`Tên khoá phải có 1–${MAX_KEY_NAME} ký tự`);
         const botIp = parseBotIp(params.botIp);
         const publicHost = validatePublicHost(params.publicHost);
+        loadBridge(); // kiểm tra trước khi đổi bất kỳ cấu hình nào
+        if (!bridge) throw new Error('Không tìm thấy tệp bridge đi kèm MaiHub');
         const current = readConfig();
         const next = validateConfigInput({
             enabled: true, port: current.port, publicHost,
@@ -292,12 +293,12 @@ export function registerControlApiIpc(): void {
         db().setSetting(CONTROL_CONFIG_SETTING_KEY, JSON.stringify(next));
         await apply();
         if (!runtime) throw new Error(lastError ?? 'Không khởi động được Control API');
-        if (!bridge) throw new Error('Không tìm thấy tệp bridge đi kèm MaiHub');
+        const bridgeSha256 = bridge.sha256;
         const fingerprint = certStoreOf().fingerprint();
         if (!fingerprint) throw new Error('Chưa có chứng chỉ Control API');
         const { ticket, expiresAt } = pairing.create(name, botIp);
         const code = buildPairingCode({ url: `https://${publicHost}:${next.port}`, fingerprint, ticket, name });
-        const command = buildInstallCommand({ host: publicHost, port: next.port, sha256: bridge.sha256, code });
+        const command = buildInstallCommand({ host: publicHost, port: next.port, sha256: bridgeSha256, code });
         return { code, command, firewall: buildFirewallCommand(next), expiresAt, ...getConfigView() };
     });
 

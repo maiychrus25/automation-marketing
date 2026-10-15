@@ -22,6 +22,7 @@ describe('isEmployeeChannelAllowed', () => {
     'facebookPoster:start', 'facebookPoster:stop',
     'controlApi:createKey', 'controlApi:setConfig', 'controlApi:getConfig', 'controlApi:listKeys', 'controlApi:revokeKey',
     'controlApi:listAudit', 'controlApi:firewallCommand', 'controlApi:regenerateCertificate',
+    'controlApi:createPairing', 'controlApi:cancelPairing',
     'relay:startServer', 'relay:kickEmployee', 'relay:startTunnel',
     'employee:create', 'employee:setPermissions', 'employee:assignAccounts',
     'workspace:switch', 'workspace:delete',

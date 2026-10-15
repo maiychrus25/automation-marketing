@@ -83,6 +83,12 @@ export function validatePublicHost(host: string): string {
     return value;
 }
 
+/** validateConfigInput đặt publicHost = null khi thiếu khoá: thiếu thì giữ địa chỉ đã nhớ; có khoá (kể cả null/rỗng) thì dùng giá trị gửi lên. */
+export function withStoredPublicHost(input: any, stored: string | null): any {
+    const base = input && typeof input === 'object' ? input : {};
+    return 'publicHost' in base ? base : { ...base, publicHost: stored };
+}
+
 /** `botIp` của ghép nối: đúng một IPv4 đơn (không CIDR, không IPv6, không nhiều địa chỉ). */
 export function parseBotIp(text: unknown): string {
     const { entries, invalid } = parseAllowList(typeof text === 'string' ? text : '');
