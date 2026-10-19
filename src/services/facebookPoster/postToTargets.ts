@@ -272,6 +272,13 @@ export function readEditorTextInPage(editorSelectors: string[]): string {
   return '';
 }
 
+/** Phần tử đang focus có nằm trong một ô nhập của composer không. CHẠY TRONG TRÌNH DUYỆT. */
+export function isEditorFocusedInPage(editorSelectors: string[]): boolean {
+  const active = document.activeElement;
+  if (!active) return false;
+  return editorSelectors.some(sel => active.matches(sel) || !!active.closest(sel));
+}
+
 /** Bấm nút "Next" của composer Page nếu có. Group không có nút này. */
 function clickNextInDialog(labels: string[]): boolean {
   for (const dialog of Array.from(document.querySelectorAll('div[role="dialog"]'))) {
@@ -606,15 +613,34 @@ async function postToSingleTarget(
   // Lần thử lại: bản nháp của lần trước có thể còn trong ô. Gõ chồng sẽ đăng
   // nội dung sai, nên xoá trước; xoá không được thì dừng chứ không đoán.
   if ((deps.attempt ?? 1) >= 2) {
-    const readLeftover = async () => {
-      const t = await page.evaluate(readEditorTextInPage, EDITOR_SELECTORS).catch(() => '');
-      return typeof t === 'string' ? t.trim() : '';
+    // null = đọc lỗi: không biết ô có gì thì không được gõ tiếp (có thể đăng trùng).
+    const readLeftover = async (): Promise<string | null> => {
+      try {
+        const t = await page.evaluate(readEditorTextInPage, EDITOR_SELECTORS);
+        return typeof t === 'string' ? t.trim() : '';
+      } catch {
+        return null;
+      }
     };
-    if (await readLeftover()) {
+    const unreadable = () => {
+      sendLog(`[${kind}] [ERROR] Không đọc được nội dung ô soạn thảo: ${url}`, 'error');
+      return failed('draft_conflict', 'Không đọc được nội dung ô soạn thảo, không thử lại để tránh đăng trùng');
+    };
+    const leftover = await readLeftover();
+    if (leftover === null) return unreadable();
+    if (leftover) {
       sendLog('[Đăng Bài] Ô soạn còn chữ của lần trước, đang xoá trước khi gõ lại...', 'warning');
+      // Control+A chỉ an toàn khi con trỏ đang ở TRONG ô soạn; ngoài đó nó chọn cả trang.
+      const focusedInEditor = await page.evaluate(isEditorFocusedInPage, EDITOR_SELECTORS).catch(() => false);
+      if (focusedInEditor !== true) {
+        sendLog(`[${kind}] [ERROR] Con trỏ không nằm trong ô soạn thảo, không xoá bản nháp cũ: ${url}`, 'error');
+        return failed('draft_conflict', 'Hộp soạn thảo còn bản nháp cũ, không thử lại để tránh đăng trùng');
+      }
       await page.keyboard.press('Control+A');
       await page.keyboard.press('Backspace');
-      if (await readLeftover()) {
+      const after = await readLeftover();
+      if (after === null) return unreadable();
+      if (after) {
         sendLog(`[${kind}] [ERROR] Không xoá được bản nháp cũ: ${url}`, 'error');
         return failed('draft_conflict', 'Hộp soạn thảo còn bản nháp cũ, không thử lại để tránh đăng trùng');
       }

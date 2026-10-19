@@ -7,6 +7,7 @@ import {
   markComposerInviteInPage,
   markPublishButtonInPage,
   readEditorTextInPage,
+  isEditorFocusedInPage,
   readUploadStateInPage,
   DISCARD_LABELS,
   MAX_POST_ATTEMPTS,
@@ -1488,6 +1489,7 @@ function retryPage(opts: {
     listeners,
     evaluate: async (fn: AnyFn) => {
       if (fn.name === 'readEditorTextInPage') return editorText(attempt, reads++);
+      if (fn.name === 'isEditorFocusedInPage' && !(fn.name in answersFor(attempt))) return true;
       const a = answersFor(attempt);
       return fn.name in a ? a[fn.name] : (defaults[fn.name] ?? false);
     },
@@ -1714,4 +1716,70 @@ test('cancel during draft discard -> stopped, no further goto', async () => {
   assert.strictEqual(r.errorCode, 'stopped');
   assert.strictEqual(r.attempts, 1);
   assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 1);
+});
+
+test('isEditorFocusedInPage is true only when the active element is inside an editor', () => {
+  const el = (matches: boolean, closest: unknown) => ({ matches: () => matches, closest: () => closest });
+  const run = (active: unknown) => {
+    (global as any).document = { activeElement: active };
+    try { return isEditorFocusedInPage(['x']); } finally { delete (global as any).document; }
+  };
+  assert.strictEqual(run(el(true, null)), true);
+  assert.strictEqual(run(el(false, {})), true);
+  assert.strictEqual(run(el(false, null)), false);
+  assert.strictEqual(run(null), false);
+});
+
+test('focus outside the editor with leftover text -> draft_conflict, no Control+A', async () => {
+  const events: string[] = [];
+  const page = retryPage({
+    events,
+    answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : { isEditorFocusedInPage: false }),
+    editorText: a => (a === 2 ? 'bản nháp cũ' : ''),
+  });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.errorCode, 'draft_conflict');
+  assert.strictEqual(r.attempts, 2);
+  assert.ok(!events.includes('press:Control+A') && !events.includes('press:Backspace') && !events.includes('type'), events.join(','));
+});
+
+test('unreadable editor on retry -> draft_conflict, not retried, nothing typed', async () => {
+  const events: string[] = [];
+  const gotos: string[] = [];
+  const page = retryPage({
+    events, gotos,
+    answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}),
+    editorText: a => { if (a === 2) throw new Error('execution context destroyed'); return ''; },
+  });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.errorCode, 'draft_conflict');
+  assert.strictEqual(r.error, 'Không đọc được nội dung ô soạn thảo, không thử lại để tránh đăng trùng');
+  assert.strictEqual(r.attempts, 2);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 2);
+  assert.ok(!events.includes('type'));
+});
+
+test('unreadable editor after clearing -> draft_conflict', async () => {
+  const events: string[] = [];
+  const page = retryPage({
+    events,
+    answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}),
+    editorText: (a, reads) => { if (a === 2 && reads === 1) throw new Error('boom'); return a === 2 ? 'cũ' : ''; },
+  });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.errorCode, 'draft_conflict');
+  assert.ok(!events.includes('type'));
+});
+
+test('draft_conflict is not retried even if reached on attempt 2 of 3', async () => {
+  const gotos: string[] = [];
+  const page = retryPage({
+    gotos,
+    answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}),
+    editorText: a => (a === 2 ? 'cứng đầu' : ''),
+  });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.errorCode, 'draft_conflict');
+  assert.strictEqual(r.attempts, 2);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 2);
 });
