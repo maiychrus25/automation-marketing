@@ -128,7 +128,7 @@ export class PostTracker {
         this.jobId = jobId;
         this.progress = { done: 0, total: pairs.length };
         const sinceMs = this.now() - (params.pairs ? MAX_TRACK_SINCE_DAYS : sinceDays) * DAY_MS;
-        this.running = this.run(jobId, !!params.auto, pairs, sinceMs);
+        this.running = this.run(jobId, !!params.auto, pairs, sinceMs).catch(() => undefined);
         return { jobId, pairs };
     }
 
@@ -193,6 +193,7 @@ export class PostTracker {
         const skipped = new Set<string>();
         const shape: { value?: string[] } = {};
         try {
+          try {
             for (let i = 0; i < pairs.length && !this.cancelled; i++) {
                 const pair = pairs[i];
                 if (i > 0) await this.pause(GROUP_DELAY_MIN_MS, GROUP_DELAY_MAX_MS);
@@ -215,6 +216,10 @@ export class PostTracker {
                 this.progress = { done: i + 1, total: pairs.length };
                 this.emit('posts.trackProgress', { jobId, done: i + 1, total: pairs.length });
             }
+          } catch (e) {
+            // Lỗi ngoài từng cặp (ví dụ sleep bị từ chối): ghi nhận, không để promise nền bị từ chối.
+            errors.push({ groupUrl: '', profileId: '', error: e instanceof Error ? e.message : String(e) });
+          }
         } finally {
             const cancelled = this.cancelled;
             this.last = {
@@ -295,7 +300,7 @@ export class PostTracker {
             if (hit) { hits.set(row.resultId, hit); claimed.add(hit.fbId); }
         }
         for (const row of rows) {
-            if (row.postId !== '' && row.linkStatus === 'known') continue;
+            if (hits.has(row.resultId) || (row.postId !== '' && row.linkStatus === 'known')) continue;
             const free = reading.items.filter((it) => !claimed.has(it.fbId));
             const hit = pickBestMatch(row, free, reading.userId);
             if (hit) { hits.set(row.resultId, hit); claimed.add(hit.fbId); }
@@ -336,17 +341,18 @@ export class PostTracker {
     private missPatch(
         row: PostTrackingRow, readPast: boolean, config: PostTrackingConfig, now: number, totals: Counters,
     ): Partial<PostTrackingRow> {
+        const pending = row.linkStatus !== 'known';
+        // Qua mốc cuối thì bỏ cuộc dù bảng tin dừng sớm (spec 4.5), tránh dòng "missing" treo vĩnh viễn.
+        if (pending && linkRetryExhausted(row, config, now)) {
+            totals.notFound++;
+            return { checkCount: readPast ? row.checkCount + 1 : row.checkCount, linkStatus: 'not_found' };
+        }
         if (!readPast) return {};
-        if (row.linkStatus === 'known') {
+        if (!pending) {
             if (row.lastSeenAt === null || row.removedSuspected) return {};
             totals.removedSuspected++;
             return { removedSuspected: true };
         }
-        const checkCount = row.checkCount + 1;
-        if (linkRetryExhausted(row, config, now)) {
-            totals.notFound++;
-            return { checkCount, linkStatus: 'not_found' };
-        }
-        return { checkCount };
+        return { checkCount: row.checkCount + 1 };
     }
 }

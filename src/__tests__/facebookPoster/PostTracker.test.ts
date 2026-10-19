@@ -200,13 +200,14 @@ describe('conclusions (spec 4.3 steps 4-5)', () => {
         expect(finished(h.events)[0].payload.notFound).toBe(1);
     });
 
-    test('past the last milestone but not read past: stays missing, no endless due loop', async () => {
+    test('past the last milestone and stopped early: still not_found (spec 4.5), no dead missing row', async () => {
         const h = setup();
         const postedAt = NOW - 8 * DAY;
         const id = addRow(h.store, { postedAt });
         feeds['111|null'] = page([item('x', NOW - HOUR)]);
         await run(h, { pairs: [{ profileId: 'p1', groupUrl: G1 }] });
-        expect(rowOf(h.store, id)).toMatchObject({ linkStatus: 'missing', checkCount: 0, nextCheckAt: null });
+        expect(rowOf(h.store, id)).toMatchObject({ linkStatus: 'not_found', checkCount: 0, nextCheckAt: null });
+        expect(finished(h.events)[0].payload.notFound).toBe(1);
     });
 
     test('seen again after being suspected removed -> recovered', async () => {
@@ -390,6 +391,23 @@ describe('slot, status, events and cancel', () => {
         const st = h.tracker.status();
         expect(st).toMatchObject({ running: false, jobId: null, progress: { done: 2, total: 2 } });
         expect(st.last).toMatchObject({ jobId: 'job1', auto: true, finishedAt: NOW, groups: 2, errors: [] });
+    });
+
+    test('an unexpected throw outside the pair loop is recorded, never an unhandled rejection', async () => {
+        const unhandled = jest.fn();
+        process.on('unhandledRejection', unhandled);
+        const h = setup();
+        addRow(h.store); addRow(h.store, { groupUrl: G2 });
+        (h.tracker as any).sleepFn = async () => { throw new Error('sleep broke'); };
+        h.tracker.track();
+        await h.tracker.whenIdle();
+        await new Promise((r) => setImmediate(r));
+        process.off('unhandledRejection', unhandled);
+        expect(unhandled).not.toHaveBeenCalled();
+        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(finished(h.events)).toHaveLength(1);
+        expect(h.tracker.status().last!.errors.map((e) => e.error)).toContain('sleep broke');
+        expect(h.tracker.isRunning()).toBe(false);
     });
 
     test('a throwing emit does not break the job', async () => {
