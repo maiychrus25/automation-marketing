@@ -3,6 +3,7 @@ import { keyOf, type CollectedComment } from './collectComments';
 import type {
     FbPosterComment, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
     FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
+    LinkStatus, PostStatsGroupBy, PostStatsReportRow, PostStatsSnapshot, PostTrackingRow,
 } from '../../models/facebookPoster';
 
 /**
@@ -72,6 +73,49 @@ function mapResult(row: any): FbPosterResult {
         identity: row.identity,
         createdAt: row.created_at,
     };
+}
+
+function mapTracking(row: any): PostTrackingRow {
+    return {
+        resultId: row.result_id,
+        runId: row.run_id,
+        scheduleId: row.schedule_id ?? null,
+        profileId: row.profile_id,
+        groupUrl: row.group_url,
+        groupId: row.group_id,
+        postId: row.post_id,
+        postUrl: row.post_url ?? null,
+        postedAt: row.posted_at,
+        textHead: row.text_head,
+        linkStatus: row.link_status,
+        removedSuspected: row.removed_suspected === 1,
+        lastSeenAt: row.last_seen_at ?? null,
+        lastCheckedAt: row.last_checked_at ?? null,
+        checkCount: row.check_count,
+        nextCheckAt: row.next_check_at ?? null,
+        statsDone: row.stats_done === '' ? [] : String(row.stats_done).split(','),
+    };
+}
+
+function mapPostStats(row: any): PostStatsSnapshot {
+    return {
+        id: row.id, resultId: row.result_id, capturedAt: row.captured_at,
+        reactions: row.reactions ?? null, comments: row.comments ?? null, shares: row.shares ?? null,
+    };
+}
+
+/** Cột của fb_poster_post_tracking mà updateTracking được vá, theo tên trường PostTrackingRow. */
+const TRACKING_PATCH_COLUMNS: Record<string, string> = {
+    postId: 'post_id', postUrl: 'post_url', groupId: 'group_id', linkStatus: 'link_status', removedSuspected: 'removed_suspected',
+    lastSeenAt: 'last_seen_at', lastCheckedAt: 'last_checked_at', checkCount: 'check_count', nextCheckAt: 'next_check_at', statsDone: 'stats_done',
+};
+
+const engagementOf = (s: PostStatsSnapshot) => (s.reactions ?? 0) + (s.comments ?? 0) + (s.shares ?? 0);
+
+function localDay(ms: number): string {
+    const d = new Date(ms);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function mapComment(row: any): FbPosterComment {
@@ -336,6 +380,179 @@ export class FacebookPosterStore {
     /** Chỉ ghi lỗi khi đã có dòng (cột state NOT NULL): chưa kiểm tra lần nào thì vẫn hiện 'unknown'. */
     setLoginError(profileId: string, error: string, at: number): void {
         this.db.run('UPDATE fb_poster_login_state SET last_error = ?, last_error_at = ? WHERE profile_id = ?', [error, at, profileId]);
+    }
+
+    // ─── Theo dõi bài đã đăng ────────────────────────────────────────────────
+
+    createTracking(row: PostTrackingRow): void {
+        this.db.run(
+            `INSERT OR IGNORE INTO fb_poster_post_tracking
+               (result_id, run_id, schedule_id, profile_id, group_url, group_id, post_id, post_url, posted_at, text_head,
+                link_status, removed_suspected, last_seen_at, last_checked_at, check_count, next_check_at, stats_done)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [row.resultId, row.runId, row.scheduleId, row.profileId, row.groupUrl, row.groupId, row.postId, row.postUrl, row.postedAt,
+             row.textHead, row.linkStatus, row.removedSuspected ? 1 : 0, row.lastSeenAt, row.lastCheckedAt, row.checkCount,
+             row.nextCheckAt, row.statsDone.join(',')],
+        );
+    }
+
+    listTracking(filter: { linkStatus?: LinkStatus; profileId?: string; groupUrl?: string; sinceMs?: number; limit?: number }): PostTrackingRow[] {
+        const where: string[] = [];
+        const params: any[] = [];
+        if (filter.linkStatus !== undefined) { where.push('link_status = ?'); params.push(filter.linkStatus); }
+        if (filter.profileId !== undefined) { where.push('profile_id = ?'); params.push(filter.profileId); }
+        if (filter.groupUrl !== undefined) { where.push('group_url = ?'); params.push(filter.groupUrl); }
+        if (filter.sinceMs !== undefined) { where.push('posted_at >= ?'); params.push(filter.sinceMs); }
+        params.push(filter.limit ?? 1000);
+        return this.db.query<any>(
+            `SELECT * FROM fb_poster_post_tracking ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY posted_at DESC, result_id DESC LIMIT ?`,
+            params,
+        ).map(mapTracking);
+    }
+
+    /** Các cặp (profile, nhóm) có dòng đến hạn, bài chờ duyệt rồi bài chưa có link đứng trước, rồi theo mốc sớm nhất. */
+    listDuePairs(now: number, limit: number): { profileId: string; groupUrl: string }[] {
+        return this.db.query<any>(
+            `SELECT profile_id, group_url,
+                    MIN(CASE link_status WHEN 'pending_approval' THEN 0 WHEN 'missing' THEN 1 ELSE 2 END) AS priority,
+                    MIN(next_check_at) AS earliest
+             FROM fb_poster_post_tracking
+             WHERE next_check_at IS NOT NULL AND next_check_at <= ?
+             GROUP BY profile_id, group_url
+             ORDER BY priority ASC, earliest ASC, profile_id ASC, group_url ASC LIMIT ?`,
+            [now, limit],
+        ).map((r) => ({ profileId: r.profile_id, groupUrl: r.group_url }));
+    }
+
+    listTrackingForPair(profileId: string, groupUrl: string, sinceMs: number): PostTrackingRow[] {
+        return this.db.query<any>(
+            'SELECT * FROM fb_poster_post_tracking WHERE profile_id = ? AND group_url = ? AND posted_at >= ? ORDER BY posted_at DESC, result_id DESC',
+            [profileId, groupUrl, sinceMs],
+        ).map(mapTracking);
+    }
+
+    updateTracking(resultId: number, patch: Partial<Omit<PostTrackingRow, 'resultId' | 'runId' | 'scheduleId' | 'profileId' | 'groupUrl' | 'postedAt' | 'textHead'>>): void {
+        const sets: string[] = [];
+        const params: any[] = [];
+        for (const [key, column] of Object.entries(TRACKING_PATCH_COLUMNS)) {
+            if (!(key in patch)) continue;
+            const value = (patch as Record<string, unknown>)[key];
+            sets.push(`${column} = ?`);
+            params.push(key === 'removedSuspected' ? (value ? 1 : 0) : key === 'statsDone' ? (value as string[]).join(',') : value);
+        }
+        if (sets.length === 0) return;
+        this.db.run(`UPDATE fb_poster_post_tracking SET ${sets.join(', ')} WHERE result_id = ?`, [...params, resultId]);
+    }
+
+    addPostStats(resultId: number, snap: { capturedAt: number; reactions: number | null; comments: number | null; shares: number | null }): void {
+        this.db.run(
+            'INSERT INTO fb_poster_post_stats (result_id, captured_at, reactions, comments, shares) VALUES (?, ?, ?, ?, ?)',
+            [resultId, snap.capturedAt, snap.reactions, snap.comments, snap.shares],
+        );
+    }
+
+    /** Lần đo mới nhất của mỗi bài trong `resultIds` (bài chưa đo không có mặt). */
+    latestStats(resultIds: number[]): PostStatsSnapshot[] {
+        if (resultIds.length === 0) return [];
+        const marks = resultIds.map(() => '?').join(',');
+        return this.db.query<any>(
+            `SELECT s.* FROM fb_poster_post_stats s
+             WHERE s.result_id IN (${marks})
+               AND s.id = (SELECT x.id FROM fb_poster_post_stats x WHERE x.result_id = s.result_id ORDER BY x.captured_at DESC, x.id DESC LIMIT 1)
+             ORDER BY s.result_id`,
+            resultIds,
+        ).map(mapPostStats);
+    }
+
+    /** Báo cáo hiệu quả bài đã đăng (spec mục 5). Bài tính theo `posted_at` trong [from, to]. */
+    statsReport(opts: { from: number; to: number; groupBy: PostStatsGroupBy; limit: number }): PostStatsReportRow[] {
+        const rows = this.db.query<any>(
+            `SELECT t.*, sc.name AS schedule_name,
+                    (SELECT r.profile_name FROM fb_poster_results r WHERE r.profile_id = t.profile_id ORDER BY r.id DESC LIMIT 1) AS profile_name,
+                    (SELECT g.name FROM fb_poster_groups g WHERE g.profile_id = t.profile_id AND g.url = t.group_url) AS group_name
+             FROM fb_poster_post_tracking t LEFT JOIN fb_poster_schedules sc ON sc.id = t.schedule_id
+             WHERE t.posted_at >= ? AND t.posted_at <= ? ORDER BY t.posted_at, t.result_id`,
+            [opts.from, opts.to],
+        );
+        const latest = new Map(this.latestStats(rows.map((r) => r.result_id)).map((x) => [x.resultId, x]));
+        const memberCache = new Map<string, number | null>();
+        const memberCountOf = (r: any): number | null => {
+            const cacheKey = `${r.group_id}\u0000${r.group_url}`;
+            if (!memberCache.has(cacheKey)) memberCache.set(cacheKey, this.groupMemberCount(r.group_id, r.group_url));
+            return memberCache.get(cacheKey) ?? null;
+        };
+
+        const buckets = new Map<string, { row: PostStatsReportRow; rates: number[]; engagement: number }>();
+        for (const r of rows) {
+            const [key, label] = ((): [string, string] => {
+                switch (opts.groupBy) {
+                    case 'group': return [r.group_url, r.group_name || r.group_url];
+                    case 'profile': return [r.profile_id, r.profile_name ?? ''];
+                    case 'schedule': return [r.schedule_id ?? '', r.schedule_name ?? ''];
+                    case 'day': return [localDay(r.posted_at), localDay(r.posted_at)];
+                    default: return [String(r.result_id), r.group_name || r.group_url];
+                }
+            })();
+            let bucket = buckets.get(key);
+            if (!bucket) {
+                bucket = {
+                    row: { key, label, posts: 0, withLink: 0, pending: 0, notFound: 0, removedSuspected: 0, reactions: 0, comments: 0, shares: 0, measured: 0, avgEngagement: null, engagementRate: null },
+                    rates: [], engagement: 0,
+                };
+                buckets.set(key, bucket);
+            }
+            const b = bucket.row;
+            b.posts++;
+            if (r.link_status === 'known') b.withLink++;
+            if (r.link_status === 'pending_approval') b.pending++;
+            if (r.link_status === 'not_found') b.notFound++;
+            if (r.removed_suspected === 1) b.removedSuspected++;
+            const snap = latest.get(r.result_id);
+            if (snap) {
+                b.measured++;
+                b.reactions += snap.reactions ?? 0;
+                b.comments += snap.comments ?? 0;
+                b.shares += snap.shares ?? 0;
+                bucket.engagement += engagementOf(snap);
+                const members = memberCountOf(r);
+                if (members) bucket.rates.push(engagementOf(snap) / members);
+            }
+            if (opts.groupBy === 'post') {
+                b.post = {
+                    resultId: r.result_id, postUrl: r.post_url ?? null, groupUrl: r.group_url, text: String(r.text_head).slice(0, 100),
+                    postedAt: r.posted_at, linkStatus: r.link_status,
+                    snapshots: this.db.query<any>('SELECT * FROM fb_poster_post_stats WHERE result_id = ? ORDER BY captured_at, id', [r.result_id]).map(mapPostStats),
+                };
+            }
+        }
+        return [...buckets.values()].slice(0, opts.limit).map(({ row, rates, engagement }) => {
+            row.avgEngagement = row.measured > 0 ? engagement / row.measured : null;
+            // groupBy 'group': trung bình tương tác / số thành viên của chính nhóm đó; khác: trung bình tỉ lệ theo bài.
+            row.engagementRate = rates.length > 0 ? rates.reduce((a, c) => a + c, 0) / rates.length : null;
+            return row;
+        });
+    }
+
+    /** Số thành viên từ mục 'group' mới nhất của Nghiên cứu; bảng không tồn tại hoặc không có mục thì null. */
+    private groupMemberCount(groupId: string, groupUrl: string): number | null {
+        try {
+            const sql = groupId !== ''
+                ? "SELECT member_count FROM research_items WHERE kind = 'group' AND fb_id = ? ORDER BY captured_at DESC, id DESC LIMIT 1"
+                : "SELECT member_count FROM research_items WHERE kind = 'group' AND url = ? ORDER BY captured_at DESC, id DESC LIMIT 1";
+            return this.db.queryOne<{ member_count: number | null }>(sql, [groupId !== '' ? groupId : groupUrl])?.member_count ?? null;
+        } catch {
+            return null;
+        }
+    }
+
+    /** Xoá dòng theo dõi có posted_at cũ hơn `ms` cùng các lần đo của chúng. Trả số dòng theo dõi đã xoá. */
+    pruneTrackingOlderThan(ms: number): number {
+        return this.db.transaction(() => {
+            const before = this.count('SELECT COUNT(*) AS n FROM fb_poster_post_tracking');
+            this.db.run('DELETE FROM fb_poster_post_stats WHERE result_id IN (SELECT result_id FROM fb_poster_post_tracking WHERE posted_at < ?)', [ms]);
+            this.db.run('DELETE FROM fb_poster_post_tracking WHERE posted_at < ?', [ms]);
+            return before - this.count('SELECT COUNT(*) AS n FROM fb_poster_post_tracking');
+        });
     }
 
     private count(sql: string, params: any[] = []): number {

@@ -86,3 +86,66 @@ export interface ProfileLoginState {
     lastError: string | null;
     lastErrorAt: number | null;
 }
+
+// ─── Theo dõi bài đã đăng (docs/specs/2026-10-19-post-performance.md) ───────────
+
+export type LinkStatus = 'known' | 'missing' | 'pending_approval' | 'not_found';
+
+export interface PostTrackingRow {
+    resultId: number;
+    runId: string;
+    scheduleId: string | null;
+    profileId: string;
+    groupUrl: string;
+    groupId: string;
+    postId: string;
+    postUrl: string | null;
+    postedAt: number;
+    textHead: string;
+    linkStatus: LinkStatus;
+    removedSuspected: boolean;
+    lastSeenAt: number | null;
+    lastCheckedAt: number | null;
+    checkCount: number;
+    nextCheckAt: number | null;
+    /** Nhãn các mốc đo đã làm, dạng `${phút}m` (ví dụ "60m", "1440m"). */
+    statsDone: string[];
+}
+
+export interface PostStatsSnapshot {
+    id: number;
+    resultId: number;
+    capturedAt: number;
+    reactions: number | null;
+    comments: number | null;
+    shares: number | null;
+}
+
+export type PostStatsGroupBy = 'group' | 'profile' | 'schedule' | 'day' | 'post';
+
+export interface PostStatsReportRow {
+    key: string;
+    label: string;
+    posts: number;
+    withLink: number;
+    pending: number;
+    notFound: number;
+    removedSuspected: number;
+    reactions: number;
+    comments: number;
+    shares: number;
+    /** Số bài đã có ít nhất một lần đo. */
+    measured: number;
+    avgEngagement: number | null;
+    engagementRate: number | null;
+    /** Chỉ có với groupBy = 'post'. */
+    post?: {
+        resultId: number;
+        postUrl: string | null;
+        groupUrl: string;
+        text: string;
+        postedAt: number;
+        linkStatus: LinkStatus;
+        snapshots: PostStatsSnapshot[];
+    };
+}

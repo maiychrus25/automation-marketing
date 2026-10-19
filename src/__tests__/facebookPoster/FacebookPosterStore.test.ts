@@ -377,3 +377,142 @@ describe('error code columns', () => {
     expect(row).toMatchObject({ errorCode: 'submit_not_found', attempts: 3 });
   });
 });
+
+// ─── Theo dõi bài đã đăng ────────────────────────────────────────────────────
+
+describe('post tracking store', () => {
+  const DAY = 24 * 3600_000;
+  function trackRow(resultId: number, over: Record<string, unknown> = {}) {
+    return {
+      resultId, runId: 'r1', scheduleId: null as string | null, profileId: 'p1', groupUrl: 'https://www.facebook.com/groups/1/', groupId: '',
+      postId: '', postUrl: null as string | null, postedAt: 1000, textHead: 'xin chào', linkStatus: 'missing' as const,
+      removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null as number | null,
+      statsDone: [] as string[], ...over,
+    } as any;
+  }
+
+  test('createTracking là INSERT OR IGNORE và listTracking đọc lại đủ trường', () => {
+    const s = store();
+    s.createTracking(trackRow(1, { nextCheckAt: 50, statsDone: ['60m'] }));
+    s.createTracking(trackRow(1, { postId: 'dup' }));
+    const [got] = s.listTracking({});
+    expect(got).toMatchObject({ resultId: 1, postId: '', linkStatus: 'missing', removedSuspected: false, nextCheckAt: 50, statsDone: ['60m'], lastSeenAt: null });
+    expect(s.listTracking({})).toHaveLength(1);
+  });
+
+  test('listTracking lọc theo linkStatus, cặp và sinceMs', () => {
+    const s = store();
+    s.createTracking(trackRow(1, { postedAt: 100 }));
+    s.createTracking(trackRow(2, { postedAt: 900, linkStatus: 'known', postId: 'x' }));
+    s.createTracking(trackRow(3, { postedAt: 900, profileId: 'p2' }));
+    expect(s.listTracking({ linkStatus: 'known' }).map((r) => r.resultId)).toEqual([2]);
+    expect(s.listTrackingForPair('p1', 'https://www.facebook.com/groups/1/', 500).map((r) => r.resultId)).toEqual([2]);
+    expect(s.listTrackingForPair('p1', 'https://www.facebook.com/groups/1/', 0).map((r) => r.resultId).sort()).toEqual([1, 2]);
+  });
+
+  test('updateTracking vá từng trường', () => {
+    const s = store();
+    s.createTracking(trackRow(1));
+    s.updateTracking(1, { postId: 'pid', postUrl: 'https://x/', linkStatus: 'known', removedSuspected: true, nextCheckAt: null, statsDone: ['60m', '1440m'], checkCount: 3, lastSeenAt: 7, lastCheckedAt: 8 });
+    expect(s.listTracking({})[0]).toMatchObject({ postId: 'pid', postUrl: 'https://x/', linkStatus: 'known', removedSuspected: true, nextCheckAt: null, statsDone: ['60m', '1440m'], checkCount: 3, lastSeenAt: 7, lastCheckedAt: 8 });
+    s.updateTracking(1, {});
+  });
+
+  test('listDuePairs: chỉ dòng đến hạn, ưu tiên chờ duyệt rồi missing, mỗi cặp một lần, có limit', () => {
+    const s = store();
+    s.createTracking(trackRow(1, { profileId: 'pa', nextCheckAt: 10, linkStatus: 'known', postId: 'x' }));
+    s.createTracking(trackRow(2, { profileId: 'pb', nextCheckAt: 20, linkStatus: 'missing' }));
+    s.createTracking(trackRow(3, { profileId: 'pc', nextCheckAt: 30, linkStatus: 'pending_approval' }));
+    s.createTracking(trackRow(4, { profileId: 'pc', nextCheckAt: 5, linkStatus: 'known', postId: 'y' }));
+    s.createTracking(trackRow(5, { profileId: 'pd', nextCheckAt: 999 }));
+    s.createTracking(trackRow(6, { profileId: 'pe', nextCheckAt: null }));
+    expect(s.listDuePairs(100, 10).map((p) => p.profileId)).toEqual(['pc', 'pb', 'pa']);
+    expect(s.listDuePairs(100, 2).map((p) => p.profileId)).toEqual(['pc', 'pb']);
+    expect(s.listDuePairs(1, 10)).toEqual([]);
+  });
+
+  test('addPostStats và latestStats trả lần đo mới nhất mỗi bài', () => {
+    const s = store();
+    s.addPostStats(1, { capturedAt: 10, reactions: 1, comments: 0, shares: 0 });
+    s.addPostStats(1, { capturedAt: 30, reactions: 5, comments: 2, shares: null });
+    s.addPostStats(2, { capturedAt: 20, reactions: 9, comments: 9, shares: 9 });
+    const got = s.latestStats([1, 2, 3]);
+    expect(got.map((g) => [g.resultId, g.reactions, g.shares])).toEqual([[1, 5, null], [2, 9, 9]]);
+    expect(s.latestStats([])).toEqual([]);
+  });
+
+  describe('statsReport', () => {
+    function seed() {
+      const s = store();
+      const db = (s as any).db;
+      db.run(`INSERT INTO fb_poster_schedules (id, name, kind, params_json, created_at, updated_at) VALUES ('s1', 'Lịch sáng', 'once', '{}', 1, 1)`);
+      db.run(`INSERT INTO fb_poster_results (id, run_id, profile_id, profile_name, target_url, outcome, created_at) VALUES (1, 'r1', 'p1', 'Profile Một', 'u', 'posted', 1)`);
+      db.run(`INSERT INTO fb_poster_results (id, run_id, profile_id, profile_name, target_url, outcome, created_at) VALUES (2, 'r1', 'p1', 'Profile Một', 'u', 'posted', 1)`);
+      db.run(`INSERT INTO fb_poster_results (id, run_id, profile_id, profile_name, target_url, outcome, created_at) VALUES (3, 'r2', 'p2', 'Profile Hai', 'u', 'posted', 1)`);
+      const g1 = 'https://www.facebook.com/groups/1/';
+      s.createTracking(trackRow(1, { scheduleId: 's1', groupUrl: g1, groupId: '111', postedAt: 5 * DAY, linkStatus: 'known', postId: 'a', postUrl: 'https://f/a', textHead: 'bài một' }));
+      s.createTracking(trackRow(2, { scheduleId: 's1', groupUrl: g1, groupId: '111', postedAt: 5 * DAY + 1000, linkStatus: 'pending_approval' }));
+      s.createTracking(trackRow(3, { profileId: 'p2', groupUrl: 'https://www.facebook.com/groups/2/', postedAt: 6 * DAY, linkStatus: 'known', postId: 'c', removedSuspected: true }));
+      s.addPostStats(1, { capturedAt: 1, reactions: 1, comments: 1, shares: 1 });
+      s.addPostStats(1, { capturedAt: 2, reactions: 10, comments: 4, shares: 2 });
+      s.addPostStats(3, { capturedAt: 3, reactions: 2, comments: null, shares: null });
+      return s;
+    }
+    const range = { from: 0, to: 10 * DAY, limit: 100 };
+
+    test('groupBy group: tổng, trung bình trên bài đã đo, engagementRate null khi không có research', () => {
+      const rows = seed().statsReport({ ...range, groupBy: 'group' });
+      const g1 = rows.find((r) => r.key === 'https://www.facebook.com/groups/1/')!;
+      expect(g1).toMatchObject({ posts: 2, withLink: 1, pending: 1, notFound: 0, removedSuspected: 0, reactions: 10, comments: 4, shares: 2, measured: 1, avgEngagement: 16, engagementRate: null });
+      const g2 = rows.find((r) => r.key === 'https://www.facebook.com/groups/2/')!;
+      expect(g2).toMatchObject({ posts: 1, removedSuspected: 1, reactions: 2, avgEngagement: 2 });
+    });
+
+    test('engagementRate dùng member_count mới nhất của nhóm trong research_items', () => {
+      const s = seed();
+      const db = (s as any).db;
+      db.exec(`CREATE TABLE research_items (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, fb_id TEXT, url TEXT, member_count INTEGER, captured_at INTEGER)`);
+      db.run(`INSERT INTO research_items (kind, fb_id, url, member_count, captured_at) VALUES ('group', '111', '', 100, 1)`);
+      db.run(`INSERT INTO research_items (kind, fb_id, url, member_count, captured_at) VALUES ('group', '111', '', 200, 2)`);
+      const g1 = s.statsReport({ ...range, groupBy: 'group' }).find((r) => r.key === 'https://www.facebook.com/groups/1/')!;
+      expect(g1.engagementRate).toBeCloseTo(16 / 200);
+    });
+
+    test('groupBy profile dùng tên profile, schedule dùng tên lịch (null-safe)', () => {
+      const s = seed();
+      const byProfile = s.statsReport({ ...range, groupBy: 'profile' });
+      expect(byProfile.map((r) => [r.key, r.label, r.posts]).sort()).toEqual([['p1', 'Profile Một', 2], ['p2', 'Profile Hai', 1]]);
+      const bySchedule = s.statsReport({ ...range, groupBy: 'schedule' });
+      expect(bySchedule.find((r) => r.key === 's1')).toMatchObject({ label: 'Lịch sáng', posts: 2 });
+      expect(bySchedule.find((r) => r.key === '')).toMatchObject({ label: '', posts: 1 });
+    });
+
+    test('groupBy day gom theo ngày đăng', () => {
+      const rows = seed().statsReport({ ...range, groupBy: 'day' });
+      expect(rows.map((r) => r.posts).sort()).toEqual([1, 2]);
+      expect(rows[0].key).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    test('groupBy post: mỗi bài một dòng kèm chuỗi lần đo; lọc from/to và limit', () => {
+      const s = seed();
+      const rows = s.statsReport({ ...range, groupBy: 'post' });
+      expect(rows).toHaveLength(3);
+      const p1 = rows.find((r) => r.key === '1')!;
+      expect(p1.post).toMatchObject({ resultId: 1, postUrl: 'https://f/a', text: 'bài một', linkStatus: 'known' });
+      expect(p1.post!.snapshots.map((x) => x.capturedAt)).toEqual([1, 2]);
+      expect(s.statsReport({ from: 5 * DAY + 500, to: 10 * DAY, groupBy: 'post', limit: 100 }).map((r) => r.key).sort()).toEqual(['2', '3']);
+      expect(s.statsReport({ ...range, groupBy: 'post', limit: 1 })).toHaveLength(1);
+    });
+  });
+
+  test('pruneTrackingOlderThan xoá dòng và lần đo cũ', () => {
+    const s = store();
+    s.createTracking(trackRow(1, { postedAt: 10 }));
+    s.createTracking(trackRow(2, { postedAt: 500 }));
+    s.addPostStats(1, { capturedAt: 11, reactions: 1, comments: 1, shares: 1 });
+    s.addPostStats(2, { capturedAt: 501, reactions: 1, comments: 1, shares: 1 });
+    expect(s.pruneTrackingOlderThan(100)).toBe(1);
+    expect(s.listTracking({}).map((r) => r.resultId)).toEqual([2]);
+    expect(s.latestStats([1, 2]).map((x) => x.resultId)).toEqual([2]);
+  });
+});

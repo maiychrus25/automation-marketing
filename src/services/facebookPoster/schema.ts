@@ -73,6 +73,38 @@ CREATE TABLE IF NOT EXISTS fb_poster_login_state (
     last_error    TEXT,                     -- lỗi của lần kiểm tra gần nhất nếu không xác định được
     last_error_at INTEGER
 );
+-- Theo dõi bài đã đăng: docs/specs/2026-10-19-post-performance.md mục 2
+CREATE TABLE IF NOT EXISTS fb_poster_post_tracking (
+    result_id         INTEGER PRIMARY KEY,   -- fb_poster_results.id
+    run_id            TEXT NOT NULL,
+    schedule_id       TEXT DEFAULT NULL,
+    profile_id        TEXT NOT NULL,
+    group_url         TEXT NOT NULL,
+    group_id          TEXT NOT NULL DEFAULT '',
+    post_id           TEXT NOT NULL DEFAULT '',
+    post_url          TEXT DEFAULT NULL,
+    posted_at         INTEGER NOT NULL,
+    text_head         TEXT NOT NULL DEFAULT '',
+    link_status       TEXT NOT NULL,         -- known | missing | pending_approval | not_found
+    removed_suspected INTEGER NOT NULL DEFAULT 0,
+    last_seen_at      INTEGER DEFAULT NULL,
+    last_checked_at   INTEGER DEFAULT NULL,
+    check_count       INTEGER NOT NULL DEFAULT 0,
+    next_check_at     INTEGER DEFAULT NULL,
+    stats_done        TEXT NOT NULL DEFAULT '' -- nhãn mốc đo đã làm, ví dụ "60m,1440m"
+);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_next ON fb_poster_post_tracking(next_check_at);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_pair ON fb_poster_post_tracking(profile_id, group_url);
+
+CREATE TABLE IF NOT EXISTS fb_poster_post_stats (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    result_id   INTEGER NOT NULL,
+    captured_at INTEGER NOT NULL,
+    reactions   INTEGER DEFAULT NULL,
+    comments    INTEGER DEFAULT NULL,
+    shares      INTEGER DEFAULT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_post_stats_result ON fb_poster_post_stats(result_id, captured_at);
 `;
 
 // Chạy sau FB_POSTER_SCHEMA_SQL, từng câu trong try/catch (cột đã có thì ALTER ném lỗi, bỏ qua).
