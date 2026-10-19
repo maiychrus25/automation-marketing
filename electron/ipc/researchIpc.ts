@@ -15,6 +15,7 @@ import {
     SCAN_NOT_FOUND_ERROR, buildSheetRows, checkProfileIds, exportFileName, parseGetParams, parseListParams,
 } from '../../src/services/research/researchOperationsLogic';
 import type { ResearchItem, ResearchOrigin } from '../../src/models/research';
+import { buildResearchFinished, emitControlEvent } from '../../src/services/control/controlEvents';
 import { getBrowserProfileService } from './browserProfileIpc';
 import {
     isFacebookPosterEmployeeBlocked, listFacebookLoginStates, listFacebookPosterRunProfileIds, observeFacebookLogin,
@@ -93,7 +94,10 @@ function getService(): ResearchService {
             },
             observeLogin: observeFacebookLogin,
             readConfig,
-            emit: (channel, data) => EventBroadcaster.emit(channel, data),
+            emit: (channel, data) => {
+                EventBroadcaster.emit(channel, data);
+                if (channel === 'research:finished') emitControlEvent('research.finished', buildResearchFinished(data as any));
+            },
         });
     }
     return service;

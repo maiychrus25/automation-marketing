@@ -2,7 +2,7 @@ import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import type { FbPosterResult, FbPosterRun, FbPosterSchedule, LoginCheckOutcome, LoginCheckSource, LoginState } from '../../models/facebookPoster';
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished';
 
 export function buildRunStarted(run: { runId: string; kind: string; scheduleId: string | null }) {
     return { runId: run.runId, kind: run.kind, scheduleId: run.scheduleId };
@@ -39,6 +39,11 @@ export function buildCheckFinished(e: { checkId: string; source: LoginCheckSourc
             ...(r.error !== undefined ? { error: r.error } : {}),
         })),
     };
+}
+
+/** Lượt quét Nghiên cứu kết thúc; chỉ giữ các trường đã công bố. */
+export function buildResearchFinished(scan: { scanId: string; source: string; query: string; status: string; errorCode: string; itemCount: number }) {
+    return { scanId: scan.scanId, source: scan.source, query: scan.query, status: scan.status, errorCode: scan.errorCode, itemCount: scan.itemCount };
 }
 
 type Sink = (type: ControlEventType, payload: unknown) => void;

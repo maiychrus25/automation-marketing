@@ -142,6 +142,8 @@ Tham số dùng chung của bản nháp (`D`): `name` (chuỗi ≤ 100, mặc đ
 
 Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; cho lịch một lần), `days` (mảng 0–6, 0 = Chủ nhật; cho lịch lặp), `time` (`"HH:MM"`; cho lịch lặp).
 
+**Nghiên cứu chủ đề (`research.*`).** Mỗi lượt quét chạy nền và tự xoay vòng các profile đủ điều kiện (không bị loại trừ, không đang mở, không nằm trong lượt Đăng Facebook, đăng nhập không `logged_out`/`checkpoint`, chưa chạm trần ngày); mỗi profile thu tối đa 50 mục rồi đổi sang profile khác, nghỉ 2–5 giây giữa hai trang kết quả và 5–10 giây giữa hai nhóm. Dữ liệu giữ 180 ngày. Mỗi mục trong `items` có tên, mã và link người đăng (`authorName`, `authorId`, `authorUrl`; kể cả cá nhân), `reactions`/`comments`/`shares` (`null` nếu không đọc được), `engagement` (= reactions + comments + shares, bỏ qua `null`; tất cả `null` thì `null`) và `engagementRate` (= engagement / số thành viên của nhóm nơi đăng; `null` nếu chưa biết số thành viên). Hoàn tất báo bằng sự kiện `research.finished`.
+
 | Thao tác | Tham số | Kết quả | Nguy hiểm |
 |---|---|---|---|
 | `system.status` | không | `{ appVersion, workspace: {id,name}\|null, browserEngine, sandbox, schedulerRunning, currentRun }` | không |
@@ -163,6 +165,11 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `runs.get` | **`runId`** | `{ run, results }`: kết quả từng đích, link bài, trạng thái bình luận | không |
 | `runs.cancel` | **`confirm`** | `{ cancelled: true }`. Dừng việc đang chạy | có |
 | `events.wait` | **`after`** (≥ 0), `timeoutSec` (0–25) | `{ events: [{ seq, type, payload, createdAt }], workspaceId }` | không |
+| `research.search` | **`source`** (`posts`/`groups`/`pages`), **`query`** (1–100 ký tự), `recent` (boolean, chỉ `posts`), `year` (chỉ `posts`, từ 2010 tới năm hiện tại), `limit` (1–500, mặc định 200), `profileIds` (mảng 1–50 mã; bỏ trống = mọi profile) | `{ scanId }`. Quét Facebook theo từ khoá, chỉ đọc, chạy nền; xong có sự kiện `research.finished`, rồi lấy kết quả bằng `research.get`. `INVALID_PARAMS` nếu tham số sai hoặc `profileIds` rỗng; `NOT_FOUND` với `details.missing` nếu `profileIds` có mã lạ; `BUSY` nếu đang có lượt quét khác | không |
+| `research.scanGroupFeeds` | `groupUrls` (≤ 20 link nhóm; bỏ trống = 20 nhóm được quét gần nhất của các profile đủ điều kiện), `sinceDays` (1–30, mặc định 7), `limitPerGroup` (1–100, mặc định 30), `profileIds` | `{ scanId }`. Đọc bài mới trong nhóm; lỗi như `research.search` | không |
+| `research.list` | `limit` (1–200), `offset`, `source` (`posts`/`groups`/`pages`/`group_feed`) | `{ total, scans[] }` (mới nhất trước) | không |
+| `research.get` | **`scanId`**, `sort` (`engagement` mặc định / `recent` / `members`), `limit` (1–500), `offset` | `{ scan, total, items[] }`. `NOT_FOUND` nếu `scanId` lạ | không |
+| `research.cancel` | không | `{ cancelled: boolean }`. Dừng lượt quét đang chạy (kể cả khi đang nghỉ giữa trang) | không |
 
 `run.status` nhận một trong `running`, `done`, `cancelled`, `failed`, `missed`.
 
@@ -202,6 +209,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `draft.approved` | Duyệt nháp (trong app hoặc qua API) | `{ scheduleId, name, when: "now"\|"scheduled", kind, nextRunAt }` |
 | `profile.loginProblem` | Trạng thái đăng nhập lưu của profile chuyển sang `logged_out` hoặc `checkpoint` (từ trạng thái khác, kể cả `unknown`); giữ nguyên thì không phát lại | `{ profileId, profileName, state, source }`; `source` là `check` hoặc `run` |
 | `profiles.checkFinished` | Một lượt kiểm tra đăng nhập kết thúc | `{ checkId, source: "manual"\|"api"\|"daily", results: [{ profileId, profileName, outcome, error? }] }`; `outcome` là `ok`, `logged_out`, `checkpoint`, `error`, `skipped`; `error` chỉ có khi `outcome = error` |
+| `research.finished` | Một lượt quét Nghiên cứu kết thúc (xong, lỗi hoặc bị huỷ) | `{ scanId, source, query, status, errorCode, itemCount }`; lấy kết quả bằng `research.get` |
 
 Sau `run.finished`, gọi `runs.get` với `runId` để lấy link bài và chi tiết từng đích.
 

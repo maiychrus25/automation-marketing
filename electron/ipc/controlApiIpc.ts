@@ -22,6 +22,7 @@ import {
     CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, withStoredPublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
 import { checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations } from './facebookPosterIpc';
+import { researchOperations } from './researchIpc';
 import { getBrowserEngineStatus, getBrowserProfileService, getBrowserSandboxState } from './browserProfileIpc';
 
 const HOUR_MS = 3_600_000;
@@ -123,6 +124,13 @@ async function startRuntime(config: ControlConfig): Promise<void> {
     const profiles = () => getBrowserProfileService();
     const methods = createControlMethods({
         poster,
+        research: {
+            search: (p) => researchOperations.search(p, 'api'),
+            scanGroupFeeds: (p) => researchOperations.scanGroupFeeds(p, 'api'),
+            list: researchOperations.list,
+            get: researchOperations.get,
+            cancel: researchOperations.cancel,
+        },
         listProfiles: () => {
             const list = db().getBrowserProfiles();
             const scanned = poster.listGroups({ profileIds: list.map((p) => p.id) }).groups;

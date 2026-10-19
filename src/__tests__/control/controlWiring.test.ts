@@ -7,7 +7,7 @@ import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
 import { ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
-import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildRunFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
+import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 import { createCertificate } from '../../services/control/certificate';
 import { parseBotIp, withStoredPublicHost } from '../../services/control/controlConfig';
 
@@ -258,4 +258,11 @@ describe('control events: login checks', () => {
     const first = buildCheckFinished({ checkId: 'c', source: 'api', results: [{ profileId: 'a', profileName: 'A', outcome: 'skipped' }] }).results[0];
     expect('error' in first).toBe(false);
   });
+});
+
+describe('control events: research', () => {
+    it('buildResearchFinished keeps only the documented fields', () => {
+        const payload = buildResearchFinished({ scanId: 's1', source: 'posts', query: 'kem', status: 'done', errorCode: '', itemCount: 7, extra: 1 } as any);
+        expect(payload).toEqual({ scanId: 's1', source: 'posts', query: 'kem', status: 'done', errorCode: '', itemCount: 7 });
+    });
 });

@@ -1,6 +1,7 @@
 import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../facebookPoster/FacebookPosterService';
+import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../research/researchOperationsLogic';
 
 /** Mã lỗi cố định của giao thức (spec §3.2). */
 export type ControlErrorCode =
@@ -16,7 +17,7 @@ export class ControlError extends Error {
 }
 
 const INTERNAL_MESSAGE = 'Lỗi nội bộ của MaiHub, thử lại sau';
-const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy'];
+const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy', SCAN_NOT_FOUND_ERROR];
 
 /**
  * Đổi lỗi ném ra từ posterOperations thành mã giao thức. Chỉ `new Error(msg)` thuần (lỗi kiểm tra có thông báo tiếng Việt)
@@ -24,6 +25,8 @@ const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấ
  */
 export function toControlError(err: unknown): ControlError {
     if (err instanceof ControlError) return err;
+    // Lớp con của Error nên phải xử lý trước nhánh "chỉ Error thuần".
+    if (err instanceof UnknownProfilesError) return new ControlError('NOT_FOUND', err.message, { missing: err.missing });
     const plain = err instanceof Error && err.constructor === Error && typeof (err as { code?: unknown }).code !== 'string';
     if (!plain) return new ControlError('INTERNAL', INTERNAL_MESSAGE);
     const message = (err as Error).message;
@@ -65,10 +68,20 @@ export interface PosterPort {
     getRun(params: any): any;
 }
 
+/** Các thao tác Nghiên cứu chủ đề; nguồn gốc lượt quét (`api`) do nơi dựng port gắn vào. */
+export interface ResearchPort {
+    search(params: any): any;
+    scanGroupFeeds(params: any): any;
+    list(params?: any): any;
+    get(params: any): any;
+    cancel(): any;
+}
+
 export interface ControlEventRow { seq: number; type: string; payload: unknown; createdAt: number }
 
 export interface ControlMethodDeps {
     poster: PosterPort;
+    research: ResearchPort;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
     checkLogins(profileIds: string[] | null): { checkId: string; profileIds: string[] };
@@ -378,6 +391,67 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                 }
                 return { events, workspaceId: deps.events.workspaceId() };
             },
+        },
+        {
+            name: 'research.search',
+            description: 'Quét Facebook theo từ khoá để chọn chủ đề nội dung (chỉ đọc, không đăng hay bấm gì). Chạy nền, trả scanId ngay; xong sẽ có sự kiện research.finished, rồi gọi research.get để lấy kết quả. MaiHub tự xoay vòng các profile đủ điều kiện (đăng nhập tốt, không đang mở, không đang đăng bài, chưa chạm trần ngày; mỗi profile tối đa 50 mục rồi đổi profile); bỏ trống profileIds để dùng mọi profile. Mỗi mục có tên, mã và link người đăng, engagement (thích + bình luận + chia sẻ) và engagementRate (engagement / số thành viên nhóm, null nếu chưa biết). BUSY nếu đang có lượt quét khác.',
+            destructive: false,
+            paramsSchema: obj({
+                source: { type: 'string', enum: ['posts', 'groups', 'pages'], description: 'Quét bài viết, nhóm hoặc trang' },
+                query: { type: 'string', minLength: 1, maxLength: 100, description: 'Từ khoá (1–100 ký tự)' },
+                recent: { type: 'boolean', description: 'Chỉ bài gần đây (chỉ dùng với source = posts)' },
+                year: int('Chỉ bài trong năm này (chỉ với source = posts; từ 2010 tới năm hiện tại)', { minimum: 2010 }),
+                limit: int('Số mục tối đa (1–500, mặc định 200)', { minimum: 1, maximum: 500 }),
+                profileIds: { type: 'array', items: { type: 'string', minLength: 1 }, maxItems: 50, description: 'Chỉ dùng các profile này (1–50 mã); bỏ trống = mọi profile; mảng rỗng bị từ chối; mã lạ → NOT_FOUND kèm details.missing' },
+            }, ['source', 'query']),
+            resultSchema: obj({ scanId: str('Mã lượt quét') }, ['scanId']),
+            run: async (p) => deps.research.search(p),
+        },
+        {
+            name: 'research.scanGroupFeeds',
+            description: 'Đọc bài mới trong các nhóm (chỉ đọc). Chạy nền, trả scanId; xong có sự kiện research.finished, lấy kết quả bằng research.get. Xoay vòng profile như research.search. Bỏ trống groupUrls = 20 nhóm được quét gần nhất của các profile đủ điều kiện. Mỗi mục có tên, mã, link người đăng, engagement và engagementRate. BUSY nếu đang có lượt quét khác.',
+            destructive: false,
+            paramsSchema: obj({
+                groupUrls: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'Link nhóm (tối đa 20)' },
+                sinceDays: int('Chỉ lấy bài trong bấy nhiêu ngày gần đây (1–30, mặc định 7)', { minimum: 1, maximum: 30 }),
+                limitPerGroup: int('Số bài tối đa mỗi nhóm (1–100, mặc định 30)', { minimum: 1, maximum: 100 }),
+                profileIds: { type: 'array', items: { type: 'string', minLength: 1 }, maxItems: 50, description: 'Chỉ dùng các profile này (1–50 mã); bỏ trống = mọi profile; mã lạ → NOT_FOUND kèm details.missing' },
+            }),
+            resultSchema: obj({ scanId: str('Mã lượt quét') }, ['scanId']),
+            run: async (p) => deps.research.scanGroupFeeds(p),
+        },
+        {
+            name: 'research.list',
+            description: 'Danh sách các lượt quét Nghiên cứu (mới nhất trước). Dữ liệu giữ 180 ngày.',
+            destructive: false,
+            paramsSchema: obj({
+                limit: int('Tối đa bao nhiêu dòng (1–200)', { minimum: 1, maximum: 200 }),
+                offset: int('Bỏ qua bao nhiêu dòng đầu', { minimum: 0 }),
+                source: { type: 'string', enum: ['posts', 'groups', 'pages', 'group_feed'], description: 'Lọc theo nguồn' },
+            }),
+            resultSchema: obj({ total: int('Tổng số lượt quét'), scans: { type: 'array', items: { type: 'object' }, description: 'Các lượt quét trong trang' } }, ['total', 'scans']),
+            run: async (p) => deps.research.list(pick(p, ['limit', 'offset', 'source'])),
+        },
+        {
+            name: 'research.get',
+            description: 'Xem một lượt quét và các mục đã thu (tên, mã, link người đăng; reactions/comments/shares; engagement; engagementRate). NOT_FOUND nếu scanId lạ.',
+            destructive: false,
+            paramsSchema: obj({
+                scanId: str('Mã lượt quét'),
+                sort: { type: 'string', enum: ['engagement', 'recent', 'members'], description: 'Sắp xếp (mặc định engagement)' },
+                limit: int('Tối đa bao nhiêu mục (1–500)', { minimum: 1, maximum: 500 }),
+                offset: int('Bỏ qua bao nhiêu mục đầu', { minimum: 0 }),
+            }, ['scanId']),
+            resultSchema: obj({ scan: { type: 'object', description: 'Thông tin lượt quét' }, total: int('Tổng số mục'), items: { type: 'array', items: { type: 'object' }, description: 'Các mục trong trang' } }, ['scan', 'total', 'items']),
+            run: async (p) => deps.research.get(pick(p, ['scanId', 'sort', 'limit', 'offset'])),
+        },
+        {
+            name: 'research.cancel',
+            description: 'Huỷ lượt quét Nghiên cứu đang chạy (nếu có); dừng ngay cả khi đang nghỉ giữa trang.',
+            destructive: false,
+            paramsSchema: obj({}),
+            resultSchema: obj({ cancelled: { type: 'boolean', description: 'true nếu có lượt quét bị huỷ' } }, ['cancelled']),
+            run: async () => deps.research.cancel(),
         },
     ];
 

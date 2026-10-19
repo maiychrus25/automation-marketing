@@ -1,4 +1,5 @@
 import { ControlError, createControlMethods, describe as describeMethods, toControlError, type ControlMethodDeps } from '../../services/control/ControlMethods';
+import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../../services/research/researchOperationsLogic';
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../../services/facebookPoster/FacebookPosterService';
 
 function makeDeps() {
@@ -237,6 +238,7 @@ describe('describe', () => {
             'drafts.list', 'drafts.get', 'drafts.create', 'drafts.update', 'drafts.delete', 'drafts.approve',
             'schedules.list', 'schedules.update', 'schedules.delete',
             'runs.current', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
+            'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.cancel',
         ]);
         for (const m of d.methods) {
             expect(m.description).toMatch(/\S/);
@@ -300,5 +302,57 @@ describe('profiles.check', () => {
         const m = describeMethods(methods).methods.find((x) => x.name === 'profiles.check') as any;
         expect(m.destructive).toBe(false);
         expect(m.paramsSchema.properties.profileIds.maxItems).toBe(50);
+    });
+});
+
+describe('research methods', () => {
+    function setupResearch() {
+        const research = {
+            search: jest.fn((_p: any): any => ({ scanId: 's1' })),
+            scanGroupFeeds: jest.fn((_p: any): any => ({ scanId: 's2' })),
+            list: jest.fn((_p?: any): any => ({ total: 0, scans: [] })),
+            get: jest.fn((_p: any): any => ({ scan: { id: 's1' }, total: 0, items: [] })),
+            cancel: jest.fn((): any => ({ cancelled: true })),
+        };
+        const deps = { ...makeDeps(), research };
+        const methods = createControlMethods(deps as unknown as ControlMethodDeps);
+        const call = (name: string, params: any = {}) => methods.find((m) => m.name === name)!.run(params, {});
+        return { research, methods, call };
+    }
+
+    it('passes params through to the research port', async () => {
+        const { research, call } = setupResearch();
+        const search = { source: 'posts', query: 'kem', limit: 10, profileIds: ['p1'] };
+        expect(await call('research.search', search)).toEqual({ scanId: 's1' });
+        expect(research.search).toHaveBeenCalledWith(search);
+        const feeds = { groupUrls: ['https://facebook.com/groups/1'], sinceDays: 3 };
+        expect(await call('research.scanGroupFeeds', feeds)).toEqual({ scanId: 's2' });
+        expect(research.scanGroupFeeds).toHaveBeenCalledWith(feeds);
+        await call('research.list', { limit: 5, source: 'groups' });
+        expect(research.list).toHaveBeenCalledWith({ limit: 5, source: 'groups' });
+        await call('research.get', { scanId: 's1', sort: 'recent' });
+        expect(research.get).toHaveBeenCalledWith({ scanId: 's1', sort: 'recent' });
+        expect(await call('research.cancel')).toEqual({ cancelled: true });
+    });
+
+    it('maps unknown scanId, unknown profiles, empty profileIds and BUSY', async () => {
+        const { research, call } = setupResearch();
+        research.get.mockImplementationOnce(() => { throw new Error(SCAN_NOT_FOUND_ERROR); });
+        expect(await call('research.get', { scanId: 'x' }).catch((e) => e)).toMatchObject({ code: 'NOT_FOUND' });
+        research.search.mockImplementationOnce(() => { throw new UnknownProfilesError(['zz']); });
+        expect(await call('research.search', { profileIds: ['zz'] }).catch((e) => e)).toMatchObject({ code: 'NOT_FOUND', details: { missing: ['zz'] } });
+        research.search.mockImplementationOnce(() => { throw new Error('profileIds không được rỗng'); });
+        expect(await call('research.search', { profileIds: [] }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+        research.scanGroupFeeds.mockImplementationOnce(() => { throw new Error(BUSY_ERROR); });
+        expect(await call('research.scanGroupFeeds', {}).catch((e) => e)).toMatchObject({ code: 'BUSY' });
+    });
+
+    it('describes the five methods as non-destructive with rotation notes', () => {
+        const { methods } = setupResearch();
+        const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('research.')) as any[];
+        expect(found).toHaveLength(5);
+        for (const m of found) expect(m.destructive).toBe(false);
+        expect(found[0].description).toMatch(/research\.finished/);
+        expect(found[0].paramsSchema.properties.profileIds.maxItems).toBe(50);
     });
 });
