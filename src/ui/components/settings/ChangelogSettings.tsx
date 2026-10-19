@@ -15,6 +15,34 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.21.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🔁 Đăng Facebook tự thử lại tối đa 3 lần khi lỗi trước lúc bấm Đăng, và không bao giờ đăng lại khi bài có thể đã gửi',
+      '📈 Theo dõi hiệu quả bài đăng nhóm: tự lấy link bài chờ duyệt, đo cảm xúc, bình luận, chia sẻ theo mốc 1 giờ, 1 ngày, 3 ngày',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Đăng Facebook tự thử lại tối đa 3 lần khi lỗi trước lúc bấm Đăng (không thấy ô "Bạn đang nghĩ gì", không mở được trang…); sau khi có thể đã gửi thì không đăng lại',
+          'Mã lỗi rõ ràng cho từng bài lỗi; Lịch sử có chip "Thử N lần" và "Chưa chắc"; CSV thêm cột mã lỗi và số lần thử',
+          'Ghi nhận bài chờ duyệt ngay lúc đăng, tự lấy link khi admin duyệt (thử lại theo các mốc từ 30 phút đến 7 ngày)',
+          'Đo cảm xúc, bình luận, chia sẻ theo mốc 1 giờ, 1 ngày, 3 ngày; đánh dấu bài có thể đã bị xoá',
+          'Lịch sử → mục "Hiệu quả": gom theo nhóm, profile, lịch; nút "Cập nhật số liệu" và ⚙ cài mốc tự động',
+          'Bot AI có 6 thao tác posts.* và nhận tin Telegram 📈 khi lấy được link hoặc có bài nghi bị xoá',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Theo dõi chỉ đọc Facebook, dùng chung khe việc với lượt đăng nên không chạy cùng lúc với đăng bài',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.20.0',
     date: '10/2026',
     type: 'minor',

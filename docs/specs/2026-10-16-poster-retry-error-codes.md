@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 16/10/2026 |
-| Trạng thái | Đã duyệt (19/10/2026) |
+| Trạng thái | Đã phát hành 26.21.0 (19/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-16-poster-retry-error-codes.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-16-poster-retry-error-codes.md` (đã duyệt) |
 | Nhánh | `feat/poster-retry-error-codes` |
@@ -134,3 +134,9 @@ Không đổi code. Dòng `• <tên đích>: <lỗi>` tự dùng lý do cụ th
 | Bản nháp giữ chữ/ảnh cũ, gây trùng nội dung | Bỏ bản nháp trước khi thử lại; xoá chữ còn sót; không xoá được thì `draft_conflict`. Ảnh trong nháp chưa đo được: anh theo dõi những lần thử lại đầu tiên trên bài có ảnh |
 | Thử lại làm Facebook nghi ngờ (thao tác dồn dập) | Tối đa 2 lần, chờ 10–30 giây, chỉ cho lỗi trước khi bấm |
 | Lượt đăng kéo dài hơn | Tối đa thêm khoảng 1 phút mỗi đích lỗi; lịch đến giờ vẫn xếp hàng như hiện tại |
+
+## Ghi chú sau phát hành
+
+- Phát hành trên nhánh `feat/26.21-retry-and-stats` ở bản 26.21.0, không phải nhánh và phiên bản nêu ở đầu tài liệu; Task phát hành được gộp vào Task 8 của plan A (`docs/plans/2026-10-19-post-performance.md`).
+- Sau review cuối: huỷ trong lúc chờ thử lại sau lỗi trước khi bấm Đăng được ghi là `skipped`.
+- Bỏ bản nháp chỉ bấm các nút nằm trong hộp thoại (`div[role="dialog"]`).

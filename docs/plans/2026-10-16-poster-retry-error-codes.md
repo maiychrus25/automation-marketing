@@ -163,6 +163,8 @@
 
 ### Task 5 (controller): Kiểm chứng và phát hành 26.20.0
 
+> Đã gộp vào Task 8 của plan A (`docs/plans/2026-10-19-post-performance.md`); phát hành ở 26.21.0.
+
 - [ ] **Step 1:** Review toàn nhánh bằng Opus. Một lượt sửa, một re-review.
 - [ ] **Step 2:** Hai vòng stress:
   - Toàn bộ jest, cả 2 lệnh tsc, `check-docs`.

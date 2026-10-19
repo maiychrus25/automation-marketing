@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 19/10/2026 |
-| Trạng thái | Đã duyệt (19/10/2026) |
+| Trạng thái | Đã phát hành 26.21.0 (19/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-19-post-performance.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-19-post-performance.md` (đã duyệt) |
 | Nhánh | `feat/26.21-retry-and-stats` (cùng phần G: `docs/specs/2026-10-16-poster-retry-error-codes.md`) |
@@ -232,3 +232,14 @@ Với `groupBy = 'post'`, mỗi dòng là một bài, có thêm link, nhóm, n�
 | Facebook đổi cấu trúc | Dùng lại bộ đọc và chẩn đoán `shape` của Nghiên cứu |
 | Tự chạy quá nhiều | Chỉ chạy khi có dòng đến hạn; tối đa 10 cặp mỗi lần; mốc thưa dần (tối đa 7 lần lấy link + 3 lần đo cho mỗi bài); gom theo nhóm |
 | Đọc nhiều làm tài khoản bị giới hạn | Nghỉ giữa trang/nhóm; dừng profile khi gặp tín hiệu; bot quyết định tần suất (gợi ý 1h, 24h, 72h sau khi đăng) |
+
+## Ghi chú sau phát hành
+
+- Nhãn `stats_done` dùng dạng `"60m"` (không phải `"1h"`).
+- `group_url` lưu đúng link đích đã đăng, không chuẩn hoá; báo cáo gom theo nhóm có thể tách thành nhiều dòng cho cùng một nhóm.
+- Khi một cặp bị lỗi (hết phiên, checkpoint, rate limit, profile bận…), các dòng đến hạn chuyển sang mốc link kế tiếp trong tương lai, hoặc mốc đo đã quá hạn được đánh dấu xong mà chưa đo. Nhờ vậy không đọc lại mỗi 15 phút, đổi lại có thể mất một lần đo.
+- Lượt tự động đọc các dòng đến hạn bất kể cửa sổ 14 ngày.
+- Lượt bị huỷ có thể đánh dấu xong các mốc quá hạn cho dòng chưa thấy.
+- Cửa sổ khớp ±2 giờ chưa kiểm chứng với bài duyệt muộn: nếu Facebook báo thời điểm duyệt thì bài đó có thể thành `not_found`. Theo dõi các lần chạy thật đầu tiên.
+- Bộ đọc dùng lại của Research và vẫn chưa kiểm chứng trên trang Facebook thật.
+- "Cập nhật số liệu" thủ công chỉ đọc tối đa 14 ngày.

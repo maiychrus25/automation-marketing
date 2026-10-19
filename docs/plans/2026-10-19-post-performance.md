@@ -230,3 +230,10 @@
   - Cập nhật dòng phiên bản trong tài liệu.
   - Đổi trạng thái 2 spec sang "Đã phát hành", thêm "Ghi chú sau phát hành" và "Điều chỉnh khi triển khai".
   - Merge vào `main`, gắn tag; anh push; kiểm tra CI.
+
+## Điều chỉnh khi triển khai
+
+- Task 4: `TRACK_TICK_MINUTES` được định nghĩa trong `PostTrackScheduler.ts`.
+- Task 5: thêm chốt đổi workspace vào `isBusy` của scheduler.
+- Vòng sửa sau review cuối: C1 back-off cặp lỗi, I1 mốc tương lai kế tiếp, I2 chia danh sách `IN` theo 500, I3 UI đọc lại `trackStatus`.
+- Nhãn nhóm trong báo cáo lấy tên nhóm đã quét của bất kỳ profile nào; popover cài đặt vừa panel hẹp.
