@@ -2,7 +2,7 @@ import { memoryDb } from '../facebookPoster/helpers';
 import { ResearchStore } from '../../services/research/ResearchStore';
 import { ResearchError } from '../../services/research/graphqlSession';
 import {
-    ResearchService, PER_PROFILE_CHUNK, PAGE_DELAY_MIN_MS, PAGE_DELAY_MAX_MS, GROUP_DELAY_MIN_MS, GROUP_DELAY_MAX_MS,
+    ResearchService, PER_PROFILE_CHUNK, PAGE_DELAY_MIN_MS, PAGE_DELAY_MAX_MS, MAX_PAGES_PER_SCAN, GROUP_DELAY_MIN_MS, GROUP_DELAY_MAX_MS,
 } from '../../services/research/ResearchService';
 import { BUSY_ERROR } from '../../services/facebookPoster/FacebookPosterService';
 
@@ -311,12 +311,14 @@ describe('ResearchService keyword scan', () => {
         const p2 = h.calls.filter((c) => c.profileId === 'p2');
         expect(p2[0].vars.cursor).toBe('c5');
         expect(p2[1].vars.cursor).toBeNull();
-        // p2 lặp lại các trang c0..c4 (mục trùng bị bỏ) rồi thêm 30 mục mới
-        expect(scan.itemCount).toBe(80);
-        expect(new Set(h.store.listItems(scan.id, { limit: 500 }).items.map((i) => i.fbId)).size).toBe(80);
+        // p2 đọc lại c0.. toàn mục trùng: 2 trang trống liên tiếp thì dừng phần của p2 (chốt cứng), không lặp vô hạn
+        expect(p2).toHaveLength(3);
+        expect(scan.itemCount).toBe(50);
+        expect(scan.errorCode).toBe('no_profile_available');
+        expect(new Set(h.store.listItems(scan.id, { limit: 500 }).items.map((i) => i.fbId)).size).toBe(50);
     });
 
-    it('lỗi bất ngờ từ dep: failed parse_failed, một sự kiện finished, không unhandled rejection', async () => {
+    it('lỗi bất ngờ từ dep: failed (errorCode rỗng, Lỗi nội bộ), một sự kiện finished, không unhandled rejection', async () => {
         const unhandled = jest.fn();
         process.on('unhandledRejection', unhandled);
         const h = setup({ script: () => { throw new TypeError('boom'); } });
@@ -325,7 +327,8 @@ describe('ResearchService keyword scan', () => {
         process.off('unhandledRejection', unhandled);
         expect(unhandled).not.toHaveBeenCalled();
         expect(scan.status).toBe('failed');
-        expect(scan.errorCode).toBe('parse_failed');
+        expect(scan.errorCode).toBe('');
+        expect(scan.error).toBe('Lỗi nội bộ: boom');
         expect(finishedEvents(h)).toHaveLength(1);
         expect(h.closed).toEqual(['p1']);
 
@@ -422,7 +425,7 @@ describe('ResearchService group_feed', () => {
         let k = 0;
         const h = setup({
             profiles: ['p1'],
-            script: () => { const base = k++ * 10; return feedPage(Array.from({ length: 10 }, (_, i) => [`g${base + i}`, nowSec - day] as [string, number]), 'NEXT'); },
+            script: () => { const base = k++ * 10; return feedPage(Array.from({ length: 10 }, (_, i) => [`g${base + i}`, nowSec - day] as [string, number]), `N${k}`); },
         });
         const { scanId } = h.svc.scanGroupFeeds({ groupUrls: [G1], limitPerGroup: 25, origin: 'api' });
         await h.svc.whenIdle();
@@ -482,5 +485,124 @@ describe('ResearchService stop', () => {
         const h = setup({ script: endless, onSleep: (_ms, svc) => svc.stop() });
         const scan = await run(h, { limit: 100 });
         expect(scan.status).toBe('cancelled');
+    });
+});
+
+describe('ResearchService hard bounds', () => {
+    const G1 = 'https://www.facebook.com/groups/111';
+    const G2 = 'https://www.facebook.com/groups/222';
+    const nowSec = NOW / 1000;
+    const day = 86400;
+
+    it('con trỏ lặp lại: coi như hết trang, done', async () => {
+        const h = setup({ profiles: ['p1'], script: (c) => postsPage(c.vars.cursor ? 11 : 1, 10, 'X') });
+        const scan = await run(h);
+        expect(h.calls).toHaveLength(2);
+        expect(scan.status).toBe('done');
+        expect(scan.errorCode).toBe('');
+        expect(scan.itemCount).toBe(20);
+    });
+
+    it('2 trang liên tiếp không có mục mới: dừng phần của profile', async () => {
+        let n = 0;
+        const h = setup({ profiles: ['p1'], script: () => postsPage(1, 10, `k${++n}`) });
+        const scan = await run(h);
+        expect(h.calls).toHaveLength(3);
+        expect(scan.itemCount).toBe(10);
+        expect(scan.errorCode).toBe('no_profile_available');
+    });
+
+    it('trần số trang mỗi phần = ceil(50/10)*3 = 15, rồi chuyển profile', async () => {
+        let n = 0;
+        const h = setup({ profiles: ['p1', 'p2'], script: () => postsPage(++n, 1, `k${n}`) });
+        await run(h, { limit: 500 });
+        expect(h.calls.filter((c) => c.profileId === 'p1')).toHaveLength(15);
+        expect(h.calls.filter((c) => c.profileId === 'p2')).toHaveLength(15);
+    });
+
+    it('trần cứng MAX_PAGES_PER_SCAN trên cả lượt: done, không mã lỗi', async () => {
+        let n = 0;
+        const ids = Array.from({ length: 30 }, (_, i) => `q${i}`);
+        const h = setup({ profiles: ids, script: () => postsPage(++n, 1, `k${n}`) });
+        const scan = await run(h, { limit: 500 });
+        expect(MAX_PAGES_PER_SCAN).toBe(200);
+        expect(h.calls).toHaveLength(200);
+        expect(scan.status).toBe('done');
+        expect(scan.errorCode).toBe('');
+        expect(scan.itemCount).toBe(200);
+    });
+
+    it('không vượt 50 mục mỗi profile dù trang 30 mục; profile sau đọc lại cùng trang, không mất mục', async () => {
+        const page = (k: number) => postsPage(k * 30 + 1, 30, `c${k + 1}`);
+        const h = setup({ profiles: ['p1', 'p2', 'p3', 'p4'], script: (c) => page(c.vars.cursor ? Number(String(c.vars.cursor).slice(1)) : 0) });
+        const scan = await run(h, { limit: 120 });
+        const per = (scan.details as any).profiles;
+        for (const id of Object.keys(per)) expect(per[id].items).toBeLessThanOrEqual(PER_PROFILE_CHUNK);
+        expect(per.p1.items).toBe(50);
+        const p1 = h.calls.filter((c) => c.profileId === 'p1');
+        const p2 = h.calls.filter((c) => c.profileId === 'p2');
+        expect(p2[0].vars.cursor).toBe(p1[p1.length - 1].vars.cursor);
+        const ids = h.store.listItems(scan.id, { limit: 500 }).items.map((i) => i.fbId).sort((a, b) => Number(a) - Number(b));
+        expect(scan.itemCount).toBe(120);
+        expect(ids).toEqual(Array.from({ length: 120 }, (_, i) => String(i + 1)));
+    });
+
+    it('group_feed: trang sau rỗng nhưng còn con trỏ thì dừng nhóm', async () => {
+        const h = setup({ profiles: ['p1'], script: (c) => (c.vars.cursor ? feedPage([], 'B') : feedPage([['a1', nowSec - day]], 'A')) });
+        const { scanId } = h.svc.scanGroupFeeds({ groupUrls: [G1], origin: 'api' });
+        await h.svc.whenIdle();
+        expect(h.calls).toHaveLength(2);
+        expect(h.store.getScan(scanId)!.status).toBe('done');
+        expect(h.store.getScan(scanId)!.itemCount).toBe(1);
+    });
+
+    it('group_feed: trang toàn mục trùng liên tiếp và trần số trang theo limitPerGroup', async () => {
+        let n = 0;
+        const h = setup({ profiles: ['p1'], script: () => feedPage([['a1', nowSec - day]], `k${++n}`) });
+        h.svc.scanGroupFeeds({ groupUrls: [G1], origin: 'api' });
+        await h.svc.whenIdle();
+        expect(h.calls).toHaveLength(3);
+        const h2 = setup({ profiles: ['p1'], script: () => feedPage([[`z${++n}`, nowSec - day]], `m${n}`) });
+        h2.svc.scanGroupFeeds({ groupUrls: [G1], limitPerGroup: 10, origin: 'api' });
+        await h2.svc.whenIdle();
+        expect(h2.calls).toHaveLength(3); // ceil(10/10)*3
+    });
+
+    it('group_feed: trần ngày áp dụng trong nhóm; hết chỗ thì không còn profile cho nhóm kế', async () => {
+        let n = 0;
+        const h = setup({
+            profiles: ['p1'], cap: 25,
+            script: () => { const b = n; n += 10; return feedPage(Array.from({ length: 10 }, (_, i) => [`g${b + i}`, nowSec - day] as [string, number]), `m${n}`); },
+        });
+        const { scanId } = h.svc.scanGroupFeeds({ groupUrls: [G1, G2], limitPerGroup: 100, origin: 'api' });
+        await h.svc.whenIdle();
+        const scan = h.store.getScan(scanId)!;
+        expect(scan.itemCount).toBe(25);
+        expect(scan.errorCode).toBe('no_profile_available');
+        expect(scan.status).toBe('done');
+    });
+});
+
+describe('ResearchService finish robustness', () => {
+    it('finishScan lỗi một lần: thử lại, vẫn phát finished đúng một lần', async () => {
+        const h = setup({ profiles: ['p1'] });
+        const orig = h.store.finishScan.bind(h.store);
+        let fails = 1;
+        jest.spyOn(h.store, 'finishScan').mockImplementation((...a: Parameters<typeof orig>) => { if (fails-- > 0) throw new Error('db'); return orig(...a); });
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        const scan = await run(h);
+        expect(scan.status).toBe('done');
+        expect(finishedEvents(h)).toHaveLength(1);
+    });
+
+    it('finishScan lỗi hai lần: không phát finished với trạng thái DB không có', async () => {
+        const h = setup({ profiles: ['p1'] });
+        jest.spyOn(h.store, 'finishScan').mockImplementation(() => { throw new Error('db'); });
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        const { scanId } = h.svc.search({ source: 'posts', query: 'a', origin: 'api' });
+        await h.svc.whenIdle();
+        expect(h.store.getScan(scanId)!.status).toBe('running');
+        expect(finishedEvents(h)).toHaveLength(0);
+        expect(h.svc.isRunning()).toBe(false);
     });
 });

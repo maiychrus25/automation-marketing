@@ -26,6 +26,10 @@ export const MAX_LIMIT_PER_GROUP = 100;
 export const DEFAULT_SINCE_DAYS = 7;
 export const MAX_SINCE_DAYS = 30;
 export const PAGE_COUNT = 10;
+/** Trần cứng số trang mỗi lượt quét: chặn vòng lặp vô hạn dù Facebook trả con trỏ lạ. */
+export const MAX_PAGES_PER_SCAN = 200;
+const MAX_EMPTY_PAGES = 2;
+const chunkPageBound = (items: number): number => Math.ceil(items / PAGE_COUNT) * 3;
 export const MAX_PROFILE_IDS = 50;
 const MIN_YEAR = 2010;
 const SEARCH_QUERY_NAME = 'SearchCometResultsPaginatedResultsQuery';
@@ -89,6 +93,7 @@ interface Run {
     used: string[];
     failed: string[];
     total: number;
+    pages: number;
     details: { profiles: Record<string, { items: number; error?: string }>; groups?: Record<string, string>; shape?: string[] };
 }
 
@@ -193,7 +198,7 @@ export class ResearchService {
         const scanId = this.newId();
         this.deps.store.createScan({ id: scanId, source, query, params, profileIds: [], origin, startedAt: this.now() });
         const run: Run = {
-            scanId, source, restrictTo, used: [], failed: [], total: 0,
+            scanId, source, restrictTo, used: [], failed: [], total: 0, pages: 0,
             details: { profiles: {}, ...(source === 'group_feed' ? { groups: {} } : {}) },
         };
         this.cancelled = false;
@@ -209,13 +214,20 @@ export class ResearchService {
         } catch (e) {
             outcome = e instanceof ScanStop
                 ? e.outcome
-                : { status: 'failed', errorCode: 'parse_failed', error: `Lỗi không mong đợi: ${shortMessage(e)}` };
+                : { status: 'failed', errorCode: '', error: `Lỗi nội bộ: ${shortMessage(e)}` };
         }
         let itemCount = run.total;
-        try {
-            this.deps.store.finishScan(run.scanId, outcome.status, outcome.errorCode, outcome.error, run.details, this.now());
-            itemCount = this.deps.store.getScan(run.scanId)?.itemCount ?? run.total;
-        } catch { /* không để lỗi lưu làm hỏng luồng nền */ }
+        let written = false;
+        for (let attempt = 0; attempt < 2 && !written; attempt++) {
+            try {
+                this.deps.store.finishScan(run.scanId, outcome.status, outcome.errorCode, outcome.error, run.details, this.now());
+                written = true;
+            } catch (e) {
+                console.error(`[research] finishScan lỗi (lần ${attempt + 1}): ${shortMessage(e)}`);
+            }
+        }
+        if (!written) return; // không báo trạng thái mà DB không có; failInterruptedScans sẽ sửa khi khởi động lại
+        try { itemCount = this.deps.store.getScan(run.scanId)?.itemCount ?? run.total; } catch { /* dùng bộ đếm trong bộ nhớ */ }
         this.emit('research:finished', {
             scanId: run.scanId, source: run.source, query, status: outcome.status, errorCode: outcome.errorCode, itemCount,
         });
@@ -335,12 +347,18 @@ export class ResearchService {
         return { res, text };
     }
 
-    private save(run: Run, items: ParsedItem[], profileId: string): number {
-        const added = this.deps.store.addItems(run.scanId, items, profileId, this.now());
+    /** Lưu tối đa `room` mục MỚI theo thứ tự trang; `leftover` = trang còn mục chưa xét (do hết chỗ). */
+    private save(run: Run, items: ParsedItem[], profileId: string, room: number): { added: number; leftover: boolean } {
+        let added = 0;
+        let leftover = false;
+        for (const item of items) {
+            if (added >= room) { leftover = true; break; }
+            added += this.deps.store.addItems(run.scanId, [item], profileId, this.now());
+        }
         run.total += added;
         run.details.profiles[profileId].items += added;
         this.emit('research:progress', { scanId: run.scanId, source: run.source, items: run.total, profileId });
-        return added;
+        return { added, leftover };
     }
 
     // ---------- Quét từ khoá ----------
@@ -349,7 +367,7 @@ export class ResearchService {
         const parse = { posts: parseSearchPosts, groups: parseSearchGroups, pages: parseSearchPages }[run.source as 'posts'];
         const triggerUrl = `https://www.facebook.com/search/${run.source}?q=${encodeURIComponent(query)}`;
         const st = { cursor: null as string | null, finished: false };
-        while (!st.finished) {
+        while (!st.finished && run.pages < MAX_PAGES_PER_SCAN) {
             this.checkCancel();
             const pool = this.eligible(run.used, run.restrictTo);
             const id = pool.ids[0];
@@ -386,7 +404,14 @@ export class ResearchService {
             buildSearchVariables(q.variables, { query: o.query, source: run.source, recent: o.recent, year: o.year, cursor, count: PAGE_COUNT });
         let inProfile = 0;
         let firstCall = true;
+        let emptyStreak = 0;
+        let pages = 0;
+        const maxPages = chunkPageBound(PER_PROFILE_CHUNK);
+        const seen = new Set<string>();
         for (;;) {
+            run.pages++;
+            pages++;
+            if (o.st.cursor !== null) seen.add(o.st.cursor);
             let { res, text } = await this.fetchPage(gql, state, buildVars, o.parse, o.st.cursor);
             if (firstCall && o.st.cursor !== null && (res.items.length === 0 || res.errorCode)) {
                 // Con trỏ mang từ profile trước không dùng được: bắt đầu lại, mục trùng sẽ bị bỏ.
@@ -399,11 +424,17 @@ export class ResearchService {
             }
             if (firstCall && res.items.length === 0) this.noteShape(run, text);
             firstCall = false;
-            const room = Math.min(o.limit - run.total, o.cap - inProfile);
-            inProfile += this.save(run, res.items.slice(0, Math.max(room, 0)), id);
-            o.st.cursor = res.endCursor;
-            if (run.total >= o.limit || res.endCursor === null || res.items.length === 0) { o.st.finished = true; return; }
-            if (inProfile >= PER_PROFILE_CHUNK || inProfile >= o.cap) return;
+            const room = Math.min(o.limit - run.total, PER_PROFILE_CHUNK - inProfile, o.cap - inProfile);
+            const { added, leftover } = this.save(run, res.items, id, room);
+            inProfile += added;
+            emptyStreak = added === 0 ? emptyStreak + 1 : 0;
+            if (run.total >= o.limit) { o.st.finished = true; return; }
+            if (leftover) return; // giữ nguyên con trỏ: profile kế tiếp đọc lại trang này, mục trùng bị bỏ
+            const next = res.endCursor;
+            if (next === null || res.items.length === 0 || seen.has(next) || next === o.st.cursor) { o.st.finished = true; return; }
+            o.st.cursor = next;
+            if (run.pages >= MAX_PAGES_PER_SCAN) { o.st.finished = true; return; }
+            if (inProfile >= PER_PROFILE_CHUNK || inProfile >= o.cap || emptyStreak >= MAX_EMPTY_PAGES || pages >= maxPages) return;
             await this.pause(PAGE_DELAY_MIN_MS, PAGE_DELAY_MAX_MS);
         }
     }
@@ -437,6 +468,7 @@ export class ResearchService {
         let current: OpenProfile | null = null;
         try {
             for (let i = 0; i < groups.length; i++) {
+                if (run.pages >= MAX_PAGES_PER_SCAN) break;
                 if (i > 0) await this.pause(GROUP_DELAY_MIN_MS, GROUP_DELAY_MAX_MS);
                 this.checkCancel();
                 for (;;) {
@@ -450,7 +482,7 @@ export class ResearchService {
                             current = null;
                             current = await this.openProfile(run, id);
                         }
-                        await this.scanGroup(run, current, groups[i], sinceDays, limitPerGroup, () => { setup = false; });
+                        await this.scanGroup(run, current, groups[i], sinceDays, limitPerGroup, pool.remaining(id), () => { setup = false; });
                         break;
                     } catch (e) {
                         await current?.close();
@@ -466,7 +498,7 @@ export class ResearchService {
     }
 
     private async scanGroup(
-        run: Run, profile: OpenProfile, url: string, sinceDays: number, limitPerGroup: number, ready: () => void,
+        run: Run, profile: OpenProfile, url: string, sinceDays: number, limitPerGroup: number, cap: number, ready: () => void,
     ): Promise<void> {
         const { gql, id } = profile;
         const key = groupKey(url);
@@ -487,18 +519,32 @@ export class ResearchService {
         const cutoff = this.now() - sinceDays * DAY_MS;
         let cursor: string | null = null;
         let got = 0;
+        let emptyStreak = 0;
+        let pages = 0;
+        const maxPages = chunkPageBound(limitPerGroup);
+        const seen = new Set<string>();
         for (let first = true; ; first = false) {
+            run.pages++;
+            pages++;
+            if (cursor !== null) seen.add(cursor);
             const { res, text } = await this.fetchPage(gql, state, buildVars, parse, cursor);
-            if (res.items.length === 0 && (first || res.errorCode)) {
-                this.noteShape(run, text);
-                if (first && res.errorCode) run.details.groups![url] = 'not_member';
+            if (res.items.length === 0) {
+                if (first || res.errorCode) {
+                    this.noteShape(run, text);
+                    if (first && res.errorCode) run.details.groups![url] = 'not_member';
+                }
                 return;
             }
             const fresh = res.items.filter((it) => it.postedAt === null || it.postedAt >= cutoff);
-            got += this.save(run, fresh.slice(0, limitPerGroup - got), id);
-            if (fresh.length < res.items.length || got >= limitPerGroup || res.endCursor === null) return;
+            const { added, leftover } = this.save(run, fresh, id, Math.min(limitPerGroup - got, cap - got));
+            got += added;
+            emptyStreak = added === 0 ? emptyStreak + 1 : 0;
+            const next = res.endCursor;
+            if (fresh.length < res.items.length || leftover || got >= limitPerGroup || got >= cap
+                || next === null || seen.has(next) || next === cursor
+                || emptyStreak >= MAX_EMPTY_PAGES || pages >= maxPages || run.pages >= MAX_PAGES_PER_SCAN) return;
             await this.pause(PAGE_DELAY_MIN_MS, PAGE_DELAY_MAX_MS);
-            cursor = res.endCursor;
+            cursor = next;
         }
     }
 }
