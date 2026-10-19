@@ -976,6 +976,11 @@ export async function postToTargets(
             break;
           }
           await discardDraft(page);
+          // Hủy có thể đến trong lúc dọn bản nháp (tối đa ~3 giây): không điều hướng thêm.
+          if (getIsStopping()) {
+            ok = false; errorCode = 'stopped'; error = 'Đã dừng';
+            break;
+          }
         }
         const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity, errorCode, attempts };
         results.push(entry);

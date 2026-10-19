@@ -1698,3 +1698,20 @@ test('filechooser handler is registered once per run, not per attempt', async ()
   ));
   assert.strictEqual(events.filter(e => e === 'on:filechooser').length, 1);
 });
+
+test('cancel during draft discard -> stopped, no further goto', async () => {
+  const gotos: string[] = [];
+  let stopping = false;
+  const page = retryPage({ gotos, answersFor: () => ({ composerIsOpenInPage: false }) });
+  const baseWait = (page as any).waitForSelector;
+  // Hủy bật đúng lúc đang tìm nút "Bỏ" của bước dọn bản nháp.
+  (page as any).waitForSelector = async (sel: string, o?: { state?: string }) => {
+    if (sel.includes('aria-label="Bỏ"')) stopping = true;
+    return baseWait(sel, o);
+  };
+  const r = (await runRetry(page, { getIsStopping: () => stopping })).results[0];
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.errorCode, 'stopped');
+  assert.strictEqual(r.attempts, 1);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 1);
+});
