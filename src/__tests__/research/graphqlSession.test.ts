@@ -359,3 +359,16 @@ describe('fix round 1', () => {
         expect(q.docId).toBe('5');
     });
 });
+
+describe('userId', () => {
+    it('is readable after open()', async () => {
+        const { page } = makePage({ tokens: { dtsg: 'D', lsd: 'L', userId: '4242', loginForm: false } });
+        const { s } = mk(page);
+        await s.open();
+        expect(s.userId()).toBe('4242');
+    });
+    it('throws before open()', () => {
+        const { page } = makePage();
+        expect(() => mk(page).s.userId()).toThrow(ResearchError);
+    });
+});

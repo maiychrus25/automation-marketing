@@ -5,8 +5,9 @@ import type {
     ParsedItem, ResearchErrorCode, ResearchOrigin, ResearchScanStatus, ResearchSource,
 } from '../../models/research';
 import {
-    ResearchError, type GraphqlSession, buildGroupFeedVariables, buildSearchVariables, type CapturedQuery,
+    ResearchError, type GraphqlSession, buildSearchVariables, type CapturedQuery,
 } from './graphqlSession';
+import { fetchGraphqlPage, groupKey, prepareGroupFeed } from './groupFeed';
 import {
     describeShape, parseGraphqlChunks, parseGroupFeed, parseSearchGroups, parseSearchPages, parseSearchPosts,
     type ParseResult,
@@ -33,10 +34,8 @@ const chunkPageBound = (items: number): number => Math.ceil(items / PAGE_COUNT) 
 export const MAX_PROFILE_IDS = 50;
 const MIN_YEAR = 2010;
 const SEARCH_QUERY_NAME = 'SearchCometResultsPaginatedResultsQuery';
-const GROUP_FEED_QUERY_NAME = 'GroupsCometFeedRegularStoriesPaginationQuery';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SHAPE_DEPTH = 16;
-const PROFILE_ERRORS: ResearchErrorCode[] = ['logged_out', 'checkpoint', 'rate_limited'];
 
 /** Phần của GraphqlSession mà service dùng (để test thay bằng bản giả). */
 export type ResearchGraphqlSession = Pick<GraphqlSession, 'open' | 'ensureQuery' | 'call' | 'recapture'>;
@@ -105,12 +104,6 @@ const shortMessage = (e: unknown): string => (e instanceof Error ? e.message : S
 
 function inRange(v: unknown, min: number, max: number): v is number {
     return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
-}
-
-/** Mã hoặc tên rút gọn của nhóm trong link; rỗng nếu không phải link nhóm. */
-function groupKey(url: string): string {
-    const m = /\/groups\/([^/?#\s]+)/.exec(url);
-    return m ? decodeURIComponent(m[1]) : '';
 }
 
 export class ResearchService {
@@ -334,23 +327,12 @@ export class ResearchService {
     }
 
     /** Gọi một trang; doc_id hỏng thì bắt lại đúng một lần rồi gọi lại. */
-    private async fetchPage(
+    private fetchPage(
         gql: ResearchGraphqlSession, state: { query: CapturedQuery; recapture(): Promise<CapturedQuery> },
         buildVars: (query: CapturedQuery, cursor: string | null) => Record<string, any>,
         parse: (text: string) => ParseResult, cursor: string | null,
     ): Promise<{ res: ParseResult; text: string }> {
-        let text = await gql.call(state.query, buildVars(state.query, cursor));
-        let res = parse(text);
-        if (res.errorCode === 'query_changed') {
-            state.query = await state.recapture();
-            text = await gql.call(state.query, buildVars(state.query, cursor));
-            res = parse(text);
-            if (res.errorCode === 'query_changed') throw new ResearchError('query_changed', 'Truy vấn vẫn hỏng sau khi bắt lại.');
-        }
-        if (res.errorCode && PROFILE_ERRORS.includes(res.errorCode)) {
-            throw new ResearchError(res.errorCode, `Facebook báo ${res.errorCode}.`);
-        }
-        return { res, text };
+        return fetchGraphqlPage(gql, state, buildVars, parse, cursor);
     }
 
     /** Lưu tối đa `room` mục MỚI theo thứ tự trang; `leftover` = trang còn mục chưa xét (do hết chỗ). */
@@ -531,30 +513,19 @@ export class ResearchService {
         run: Run, profile: OpenProfile, url: string, sinceDays: number, limitPerGroup: number, cap: number, ready: () => void,
     ): Promise<boolean> {
         const { gql, id } = profile;
-        const key = groupKey(url);
-        const numeric = /^\d+$/.test(key);
-        const triggerUrl = `https://www.facebook.com/groups/${key}/?sorting_setting=CHRONOLOGICAL`;
-        const query = await this.groupQuery(run, gql, url, triggerUrl, !numeric);
-        if (!query) return false;
-        const state = {
-            query,
-            recapture: () => gql.recapture('group_feed', GROUP_FEED_QUERY_NAME, triggerUrl),
-        };
+        const prepared = await prepareGroupFeed(gql, url, PAGE_COUNT);
+        if (prepared.unresolved && prepared.reason === 'no_query') {
+            run.details.groups![url] = 'unresolved';
+            return false;
+        }
         this.checkCancel();
         ready();
-        // Link rút gọn: id thật nằm trong truy vấn bắt từ chính trang nhóm; không có id số thì không quét được.
-        const idKey = ['id', 'groupID'].find((k) => k in query.variables);
-        const groupId = numeric ? key : String(idKey ? query.variables[idKey] : '');
-        if (!/^\d+$/.test(groupId)) {
+        if (prepared.unresolved) {
             run.details.groups![url] = 'unresolved';
             return true;
         }
-        const buildVars = (q: CapturedQuery, cursor: string | null) => {
-            const vars = buildGroupFeedVariables(q.variables, { cursor, count: PAGE_COUNT });
-            // Mẫu có thể bắt từ một nhóm khác: chỉ đổi id khi link có mã số; link rút gọn dùng id đã bắt từ chính trang nhóm.
-            if (numeric) for (const k of ['id', 'groupID']) if (k in vars) vars[k] = key;
-            return vars;
-        };
+        const { groupId, buildVars } = prepared;
+        const state = { query: prepared.query, recapture: prepared.recapture };
         const parse = (text: string) => parseGroupFeed(text, { groupId });
         const cutoff = this.now() - sinceDays * DAY_MS;
         let cursor: string | null = null;
@@ -585,21 +556,6 @@ export class ResearchService {
                 || emptyStreak >= MAX_EMPTY_PAGES || pages >= maxPages || run.pages >= MAX_PAGES_PER_SCAN) return true;
             await this.pause(PAGE_DELAY_MIN_MS, PAGE_DELAY_MAX_MS);
             cursor = next;
-        }
-    }
-
-    /** Lấy truy vấn bài viết nhóm; không bắt được thì đánh dấu riêng nhóm này (null), các lỗi khác ném tiếp. */
-    private async groupQuery(
-        run: Run, gql: ResearchGraphqlSession, url: string, triggerUrl: string, fresh: boolean,
-    ): Promise<CapturedQuery | null> {
-        try {
-            return await gql.ensureQuery('group_feed', GROUP_FEED_QUERY_NAME, triggerUrl, fresh);
-        } catch (e) {
-            if (e instanceof ResearchError && e.code === 'query_changed') {
-                run.details.groups![url] = 'unresolved';
-                return null;
-            }
-            throw e;
         }
     }
 }

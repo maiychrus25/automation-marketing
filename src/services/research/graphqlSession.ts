@@ -140,6 +140,12 @@ export class GraphqlSession {
         this.tokens = { dtsg: t.dtsg, lsd: t.lsd, userId };
     }
 
+    /** Mã người dùng Facebook của profile (đọc khi open()); chỉ đọc. */
+    userId(): string {
+        if (!this.tokens) throw new ResearchError('logged_out', 'Phiên GraphQL chưa mở (gọi open() trước).');
+        return this.tokens.userId;
+    }
+
     /** Trang vừa tải bị đưa sang /checkpoint hoặc /login thì ném đúng mã. */
     private assertNotRedirected(): void {
         let path = '';
