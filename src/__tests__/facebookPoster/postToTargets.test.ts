@@ -6,7 +6,10 @@ import {
   isPublishLabel,
   markComposerInviteInPage,
   markPublishButtonInPage,
+  readEditorTextInPage,
   readUploadStateInPage,
+  DISCARD_LABELS,
+  MAX_POST_ATTEMPTS,
   postToTargets,
   type PostTargetResult,
 } from '../../services/facebookPoster/postToTargets';
@@ -271,7 +274,7 @@ test('không mở được hộp soạn thảo thì phải báo lỗi, không g�
       commentStatus: 'not_requested',
       identity: '',
       errorCode: 'unexpected_error',
-      attempts: 1,
+      attempts: 3,
     },
   ]);
   assert.strictEqual(result.posted, 0);
@@ -855,6 +858,9 @@ test('onResult is called once per target, in order, as soon as each target finis
     'goto:https://www.facebook.com/',
     'goto:https://www.facebook.com/groups/1/',
     'result:true',
+    // Đích 2 lỗi trước cú bấm Đăng nên được thử đủ 3 lần, rồi mới báo MỘT kết quả.
+    'goto:https://www.facebook.com/groups/2/',
+    'goto:https://www.facebook.com/groups/2/',
     'goto:https://www.facebook.com/groups/2/',
     'result:false',
   ]);
@@ -1074,8 +1080,8 @@ test('thanh tải không bao giờ về 0: đích failed "Ảnh chưa tải lên
   assert.ok(!m.order.includes('markPublishButtonInPage'));
   assert.ok(!m.clicked.includes('publish'));
   assert.strictEqual(result.failed, 1);
-  // 15 + 5 × 1 = 20 lần đọc, không hơn.
-  assert.strictEqual(m.order.filter(n => n === 'readUploadStateInPage').length, 20);
+  // 15 + 5 × 1 = 20 lần đọc mỗi lần thử, không hơn; media_failed được thử đủ 3 lần.
+  assert.strictEqual(m.order.filter(n => n === 'readUploadStateInPage').length, 20 * 3);
 });
 
 test('thanh tải về 0 sau vài lần đọc thì đi tiếp tới bước đăng', async () => {
@@ -1397,7 +1403,8 @@ test('maps each failure point to its error code and message', async () => {
     assert.strictEqual(r.ok, false, c.name);
     assert.strictEqual(r.errorCode, c.code, c.name);
     assert.strictEqual(r.error, c.error, c.name);
-    assert.strictEqual(r.attempts, 1, c.name);
+    // Lỗi trước cú bấm Đăng được thử lại đủ 3 lần; lỗi sau cú bấm thì không.
+    assert.strictEqual(r.attempts, c.code === 'uncertain_after_submit' ? 1 : 3, c.name);
   }
 });
 
@@ -1454,4 +1461,240 @@ test('fallback click throwing after the button is found stays uncertain_after_su
   const r = await runScenario(page);
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.errorCode, 'uncertain_after_submit');
+});
+
+// ---- Vòng thử lại (Task 2) ----
+
+/**
+ * Trang giả có kịch bản theo lần thử (đếm bằng số lần goto tới đích).
+ * `answersFor(attempt)` ghi đè evaluate; `editorText(attempt, reads)` là chữ còn trong ô.
+ */
+function retryPage(opts: {
+  answersFor?: (attempt: number) => Record<string, unknown>;
+  editorText?: (attempt: number, reads: number) => string;
+  gotos?: string[];
+  events?: string[];
+} = {}) {
+  const { answersFor = () => ({}), editorText = () => '', gotos = [], events = [] } = opts;
+  const listeners: Record<string, unknown[]> = {};
+  let attempt = 0;
+  let reads = 0;
+  const defaults: Record<string, unknown> = { composerIsOpenInPage: true, focusEditorInPage: true, markPublishButtonInPage: true };
+  const page = {
+    goto: async (u: string) => { if (u.includes('/groups/')) { attempt++; reads = 0; } gotos.push(u); events.push('goto'); },
+    $: async () => null,
+    on: (n: string, f: unknown) => { (listeners[n] = listeners[n] || []).push(f); events.push(`on:${n}`); },
+    off: (n: string, f: unknown) => { listeners[n] = (listeners[n] || []).filter(x => x !== f); events.push(`off:${n}`); },
+    listeners,
+    evaluate: async (fn: AnyFn) => {
+      if (fn.name === 'readEditorTextInPage') return editorText(attempt, reads++);
+      const a = answersFor(attempt);
+      return fn.name in a ? a[fn.name] : (defaults[fn.name] ?? false);
+    },
+    locator: () => ({ first: () => ({ click: async () => { events.push('click:publish'); } }) }),
+    waitForFunction: async () => { throw new Error('hết giờ (giả lập)'); },
+    waitForSelector: async (sel: string, o?: { state?: string }) => {
+      if (o?.state === 'hidden') return null;
+      if (sel.includes('aria-label="Bỏ"')) { events.push('discard-lookup'); return { click: async () => { events.push('discard-click'); } }; }
+      throw new Error('không tìm thấy (giả lập)');
+    },
+    keyboard: {
+      type: async () => { events.push('type'); },
+      press: async (k: string) => { events.push(`press:${k}`); },
+    },
+  };
+  return page as unknown as FakePage & { listeners: Record<string, unknown[]> };
+}
+
+async function runRetry(page: FakePage, extra: Partial<TaskDeps> & { onResult?: (r: PostTargetResult) => void; targets?: string[]; minDelay?: number; maxDelay?: number } = {}) {
+  const { targets = ['https://www.facebook.com/groups/1/'], minDelay = 0, maxDelay = 0, ...deps } = extra;
+  return runWithFakeTimers(() => postToTargets(
+    { text: 'hi', targets, minDelay, maxDelay },
+    { ...makeDeps(loggedInCtx([]), page, deps), pickRetryDelaySec: () => 12 } as never,
+  ));
+}
+
+test('readEditorTextInPage returns the visible editor text inside the dialog only', () => {
+  const visible = { width: 10, height: 10 };
+  const editor = (text: string, rect = visible, closest: unknown = null) => ({
+    getBoundingClientRect: () => rect, closest: () => closest, innerText: text, textContent: text,
+  });
+  const dialog = (els: unknown[]) => ({ querySelectorAll: () => els });
+  const run = (dialogs: unknown[], forms: unknown[] = []) => {
+    (global as any).document = {
+      querySelectorAll: (sel: string) => (sel.includes('dialog') ? dialogs : forms),
+    };
+    try { return readEditorTextInPage(['x']); } finally { delete (global as any).document; }
+  };
+  assert.strictEqual(run([dialog([editor('  bản nháp cũ \n')])]), 'bản nháp cũ');
+  assert.strictEqual(run([dialog([editor('ẩn', { width: 0, height: 0 })])]), '');
+  assert.strictEqual(run([dialog([editor('trong header', visible, {})])]), '');
+  assert.strictEqual(run([], [dialog([editor('trang riêng')])]), 'trang riêng');
+  assert.strictEqual(run([]), '');
+});
+
+test('composer missing once then success -> ok, attempts 2, retry log line', async () => {
+  const logs: string[] = [];
+  const page = retryPage({ answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}) });
+  const r = (await runRetry(page, { sendLog: (m: string) => logs.push(m) })).results[0];
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.attempts, 2);
+  assert.strictEqual(r.errorCode, '');
+  assert.ok(logs.some(m => m === '[Đăng Bài] Thử lại lần 1/2 sau 12s: Không mở được hộp soạn thảo (không thấy ô "Bạn đang nghĩ gì…")'), logs.join('\n'));
+});
+
+test('fails 3 times -> failed, attempts 3', async () => {
+  const gotos: string[] = [];
+  const page = retryPage({ gotos, answersFor: () => ({ composerIsOpenInPage: false }) });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.errorCode, 'composer_not_found');
+  assert.strictEqual(r.attempts, MAX_POST_ATTEMPTS);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 3);
+});
+
+test('uncertain_after_submit -> no retry', async () => {
+  const gotos: string[] = [];
+  const page = retryPage({ gotos });
+  (page as any).waitForSelector = async () => { throw new Error('x'); };
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.errorCode, 'uncertain_after_submit');
+  assert.strictEqual(r.attempts, 1);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 1);
+});
+
+test('not retryable codes are not retried', async () => {
+  // draft_conflict và stopped nằm ngoài nhóm thử lại: một lần goto duy nhất.
+  const gotos: string[] = [];
+  const page = retryPage({ gotos, answersFor: () => ({ composerIsOpenInPage: false }) });
+  const first = (await runRetry(page, { getIsStopping: (() => { let n = 0; return () => ++n > 1; })() })).results[0];
+  assert.strictEqual(first.errorCode, 'stopped');
+  assert.strictEqual(first.attempts, 1);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 1);
+});
+
+test('submit_not_found -> leaveCritical called before retry', async () => {
+  const events: string[] = [];
+  const page = retryPage({ events, answersFor: a => (a === 1 ? { markPublishButtonInPage: false } : {}) });
+  // Lần 1 không thấy nút Đăng (kể cả selector dự phòng); lần 2 bình thường.
+  const baseWait = (page as any).waitForSelector;
+  (page as any).waitForSelector = async (sel: string, o?: { state?: string }) => {
+    if (o?.state !== 'hidden' && sel.includes('aria-label="Đăng"')) throw new Error('không thấy');
+    return baseWait(sel, o);
+  };
+  const r = (await runRetry(page, {
+    enterCritical: () => events.push('enter'),
+    leaveCritical: () => events.push('leave'),
+  })).results[0];
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.attempts, 2);
+  const firstEnter = events.indexOf('enter');
+  const firstLeave = events.indexOf('leave');
+  const secondGoto = events.lastIndexOf('goto');
+  assert.ok(firstEnter >= 0 && firstLeave > firstEnter && firstLeave < secondGoto, events.join(','));
+});
+
+test('cancel during retry wait -> stopped, no further goto', async () => {
+  const gotos: string[] = [];
+  let stopping = false;
+  const page = retryPage({ gotos, answersFor: () => ({ composerIsOpenInPage: false }) });
+  const logs: string[] = [];
+  const r = (await runRetry(page, {
+    getIsStopping: () => stopping,
+    // Bật cờ dừng ngay khi nhật ký thử lại được ghi, tức đang ở giữa lúc chờ.
+    sendLog: (m: string) => { logs.push(m); if (m.startsWith('[Đăng Bài] Thử lại lần')) stopping = true; },
+  })).results[0];
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.errorCode, 'stopped');
+  assert.strictEqual(r.attempts, 1);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 1);
+});
+
+test('leftover editor text cleared before typing on retry', async () => {
+  const events: string[] = [];
+  const page = retryPage({
+    events,
+    answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}),
+    // Lần 2: lần đọc đầu còn chữ cũ, sau Control+A/Backspace thì rỗng.
+    editorText: (a, reads) => (a === 2 && reads === 0 ? 'bản nháp cũ' : ''),
+  });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.attempts, 2);
+  const iA = events.indexOf('press:Control+A');
+  const iB = events.indexOf('press:Backspace');
+  assert.ok(iA >= 0 && iB > iA && events.indexOf('type') > iB, events.join(','));
+});
+
+test('no clearing on the first attempt and none when the editor is empty', async () => {
+  const events: string[] = [];
+  const page = retryPage({ events, editorText: () => 'chữ bất kỳ' });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.ok, true);
+  assert.ok(!events.includes('press:Control+A'), 'lần 1 không được đụng vào ô nhập');
+});
+
+test('uncleared text -> draft_conflict, no further retry', async () => {
+  const gotos: string[] = [];
+  const events: string[] = [];
+  const page = retryPage({
+    gotos, events,
+    answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}),
+    editorText: a => (a === 2 ? 'bản nháp cứng đầu' : ''),
+  });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.errorCode, 'draft_conflict');
+  assert.strictEqual(r.error, 'Hộp soạn thảo còn bản nháp cũ, không thử lại để tránh đăng trùng');
+  assert.strictEqual(r.attempts, 2);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 2);
+  assert.ok(!events.includes('type'), 'không được gõ chồng lên bản nháp cũ');
+});
+
+test('onResult called once per target with the final attempt', async () => {
+  const seen: PostTargetResult[] = [];
+  const page = retryPage({ answersFor: a => (a <= 2 ? { composerIsOpenInPage: false } : {}) });
+  await runRetry(page, { onResult: r => seen.push(r) });
+  assert.strictEqual(seen.length, 1);
+  assert.strictEqual(seen[0].ok, true);
+  assert.strictEqual(seen[0].attempts, 3);
+});
+
+test('delay between targets unchanged (retry time not added)', async () => {
+  const logs: string[] = [];
+  const page = retryPage({ answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}) });
+  await runRetry(page, {
+    targets: ['https://www.facebook.com/groups/1/', 'https://www.facebook.com/groups/2/'],
+    minDelay: 40, maxDelay: 40,
+    sendLog: (m: string) => logs.push(m),
+  });
+  assert.strictEqual(logs.filter(m => m === 'Nghỉ 40 giây trước bài viết tiếp theo...').length, 1, logs.join('\n'));
+});
+
+test('retry cleanup: Escape, discard button, dialog handler only around the next navigation', async () => {
+  const events: string[] = [];
+  const page = retryPage({ events, answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}) });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.attempts, 2);
+  const iEsc = events.indexOf('press:Escape');
+  const iDiscard = events.indexOf('discard-click');
+  const iOn = events.indexOf('on:dialog');
+  const secondGoto = events.lastIndexOf('goto');
+  const iOff = events.indexOf('off:dialog');
+  assert.ok(iEsc >= 0 && iDiscard > iEsc, events.join(','));
+  assert.ok(iOn > iDiscard && iOn < secondGoto && iOff > secondGoto, events.join(','));
+  assert.strictEqual(events.filter(e => e === 'on:dialog').length, 1);
+  assert.strictEqual(events.filter(e => e === 'off:dialog').length, 1);
+  assert.strictEqual((page.listeners.dialog || []).length, 0, 'handler phải được gỡ');
+  assert.ok(DISCARD_LABELS.includes('Bỏ'));
+});
+
+test('filechooser handler is registered once per run, not per attempt', async () => {
+  const events: string[] = [];
+  const page = retryPage({ events, answersFor: a => (a <= 2 ? { composerIsOpenInPage: false } : {}) });
+  await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', mediaPaths: ['/a.jpg'], targets: ['https://www.facebook.com/groups/1/'], minDelay: 0, maxDelay: 0 },
+    { ...makeDeps(loggedInCtx([]), page), pickRetryDelaySec: () => 12 } as never,
+  ));
+  assert.strictEqual(events.filter(e => e === 'on:filechooser').length, 1);
 });

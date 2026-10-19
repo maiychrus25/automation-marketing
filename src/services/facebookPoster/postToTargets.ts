@@ -250,6 +250,28 @@ export function focusEditorInPage(editorSelectors: string[]): boolean {
   return false;
 }
 
+/**
+ * Đọc chữ đang có trong ô nhập của hộp soạn thảo (cùng luật chọn gốc/ô với
+ * focusEditorInPage). CHẠY TRONG TRÌNH DUYỆT. Dùng ở lần thử lại để phát hiện
+ * bản nháp cũ còn sót; không có ô nào hiện thì trả chuỗi rỗng.
+ */
+export function readEditorTextInPage(editorSelectors: string[]): string {
+  let roots: Element[] = Array.from(document.querySelectorAll('div[role="dialog"]'));
+  if (!roots.length) roots = Array.from(document.querySelectorAll('div[role="form"]'));
+  for (const root of roots) {
+    for (const sel of editorSelectors) {
+      for (const el of Array.from(root.querySelectorAll(sel))) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (el.closest('header') || el.closest('[role="banner"]') ||
+            el.closest('[role="navigation"]')) continue;
+        return ((el as HTMLElement).innerText || el.textContent || '').trim();
+      }
+    }
+  }
+  return '';
+}
+
 /** Bấm nút "Next" của composer Page nếu có. Group không có nút này. */
 function clickNextInDialog(labels: string[]): boolean {
   for (const dialog of Array.from(document.querySelectorAll('div[role="dialog"]'))) {
@@ -375,6 +397,14 @@ export const RETRYABLE_POST_ERRORS: ReadonlySet<PostErrorCode> = new Set<PostErr
   'submit_not_ready', 'submit_not_found', 'unexpected_error',
 ]);
 
+/** Số lần thử tối đa cho mỗi đích (lần đầu + 2 lần thử lại). */
+export const MAX_POST_ATTEMPTS = 3;
+/** Giây chờ ngẫu nhiên giữa hai lần thử. */
+export const RETRY_DELAY_MIN_SEC = 10;
+export const RETRY_DELAY_MAX_SEC = 30;
+/** Nhãn nút "bỏ bản nháp" khi Facebook hỏi lúc đóng hộp soạn thảo. */
+export const DISCARD_LABELS = ['Bỏ', 'Bỏ bài viết', 'Discard', 'Discard post', 'Rời khỏi', 'Leave'];
+
 const UNCERTAIN_SUFFIX = ' — có thể bài đã lên, kiểm tra trước khi đăng lại';
 
 /** Cắt thông báo gốc còn tối đa 200 ký tự. */
@@ -426,7 +456,13 @@ async function postToSingleTarget(
   ctx: BrowserContext,
   target: { url: string; kind: 'group' | 'page' },
   { text, mediaPaths, comment, commentDelayMin = 0 }: { text: string; mediaPaths: string[]; comment: string | null; commentDelayMin?: number },
-  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog' | 'enterCritical'> & { attachShortfall?: () => boolean },
+  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog' | 'enterCritical'> & {
+    attachShortfall?: () => boolean;
+    /** Lần thử thứ mấy (1-based). Từ lần 2 phải xoá bản nháp cũ trước khi gõ. */
+    attempt?: number;
+    /** Gọi ngay sau khi điều hướng xong (thành công hay lỗi). */
+    onNavigated?: () => void;
+  },
 ): Promise<SingleTargetOutcome> {
   const { url, kind } = target;
   const { getIsStopping, sendLog } = deps;
@@ -440,6 +476,8 @@ async function postToSingleTarget(
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
   } catch (e) {
     return failed('navigation_failed', `Không tải được trang nhóm: ${clip((e as Error).message)}`);
+  } finally {
+    deps.onNavigated?.();
   }
   await delayRandom(1000, 2000);
   if (getIsStopping()) return stopped();
@@ -564,6 +602,23 @@ async function postToSingleTarget(
   if (!(await page.evaluate(focusEditorInPage, EDITOR_SELECTORS))) {
     sendLog(`[${kind}] [ERROR] Không focus được ô nhập trong hộp soạn thảo: ${url}`, 'error');
     return failed('editor_not_focusable', 'Không đặt được con trỏ vào ô nhập nội dung');
+  }
+  // Lần thử lại: bản nháp của lần trước có thể còn trong ô. Gõ chồng sẽ đăng
+  // nội dung sai, nên xoá trước; xoá không được thì dừng chứ không đoán.
+  if ((deps.attempt ?? 1) >= 2) {
+    const readLeftover = async () => {
+      const t = await page.evaluate(readEditorTextInPage, EDITOR_SELECTORS).catch(() => '');
+      return typeof t === 'string' ? t.trim() : '';
+    };
+    if (await readLeftover()) {
+      sendLog('[Đăng Bài] Ô soạn còn chữ của lần trước, đang xoá trước khi gõ lại...', 'warning');
+      await page.keyboard.press('Control+A');
+      await page.keyboard.press('Backspace');
+      if (await readLeftover()) {
+        sendLog(`[${kind}] [ERROR] Không xoá được bản nháp cũ: ${url}`, 'error');
+        return failed('draft_conflict', 'Hộp soạn thảo còn bản nháp cũ, không thử lại để tránh đăng trùng');
+      }
+    }
   }
   for (const char of text) {
     if (getIsStopping()) return stopped();
@@ -774,9 +829,29 @@ export interface PostInput {
   maxDelay?: number;
 }
 
+/**
+ * Bỏ bản nháp còn mở trước khi tải lại trang: Escape, rồi bấm nút xác nhận bỏ
+ * (nếu Facebook hỏi). Không thấy nút thì thôi; mọi lỗi đều bị nuốt vì bước
+ * này chỉ là dọn dẹp, lần thử lại vẫn tự xoá chữ còn sót trong ô.
+ */
+async function discardDraft(page: Page): Promise<void> {
+  try {
+    await page.keyboard.press('Escape');
+    const selector = DISCARD_LABELS
+      .map(l => `[role="button"][aria-label="${l}"], [role="button"]:text-is("${l}"), button:text-is("${l}")`)
+      .join(', ');
+    const button = await page.waitForSelector(selector, { state: 'visible', timeout: 3000 }).catch(() => null);
+    if (button) await button.click();
+  } catch { /* dọn dẹp thất bại không được chặn lần thử lại */ }
+}
+
 export async function postToTargets(
   input: PostInput,
-  deps: TaskDeps & { onResult?: (result: PostTargetResult) => void },
+  deps: TaskDeps & {
+    onResult?: (result: PostTargetResult) => void;
+    /** Giây chờ trước lần thử lại; mặc định ngẫu nhiên 10-30 (test truyền số cố định). */
+    pickRetryDelaySec?: () => number;
+  },
 ): Promise<{ posted: number; failed: number; results: PostTargetResult[] }> {
   const { text, mediaPaths, comment = null, commentDelayMin = 0, targets, minDelay = 30, maxDelay = 60 } = (input || {}) as Partial<PostInput>;
   const files = Array.isArray(mediaPaths) ? mediaPaths : [];
@@ -840,31 +915,69 @@ export async function postToTargets(
       let identity = '';
       let waitedMs = 0;
       let errorCode: PostErrorCode | '' = '';
-      // Đã qua điểm không quay lại trong lần thử này chưa (để phân loại ngoại lệ).
-      let enteredCritical = false;
-      chooserShortfall = false;
+      let attempts = 0;
       try {
-        try {
-          const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment, commentDelayMin },
-            { getIsStopping, sendLog, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall });
-          // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
-          // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
-          ok = single.ok;
-          postUrl = single.postUrl;
-          identity = single.identity;
-          waitedMs = single.waitedMs ?? 0;
-          if (!single.ok) {
-            errorCode = single.errorCode ?? 'unknown';
-            error = single.error ?? null;
+        for (let attempt = 1; ; attempt++) {
+          attempts = attempt;
+          ok = false; error = null; postUrl = null; errorCode = ''; commentStatus = 'not_requested';
+          // Đã qua điểm không quay lại trong lần thử này chưa (để phân loại ngoại lệ).
+          let enteredCritical = false;
+          let afterSubmit = false;
+          chooserShortfall = false;
+          const dialogHandler = (d: { accept: () => Promise<void> }) => { d.accept().catch(() => {}); };
+          let dialogHandlerOn = false;
+          const dropDialogHandler = () => {
+            if (!dialogHandlerOn) return;
+            dialogHandlerOn = false;
+            try { page.off('dialog', dialogHandler); } catch { /* trang đã đóng */ }
+          };
+          if (attempt > 1) {
+            // Chỉ chấp nhận hộp thoại beforeunload trong đúng lần điều hướng này.
+            try { page.on('dialog', dialogHandler); dialogHandlerOn = true; } catch { /* trang giả/đã đóng */ }
           }
-          if (single.commentStatus) commentStatus = single.commentStatus;
-        } catch (err) {
-          const message = clip((err as Error).message);
-          errorCode = enteredCritical ? 'uncertain_after_submit' : 'unexpected_error';
-          error = enteredCritical ? `Lỗi bất ngờ sau khi bấm Đăng: ${message}${UNCERTAIN_SUFFIX}` : `Lỗi bất ngờ: ${message}`;
-          sendLog(`Lỗi khi đăng ${target.url}: ${(err as Error).message}`, 'error');
+          try {
+            const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment, commentDelayMin },
+              { getIsStopping, sendLog, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall, attempt, onNavigated: dropDialogHandler });
+            // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
+            // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
+            ok = single.ok;
+            postUrl = single.postUrl;
+            identity = single.identity;
+            waitedMs = single.waitedMs ?? 0;
+            if (!single.ok) {
+              errorCode = single.errorCode ?? 'unknown';
+              error = single.error ?? null;
+              afterSubmit = !!single.afterSubmit;
+            }
+            if (single.commentStatus) commentStatus = single.commentStatus;
+          } catch (err) {
+            const message = clip((err as Error).message);
+            afterSubmit = enteredCritical;
+            errorCode = enteredCritical ? 'uncertain_after_submit' : 'unexpected_error';
+            error = enteredCritical ? `Lỗi bất ngờ sau khi bấm Đăng: ${message}${UNCERTAIN_SUFFIX}` : `Lỗi bất ngờ: ${message}`;
+            sendLog(`Lỗi khi đăng ${target.url}: ${(err as Error).message}`, 'error');
+          } finally {
+            dropDialogHandler();
+          }
+
+          // Chỉ thử lại lỗi xảy ra TRƯỚC cú bấm Đăng; sau đó thì có thể bài đã lên.
+          if (ok || afterSubmit || !errorCode || !RETRYABLE_POST_ERRORS.has(errorCode) ||
+              getIsStopping() || attempt >= MAX_POST_ATTEMPTS) break;
+
+          // Thả đoạn không-quay-lại (submit_not_found đã enterCritical) để Hủy đóng được trình duyệt khi chờ.
+          deps.leaveCritical?.();
+          const waitSec = deps.pickRetryDelaySec
+            ? deps.pickRetryDelaySec()
+            : pickDelaySeconds(RETRY_DELAY_MIN_SEC, RETRY_DELAY_MAX_SEC);
+          sendLog(`[Đăng Bài] Thử lại lần ${attempt}/${MAX_POST_ATTEMPTS - 1} sau ${waitSec}s: ${error ?? errorCode}`, 'warning');
+          await sleepStoppable(waitSec * 1000, getIsStopping);
+          if (getIsStopping()) {
+            ok = false; errorCode = 'stopped'; error = 'Đã dừng';
+            break;
+          }
+          await discardDraft(page);
         }
-        const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity, errorCode, attempts: 1 };
+        const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity, errorCode, attempts };
         results.push(entry);
         // Báo ngay khi đích này xong để nơi gọi ghi lịch sử/hiển thị từng bước,
         // không đợi cả lượt.
