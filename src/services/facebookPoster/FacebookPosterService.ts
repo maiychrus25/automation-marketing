@@ -42,6 +42,7 @@ const STOPPED_REASON = 'Đã dừng';
 const FORCED_CLOSE_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook';
 const FORCED_CLOSE_JOIN_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra yêu cầu vào nhóm trên Facebook';
 const POST_FAILED_DEFAULT = 'Không đăng được, xem nhật ký';
+const UNCERTAIN_SUFFIX = ' — có thể bài đã lên, kiểm tra trước khi đăng lại';
 
 /** Mã lỗi của lỗi ném từ launch(): chưa đăng nhập, bị dừng khi đang mở, còn lại là không mở được profile. */
 function launchErrorCode(message: string): string {
@@ -343,12 +344,18 @@ export class FacebookPosterService {
             if (params.kind !== 'join') this.skipRemaining(active, plan);
         } catch (err) {
             failed = true;
+            const wasCritical = plan.critical || plan.reachedCritical;
             const message = errorMessage(err);
             if (params.kind === 'join') {
                 this.record(active, plan, { url: '', name: '', outcome: 'failed', error: message, errorCode: err === launchError ? launchErrorCode(message) : '' });
             } else {
                 // Open/login errors hit every target alike; a mid-run error (window closed) fails only the one in progress.
-                this.failRemaining(active, plan, message, err === launchError, err === launchError ? launchErrorCode(message) : (params.kind === 'post' ? 'unknown' : ''));
+                if (err !== launchError && params.kind === 'post' && wasCritical) {
+                    // Closed after the Post click: the post may be live, so it is never a plain failure.
+                    this.failRemaining(active, plan, `${message}${UNCERTAIN_SUFFIX}`, false, 'uncertain_after_submit');
+                } else {
+                    this.failRemaining(active, plan, message, err === launchError, err === launchError ? launchErrorCode(message) : 'unknown');
+                }
             }
         } finally {
             await Promise.allSettled(plan.sessions.map((session) => session.close()));
@@ -455,8 +462,9 @@ export class FacebookPosterService {
                 targetName: row.name,
                 outcome: row.outcome,
                 error: row.error,
-                errorCode: row.errorCode ?? '',
-                attempts: row.attempts ?? 1,
+                // Only posting records a code and attempts; other kinds keep the defaults.
+                errorCode: active.params.kind === 'post' ? row.errorCode ?? '' : '',
+                attempts: active.params.kind === 'post' ? row.attempts ?? 1 : 1,
                 postUrl: row.postUrl ?? null,
                 commentStatus: row.commentStatus ?? 'not_requested',
                 identity: row.identity ?? '',

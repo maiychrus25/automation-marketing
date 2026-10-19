@@ -1058,6 +1058,7 @@ describe('FacebookPosterService cancel closes sessions', () => {
       await jest.advanceTimersByTimeAsync(45000);
       await expect(stopped).resolves.toBe(true);
       expect(rowsOf(k.results(runId))).toEqual([['failed', 'Đã đóng khi đang chờ kết quả — kiểm tra yêu cầu vào nhóm trên Facebook']]);
+      expect(k.results(runId).map((r) => [r.errorCode, r.attempts])).toEqual([['', 1]]);
     });
 
     test('stopAndWait does not force-close a job that ends within the grace period', async () => {
@@ -1235,4 +1236,49 @@ describe('FacebookPosterService error codes', () => {
     await h.service.whenIdle();
     expect(codes(h.results(s.runId))).toEqual([['done', '', 1]]);
   });
+
+  test('non-post kinds keep empty code and 1 attempt on failure, launch error and cancel', async () => {
+    const h = harness({
+      searchAndJoinGroups: jest.fn(async () => { throw new Error('không quét được'); }),
+      scanGroups: jest.fn(async () => { throw new Error('quét hỏng'); }),
+    });
+    h.loggedIn.set('p1', false);
+    const j = h.service.start({ kind: 'join', profileId: 'p1', keywords: ['a'], limit: 5, minDelaySec: 3, maxDelaySec: 4 });
+    await h.service.whenIdle();
+    expect(codes(h.results(j.runId))).toEqual([['failed', '', 1]]);
+    h.loggedIn.set('p1', true);
+    const s = h.service.start({ kind: 'scan_groups', profileIds: ['p1', 'p2'], concurrency: 1, staggerMinSec: 30, staggerMaxSec: 90 });
+    await h.service.whenIdle();
+    expect(h.results(s.runId).every((r) => r.errorCode === '' && r.attempts === 1)).toBe(true);
+  });
+
+  test('a cancelled scan_groups run keeps empty codes on skipped rows', async () => {
+    const gate = deferred();
+    const h = harness({ scanGroups: jest.fn(async (deps: any) => { await deps.launch(); await gate.promise; return { groups: [], scrollError: false, hitScrollLimit: false }; }) });
+    const { runId } = h.service.start({ kind: 'scan_groups', profileIds: ['p1', 'p2'], concurrency: 1, staggerMinSec: 30, staggerMaxSec: 90 });
+    await tick();
+    const cancelled = h.service.cancel();
+    gate.resolve();
+    await cancelled;
+    await h.service.whenIdle();
+    const rows = h.results(runId);
+    expect(rows.some((r) => r.outcome === 'skipped')).toBe(true);
+    expect(rows.every((r) => r.errorCode === '' && r.attempts === 1)).toBe(true);
+  });
+
+  test('post closed after reaching the critical section is uncertain_after_submit, never unknown', async () => {
+    const h = harness({
+      postToTargets: jest.fn(async (_input: any, deps: any) => {
+        await deps.launch();
+        deps.enterCritical();
+        throw new Error('Target page, context or browser has been closed');
+      }),
+    });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    const rows = h.results(runId);
+    expect(codes(rows)).toEqual([['failed', 'uncertain_after_submit', 1], ['skipped', 'stopped', 1]]);
+    expect(rows[0].error).toContain('có thể bài đã lên, kiểm tra trước khi đăng lại');
+  });
 });
+
