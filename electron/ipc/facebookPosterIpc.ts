@@ -355,7 +355,7 @@ export function startFacebookPosterScheduler(): void {
         },
         clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
         readConfig: readTrackingConfig,
-        isBusy: () => isFacebookPosterBusy(),
+        isBusy: () => isWorkspaceSwitchInProgress() || isFacebookPosterBusy(),
         duePairs: (now, limit) => store().listDuePairs(now, limit),
         runTrack: (pairs, auto) => { getTracker().track({ pairs, auto }); },
         log: (msg) => Logger.warn(msg),
