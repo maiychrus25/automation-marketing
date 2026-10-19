@@ -18,11 +18,11 @@
 | `pages`: fanpage theo từ khoá | `page` | `SearchCometResultsPaginatedResultsQuery` (tìm trang) |
 | `group_feed`: bài trong nhóm đã tham gia | `post` | Truy vấn phân trang bảng tin nhóm, ví dụ `GroupsCometFeedRegularStoriesPaginationQuery` |
 
-Chạy bằng **một profile quét** do người dùng chọn, mỗi lúc một lượt quét. Kết quả lưu vào DB của workspace. Bot gọi qua Control API; người dùng dùng tab "Nghiên cứu".
+Chạy bằng **các profile sẵn có**, xoay vòng và chia nhỏ lượng quét (mục 5); mỗi lúc một lượt quét. Kết quả lưu vào DB của workspace. Bot gọi qua Control API; người dùng dùng tab "Nghiên cứu".
 
 ## 2. Bước thử bắt buộc (Task 0, cần anh cho phép)
 
-Facebook đổi cấu trúc thường xuyên. Vì vậy chi tiết bắt truy vấn và đường dẫn tới từng trường **không cố định trong spec**; chúng được chốt bằng bước thử, **chỉ đọc**, trên profile quét anh cung cấp. Bước thử phải trả lời 5 câu:
+Facebook đổi cấu trúc thường xuyên. Vì vậy chi tiết bắt truy vấn và đường dẫn tới từng trường **không cố định trong spec**; chúng được chốt bằng bước thử, **chỉ đọc**, trên một profile có sẵn anh chỉ định. Bước thử phải trả lời 5 câu:
 
 1. **Mã phiên:** lấy `fb_dtsg`, `lsd` và ID người dùng ở đâu trong trang (vd. module `DTSGInitialData`, `LSD`, `CurrentUserInitialData`, hoặc đọc từ HTML).
 2. **Trang kết quả đầu tiên** của mỗi nguồn đến từ đâu: request GraphQL, hay dữ liệu nhúng sẵn trong HTML. Cách bắt `doc_id` và biến mẫu của truy vấn phân trang.
@@ -38,7 +38,7 @@ Nếu bước thử cho thấy một nguồn không lấy được ổn định,
 
 ## 3. Cách quét (hướng babyvibe, chạy trong trình duyệt)
 
-1. Mở profile quét bằng `openForAutomation` (như Đăng Facebook). Profile đang mở thì từ chối.
+1. Chọn profile theo mục 5, rồi mở bằng `openForAutomation` (như Đăng Facebook). Profile đang mở hoặc đang bận thì chọn profile khác.
 2. Vào `facebook.com` và đọc mã phiên. Không đọc được, hoặc bị chuyển tới `/login` hay `/checkpoint`, thì dừng với mã `logged_out` / `checkpoint`.
 3. **Bắt truy vấn:**
    - Mở URL tìm kiếm hoặc URL nhóm thật, lắng nghe request `POST /api/graphql/` có `fb_api_req_friendly_name` đúng tên, và lưu `doc_id` cùng biến mẫu vào bảng `research_queries`.
@@ -61,7 +61,8 @@ Nếu bước thử cho thấy một nguồn không lấy được ổn định,
 | `source` | TEXT | `posts` / `groups` / `pages` / `group_feed` |
 | `query` | TEXT | từ khoá; với `group_feed` là `''` |
 | `params_json` | TEXT | bộ lọc, giới hạn, danh sách nhóm |
-| `profile_id` | TEXT | profile quét |
+| `profile_ids` | TEXT | JSON mảng các profile đã dùng trong lượt quét |
+| `details_json` | TEXT | số mục theo từng profile, lỗi theo từng profile/nhóm (vd. `{"profiles":{"<id>":{"items":40,"error":""}},"groups":{"<url>":"not_member"}}`) |
 | `origin` | TEXT | `manual` / `api` |
 | `status` | TEXT | `running` / `done` / `failed` / `cancelled` |
 | `error_code` | TEXT | `''` hoặc mã ở mục 7 |
@@ -95,6 +96,7 @@ Nếu bước thử cho thấy một nguồn không lấy được ổn định,
 | `shares` | INTEGER NULL | bài |
 | `posted_at` | INTEGER NULL | ms, bài |
 | `captured_at` | INTEGER | |
+| `profile_id` | TEXT | profile đã thu mục này |
 
 Ràng buộc: `UNIQUE(scan_id, kind, fb_id)`. Mục trùng trong cùng lượt quét thì bỏ qua.
 
@@ -123,14 +125,34 @@ Hàm thuần, không phụ thuộc trình duyệt, nằm trong `src/services/res
 - Mục thiếu ID thì bỏ qua.
 - Người đăng (cá nhân hoặc trang) được lưu tên, ID và link để truy vết (anh yêu cầu 19/10/2026). Đọc không được thì để `''` / `author_kind = 'unknown'`.
 
-## 5. Profile quét và cấu hình
+## 5. Chọn profile để quét (xoay vòng các profile sẵn có)
 
-- `app_settings` khoá `research_config` gồm:
-  - `profileId`: string hoặc null;
-  - `dailyCap`: số nguyên, mặc định `3000`, khoảng 100–20000.
-- Tab Nghiên cứu có ô chọn profile quét. Khuyến nghị (không bắt buộc) dùng một tài khoản Facebook riêng để quét. Nếu profile được chọn đang nằm trong một lịch đăng đang bật, chỉ hiện cảnh báo "Profile này đang dùng để đăng bài — nếu bị Facebook giới hạn do quét nhiều, việc đăng bài cũng bị ảnh hưởng".
-- Profile quét đang bận (đang mở hoặc đang có lượt đăng dùng nó) thì lượt quét không chạy, báo `profile_busy`.
-- Chưa chọn profile quét thì mọi lệnh quét bị từ chối với câu `Chưa chọn profile quét`.
+Không cần profile riêng. Đổi theo yêu cầu của anh, 19/10/2026.
+
+**Profile đủ điều kiện:**
+- không nằm trong danh sách loại trừ;
+- không đang mở và không có lượt Đăng Facebook đang chạy;
+- trạng thái đăng nhập (tính năng 26.19) không phải `logged_out` / `checkpoint` (`unknown` vẫn được);
+- chưa chạm trần ngày của chính nó.
+
+**Quét theo từ khoá** (`posts` / `groups` / `pages`):
+- Thứ tự ưu tiên: profile có số mục quét trong 24 giờ ít nhất, rồi đến profile quét lâu nhất chưa dùng.
+- Mỗi profile thu tối đa `PER_PROFILE_CHUNK = 50` mục cho một lượt, rồi chuyển sang profile kế tiếp. Profile mới tiếp tục **cùng truy vấn từ con trỏ hiện tại**; con trỏ không dùng được ở profile khác thì bắt đầu lại và bỏ qua mục trùng.
+- Hết profile đủ điều kiện trước khi đủ `limit`: dừng, `status = done`, mã `no_profile_available`.
+
+**Bài trong nhóm** (`group_feed`):
+- Mỗi nhóm quét bằng một profile **đã tham gia nhóm đó**, theo `fb_poster_groups`; ưu tiên profile ít dùng nhất.
+- Nhóm không có profile nào đã tham gia: thử bằng profile đủ điều kiện bất kỳ (nhóm công khai đọc được); đọc không được thì ghi `groups[<url>] = "not_member"` và sang nhóm khác.
+
+**Gặp `logged_out` / `checkpoint` / `rate_limited` ở một profile:**
+- Dừng dùng profile đó trong lượt quét, ghi lỗi vào `details_json`, chuyển sang profile khác.
+- Với `logged_out` / `checkpoint`: cập nhật trạng thái đăng nhập qua `LoginChecker.observe(..., 'run')`, nên phát `profile.loginProblem` và có tin 🔒 Telegram như 26.19.
+
+**Bot chỉ định:** `profileIds?` trong thao tác quét giới hạn việc xoay vòng trong danh sách đó. Profile trong danh sách vẫn phải đủ điều kiện.
+
+**Cấu hình:** `app_settings` khoá `research_config`:
+- `excludedProfileIds`: string[], mặc định `[]`;
+- `perProfileDailyCap`: số nguyên, mặc định `500`, khoảng 50–5000.
 
 ## 6. Giới hạn an toàn
 
@@ -139,30 +161,30 @@ Hàm thuần, không phụ thuộc trình duyệt, nằm trong `src/services/res
 | `limit` mỗi lượt quét từ khoá | mặc định 200, tối đa 500 |
 | `group_feed` | tối đa 20 nhóm mỗi lượt; `limitPerGroup` mặc định 30, tối đa 100; `sinceDays` mặc định 7, khoảng 1–30 (dừng nhóm đó khi gặp bài cũ hơn) |
 | Nghỉ giữa hai trang | ngẫu nhiên 2–5 giây; giữa hai nhóm 5–10 giây |
-| Trần mỗi ngày | tổng số mục của mọi lượt quét trong 24 giờ gần nhất của profile quét ≤ `dailyCap`. Chạm trần thì dừng với `daily_cap_reached` |
+| Trần mỗi ngày **theo từng profile** | tổng số mục profile đó thu trong 24 giờ gần nhất ≤ `perProfileDailyCap` (mặc định 500); chạm trần thì chuyển profile khác |
+| Phần mỗi profile trong một lượt | `PER_PROFILE_CHUNK = 50` mục |
 | Đồng thời | một lượt quét mỗi lúc (khe riêng của Nghiên cứu, độc lập với khe Đăng Facebook) |
 
 ## 7. Mã lỗi của lượt quét
 
 | Mã | Ý nghĩa | Hành vi |
 |---|---|---|
-| `logged_out` | Hết phiên | Dừng |
-| `checkpoint` | Facebook yêu cầu xác minh | Dừng |
-| `rate_limited` | Bị chặn tạm thời hoặc giới hạn tần suất | Dừng; mục đã thu vẫn giữ |
+| `logged_out` | Hết phiên (ở một profile) | Bỏ profile đó, chuyển profile khác (mục 5); ghi vào `details_json` |
+| `checkpoint` | Facebook yêu cầu xác minh (ở một profile) | Như trên |
+| `rate_limited` | Bị chặn tạm thời (ở một profile) | Như trên; mục đã thu vẫn giữ |
 | `query_changed` | Bắt lại truy vấn vẫn hỏng | Dừng |
 | `parse_failed` | Đọc phản hồi hỏng ở trang đầu | Dừng (ở trang sau thì dừng, giữ mục đã thu) |
-| `daily_cap_reached` | Chạm trần mỗi ngày | Dừng, giữ mục đã thu |
-| `profile_busy` | Profile quét đang mở hoặc đang dùng | Không chạy |
+| `no_profile_available` | Không còn profile đủ điều kiện (tất cả bận, bị loại trừ, hỏng phiên hoặc chạm trần ngày) | Dừng, giữ mục đã thu; lúc bắt đầu mà không có profile nào thì `status = failed` |
 | `cancelled` | Người dùng hoặc bot huỷ | `status = cancelled` |
 
-Lượt quét dừng giữa chừng vì `rate_limited`, `daily_cap_reached` hoặc `parse_failed` ở trang sau: `status = done`, kèm `error_code` để biết là chưa đủ. Các mã còn lại: `status = failed`.
+Lỗi ở một profile (`logged_out`, `checkpoint`, `rate_limited`) không làm hỏng cả lượt, chỉ ghi vào `details_json`. Lượt quét dừng sớm vì `no_profile_available` hoặc `parse_failed` ở trang sau: `status = done`, kèm `error_code` để biết là chưa đủ. `query_changed`, `parse_failed` ở trang đầu, và không có profile nào lúc bắt đầu: `status = failed`.
 
 ## 8. Control API (chỉ thêm)
 
 | Thao tác | Tham số | Kết quả |
 |---|---|---|
-| `research.search` | `source` (`posts`/`groups`/`pages`), `query` (1–100 ký tự), `recent?` (chỉ `posts`), `year?` (chỉ `posts`, từ 2010 tới năm hiện tại), `limit?` (1–500) | `{ scanId }`, chạy nền |
-| `research.scanGroupFeeds` | `groupUrls?` (≤ 20 URL nhóm; bỏ trống = các nhóm đã quét của profile quét, lấy 20 nhóm mới nhất), `sinceDays?`, `limitPerGroup?` | `{ scanId }` |
+| `research.search` | `source` (`posts`/`groups`/`pages`), `query` (1–100 ký tự), `recent?` (chỉ `posts`), `year?` (chỉ `posts`, từ 2010 tới năm hiện tại), `limit?` (1–500), `profileIds?` (≤ 50) | `{ scanId }`, chạy nền |
+| `research.scanGroupFeeds` | `groupUrls?` (≤ 20 URL nhóm; bỏ trống = 20 nhóm được quét gần nhất trong `fb_poster_groups` của các profile đủ điều kiện), `sinceDays?`, `limitPerGroup?`, `profileIds?` | `{ scanId }` |
 | `research.list` | `limit?` (≤ 200), `offset?`, `source?` | `{ total, scans[] }` |
 | `research.get` | `scanId`, `sort?` (`engagement` mặc định / `recent` / `members`), `limit?` (≤ 500), `offset?` | `{ scan, total, items[] }` |
 | `research.cancel` | không | `{ cancelled: boolean }` |
@@ -173,14 +195,14 @@ Lượt quét dừng giữa chừng vì `rate_limited`, `daily_cap_reached` ho�
 
 **Lỗi:**
 - `BUSY`: đang có lượt quét khác.
-- `INVALID_PARAMS`: tham số sai, hoặc chưa chọn profile quét (`details.field = 'profile'`).
+- `INVALID_PARAMS`: tham số sai; `profileIds` có mã lạ → `NOT_FOUND` với `details.missing`.
 - `NOT_FOUND`: `scanId` lạ.
 
 **Sự kiện mới** `research.finished`: `{ scanId, source, query, status, errorCode, itemCount }`. `watch` không báo sự kiện này vì bot tự gọi.
 
 ## 9. Giao diện: tab "Nghiên cứu" trong Đăng Facebook
 
-- **Đầu tab:** chọn profile quét, số mục đã quét trong 24 giờ trên trần, cảnh báo ở mục 5.
+- **Đầu tab:** bảng nhỏ "Profile dùng để quét": mỗi profile có số mục đã quét trong 24 giờ / trần ngày, trạng thái đăng nhập, và ô **Không dùng để quét** (loại trừ). Có ô sửa trần ngày cho mỗi profile.
 - **Form:** nguồn, từ khoá (hoặc chọn nhóm cho `group_feed`), bộ lọc (gần đây/năm), số lượng, nút **Quét**, tiến độ, nút **Huỷ**.
 - **Danh sách lượt quét:** nguồn, từ khoá, thời gian, số mục, trạng thái/mã lỗi.
 - **Bảng kết quả** của lượt quét đang chọn:
@@ -230,19 +252,22 @@ Lượt quét dừng giữa chừng vì `rate_limited`, `daily_cap_reached` ho�
   - nghỉ giữa trang;
   - huỷ;
   - một lượt mỗi lúc;
-  - profile đang mở → `profile_busy`;
+  - xoay vòng: chọn đúng profile ít dùng nhất, chuyển profile sau 50 mục, bỏ profile bị loại trừ, đang bận, hỏng phiên hoặc chạm trần;
+  - một profile gặp `checkpoint` → chuyển profile, ghi `details_json`, gọi `observe` cập nhật trạng thái đăng nhập;
+  - `group_feed` dùng profile đã tham gia nhóm; nhóm không ai tham gia → `not_member`;
+  - không còn profile → `no_profile_available`;
   - `group_feed` dừng khi gặp bài quá `sinceDays`;
   - lưu ngay từng trang.
 - **Store:** schema, `UNIQUE`, dọn 180 ngày, tính `engagement`/`engagementRate`.
 - **Control API:** kiểm tham số, `BUSY`, `NOT_FOUND`, sự kiện.
-- **Chạy thật** (sau bước thử, chỉ đọc, với profile quét): mỗi nguồn một lượt nhỏ (`limit = 20`); giao diện ở 1280/390 px, sáng/tối; xuất Excel.
+- **Chạy thật** (sau bước thử, chỉ đọc, với profile anh chỉ định): mỗi nguồn một lượt nhỏ (`limit = 20`); giao diện ở 1280/390 px, sáng/tối; xuất Excel.
 - **Hồi quy:** toàn bộ jest; Đăng Facebook chạy song song với một lượt quét không bị ảnh hưởng.
 
 ## 12. Rủi ro
 
 | Rủi ro | Giảm thiểu |
 |---|---|
-| Facebook khoá hoặc checkpoint profile quét | Profile riêng, nghỉ giữa trang, trần ngày, dừng ngay khi gặp tín hiệu |
+| Facebook giới hạn hoặc checkpoint một tài khoản vì quét | Xoay vòng nhiều profile, mỗi profile ≤ 500 mục/ngày và ≤ 50 mục mỗi lượt; nghỉ giữa trang; gặp tín hiệu thì bỏ profile đó ngay và báo 🔒; danh sách loại trừ cho tài khoản quan trọng |
 | Facebook đổi `doc_id` / biến | Tự bắt lại từ request thật; mã `query_changed` khi không bắt được |
 | Facebook đổi cấu trúc phản hồi | Bộ đọc thuần có test trên mẫu; trường không đọc được thì `null` thay vì sai; `parse_failed` khi hỏng hẳn |
 | Trái điều khoản Facebook | Anh đã chấp nhận rủi ro; chỉ đọc, giới hạn số lượng, không thu danh sách người dùng |

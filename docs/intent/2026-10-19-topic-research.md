@@ -14,7 +14,7 @@ Repo `babyvibe/facebook-scan-data-extension` cho thấy có thể lấy dữ li�
 
 MaiHub có tính năng **Nghiên cứu chủ đề**:
 
-- **Quét theo hướng babyvibe:** gọi API GraphQL ngay trong trình duyệt của một **profile riêng dành cho việc quét**. `doc_id` được bắt tự động từ request thật của trang, nên Facebook đổi mã thì MaiHub tự cập nhật.
+- **Quét theo hướng babyvibe:** gọi API GraphQL ngay trong trình duyệt của **các profile sẵn có**, xoay vòng giữa các profile. `doc_id` được bắt tự động từ request thật của trang, nên Facebook đổi mã thì MaiHub tự cập nhật.
 - **Bốn nguồn:**
   - bài viết theo từ khoá;
   - nhóm theo từ khoá;
@@ -31,7 +31,11 @@ MaiHub có tính năng **Nghiên cứu chủ đề**:
   - giới hạn số mục mỗi lần quét và mỗi ngày;
   - nghỉ giữa các trang kết quả;
   - dừng ngay khi gặp checkpoint, chặn tạm thời hoặc hết phiên.
-- Nên dùng một profile (tài khoản Facebook) riêng để quét, không dùng để đăng bài, để nếu Facebook giới hạn hay checkpoint vì quét nhiều thì tài khoản đăng bài không bị ảnh hưởng. Đây là khuyến nghị, không bắt buộc: chọn profile đăng bài thì app chỉ cảnh báo.
+- Dùng các profile sẵn có, xoay vòng và chia nhỏ lượng quét để giảm rủi ro mỗi tài khoản (anh chọn 19/10/2026):
+  - mỗi profile có trần ngày riêng;
+  - không quét bằng profile đang bận đăng bài;
+  - có danh sách loại trừ cho tài khoản quan trọng;
+  - bài trong nhóm được quét bằng profile đã tham gia nhóm đó.
 - Không chép code babyvibe. Tự viết, chỉ tham khảo cách tiếp cận và tên truy vấn GraphQL (là thông tin công khai của Facebook).
 - Control API chỉ được thêm thao tác và sự kiện mới; bot cũ không ảnh hưởng.
 - Test dùng dữ liệu mẫu đã làm sạch, không gọi Facebook thật. Bước thử thật chỉ đọc và cần anh cho phép.
