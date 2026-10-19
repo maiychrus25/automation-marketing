@@ -314,6 +314,7 @@ test('bấm đăng xong mà dialog không đóng thì coi như chưa đăng đư
   // Chốt: phải fail êm qua nhánh dialog-không-đóng (ok:false), không phải vì
   // mock thiếu method rồi ném lỗi lên tận postToTargets — hai lý do fail rất
   // khác nhau nhưng posted/failed giống hệt nhau nên dễ lẫn.
+  assert.ok(result.results[0].error?.includes('hộp soạn thảo không đóng'), 'phải là nhánh dialog không đóng, không phải ngoại lệ');
   assert.strictEqual(result.results[0].errorCode, 'uncertain_after_submit',
     'phải fail êm qua ok:false, không phải fail vì mock thiếu method');
   assert.ok(clicked.includes('publish'), 'đã click Đăng (click tin cậy) nhưng không có bằng chứng bài đi');
@@ -1434,4 +1435,23 @@ test('success has empty errorCode and one attempt', async () => {
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.errorCode, '');
   assert.strictEqual(r.attempts, 1);
+});
+
+test('fallback publish button missing maps to submit_not_found', async () => {
+  const page = scenarioPage({ markPublishButtonInPage: false });
+  const r = await runScenario(page);
+  assert.strictEqual(r.errorCode, 'submit_not_found');
+});
+
+test('fallback click throwing after the button is found stays uncertain_after_submit', async () => {
+  const page = scenarioPage({ markPublishButtonInPage: false }, {
+    waitForSelector: async (_s: string, o?: { state?: string }) => {
+      if (o?.state === 'hidden') throw new Error('dialog vẫn mở');
+      return { boundingBox: async () => ({ x: 0, y: 0, width: 10, height: 10 }), click: async () => {} };
+    },
+    mouse: { move: async () => {}, down: async () => {}, up: async () => { throw new Error('mất kết nối'); } },
+  });
+  const r = await runScenario(page);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.errorCode, 'uncertain_after_submit');
 });

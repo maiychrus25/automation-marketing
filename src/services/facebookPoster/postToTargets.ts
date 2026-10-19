@@ -650,10 +650,20 @@ async function postToSingleTarget(
       const fallback = PUBLISH_LABELS
         .map(l => `${root}div[role="button"][aria-label="${l}"]`)
         .join(', ');
-      try {
-        await humanClick(page, fallback);
+      // Tìm nút TRƯỚC khi bấm: chưa thấy nút thì chưa có cú bấm nào (thử lại được).
+      const fallbackButton = await page
+        .waitForSelector(fallback, { state: 'visible', timeout: 20000 })
+        .catch(() => null);
+      if (fallbackButton) {
+        // Từ lúc gọi humanClick, ngoại lệ nào cũng có thể đến sau mouse.down()/click:
+        // coi như cú bấm đã đi và để phép chờ dialog đóng quyết định.
         published = true;
-      } catch (e) {
+        try {
+          await humanClick(page, fallback);
+        } catch (e) {
+          sendLog(`[${kind}] Bấm nút Đăng bằng selector dự phòng bị lỗi: ${(e as Error).message}`, 'warning');
+        }
+      } else {
         sendLog(`[${kind}] Nút Đăng bài không phản hồi bằng selector dự phòng.`, 'warning');
       }
     }
