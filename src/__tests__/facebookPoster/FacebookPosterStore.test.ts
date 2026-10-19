@@ -505,6 +505,22 @@ describe('post tracking store', () => {
     });
   });
 
+  test('statsReport: limit giữ bài mới nhất (post/day) và nhóm nhiều bài nhất (group)', () => {
+    const s = store();
+    s.createTracking(trackRow(1, { postedAt: 1 * DAY, groupUrl: 'g-old' }));
+    s.createTracking(trackRow(2, { postedAt: 2 * DAY, groupUrl: 'g-busy' }));
+    s.createTracking(trackRow(3, { postedAt: 3 * DAY, groupUrl: 'g-busy' }));
+    s.createTracking(trackRow(4, { postedAt: 4 * DAY, groupUrl: 'g-new' }));
+    s.addPostStats(4, { capturedAt: 1, reactions: 1, comments: 0, shares: 0 });
+    s.addPostStats(3, { capturedAt: 1, reactions: 2, comments: 0, shares: 0 });
+    const r = { from: 0, to: 10 * DAY };
+    const posts = s.statsReport({ ...r, groupBy: 'post', limit: 2 });
+    expect(posts.map((x) => x.key)).toEqual(['4', '3']);
+    expect(posts.map((x) => x.post!.snapshots.length)).toEqual([1, 1]);
+    expect(s.statsReport({ ...r, groupBy: 'day', limit: 2 }).map((x) => x.posts)).toHaveLength(2);
+    expect(s.statsReport({ ...r, groupBy: 'group', limit: 2 }).map((x) => x.key)).toEqual(['g-busy', 'g-new']);
+  });
+
   test('pruneTrackingOlderThan xoá dòng và lần đo cũ', () => {
     const s = store();
     s.createTracking(trackRow(1, { postedAt: 10 }));

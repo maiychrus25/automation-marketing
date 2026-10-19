@@ -437,6 +437,7 @@ export class FacebookPosterStore {
         for (const [key, column] of Object.entries(TRACKING_PATCH_COLUMNS)) {
             if (!(key in patch)) continue;
             const value = (patch as Record<string, unknown>)[key];
+            if (value === undefined) continue;
             sets.push(`${column} = ?`);
             params.push(key === 'removedSuspected' ? (value ? 1 : 0) : key === 'statsDone' ? (value as string[]).join(',') : value);
         }
@@ -471,7 +472,7 @@ export class FacebookPosterStore {
                     (SELECT r.profile_name FROM fb_poster_results r WHERE r.profile_id = t.profile_id ORDER BY r.id DESC LIMIT 1) AS profile_name,
                     (SELECT g.name FROM fb_poster_groups g WHERE g.profile_id = t.profile_id AND g.url = t.group_url) AS group_name
              FROM fb_poster_post_tracking t LEFT JOIN fb_poster_schedules sc ON sc.id = t.schedule_id
-             WHERE t.posted_at >= ? AND t.posted_at <= ? ORDER BY t.posted_at, t.result_id`,
+             WHERE t.posted_at >= ? AND t.posted_at <= ? ORDER BY t.posted_at DESC, t.result_id DESC`,
             [opts.from, opts.to],
         );
         const latest = new Map(this.latestStats(rows.map((r) => r.result_id)).map((x) => [x.resultId, x]));
@@ -482,7 +483,7 @@ export class FacebookPosterStore {
             return memberCache.get(cacheKey) ?? null;
         };
 
-        const buckets = new Map<string, { row: PostStatsReportRow; rates: number[]; engagement: number }>();
+        const buckets = new Map<string, { row: PostStatsReportRow; rates: number[]; engagement: number; latestAt: number }>();
         for (const r of rows) {
             const [key, label] = ((): [string, string] => {
                 switch (opts.groupBy) {
@@ -497,7 +498,7 @@ export class FacebookPosterStore {
             if (!bucket) {
                 bucket = {
                     row: { key, label, posts: 0, withLink: 0, pending: 0, notFound: 0, removedSuspected: 0, reactions: 0, comments: 0, shares: 0, measured: 0, avgEngagement: null, engagementRate: null },
-                    rates: [], engagement: 0,
+                    rates: [], engagement: 0, latestAt: 0,
                 };
                 buckets.set(key, bucket);
             }
@@ -520,12 +521,26 @@ export class FacebookPosterStore {
             if (opts.groupBy === 'post') {
                 b.post = {
                     resultId: r.result_id, postUrl: r.post_url ?? null, groupUrl: r.group_url, text: String(r.text_head).slice(0, 100),
-                    postedAt: r.posted_at, linkStatus: r.link_status,
-                    snapshots: this.db.query<any>('SELECT * FROM fb_poster_post_stats WHERE result_id = ? ORDER BY captured_at, id', [r.result_id]).map(mapPostStats),
+                    postedAt: r.posted_at, linkStatus: r.link_status, snapshots: [],
                 };
             }
+            if (bucket.latestAt === 0) bucket.latestAt = r.posted_at; // rows đi từ mới đến cũ nên dòng đầu là mới nhất
         }
-        return [...buckets.values()].slice(0, opts.limit).map(({ row, rates, engagement }) => {
+        // Thứ tự khi cắt `limit` (luôn giữ dữ liệu mới): post/day theo bài mới nhất trước; group/profile/schedule
+        // theo số bài giảm dần rồi theo bài mới nhất.
+        const ordered = [...buckets.values()];
+        if (opts.groupBy === 'group' || opts.groupBy === 'profile' || opts.groupBy === 'schedule') {
+            ordered.sort((a, c) => c.row.posts - a.row.posts || c.latestAt - a.latestAt);
+        }
+        const kept = ordered.slice(0, opts.limit);
+        if (opts.groupBy === 'post' && kept.length > 0) {
+            const byId = new Map(kept.map((k) => [k.row.post!.resultId, k.row.post!]));
+            const marks = [...byId.keys()].map(() => '?').join(',');
+            for (const snap of this.db.query<any>(
+                `SELECT * FROM fb_poster_post_stats WHERE result_id IN (${marks}) ORDER BY captured_at, id`, [...byId.keys()],
+            )) byId.get(snap.result_id)?.snapshots.push(mapPostStats(snap));
+        }
+        return kept.map(({ row, rates, engagement }) => {
             row.avgEngagement = row.measured > 0 ? engagement / row.measured : null;
             // groupBy 'group': trung bình tương tác / số thành viên của chính nhóm đó; khác: trung bình tỉ lệ theo bài.
             row.engagementRate = rates.length > 0 ? rates.reduce((a, c) => a + c, 0) / rates.length : null;

@@ -25,6 +25,15 @@ test('normalizeHead: chữ thường, gộp khoảng trắng, cắt 200', () => 
     expect(normalizeHead('a'.repeat(300))).toHaveLength(200);
 });
 
+test('normalizeHead: NFD = NFC, bỏ ký tự độ rộng 0, khoảng trắng Unicode, giữ emoji', () => {
+    const nfc = 'Bán hàng giá rẻ tiếng Việt'.normalize('NFC');
+    expect(normalizeHead(nfc.normalize('NFD'))).toBe(normalizeHead(nfc));
+    expect(normalizeHead('a\u200Bb\uFEFFc\u200D')).toBe('abc');
+    expect(normalizeHead('a\u00A0\u3000b')).toBe('a b');
+    expect(normalizeHead('Hot 🔥 deal')).toBe('hot 🔥 deal');
+    expect(matchesOwnPost(row(), item({ title: 'Bán Hàng Giá Rẻ hôm nay'.normalize('NFD') }), 'u1')).toBe(true);
+});
+
 describe('matchesOwnPost', () => {
     test('khớp', () => expect(matchesOwnPost(row(), item(), 'u1')).toBe(true));
     test('khác tác giả', () => expect(matchesOwnPost(row(), item({ authorId: 'u2' }), 'u1')).toBe(false));

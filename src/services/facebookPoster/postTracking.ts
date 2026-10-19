@@ -68,9 +68,10 @@ export function parsePostTrackingConfig(raw: string | null): PostTrackingConfig 
     }
 }
 
-/** Chữ thường, gộp khoảng trắng, cắt 200 ký tự. */
+/** NFC, bỏ ký tự độ rộng 0 (Facebook hay chèn), chữ thường, gộp mọi khoảng trắng Unicode, cắt 200 ký tự. */
 export function normalizeHead(text: string): string {
-    return String(text ?? '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, TEXT_HEAD_CHARS);
+    return String(text ?? '').normalize('NFC').replace(/[\u200B-\u200D\uFEFF]/g, '').toLowerCase()
+        .replace(/\s+/g, ' ').trim().slice(0, TEXT_HEAD_CHARS);
 }
 
 /** Phần của mục Nghiên cứu (ResearchItemInput) mà việc đối chiếu cần. */
