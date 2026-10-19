@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 16/10/2026 |
-| Trạng thái | Chờ duyệt |
+| Trạng thái | Đã duyệt (19/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-16-poster-retry-error-codes.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-16-poster-retry-error-codes.md` (đã duyệt) |
 | Nhánh | `feat/poster-retry-error-codes` |
