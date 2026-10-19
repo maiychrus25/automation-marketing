@@ -13,4 +13,6 @@ export interface TaskDeps {
     /** Bao thao tác không hoàn tác được (bấm Đăng, bấm Tham gia) tới khi có kết quả; Hủy không đóng trình duyệt trong đoạn này. */
     enterCritical?: () => void;
     leaveCritical?: () => void;
+    /** Chỉ gọi khi chắc chắn chưa có cú bấm nào (lần thử lỗi trước khi bấm Đăng, sắp thử lại). */
+    clearReachedCritical?: () => void;
 }

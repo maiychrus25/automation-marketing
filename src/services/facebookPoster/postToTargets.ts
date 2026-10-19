@@ -883,7 +883,8 @@ async function discardDraft(page: Page): Promise<void> {
   try {
     await page.keyboard.press('Escape');
     const selector = DISCARD_LABELS
-      .map(l => `[role="button"][aria-label="${l}"], [role="button"]:text-is("${l}"), button:text-is("${l}")`)
+      // Chỉ trong hộp thoại: không có composer thì không được bấm nhầm nút trùng nhãn ở nơi khác trên trang.
+      .map(l => `div[role="dialog"] [role="button"][aria-label="${l}"], div[role="dialog"] [role="button"]:text-is("${l}"), div[role="dialog"] button:text-is("${l}")`)
       .join(', ');
     const button = await page.waitForSelector(selector, { state: 'visible', timeout: 3000 }).catch(() => null);
     if (button) await button.click();
@@ -1013,6 +1014,8 @@ export async function postToTargets(
 
           // Thả đoạn không-quay-lại (submit_not_found đã enterCritical) để Hủy đóng được trình duyệt khi chờ.
           deps.leaveCritical?.();
+          // Tới đây chắc chắn chưa có cú bấm nào (afterSubmit=false): bỏ dấu "đã vào đoạn không quay lại" để Hủy trong lúc chờ ghi `skipped`.
+          deps.clearReachedCritical?.();
           const waitSec = deps.pickRetryDelaySec
             ? deps.pickRetryDelaySec()
             : pickDelaySeconds(RETRY_DELAY_MIN_SEC, RETRY_DELAY_MAX_SEC);

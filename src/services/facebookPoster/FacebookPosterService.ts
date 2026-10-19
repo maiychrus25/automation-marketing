@@ -339,6 +339,7 @@ export class FacebookPosterService {
             updateProgress: () => undefined,
             enterCritical: () => { plan.critical = true; plan.reachedCritical = true; },
             leaveCritical: () => { plan.critical = false; },
+            clearReachedCritical: () => { plan.reachedCritical = false; },
         };
 
         let failed = false;

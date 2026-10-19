@@ -1046,6 +1046,22 @@ describe('FacebookPosterService cancel closes sessions', () => {
       expect(k.results(runId).map((r) => r.errorCode)).toEqual(['uncertain_after_submit', 'stopped']);
     });
 
+    test('a forced close during a retry wait after a pre-submit failure is skipped, not uncertain', async () => {
+      let hang!: () => Promise<never>;
+      const k = killable({
+        postToTargets: jest.fn(async (_input: any, deps: any) => {
+          await deps.launch(); deps.enterCritical(); deps.leaveCritical(); deps.clearReachedCritical(); await hang();
+        }),
+      });
+      hang = k.hang;
+      const { runId } = k.service.start(postParams());
+      await tick();
+      const stopped = k.service.stopAndWait(45000, 10000);
+      await jest.advanceTimersByTimeAsync(45000);
+      await expect(stopped).resolves.toBe(true);
+      expect(k.results(runId).map((r) => r.errorCode)).toEqual(['stopped', 'stopped']);
+    });
+
     test('a forced close of a join says to check the group request, not a post', async () => {
       let hang!: () => Promise<never>;
       const k = killable({

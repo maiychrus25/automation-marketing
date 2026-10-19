@@ -1599,6 +1599,45 @@ test('submit_not_found -> leaveCritical called before retry', async () => {
   assert.ok(firstEnter >= 0 && firstLeave > firstEnter && firstLeave < secondGoto, events.join(','));
 });
 
+test('submit_not_found retry clears the reached-critical mark after leaveCritical; uncertain_after_submit never does', async () => {
+  const events: string[] = [];
+  const page = retryPage({ events, answersFor: a => (a === 1 ? { markPublishButtonInPage: false } : {}) });
+  const baseWait = (page as any).waitForSelector;
+  (page as any).waitForSelector = async (sel: string, o?: { state?: string }) => {
+    if (o?.state !== 'hidden' && sel.includes('aria-label="Đăng"')) throw new Error('không thấy');
+    return baseWait(sel, o);
+  };
+  await runRetry(page, {
+    enterCritical: () => events.push('enter'),
+    leaveCritical: () => events.push('leave'),
+    clearReachedCritical: () => events.push('clear'),
+  });
+  assert.strictEqual(events.indexOf('clear'), events.indexOf('leave') + 1, events.join(','));
+
+  const events2: string[] = [];
+  const page2 = retryPage({ events: events2 });
+  (page2 as any).waitForSelector = async () => { throw new Error('x'); };
+  const r = (await runRetry(page2, {
+    enterCritical: () => events2.push('enter'),
+    clearReachedCritical: () => events2.push('clear'),
+  })).results[0];
+  assert.strictEqual(r.errorCode, 'uncertain_after_submit');
+  assert.ok(!events2.includes('clear'), events2.join(','));
+});
+
+test('draft discard only looks inside a dialog', async () => {
+  const selectors: string[] = [];
+  const page = retryPage({ answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}) });
+  const baseWait = (page as any).waitForSelector;
+  (page as any).waitForSelector = async (sel: string, o?: { state?: string }) => {
+    if (sel.includes('aria-label="Bỏ"')) selectors.push(sel);
+    return baseWait(sel, o);
+  };
+  await runRetry(page);
+  assert.strictEqual(selectors.length, 1);
+  for (const part of selectors[0].split(', ')) assert.ok(part.startsWith('div[role="dialog"] '), part);
+});
+
 test('cancel during retry wait -> stopped, no further goto', async () => {
   const gotos: string[] = [];
   let stopping = false;
