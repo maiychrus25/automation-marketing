@@ -244,3 +244,69 @@ describe('recapture', () => {
         await expect(sess.recapture('posts', SEARCH, 'https://x')).rejects.toMatchObject({ code: 'query_changed' });
     });
 });
+
+describe('fix round 1', () => {
+    it('keeps scrolling past a fallback and stores the exact match', async () => {
+        const { page } = makePage({ emitAt: [
+            { scroll: 1, req: req('SearchCometResultsInitialFoo', { doc_id: '111' }) },
+            { scroll: 3, req: req(SEARCH, { doc_id: '222' }) },
+        ] });
+        const { s, store } = mk(page);
+        const q = await s.ensureQuery('posts', SEARCH, 'https://x');
+        expect(q).toMatchObject({ friendlyName: SEARCH, docId: '222' });
+        expect(page.mouse.wheel).toHaveBeenCalledTimes(3);
+        expect(store.m.get(`${SEARCH}:posts`).docId).toBe('222');
+    });
+    it('only fallback seen -> uses it after all 6 scrolls with its real name', async () => {
+        const { page } = makePage({ emitAt: [{ scroll: 1, req: req('SearchCometResultsInitialFoo', { doc_id: '111' }) }] });
+        const { s, store } = mk(page);
+        const q = await s.ensureQuery('posts', SEARCH, 'https://x');
+        expect(q).toMatchObject({ friendlyName: 'SearchCometResultsInitialFoo', docId: '111' });
+        expect(page.mouse.wheel).toHaveBeenCalledTimes(6);
+        expect(store.m.has(`${SEARCH}:posts`)).toBe(true);
+    });
+    it('call: closed target -> Mất kết nối; network error -> Lỗi mạng', async () => {
+        const { page } = makePage();
+        const { s } = mk(page);
+        await s.open();
+        const q = { friendlyName: SEARCH, docId: '1', variables: {} };
+        const real = page.evaluate.getMockImplementation();
+        page.evaluate.mockImplementation(async () => { throw new Error('Target page, context or browser has been closed'); });
+        const e1 = await s.call(q, {}).catch((e: any) => e);
+        expect(e1).toBeInstanceOf(ResearchError);
+        expect(e1.code).toBe('parse_failed');
+        expect(e1.message).toContain('Mất kết nối với trang');
+        page.evaluate.mockImplementation(async () => { throw new TypeError('Failed to fetch'); });
+        const e2 = await s.call(q, {}).catch((e: any) => e);
+        expect(e2.code).toBe('parse_failed');
+        expect(e2.message).toContain('Lỗi mạng khi gọi Facebook');
+        page.evaluate.mockImplementation(async () => { throw new Error('Execution context was destroyed ' + 'x'.repeat(500)); });
+        const e3 = await s.call(q, {}).catch((e: any) => e);
+        expect(e3.message).toContain('Mất kết nối với trang');
+        expect(e3.message.length).toBeLessThanOrEqual(200);
+        page.evaluate.mockImplementation(real);
+    });
+    it('goto failure in open and ensureQuery -> parse_failed, listener removed', async () => {
+        const a = makePage();
+        a.page.goto.mockRejectedValue(new Error('Timeout 45000ms exceeded'));
+        const e1 = await mk(a.page).s.open().catch((e: any) => e);
+        expect(e1).toMatchObject({ code: 'parse_failed' });
+        expect(e1.message).toContain('Không tải được trang');
+        const b = makePage();
+        b.page.goto.mockRejectedValue(new Error('net::ERR_FAILED'));
+        const e2 = await mk(b.page).s.ensureQuery('posts', SEARCH, 'https://x').catch((e: any) => e);
+        expect(e2).toMatchObject({ code: 'parse_failed' });
+        expect(b.listeners.request).toHaveLength(0);
+    });
+    it('empty user id after cookie fallback -> logged_out', async () => {
+        const { page } = makePage({ tokens: { dtsg: 'D', lsd: 'L', userId: '', loginForm: false }, cookies: [] });
+        await expect(mk(page).s.open()).rejects.toMatchObject({ code: 'logged_out' });
+    });
+    it('corrupt stored template -> recaptures', async () => {
+        const { page } = makePage({ emitAt: [{ scroll: 1, req: req(SEARCH, { doc_id: '5' }) }] });
+        const store = makeStore();
+        store.m.set(`${SEARCH}:posts`, { friendlyName: 'k', docId: '1', variablesTemplate: '{bad', capturedAt: 1 });
+        const q = await mk(page, store).s.ensureQuery('posts', SEARCH, 'https://x');
+        expect(q.docId).toBe('5');
+    });
+});

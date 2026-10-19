@@ -67,6 +67,27 @@ async function fetchInPage(arg: { body: string; name: string; lsd: string }): Pr
     return { status: res.status, text: await res.text() };
 }
 
+function shortMessage(e: unknown): string {
+    const m = e instanceof Error ? e.message : String(e);
+    return m.replace(/\s+/g, ' ').slice(0, 120);
+}
+
+function isConnectionLost(e: unknown): boolean {
+    return /closed|destroyed|detached|disconnected|crashed/i.test(e instanceof Error ? e.message : String(e));
+}
+
+/** Chuyển lỗi điều hướng thành ResearchError (không lộ mã phiên). */
+async function gotoOrThrow(page: Page, url: string): Promise<void> {
+    try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    } catch (e) {
+        if (e instanceof ResearchError) throw e;
+        throw new ResearchError('parse_failed', isConnectionLost(e)
+            ? `Mất kết nối với trang: ${shortMessage(e)}`
+            : `Không tải được trang: ${shortMessage(e)}`);
+    }
+}
+
 function fallbackMatches(source: ResearchSource, name: string): boolean {
     return source === 'group_feed' ? name.includes('GroupsCometFeed') : name.includes('Search') && name.includes('Results');
 }
@@ -89,7 +110,7 @@ export class GraphqlSession {
     }
 
     async open(): Promise<void> {
-        await this.page.goto(FB_HOME, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await gotoOrThrow(this.page, FB_HOME);
         let path = '';
         try { path = new URL(this.page.url()).pathname; } catch { path = ''; }
         if (path.startsWith('/checkpoint')) throw new ResearchError('checkpoint', 'Profile bị Facebook yêu cầu xác minh (checkpoint).');
@@ -105,6 +126,7 @@ export class GraphqlSession {
             const cookies = await this.page.context().cookies();
             userId = cookies.find((c) => c.name === 'c_user')?.value || '';
         }
+        if (!userId) throw new ResearchError('logged_out', 'Không đọc được ID người dùng Facebook; coi như chưa đăng nhập.');
         this.tokens = { dtsg: t.dtsg, lsd: t.lsd, userId };
     }
 
@@ -145,7 +167,14 @@ export class GraphqlSession {
             server_timestamps: 'true',
             doc_id: query.docId,
         }).toString();
-        const res = await this.page.evaluate(fetchInPage, { body, name: query.friendlyName, lsd: t.lsd });
+        let res: { status: number; text: string };
+        try {
+            res = await this.page.evaluate(fetchInPage, { body, name: query.friendlyName, lsd: t.lsd });
+        } catch (e) {
+            throw new ResearchError('parse_failed', isConnectionLost(e)
+                ? `Mất kết nối với trang: ${shortMessage(e)}`
+                : `Lỗi mạng khi gọi Facebook: ${shortMessage(e)}`);
+        }
         if (res.status === 401 || res.status === 403) throw new ResearchError('logged_out', `Facebook từ chối phiên (HTTP ${res.status}).`);
         if (res.status === 429) throw new ResearchError('rate_limited', 'Facebook giới hạn tần suất (HTTP 429).');
         if (res.status >= 400) throw new ResearchError('parse_failed', `Facebook trả HTTP ${res.status}.`);
@@ -169,8 +198,8 @@ export class GraphqlSession {
         };
         this.page.on('request', onRequest);
         try {
-            await this.page.goto(triggerUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-            for (let i = 0; i < MAX_SCROLLS && !exact && !fallback; i++) {
+            await gotoOrThrow(this.page, triggerUrl);
+            for (let i = 0; i < MAX_SCROLLS && !exact; i++) {
                 await this.page.mouse.wheel(0, 1500);
                 await this.sleep(1500 + Math.floor(this.random() * 1500));
             }
