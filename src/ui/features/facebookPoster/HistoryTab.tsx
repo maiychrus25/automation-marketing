@@ -2,9 +2,14 @@ import React, { useEffect, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
-import type { FbPosterRun, FbPosterResult } from '../../../models/facebookPoster';
+import PerformancePanel from './PerformancePanel';
+import { formatStatsLine, linkChip } from './trackingFormat';
+import type { FbPosterRun, FbPosterResult, LinkStatus, PostStatsSnapshot } from '../../../models/facebookPoster';
 
 const PAGE_SIZE = 50;
+const TRACKING_LIMIT = 500;
+
+type TrackInfo = { linkStatus: LinkStatus; removedSuspected: boolean; latestStats: PostStatsSnapshot | null };
 
 const KIND_LABEL: Record<string, string> = { post: 'Đăng bài', join: 'Tham gia nhóm', scan_groups: 'Quét nhóm', collect_comments: 'Thu bình luận' };
 const MODE_LABEL: Record<string, string> = { group: 'Nhóm', page: 'Page' };
@@ -57,13 +62,16 @@ export default function HistoryTab() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, FbPosterResult[]>>({});
   const [detailLoading, setDetailLoading] = useState(false);
+  // Trạng thái link và số đo theo từng kết quả; lấy khi mở một lượt chạy, tối đa TRACKING_LIMIT dòng.
+  const [tracking, setTracking] = useState<Record<string, Record<number, TrackInfo>>>({});
 
   useEffect(() => {
     const off = ipc.on?.('facebookPoster:runFinished', () => {
       setDetails({}); // counts of a finished run must be refetched
       setReloadTick((n) => n + 1);
     });
-    return () => off?.();
+    const offTrack = ipc.on?.('facebookPoster:trackFinished', () => setTracking({}));
+    return () => { off?.(); offTrack?.(); };
   }, []);
 
   useEffect(() => {
@@ -94,6 +102,19 @@ export default function HistoryTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, details]);
 
+  useEffect(() => {
+    const run = expanded ? runs.find((r) => r.id === expanded) : undefined;
+    if (!run || !details[run.id] || tracking[run.id] || run.kind !== 'post') return;
+    let cancelled = false;
+    ipc.facebookPoster?.listTracking({ from: run.startedAt, to: run.finishedAt ?? Date.now(), limit: TRACKING_LIMIT }).then((res) => {
+      if (cancelled || !res?.success) return; // chip theo dõi là phần phụ: lỗi thì chỉ không hiện
+      const byResult: Record<number, TrackInfo> = {};
+      for (const row of res.rows || []) if (row.runId === run.id) byResult[row.resultId] = row;
+      setTracking((prev) => ({ ...prev, [run.id]: byResult }));
+    }).catch(() => { /* giữ nguyên */ });
+    return () => { cancelled = true; };
+  }, [expanded, runs, details, tracking]);
+
   const exportCsv = async (runId: string) => {
     try {
       const res = await ipc.facebookPoster?.exportRunCsv(runId);
@@ -106,11 +127,12 @@ export default function HistoryTab() {
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  if (loading && runs.length === 0) return <div className="flex justify-center py-10"><Spinner size={5} /></div>;
-  if (runs.length === 0) return <p className="text-sm text-gray-400 text-center py-10">Chưa có lịch sử.</p>;
+  if (loading && runs.length === 0) return <div className="space-y-3 min-w-0"><PerformancePanel /><div className="flex justify-center py-10"><Spinner size={5} /></div></div>;
+  if (runs.length === 0) return <div className="space-y-3 min-w-0"><PerformancePanel /><p className="text-sm text-gray-400 text-center py-10">Chưa có lịch sử.</p></div>;
 
   return (
     <div className="space-y-3 min-w-0">
+      <PerformancePanel />
       <ul className="space-y-2" aria-label="Lịch sử chạy">
         {runs.map((run) => {
           const open = expanded === run.id;
@@ -149,6 +171,14 @@ export default function HistoryTab() {
                                 {r.attempts > 1 && <span aria-label={`Đã thử ${r.attempts} lần`} className="shrink-0 whitespace-nowrap rounded border border-gray-600 px-1.5 text-xs text-gray-400">Thử {r.attempts} lần</span>}
                                 {r.errorCode === 'uncertain_after_submit' && <span aria-label="Chưa chắc bài đã đăng" title={r.error} className="shrink-0 whitespace-nowrap rounded border border-yellow-500/30 px-1.5 text-xs text-orange-400">Chưa chắc</span>}
                                 {r.error && <span className="text-red-400 break-words min-w-0">{r.error}</span>}
+                                {(() => {
+                                  const t = tracking[run.id]?.[r.id];
+                                  const chip = t ? linkChip(t.linkStatus, t.removedSuspected) : null;
+                                  return (<>
+                                    {chip && <span aria-label={chip.label} title={chip.title} className={`shrink-0 whitespace-nowrap rounded border px-1.5 text-xs ${chip.cls}`}>{chip.label}</span>}
+                                    {t?.latestStats && <span title={`Đo lúc ${formatTime(t.latestStats.capturedAt)}`} className="text-gray-400 whitespace-nowrap">{formatStatsLine(t.latestStats)}</span>}
+                                  </>);
+                                })()}
                                 {r.postUrl && <button type="button" onClick={() => openLink(r.postUrl!)} className="text-blue-400 hover:underline whitespace-nowrap">Mở bài</button>}
                                 <span className="text-gray-400">{COMMENT_STATUS_LABEL[r.commentStatus] || r.commentStatus}</span>
                                 {r.identity && <span className="text-gray-400 break-words min-w-0">{r.identity}</span>}

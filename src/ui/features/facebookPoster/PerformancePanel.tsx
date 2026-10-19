@@ -1,0 +1,152 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import ipc from '@/lib/ipc';
+import { useAppStore } from '@/store/appStore';
+import { Spinner } from '@/components/common/PageLoading';
+import TrackConfigPopover from './TrackConfigPopover';
+import { formatCount, formatRate } from './researchFormat';
+import { GROUP_BY_OPTIONS, RANGE_OPTIONS } from './trackingFormat';
+import type { PostStatsGroupBy, PostStatsReportRow } from '../../../models/facebookPoster';
+
+const DAY_MS = 86_400_000;
+const FOCUS = 'focus-visible:ring-2 focus-visible:ring-blue-500';
+const TH = 'px-2 py-1.5 text-left font-medium whitespace-nowrap';
+const TD = 'px-2 py-1.5 whitespace-nowrap';
+
+export default function PerformancePanel() {
+  const showNotification = useAppStore((s) => s.showNotification);
+  const [days, setDays] = useState(30);
+  const [groupBy, setGroupBy] = useState<PostStatsGroupBy>('group');
+  const [rows, setRows] = useState<PostStatsReportRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [reloadTick, setReloadTick] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const aliveRef = useRef(true);
+
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError('');
+    ipc.facebookPoster?.postStats({ from: Date.now() - days * DAY_MS, groupBy, limit: 200 }).then((res) => {
+      if (cancelled) return;
+      if (res?.success) setRows(res.rows || []); else { setRows([]); setLoadError(res?.error || 'Không tải được báo cáo'); }
+    }).catch(() => { if (!cancelled) { setRows([]); setLoadError('Không tải được báo cáo'); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [days, groupBy, reloadTick]);
+
+  useEffect(() => {
+    let cancelled = false;
+    ipc.facebookPoster?.trackStatus().then((res) => {
+      if (cancelled || !res?.success) return;
+      setRunning(!!res.running);
+      if (res.running && res.progress) setProgress(res.progress);
+    }).catch(() => { /* sự kiện tiến độ sẽ cập nhật */ });
+    const offProgress = ipc.on?.('facebookPoster:trackProgress', (data: { done: number; total: number }) => {
+      setRunning(true);
+      setProgress({ done: data.done, total: data.total });
+    });
+    const offFinished = ipc.on?.('facebookPoster:trackFinished', () => {
+      setRunning(false);
+      setProgress(null);
+      setReloadTick((n) => n + 1);
+    });
+    return () => { cancelled = true; offProgress?.(); offFinished?.(); };
+  }, []);
+
+  const start = useCallback(async () => {
+    setStarting(true);
+    try {
+      const res = await ipc.facebookPoster.trackPosts({ sinceDays: days });
+      if (!res?.success) showNotification(res?.error || 'Không bắt đầu được việc theo dõi', 'error');
+      else { setRunning(true); setProgress({ done: 0, total: res.pairs?.length ?? 0 }); }
+    } catch (err) {
+      showNotification(err instanceof Error && err.message ? err.message : 'Không bắt đầu được việc theo dõi', 'error');
+    } finally {
+      if (aliveRef.current) setStarting(false);
+    }
+  }, [days, showNotification]);
+
+  const cancel = async () => {
+    try {
+      const res = await ipc.facebookPoster.trackCancel();
+      if (!res?.success) showNotification(res?.error || 'Không huỷ được', 'error');
+    } catch (err) {
+      showNotification(err instanceof Error && err.message ? err.message : 'Không huỷ được', 'error');
+    }
+  };
+
+  const select = 'input-field text-xs py-1';
+  const labelHead = GROUP_BY_OPTIONS.find((o) => o.value === groupBy)?.label || 'Nhóm';
+
+  return (
+    <section aria-label="Hiệu quả bài đăng" className="rounded-lg border border-gray-700 p-3 space-y-2 min-w-0">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <h3 className="text-sm font-medium text-white">Hiệu quả</h3>
+        <label className="flex items-center gap-1 text-xs text-gray-400">Khoảng
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))} className={`${select} ${FOCUS}`}>
+            {RANGE_OPTIONS.map((o) => <option key={o.days} value={o.days}>{o.label}</option>)}
+          </select>
+        </label>
+        <label className="flex items-center gap-1 text-xs text-gray-400">Gom theo
+          <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as PostStatsGroupBy)} className={`${select} ${FOCUS}`}>
+            {GROUP_BY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+        <div className="flex flex-wrap items-center gap-2 ml-auto">
+          {running ? (
+            <>
+              <span role="status" className="text-xs text-blue-400 whitespace-nowrap">Đang theo dõi… ({progress?.done ?? 0}/{progress?.total ?? 0})</span>
+              <button type="button" onClick={cancel} className={`px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 ${FOCUS}`}>Huỷ</button>
+            </>
+          ) : (
+            <button type="button" onClick={start} disabled={starting} className={`px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-50 whitespace-nowrap ${FOCUS}`}>
+              {starting ? 'Đang bắt đầu…' : 'Cập nhật số liệu'}
+            </button>
+          )}
+          <TrackConfigPopover />
+        </div>
+      </div>
+      {loading ? <div className="flex justify-center py-4"><Spinner size={5} /></div>
+        : loadError ? (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span role="alert" className="text-red-400 break-words">{loadError}</span>
+            <button type="button" onClick={() => setReloadTick((n) => n + 1)} className={`px-2.5 py-1 rounded-lg border border-gray-600 text-gray-300 hover:border-gray-400 ${FOCUS}`}>Thử lại</button>
+          </div>
+        ) : rows.length === 0 ? <p className="text-xs text-gray-400 py-2">Chưa có bài nào được theo dõi trong khoảng này.</p>
+          : (
+            <div className="overflow-x-auto max-w-full" tabIndex={0} role="region" aria-label="Bảng hiệu quả bài đăng">
+              <table className="w-full text-xs text-gray-300">
+                <thead className="text-gray-400 border-b border-gray-700">
+                  <tr>
+                    <th className={TH}>{labelHead}</th>
+                    <th className={`${TH} text-right`}>Bài</th><th className={`${TH} text-right`}>Có link</th>
+                    <th className={`${TH} text-right`}>Chờ duyệt</th><th className={`${TH} text-right`}>Không thấy</th>
+                    <th className={`${TH} text-right`}>Nghi xoá</th>
+                    <th className={`${TH} text-right`}>👍</th><th className={`${TH} text-right`}>💬</th><th className={`${TH} text-right`}>↗</th>
+                    <th className={`${TH} text-right`}>TB/bài</th><th className={`${TH} text-right`}>Tỉ lệ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800">
+                  {rows.map((r) => (
+                    <tr key={r.key}>
+                      <td className={`${TD} max-w-[16rem] truncate`} title={r.label}>{r.label}</td>
+                      <td className={`${TD} text-right`}>{formatCount(r.posts)}</td><td className={`${TD} text-right`}>{formatCount(r.withLink)}</td>
+                      <td className={`${TD} text-right`}>{formatCount(r.pending)}</td><td className={`${TD} text-right`}>{formatCount(r.notFound)}</td>
+                      <td className={`${TD} text-right ${r.removedSuspected ? 'text-red-400' : ''}`}>{formatCount(r.removedSuspected)}</td>
+                      <td className={`${TD} text-right`}>{formatCount(r.reactions)}</td><td className={`${TD} text-right`}>{formatCount(r.comments)}</td><td className={`${TD} text-right`}>{formatCount(r.shares)}</td>
+                      <td className={`${TD} text-right`}>{r.avgEngagement === null ? '—' : r.avgEngagement.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</td>
+                      <td className={`${TD} text-right`}>{formatRate(r.engagementRate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+    </section>
+  );
+}
