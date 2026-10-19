@@ -1360,6 +1360,8 @@ function scenarioPage(answers: Record<string, unknown> = {}, over: Record<string
   const base = pageForCritical();
   const defaults: Record<string, unknown> = {
     composerIsOpenInPage: true, focusEditorInPage: true, markPublishButtonInPage: true,
+    // Lần thử lại đọc ô soạn: fake phải trả chuỗi (rỗng = không có bản nháp cũ).
+    readEditorTextInPage: '',
   };
   return {
     ...base,
@@ -1782,4 +1784,18 @@ test('draft_conflict is not retried even if reached on attempt 2 of 3', async ()
   assert.strictEqual(r.errorCode, 'draft_conflict');
   assert.strictEqual(r.attempts, 2);
   assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 2);
+});
+
+test('non-string editor read on retry -> draft_conflict, nothing typed', async () => {
+  const events: string[] = [];
+  const page = retryPage({
+    events,
+    answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}),
+    editorText: a => (a === 2 ? (undefined as unknown as string) : ''),
+  });
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.errorCode, 'draft_conflict');
+  assert.strictEqual(r.error, 'Không đọc được nội dung ô soạn thảo, không thử lại để tránh đăng trùng');
+  assert.strictEqual(r.attempts, 2);
+  assert.ok(!events.includes('type') && !events.includes('press:Control+A'));
 });

@@ -617,7 +617,7 @@ async function postToSingleTarget(
     const readLeftover = async (): Promise<string | null> => {
       try {
         const t = await page.evaluate(readEditorTextInPage, EDITOR_SELECTORS);
-        return typeof t === 'string' ? t.trim() : '';
+        return typeof t === 'string' ? t.trim() : null;
       } catch {
         return null;
       }
