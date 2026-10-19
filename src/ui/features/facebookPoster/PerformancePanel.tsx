@@ -7,6 +7,9 @@ import { formatCount, formatRate } from './researchFormat';
 import { GROUP_BY_OPTIONS, RANGE_OPTIONS } from './trackingFormat';
 import type { PostStatsGroupBy, PostStatsReportRow } from '../../../models/facebookPoster';
 
+// Giới hạn của thao tác theo dõi (trackingOperations.track): đọc tối đa 14 ngày bài gần nhất.
+const MAX_TRACK_SINCE_DAYS = 14;
+
 const DAY_MS = 86_400_000;
 const FOCUS = 'focus-visible:ring-2 focus-visible:ring-blue-500';
 const TH = 'px-2 py-1.5 text-left font-medium whitespace-nowrap';
@@ -61,7 +64,7 @@ export default function PerformancePanel() {
   const start = useCallback(async () => {
     setStarting(true);
     try {
-      const res = await ipc.facebookPoster.trackPosts({ sinceDays: days });
+      const res = await ipc.facebookPoster.trackPosts({ sinceDays: Math.min(days, MAX_TRACK_SINCE_DAYS) });
       if (!res?.success) showNotification(res?.error || 'Không bắt đầu được việc theo dõi', 'error');
       else { setRunning(true); setProgress({ done: 0, total: res.pairs?.length ?? 0 }); }
     } catch (err) {
