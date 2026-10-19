@@ -59,6 +59,13 @@ describe('createControlMethods', () => {
         expect(deps.poster.draftGet).toHaveBeenCalledWith({ id: 'd1' });
     });
 
+    it('runs.get exposes errorCode and attempts', async () => {
+        const { deps, call } = setup();
+        const detail = { run: { id: 'r1' }, results: [{ outcome: 'failed', error: 'x', errorCode: 'submit_not_found', attempts: 3 }] };
+        (deps.poster.getRun as jest.Mock).mockReturnValueOnce(detail);
+        expect(await call('runs.get', { runId: 'r1' })).toEqual(detail);
+    });
+
     it('profiles.scanGroups starts a scan_groups run passing only provided keys', async () => {
         const { deps, call } = setup();
         expect(await call('profiles.scanGroups', { profileIds: ['p1', 'p2'] })).toEqual({ runId: 'r1' });

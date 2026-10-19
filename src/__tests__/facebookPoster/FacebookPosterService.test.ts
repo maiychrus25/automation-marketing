@@ -874,6 +874,7 @@ describe('FacebookPosterService cancel closes sessions', () => {
     await k.service.whenIdle();
     expect(k.run(runId).status).toBe('cancelled');
     expect(rowsOf(k.results(runId))).toEqual([['skipped', 'Đã dừng'], ['skipped', 'Đã dừng']]);
+    expect(k.results(runId).map((r) => r.errorCode)).toEqual(['stopped', 'stopped']);
     expect(k.lastProfileStates()).toEqual(['cancelled']);
   });
 
@@ -1042,6 +1043,7 @@ describe('FacebookPosterService cancel closes sessions', () => {
       expect(k.closes).toEqual(['p1']);
       await expect(stopped).resolves.toBe(true);
       expect(rowsOf(k.results(runId))).toEqual([['failed', FORCED_CLOSE], ['skipped', 'Đã dừng']]);
+      expect(k.results(runId).map((r) => r.errorCode)).toEqual(['uncertain_after_submit', 'stopped']);
     });
 
     test('a forced close of a join says to check the group request, not a post', async () => {
@@ -1176,5 +1178,61 @@ describe('exclusive slot and login observation', () => {
     const { runId } = h.service.start(postParams());
     await h.service.whenIdle();
     expect(h.run(runId).status).toBe('done');
+  });
+});
+
+describe('FacebookPosterService error codes', () => {
+  const codes = (rows: any[]) => rows.map((r) => [r.outcome, r.errorCode, r.attempts]);
+
+  test('service maps not_logged_in / launch_failed / stopped', async () => {
+    const h = harness({ postToTargets: postAll() });
+    h.loggedIn.set('p1', false);
+    const a = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(codes(h.results(a.runId))).toEqual([['failed', 'not_logged_in', 1], ['failed', 'not_logged_in', 1]]);
+
+    const g = harness({ postToTargets: postAll() });
+    const b = g.service.start(postParams({ profiles: [{ profileId: 'ghost', targets: ['https://www.facebook.com/groups/1/'] }] }));
+    await g.service.whenIdle();
+    expect(codes(g.results(b.runId))).toEqual([['failed', 'launch_failed', 1]]);
+  });
+
+  test('a mid-run error without code is unknown, rows left unreached are stopped', async () => {
+    const h = harness({
+      postToTargets: jest.fn(async (input: any, deps: any) => {
+        await deps.launch();
+        throw new Error('Target page, context or browser has been closed');
+      }),
+    });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(codes(h.results(runId))).toEqual([['failed', 'unknown', 1], ['skipped', 'stopped', 1]]);
+  });
+
+  test('post results carry errorCode/attempts from the task; failure without code is unknown', async () => {
+    const h = harness({
+      postToTargets: jest.fn(async (input: any, deps: any) => {
+        await deps.launch();
+        deps.onResult({ url: input.targets[0], ok: false, error: 'hết lượt', postUrl: null, commentStatus: 'not_requested', identity: '', errorCode: 'submit_not_found', attempts: 3 });
+        deps.onResult({ url: input.targets[1], ok: false, error: null, postUrl: null, commentStatus: 'not_requested', identity: '', errorCode: '', attempts: 1 });
+      }),
+    });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(codes(h.results(runId))).toEqual([['failed', 'submit_not_found', 3], ['failed', 'unknown', 1]]);
+  });
+
+  test('join and scan results default to empty code and 1 attempt', async () => {
+    const task = jest.fn(async (_i: any, deps: any) => {
+      await deps.launch();
+      deps.onResult({ id: '1', name: 'A', url: 'https://www.facebook.com/groups/1/', outcome: 'joined' });
+    });
+    const h = harness({ searchAndJoinGroups: task, scanGroups: jest.fn(async (deps: any) => { await deps.launch(); return { groups: [], scrollError: false, hitScrollLimit: false }; }) });
+    const j = h.service.start({ kind: 'join', profileId: 'p1', keywords: ['a'], limit: 5, minDelaySec: 3, maxDelaySec: 4 });
+    await h.service.whenIdle();
+    expect(codes(h.results(j.runId))).toEqual([['joined', '', 1]]);
+    const s = h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 30, staggerMaxSec: 90 });
+    await h.service.whenIdle();
+    expect(codes(h.results(s.runId))).toEqual([['done', '', 1]]);
   });
 });

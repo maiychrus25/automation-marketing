@@ -65,6 +65,8 @@ function mapResult(row: any): FbPosterResult {
         targetName: row.target_name,
         outcome: row.outcome,
         error: row.error,
+        errorCode: row.error_code ?? '',
+        attempts: row.attempts ?? 1,
         postUrl: row.post_url ?? null,
         commentStatus: row.comment_status,
         identity: row.identity,
@@ -133,9 +135,9 @@ export class FacebookPosterStore {
     addResult(r: Omit<FbPosterResult, 'id'>): number {
         return this.db.runInsert(
             `INSERT INTO fb_poster_results
-                (run_id, profile_id, profile_name, target_url, target_name, outcome, error, post_url, comment_status, identity, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [r.runId, r.profileId, r.profileName, r.targetUrl, r.targetName, r.outcome, r.error, r.postUrl, r.commentStatus, r.identity, r.createdAt],
+                (run_id, profile_id, profile_name, target_url, target_name, outcome, error, error_code, attempts, post_url, comment_status, identity, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [r.runId, r.profileId, r.profileName, r.targetUrl, r.targetName, r.outcome, r.error, r.errorCode, r.attempts, r.postUrl, r.commentStatus, r.identity, r.createdAt],
         );
     }
 

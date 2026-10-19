@@ -45,6 +45,10 @@ export interface FbPosterResult {
     targetName: string;
     outcome: string;
     error: string;
+    /** Mã lỗi ổn định ('' khi không lỗi hoặc không phải việc đăng). */
+    errorCode: string;
+    /** Số lần thử đăng (1 khi không thử lại). */
+    attempts: number;
     postUrl: string | null;
     commentStatus: string;
     identity: string;

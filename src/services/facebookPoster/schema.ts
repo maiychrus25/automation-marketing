@@ -79,4 +79,6 @@ CREATE TABLE IF NOT EXISTS fb_poster_login_state (
 export const FB_POSTER_MIGRATIONS: string[] = [
     'ALTER TABLE fb_poster_runs ADD COLUMN schedule_id TEXT DEFAULT NULL',
     'ALTER TABLE fb_poster_schedules ADD COLUMN draft INTEGER NOT NULL DEFAULT 0',
+    "ALTER TABLE fb_poster_results ADD COLUMN error_code TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE fb_poster_results ADD COLUMN attempts INTEGER NOT NULL DEFAULT 1',
 ];

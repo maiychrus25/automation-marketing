@@ -11,7 +11,7 @@ function newRun(id: string, startedAt: number, kind: 'post' | 'join' = 'post') {
 function newResult(runId: string, over: Record<string, unknown> = {}) {
   return {
     runId, profileId: 'p1', profileName: 'Profile 1', targetUrl: 'https://www.facebook.com/groups/1/',
-    targetName: 'G1', outcome: 'posted', error: '', postUrl: null as string | null,
+    targetName: 'G1', outcome: 'posted', error: '', errorCode: '', attempts: 1, postUrl: null as string | null,
     commentStatus: 'not_requested', identity: '', createdAt: 1, ...over,
   };
 }
@@ -350,5 +350,30 @@ describe('login state', () => {
     expect(s.listLoginStates()).toEqual([
       { profileId: 'a', state: 'checkpoint', checkedAt: 7, source: 'run', lastError: null, lastErrorAt: null },
     ]);
+  });
+});
+
+describe('error code columns', () => {
+  test('migration adds error_code/attempts with defaults to an old DB', () => {
+    const db = memoryDb();
+    db.exec(`CREATE TABLE fb_poster_results (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, profile_id TEXT NOT NULL,
+      profile_name TEXT NOT NULL, target_url TEXT NOT NULL, target_name TEXT NOT NULL DEFAULT '', outcome TEXT NOT NULL,
+      error TEXT NOT NULL DEFAULT '', post_url TEXT DEFAULT NULL, comment_status TEXT NOT NULL DEFAULT 'not_requested',
+      identity TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)`);
+    db.run(`INSERT INTO fb_poster_results (run_id, profile_id, profile_name, target_url, outcome, created_at) VALUES ('r1', 'p', 'P', 'u', 'failed', 1)`);
+    const s = new FacebookPosterStore(db);
+    s.ensureSchema();
+    s.createRun(newRun('r1', 1));
+    const [row] = s.getRun('r1')!.results;
+    expect(row.errorCode).toBe('');
+    expect(row.attempts).toBe(1);
+  });
+
+  test('getRun returns errorCode/attempts', () => {
+    const s = store();
+    s.createRun(newRun('r1', 1));
+    s.addResult(newResult('r1', { outcome: 'failed', errorCode: 'submit_not_found', attempts: 3 }));
+    const [row] = s.getRun('r1')!.results;
+    expect(row).toMatchObject({ errorCode: 'submit_not_found', attempts: 3 });
   });
 });

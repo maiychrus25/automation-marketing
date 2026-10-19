@@ -162,7 +162,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `schedules.delete` | **`id`**, **`confirm`** | `{ deleted: true }`. Từ chối (`INVALID_PARAMS`) khi lịch đang chạy | có |
 | `runs.current` | không | `{ run, progress }` (`null` nếu rảnh) | không |
 | `runs.list` | `limit`, `offset`, `kind` (`post`, `join`, `scan_groups`, `collect_comments`) | `{ runs, total }`, mới nhất trước | không |
-| `runs.get` | **`runId`** | `{ run, results }`: kết quả từng đích, link bài, trạng thái bình luận | không |
+| `runs.get` | **`runId`** | `{ run, results }`: kết quả từng đích, link bài, trạng thái bình luận; mỗi kết quả có `errorCode` (mã lỗi, `""` khi không lỗi hoặc không phải việc đăng) và `attempts` (số lần thử, mặc định 1). Xem bảng mã lỗi bên dưới | không |
 | `runs.cancel` | **`confirm`** | `{ cancelled: true }`. Dừng việc đang chạy | có |
 | `events.wait` | **`after`** (≥ 0), `timeoutSec` (0–25) | `{ events: [{ seq, type, payload, createdAt }], workspaceId }` | không |
 | `research.search` | **`source`** (`posts`/`groups`/`pages`), **`query`** (1–100 ký tự), `recent` (boolean, chỉ `posts`), `year` (chỉ `posts`, từ 2010 tới năm hiện tại), `limit` (1–500, mặc định 200), `profileIds` (mảng 1–50 mã; bỏ trống = mọi profile) | `{ scanId }`. Quét Facebook theo từ khoá, chỉ đọc, chạy nền; xong có sự kiện `research.finished`, rồi lấy kết quả bằng `research.get`. `INVALID_PARAMS` nếu tham số sai hoặc `profileIds` rỗng; `NOT_FOUND` với `details.missing` nếu `profileIds` có mã lạ; `BUSY` nếu đang có lượt quét khác | không |
@@ -212,6 +212,18 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `research.finished` | Một lượt quét Nghiên cứu kết thúc (xong, lỗi hoặc bị huỷ) | `{ scanId, source, query, status, errorCode, itemCount }`; lấy kết quả bằng `research.get` |
 
 Sau `run.finished`, gọi `runs.get` với `runId` để lấy link bài và chi tiết từng đích.
+
+Mã lỗi `errorCode` trong kết quả của `runs.get` (chỉ-thêm, bot cũ bỏ qua được):
+
+| Mã | Ý nghĩa | Tự thử lại? |
+|---|---|---|
+| `navigation_failed`, `composer_not_found`, `media_failed`, `editor_not_focusable`, `submit_not_ready`, `submit_not_found`, `unexpected_error` | Lỗi **trước** cú bấm Đăng (tải trang, hộp soạn thảo, ảnh/video, ô nhập, nút Đăng, lỗi bất ngờ) | Có, tối đa 3 lần (`attempts` ≤ 3), chờ 10–30 giây |
+| `uncertain_after_submit` | Đã bấm Đăng nhưng không xác nhận được, hoặc trình duyệt bị đóng cưỡng bức: **có thể bài đã lên**, kiểm tra trước khi đăng lại | Không |
+| `draft_conflict` | Lần thử lại thấy bản nháp cũ không xoá được | Không |
+| `not_logged_in` | Profile chưa đăng nhập Facebook | Không |
+| `launch_failed` | Không mở được trình duyệt/profile | Không |
+| `stopped` | Bị bỏ qua vì Huỷ (`outcome = skipped`) | Không |
+| `unknown` | Không xác định | Không |
 
 ## 10. Luồng mẫu: ý tưởng → ảnh → nháp → duyệt → chờ kết quả
 

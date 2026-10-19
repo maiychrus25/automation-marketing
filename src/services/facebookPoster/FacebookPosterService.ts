@@ -42,6 +42,13 @@ const STOPPED_REASON = 'Đã dừng';
 const FORCED_CLOSE_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook';
 const FORCED_CLOSE_JOIN_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra yêu cầu vào nhóm trên Facebook';
 const POST_FAILED_DEFAULT = 'Không đăng được, xem nhật ký';
+
+/** Mã lỗi của lỗi ném từ launch(): chưa đăng nhập, bị dừng khi đang mở, còn lại là không mở được profile. */
+function launchErrorCode(message: string): string {
+    if (message === NOT_LOGGED_IN_ERROR) return 'not_logged_in';
+    if (message === STOPPED_REASON) return 'stopped';
+    return 'launch_failed';
+}
 const SCAN_ERROR_MESSAGE = 'Quét nhóm bị lỗi giữa chừng, giữ danh sách cũ';
 const SCAN_LIMIT_MESSAGE = 'Danh sách có thể thiếu (chạm trần cuộn)';
 const JOINS_URL = 'https://www.facebook.com/groups/joins/';
@@ -61,7 +68,7 @@ interface ProfilePlan {
     posted: boolean;
 }
 interface ActiveRun { run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number }; }
-interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; identity?: string; }
+interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; identity?: string; errorCode?: string; attempts?: number; }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -338,10 +345,10 @@ export class FacebookPosterService {
             failed = true;
             const message = errorMessage(err);
             if (params.kind === 'join') {
-                this.record(active, plan, { url: '', name: '', outcome: 'failed', error: message });
+                this.record(active, plan, { url: '', name: '', outcome: 'failed', error: message, errorCode: err === launchError ? launchErrorCode(message) : '' });
             } else {
                 // Open/login errors hit every target alike; a mid-run error (window closed) fails only the one in progress.
-                this.failRemaining(active, plan, message, err === launchError);
+                this.failRemaining(active, plan, message, err === launchError, err === launchError ? launchErrorCode(message) : (params.kind === 'post' ? 'unknown' : ''));
             }
         } finally {
             await Promise.allSettled(plan.sessions.map((session) => session.close()));
@@ -376,6 +383,8 @@ export class FacebookPosterService {
                             name: '',
                             outcome: r.ok ? 'posted' : 'failed',
                             error: r.error ?? (r.ok ? '' : POST_FAILED_DEFAULT),
+                            errorCode: r.errorCode || (r.ok ? '' : 'unknown'),
+                            attempts: r.attempts,
                             postUrl: r.postUrl,
                             commentStatus: r.commentStatus,
                             identity: r.identity,
@@ -446,6 +455,8 @@ export class FacebookPosterService {
                 targetName: row.name,
                 outcome: row.outcome,
                 error: row.error,
+                errorCode: row.errorCode ?? '',
+                attempts: row.attempts ?? 1,
                 postUrl: row.postUrl ?? null,
                 commentStatus: row.commentStatus ?? 'not_requested',
                 identity: row.identity ?? '',
@@ -463,21 +474,21 @@ export class FacebookPosterService {
     /** A failure caused by our own cancel is a stop, not an error; one after a critical step stays a failure (forced close gets its own text). */
     private stopAwareRow(active: ActiveRun, plan: ProfilePlan, row: ResultRow): ResultRow {
         if (row.outcome !== 'failed' || !this.stopping) return row;
-        if (!plan.critical && !plan.reachedCritical) return { ...row, outcome: 'skipped', error: STOPPED_REASON };
-        return this.forced ? { ...row, error: active.params.kind === 'join' ? FORCED_CLOSE_JOIN_ERROR : FORCED_CLOSE_ERROR } : row;
+        if (!plan.critical && !plan.reachedCritical) return { ...row, outcome: 'skipped', error: STOPPED_REASON, errorCode: 'stopped' };
+        return this.forced ? { ...row, error: active.params.kind === 'join' ? FORCED_CLOSE_JOIN_ERROR : FORCED_CLOSE_ERROR, errorCode: 'uncertain_after_submit' } : row;
     }
 
     /** Targets with no result yet: the first one carries the error, the rest were never reached (or all fail when the error hit every target alike). */
-    private failRemaining(active: ActiveRun, plan: ProfilePlan, message: string, allFailed: boolean): void {
+    private failRemaining(active: ActiveRun, plan: ProfilePlan, message: string, allFailed: boolean, errorCode: string): void {
         plan.targets.slice(plan.progress.done).forEach((target, i) => {
             const failedOne = allFailed || i === 0;
-            this.record(active, plan, { url: target.url, name: target.name, outcome: failedOne ? 'failed' : 'skipped', error: failedOne ? message : STOPPED_REASON });
+            this.record(active, plan, { url: target.url, name: target.name, outcome: failedOne ? 'failed' : 'skipped', error: failedOne ? message : STOPPED_REASON, errorCode: failedOne ? errorCode : 'stopped' });
         });
     }
 
     private skipRemaining(active: ActiveRun, plan: ProfilePlan): void {
         for (const target of plan.targets.slice(plan.progress.done)) {
-            this.record(active, plan, { url: target.url, name: target.name, outcome: 'skipped', error: STOPPED_REASON });
+            this.record(active, plan, { url: target.url, name: target.name, outcome: 'skipped', error: STOPPED_REASON, errorCode: 'stopped' });
         }
     }
 

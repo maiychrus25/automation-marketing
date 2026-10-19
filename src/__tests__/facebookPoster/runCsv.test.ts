@@ -12,7 +12,7 @@ describe('csvField', () => {
   });
 });
 
-test('buildRunCsv: BOM, CRLF, 9 columns, injection neutralised', () => {
+test('buildRunCsv: BOM, CRLF, 11 columns, injection neutralised', () => {
   const csv = buildRunCsv([{
     id: 1, runId: 'r', profileId: 'p', profileName: '=cmd', targetUrl: 'https://www.facebook.com/groups/1/', targetName: 'G',
     outcome: 'posted', error: '', postUrl: null, commentStatus: 'not_requested', identity: '@me', createdAt: 0,
@@ -20,8 +20,19 @@ test('buildRunCsv: BOM, CRLF, 9 columns, injection neutralised', () => {
   expect(csv.charCodeAt(0)).toBe(0xfeff);
   const lines = csv.slice(1).split('\r\n');
   expect(lines).toHaveLength(3);
-  expect(lines[0].split('","')).toHaveLength(9);
+  expect(lines[0].split('","')).toHaveLength(11);
   expect(lines[1]).toContain(`"'=cmd"`);
   expect(lines[1]).toContain(`"'@me"`);
   expect(lines[1]).toContain('1970-01-01T00:00:00.000Z');
+});
+
+test('csv has two new trailing columns', () => {
+  const csv = buildRunCsv([{
+    id: 1, runId: 'r', profileId: 'p', profileName: 'P', targetUrl: 'u', targetName: 'G',
+    outcome: 'failed', error: 'x', errorCode: 'submit_not_found', attempts: 3, postUrl: null, commentStatus: 'not_requested', identity: '', createdAt: 0,
+  } as any]);
+  const lines = csv.slice(1).split('\r\n');
+  expect(lines[0].split('","')).toHaveLength(11);
+  expect(lines[0].endsWith('"time","error_code","attempts"')).toBe(true);
+  expect(lines[1].endsWith('"1970-01-01T00:00:00.000Z","submit_not_found","3"')).toBe(true);
 });
