@@ -7,7 +7,7 @@ import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
 import { ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
-import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
+import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 import { createCertificate } from '../../services/control/certificate';
 import { parseBotIp, withStoredPublicHost } from '../../services/control/controlConfig';
 
@@ -264,5 +264,13 @@ describe('control events: research', () => {
     it('buildResearchFinished keeps only the documented fields', () => {
         const payload = buildResearchFinished({ scanId: 's1', source: 'posts', query: 'kem', status: 'done', errorCode: '', itemCount: 7, extra: 1 } as any);
         expect(payload).toEqual({ scanId: 's1', source: 'posts', query: 'kem', status: 'done', errorCode: '', itemCount: 7 });
+    });
+});
+
+describe('control events: post tracking', () => {
+    it('buildTrackFinished keeps only the documented fields', () => {
+        const input = { jobId: 'j1', auto: true, cancelled: false, groups: 2, checked: 5, found: 4, linked: 3, removedSuspected: 1, notFound: 0, errors: 0, extra: 9 };
+        const { extra, ...expected } = input;
+        expect(buildTrackFinished(input as any)).toEqual(expected);
     });
 });

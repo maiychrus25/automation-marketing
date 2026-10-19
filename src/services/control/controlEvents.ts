@@ -2,7 +2,7 @@ import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import type { FbPosterResult, FbPosterRun, FbPosterSchedule, LoginCheckOutcome, LoginCheckSource, LoginState } from '../../models/facebookPoster';
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished';
 
 export function buildRunStarted(run: { runId: string; kind: string; scheduleId: string | null }) {
     return { runId: run.runId, kind: run.kind, scheduleId: run.scheduleId };
@@ -44,6 +44,17 @@ export function buildCheckFinished(e: { checkId: string; source: LoginCheckSourc
 /** Lượt quét Nghiên cứu kết thúc; chỉ giữ các trường đã công bố. */
 export function buildResearchFinished(scan: { scanId: string; source: string; query: string; status: string; errorCode: string; itemCount: number }) {
     return { scanId: scan.scanId, source: scan.source, query: scan.query, status: scan.status, errorCode: scan.errorCode, itemCount: scan.itemCount };
+}
+
+/** Lượt theo dõi bài đăng kết thúc; chỉ giữ các trường đã công bố. */
+export function buildTrackFinished(e: {
+    jobId: string; auto: boolean; cancelled: boolean; groups: number; checked: number; found: number;
+    linked: number; removedSuspected: number; notFound: number; errors: number;
+}) {
+    return {
+        jobId: e.jobId, auto: e.auto, cancelled: e.cancelled, groups: e.groups, checked: e.checked, found: e.found,
+        linked: e.linked, removedSuspected: e.removedSuspected, notFound: e.notFound, errors: e.errors,
+    };
 }
 
 type Sink = (type: ControlEventType, payload: unknown) => void;

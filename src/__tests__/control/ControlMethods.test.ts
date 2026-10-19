@@ -246,6 +246,7 @@ describe('describe', () => {
             'schedules.list', 'schedules.update', 'schedules.delete',
             'runs.current', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
             'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.cancel',
+            'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.trackConfig',
         ]);
         for (const m of d.methods) {
             expect(m.description).toMatch(/\S/);
@@ -361,5 +362,64 @@ describe('research methods', () => {
         for (const m of found) expect(m.destructive).toBe(false);
         expect(found[0].description).toMatch(/research\.finished/);
         expect(found[0].paramsSchema.properties.profileIds.maxItems).toBe(50);
+    });
+});
+
+describe('posts tracking methods', () => {
+    function setupTracking() {
+        const tracking = {
+            track: jest.fn((_p: any): any => ({ jobId: 'j1', pairs: [] })),
+            status: jest.fn((): any => ({ running: false, jobId: null, progress: { done: 0, total: 0 }, last: null })),
+            cancel: jest.fn((): any => ({ cancelled: true })),
+            list: jest.fn((_p?: any): any => ({ total: 0, rows: [] })),
+            stats: jest.fn((_p: any): any => ({ rows: [] })),
+            getConfig: jest.fn((): any => ({ config: { autoEnabled: true } })),
+            setConfig: jest.fn((_p: any): any => ({ config: { autoEnabled: false } })),
+        };
+        const methods = createControlMethods({ ...makeDeps(), tracking } as unknown as ControlMethodDeps);
+        const call = (name: string, params: any = {}) => methods.find((m) => m.name === name)!.run(params, {});
+        return { tracking, methods, call };
+    }
+
+    it('passes only documented params to the tracking port', async () => {
+        const { tracking, call } = setupTracking();
+        expect(await call('posts.track', { sinceDays: 3, groupUrls: ['g'], profileIds: ['p1'], extra: 1 })).toEqual({ jobId: 'j1', pairs: [] });
+        expect(tracking.track).toHaveBeenCalledWith({ sinceDays: 3, groupUrls: ['g'], profileIds: ['p1'] });
+        await call('posts.trackStatus');
+        expect(tracking.status).toHaveBeenCalled();
+        expect(await call('posts.trackCancel')).toEqual({ cancelled: true });
+        await call('posts.list', { limit: 5, linkStatus: 'missing', junk: 1 });
+        expect(tracking.list).toHaveBeenCalledWith({ limit: 5, linkStatus: 'missing' });
+        await call('posts.stats', { groupBy: 'group', from: 1, to: 2 });
+        expect(tracking.stats).toHaveBeenCalledWith({ groupBy: 'group', from: 1, to: 2 });
+    });
+
+    it('posts.trackConfig reads without config and saves with config', async () => {
+        const { tracking, call } = setupTracking();
+        expect(await call('posts.trackConfig')).toEqual({ config: { autoEnabled: true } });
+        expect(tracking.setConfig).not.toHaveBeenCalled();
+        const config = { autoEnabled: false, linkRetryMinutes: [30], statsAtMinutes: [60] };
+        expect(await call('posts.trackConfig', { config })).toEqual({ config: { autoEnabled: false } });
+        expect(tracking.setConfig).toHaveBeenCalledWith(config);
+    });
+
+    it('maps BUSY, unknown profiles and invalid params', async () => {
+        const { tracking, call } = setupTracking();
+        tracking.track.mockImplementationOnce(() => { throw new Error(BUSY_ERROR); });
+        expect(await call('posts.track', {}).catch((e) => e)).toMatchObject({ code: 'BUSY' });
+        tracking.track.mockImplementationOnce(() => { throw new UnknownProfilesError(['zz']); });
+        expect(await call('posts.track', { profileIds: ['zz'] }).catch((e) => e)).toMatchObject({ code: 'NOT_FOUND', details: { missing: ['zz'] } });
+        tracking.track.mockImplementationOnce(() => { throw new Error('sinceDays phải là số nguyên từ 1 đến 30'); });
+        expect(await call('posts.track', { sinceDays: 0 }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+        tracking.setConfig.mockImplementationOnce(() => { throw new Error('config không hợp lệ'); });
+        expect(await call('posts.trackConfig', { config: {} }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+    });
+
+    it('describes the six methods as non-destructive', () => {
+        const { methods } = setupTracking();
+        const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('posts.')) as any[];
+        expect(found).toHaveLength(6);
+        for (const m of found) expect(m.destructive).toBe(false);
+        expect(found[0].description).toMatch(/posts\.trackFinished/);
     });
 });

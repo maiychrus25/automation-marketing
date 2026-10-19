@@ -980,6 +980,23 @@ class FormatDoneWithoutCountsTests(unittest.TestCase):
         self.assertEqual(bridge.format_event(finished(2), lambda r: None), "✅ Đăng ngay: xong 2/2")
 
 
+class FormatTrackFinishedTests(unittest.TestCase):
+    def fmt(self, **over):
+        payload = {"jobId": "j1", "auto": False, "cancelled": False, "groups": 3, "checked": 8, "found": 5,
+                   "linked": 2, "removedSuspected": 1, "notFound": 0, "errors": 0}
+        payload.update(over)
+        return bridge.format_event({"seq": 1, "type": "posts.trackFinished", "payload": payload, "createdAt": 1}, lambda r: None)
+
+    def test_reports_links_and_suspected_removals(self):
+        self.assertEqual(self.fmt(), "📈 Theo dõi bài: kiểm tra 3 nhóm, lấy được 2 link, 1 bài có thể đã bị xoá")
+        self.assertEqual(self.fmt(auto=True, linked=0), "📈 Theo dõi bài: kiểm tra 3 nhóm, lấy được 0 link, 1 bài có thể đã bị xoá")
+        self.assertEqual(self.fmt(auto=True, removedSuspected=0), "📈 Theo dõi bài: kiểm tra 3 nhóm, lấy được 2 link, 0 bài có thể đã bị xoá")
+
+    def test_silent_when_nothing_new(self):
+        self.assertIsNone(self.fmt(linked=0, removedSuspected=0))
+        self.assertIsNone(self.fmt(auto=True, linked=0, removedSuspected=0, found=4))
+
+
 class NotifyTargetTests(unittest.TestCase):
     def test_notify_target_priority(self):
         bot = {"TG_TOKEN": TG_TOKEN, "ALLOWED_CHAT_ID": "-100,-200", "ALLOWED_TOPIC_ID": "7", "ADMIN_USER_ID": "9"}

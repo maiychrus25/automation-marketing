@@ -27,7 +27,7 @@ import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
-import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished } from '../../src/services/control/controlEvents';
+import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished } from '../../src/services/control/controlEvents';
 import { getResearchStore } from './researchIpc';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
 import type { FbPosterRun, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
@@ -185,6 +185,7 @@ function getTracker(): PostTracker {
                 if (type === 'posts.trackProgress') EventBroadcaster.emit('facebookPoster:trackProgress', payload);
                 else if (type === 'posts.trackFinished') {
                     EventBroadcaster.emit('facebookPoster:trackFinished', payload);
+                    safely('controlTrackFinished', () => emitControlEvent('posts.trackFinished', buildTrackFinished(payload as any)));
                     safely('onRunFinished', () => scheduler?.onRunFinished()); // queued schedules start once the slot is free
                 }
             },

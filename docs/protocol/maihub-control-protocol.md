@@ -170,6 +170,12 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `research.list` | `limit` (1–200), `offset`, `source` (`posts`/`groups`/`pages`/`group_feed`) | `{ total, scans[] }` (mới nhất trước) | không |
 | `research.get` | **`scanId`**, `sort` (`engagement` mặc định / `recent` / `members`), `limit` (1–500), `offset` | `{ scan, total, items[] }`. `NOT_FOUND` nếu `scanId` lạ | không |
 | `research.cancel` | không | `{ cancelled: boolean }`. Dừng lượt quét đang chạy (kể cả khi đang nghỉ giữa trang) | không |
+| `posts.track` | `sinceDays` (1–14, mặc định 3), `groupUrls` (1–30 link nhóm), `profileIds` (mảng ≤ 50 mã; bỏ trống = mọi profile) | `{ jobId, pairs }`. Đọc bảng tin nhóm để lấy link và đo tương tác các bài đã đăng, chỉ đọc, chạy nền; xong có sự kiện `posts.trackFinished`. `INVALID_PARAMS` nếu tham số sai; `NOT_FOUND` với `details.missing` nếu `profileIds` có mã lạ; `BUSY` nếu đang đăng, đang kiểm tra đăng nhập hoặc đang theo dõi | không |
+| `posts.trackStatus` | không | `{ running, jobId, progress: { done, total }, last }`; `last` là kết quả lần gần nhất (gồm lỗi từng nhóm) hoặc `null` | không |
+| `posts.trackCancel` | không | `{ cancelled: boolean }`. Dừng sau trang đang đọc | không |
+| `posts.list` | `from`, `to` (epoch ms; mặc định 30 ngày gần nhất), `linkStatus` (`known`/`missing`/`pending_approval`/`not_found`), `groupUrl`, `profileId`, `limit` (1–500), `offset` | `{ total, rows[] }`: các bài theo dõi kèm `latestStats` (lần đo mới nhất hoặc `null`) | không |
+| `posts.stats` | **`groupBy`** (`group`/`profile`/`schedule`/`day`/`post`), `from`, `to`, `limit` (1–500) | `{ rows[] }`: số bài, có link, chờ duyệt, không tìm thấy, nghi bị xoá, reactions/comments/shares (lần đo mới nhất), tương tác trung bình, `engagementRate` (`null` nếu chưa biết số thành viên nhóm) | không |
+| `posts.trackConfig` | `config` (`{ autoEnabled, linkRetryMinutes[], statsAtMinutes[] }`; mỗi mảng 1–10 số tăng dần, 5–20160 phút). Không truyền = chỉ đọc | `{ config }`. `INVALID_PARAMS` nếu `config` sai | không |
 
 `run.status` nhận một trong `running`, `done`, `cancelled`, `failed`, `missed`.
 
@@ -210,6 +216,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `profile.loginProblem` | Trạng thái đăng nhập lưu của profile chuyển sang `logged_out` hoặc `checkpoint` (từ trạng thái khác, kể cả `unknown`); giữ nguyên thì không phát lại | `{ profileId, profileName, state, source }`; `source` là `check` hoặc `run` |
 | `profiles.checkFinished` | Một lượt kiểm tra đăng nhập kết thúc | `{ checkId, source: "manual"\|"api"\|"daily", results: [{ profileId, profileName, outcome, error? }] }`; `outcome` là `ok`, `logged_out`, `checkpoint`, `error`, `skipped`; `error` chỉ có khi `outcome = error` |
 | `research.finished` | Một lượt quét Nghiên cứu kết thúc (xong, lỗi hoặc bị huỷ) | `{ scanId, source, query, status, errorCode, itemCount }`; lấy kết quả bằng `research.get` |
+| `posts.trackFinished` | Một lượt theo dõi bài đăng kết thúc (xong, huỷ hoặc có lỗi; cả lượt do người dùng bấm hay MaiHub tự chạy) | `{ jobId, auto, cancelled, groups, checked, found, linked, removedSuspected, notFound, errors }`; `auto` là `true` khi MaiHub tự chạy, `errors` là số nhóm lỗi; chi tiết bằng `posts.trackStatus` |
 
 Sau `run.finished`, gọi `runs.get` với `runId` để lấy link bài và chi tiết từng đích.
 

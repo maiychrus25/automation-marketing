@@ -38,6 +38,7 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
   const real = createControlMethods({
     poster: (opts.poster ?? {}) as any,
     research: {} as any,
+    tracking: {} as any,
     listProfiles: () => [],
     checkLogins: (ids) => ({ checkId: 'c1', profileIds: ids ?? [] }),
     systemStatus: () => ({}),

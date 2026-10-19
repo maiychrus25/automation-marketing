@@ -1087,6 +1087,10 @@ def format_event(event, fetch_run):
     elif etype == "profile.loginProblem":
         what = "bị checkpoint" if payload.get("state") == "checkpoint" else "hết phiên đăng nhập"
         lines = ["🔒 Profile \"%s\": %s" % (clip(payload.get("profileName") or "", MAX_FIELD_CHARS), what), "Mở MaiHub để đăng nhập lại."]
+    elif etype == "posts.trackFinished":
+        linked, removed = (int(payload.get(k) or 0) for k in ("linked", "removedSuspected"))
+        if linked > 0 or removed > 0:  # không có link mới và không có bài bị xoá thì không báo
+            lines = ["📈 Theo dõi bài: kiểm tra %d nhóm, lấy được %d link, %d bài có thể đã bị xoá" % (int(payload.get("groups") or 0), linked, removed)]
     return clip("\n".join(lines), MAX_MESSAGE_CHARS) if lines else None
 
 

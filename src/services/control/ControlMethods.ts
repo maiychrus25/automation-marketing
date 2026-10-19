@@ -77,11 +77,23 @@ export interface ResearchPort {
     cancel(): any;
 }
 
+/** Các thao tác theo dõi bài đăng (`trackingOperations`); kiểm tra tham số nằm ở đó. */
+export interface TrackingPort {
+    track(params: any): any;
+    status(): any;
+    cancel(): any;
+    list(params?: any): any;
+    stats(params: any): any;
+    getConfig(): any;
+    setConfig(params: any): any;
+}
+
 export interface ControlEventRow { seq: number; type: string; payload: unknown; createdAt: number }
 
 export interface ControlMethodDeps {
     poster: PosterPort;
     research: ResearchPort;
+    tracking: TrackingPort;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
     checkLogins(profileIds: string[] | null): { checkId: string; profileIds: string[] };
@@ -452,6 +464,84 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             paramsSchema: obj({}),
             resultSchema: obj({ cancelled: { type: 'boolean', description: 'true nếu có lượt quét bị huỷ' } }, ['cancelled']),
             run: async () => deps.research.cancel(),
+        },
+        {
+            name: 'posts.track',
+            description: 'Lấy link và đo tương tác các bài đã đăng nhóm bằng cách đọc bảng tin nhóm (chỉ đọc). Chạy nền, trả jobId ngay; xong có sự kiện posts.trackFinished, xem tiến độ bằng posts.trackStatus. MaiHub cũng tự chạy định kỳ. BUSY nếu đang đăng, đang kiểm tra đăng nhập hoặc đang theo dõi; profileIds lạ → NOT_FOUND kèm details.missing.',
+            destructive: false,
+            paramsSchema: obj({
+                sinceDays: int('Chỉ xét bài đăng trong bấy nhiêu ngày gần đây (1–14, mặc định 3)', { minimum: 1, maximum: 14 }),
+                groupUrls: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 30, description: 'Chỉ các nhóm này (1–30 link)' },
+                profileIds: { type: 'array', items: { type: 'string', minLength: 1 }, maxItems: 50, description: 'Chỉ các profile này; bỏ trống = mọi profile' },
+            }),
+            resultSchema: obj({ jobId: str('Mã lượt theo dõi'), pairs: { type: 'array', items: { type: 'object' }, description: 'Các cặp { profileId, groupUrl } sẽ đọc' } }, ['jobId', 'pairs']),
+            run: async (p) => deps.tracking.track(pick(p, ['sinceDays', 'groupUrls', 'profileIds'])),
+        },
+        {
+            name: 'posts.trackStatus',
+            description: 'Trạng thái lượt theo dõi bài đăng: đang chạy không, tiến độ và kết quả lần gần nhất (kể cả lỗi từng nhóm).',
+            destructive: false,
+            paramsSchema: obj({}),
+            resultSchema: obj({
+                running: { type: 'boolean' }, jobId: { type: ['string', 'null'] },
+                progress: { type: 'object', description: '{ done, total }' }, last: { type: ['object', 'null'], description: 'Kết quả lần gần nhất' },
+            }, ['running', 'jobId', 'progress', 'last']),
+            run: async () => deps.tracking.status(),
+        },
+        {
+            name: 'posts.trackCancel',
+            description: 'Huỷ lượt theo dõi bài đăng đang chạy (nếu có); dừng sau trang đang đọc.',
+            destructive: false,
+            paramsSchema: obj({}),
+            resultSchema: obj({ cancelled: { type: 'boolean', description: 'true nếu có lượt bị huỷ' } }, ['cancelled']),
+            run: async () => deps.tracking.cancel(),
+        },
+        {
+            name: 'posts.list',
+            description: 'Các bài đã đăng nhóm đang được theo dõi, kèm link, trạng thái link (known/pending_approval/missing/not_found) và lần đo mới nhất. Mặc định 30 ngày gần nhất.',
+            destructive: false,
+            paramsSchema: obj({
+                from: int('Từ thời điểm (epoch ms)', { minimum: 0 }),
+                to: int('Đến thời điểm (epoch ms)', { minimum: 0 }),
+                linkStatus: { type: 'string', enum: ['known', 'missing', 'pending_approval', 'not_found'], description: 'Lọc theo trạng thái link' },
+                groupUrl: str('Lọc theo link nhóm'),
+                profileId: str('Lọc theo profile'),
+                limit: int('Tối đa bao nhiêu dòng (1–500)', { minimum: 1, maximum: 500 }),
+                offset: int('Bỏ qua bao nhiêu dòng đầu', { minimum: 0 }),
+            }),
+            resultSchema: obj({ total: int('Tổng số dòng khớp'), rows: { type: 'array', items: { type: 'object' }, description: 'Các dòng trong trang' } }, ['total', 'rows']),
+            run: async (p) => deps.tracking.list(pick(p, ['from', 'to', 'linkStatus', 'groupUrl', 'profileId', 'limit', 'offset'])),
+        },
+        {
+            name: 'posts.stats',
+            description: 'Báo cáo hiệu quả bài đăng nhóm theo nhóm / profile / lịch / ngày / từng bài: số bài, số có link, chờ duyệt, nghi bị xoá, reactions/comments/shares (lần đo mới nhất), tương tác trung bình và tỉ lệ so với số thành viên nhóm (null nếu chưa biết).',
+            destructive: false,
+            paramsSchema: obj({
+                groupBy: { type: 'string', enum: ['group', 'profile', 'schedule', 'day', 'post'], description: 'Gom theo' },
+                from: int('Từ thời điểm (epoch ms; mặc định 30 ngày trước)', { minimum: 0 }),
+                to: int('Đến thời điểm (epoch ms)', { minimum: 0 }),
+                limit: int('Tối đa bao nhiêu dòng (1–500)', { minimum: 1, maximum: 500 }),
+            }, ['groupBy']),
+            resultSchema: obj({ rows: { type: 'array', items: { type: 'object' }, description: 'Các dòng báo cáo' } }, ['rows']),
+            run: async (p) => deps.tracking.stats(pick(p, ['groupBy', 'from', 'to', 'limit'])),
+        },
+        {
+            name: 'posts.trackConfig',
+            description: 'Đọc hoặc lưu cấu hình tự động lấy link và đo tương tác. Không truyền config = chỉ đọc; có config = lưu rồi trả cấu hình mới. Cấu hình: autoEnabled (boolean), linkRetryMinutes và statsAtMinutes (mỗi mảng 1–10 số tăng dần, 5–20160 phút).',
+            destructive: false,
+            paramsSchema: obj({
+                config: {
+                    type: 'object',
+                    properties: {
+                        autoEnabled: { type: 'boolean' },
+                        linkRetryMinutes: { type: 'array', items: { type: 'integer', minimum: 5, maximum: 20160 }, minItems: 1, maxItems: 10 },
+                        statsAtMinutes: { type: 'array', items: { type: 'integer', minimum: 5, maximum: 20160 }, minItems: 1, maxItems: 10 },
+                    },
+                    description: 'Cấu hình cần lưu; bỏ trống để chỉ đọc',
+                },
+            }),
+            resultSchema: obj({ config: { type: 'object', description: 'Cấu hình hiện hành' } }, ['config']),
+            run: async (p) => (p.config === undefined ? deps.tracking.getConfig() : deps.tracking.setConfig(p.config)),
         },
     ];
 
