@@ -219,8 +219,8 @@ test('đăng thành công 2 targets: tổng hợp kết quả đúng, đóng con
       // Không có phản hồi GraphQL và không có bài "[role=article]" nào trong
       // DOM giả lập, nên đường dự phòng cũng không bắt được link — đúng theo
       // thiết kế: thà không có link còn hơn vớ nhầm bài của người khác.
-      { url: 'https://www.facebook.com/groups/123456789/', ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '' },
-      { url: 'https://www.facebook.com/mytrang', ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '' },
+      { url: 'https://www.facebook.com/groups/123456789/', ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '', errorCode: '', attempts: 1 },
+      { url: 'https://www.facebook.com/mytrang', ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '', errorCode: '', attempts: 1 },
     ],
   });
   assert.deepStrictEqual(clicked, ['publish', 'publish'], 'nút Đăng phải được bấm bằng click tin cậy qua locator, mỗi đích một lần');
@@ -266,10 +266,12 @@ test('không mở được hộp soạn thảo thì phải báo lỗi, không g�
       // postToSingleTarget ném lỗi (page.waitForFunction không có trong mock) thay vì
       // trả về false êm — nên error là message của exception, không phải
       // câu mặc định 'Không đăng được (xem nhật ký)'.
-      error: 'page.waitForFunction is not a function',
+      error: 'Lỗi bất ngờ: page.waitForFunction is not a function',
       postUrl: null,
       commentStatus: 'not_requested',
       identity: '',
+      errorCode: 'unexpected_error',
+      attempts: 1,
     },
   ]);
   assert.strictEqual(result.posted, 0);
@@ -312,7 +314,7 @@ test('bấm đăng xong mà dialog không đóng thì coi như chưa đăng đư
   // Chốt: phải fail êm qua nhánh dialog-không-đóng (ok:false), không phải vì
   // mock thiếu method rồi ném lỗi lên tận postToTargets — hai lý do fail rất
   // khác nhau nhưng posted/failed giống hệt nhau nên dễ lẫn.
-  assert.strictEqual(result.results[0].error, null,
+  assert.strictEqual(result.results[0].errorCode, 'uncertain_after_submit',
     'phải fail êm qua ok:false, không phải fail vì mock thiếu method');
   assert.ok(clicked.includes('publish'), 'đã click Đăng (click tin cậy) nhưng không có bằng chứng bài đi');
   assert.strictEqual(closed.length, 1);
@@ -1343,4 +1345,93 @@ test('does not click publish when stopped right before the click', async () => {
   ));
   assert.ok(!events.includes('enter'));
   assert.ok(!events.includes('click:publish'));
+});
+
+/** Trang giả cho từng điểm thất bại: `answers` ghi đè kết quả evaluate theo tên hàm. */
+function scenarioPage(answers: Record<string, unknown> = {}, over: Record<string, unknown> = {}) {
+  const base = pageForCritical();
+  const defaults: Record<string, unknown> = {
+    composerIsOpenInPage: true, focusEditorInPage: true, markPublishButtonInPage: true,
+  };
+  return {
+    ...base,
+    waitForFunction: async () => { throw new Error('hết giờ (giả lập)'); },
+    evaluate: async (fn: AnyFn) => (fn.name in answers ? answers[fn.name] : (defaults[fn.name] ?? false)),
+    ...over,
+  } as unknown as FakePage;
+}
+
+async function runScenario(page: FakePage, opts: { mediaPaths?: string[]; deps?: Partial<TaskDeps> } = {}) {
+  const ra = await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', mediaPaths: opts.mediaPaths, targets: ['https://www.facebook.com/groups/1/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page, opts.deps),
+  ));
+  return ra.results[0];
+}
+
+test('maps each failure point to its error code and message', async () => {
+  const cases: Array<{ name: string; page: FakePage; media?: string[]; code: string; error: string }> = [
+    { name: 'no composer', page: scenarioPage({ composerIsOpenInPage: false }), code: 'composer_not_found',
+      error: 'Không mở được hộp soạn thảo (không thấy ô "Bạn đang nghĩ gì…")' },
+    { name: 'no media button', page: scenarioPage({ clickMediaButtonInDialog: false }), media: ['/a.jpg'], code: 'media_failed',
+      error: 'Không thấy nút Ảnh/Video trong hộp soạn thảo' },
+    { name: 'no file input', page: scenarioPage({ clickMediaButtonInDialog: true }), media: ['/a.jpg'], code: 'media_failed',
+      error: 'Không tìm thấy ô tải tệp trong hộp soạn thảo' },
+    { name: 'upload not finished', page: mediaPage({ multiple: true, progress: () => 1 }).page as unknown as FakePage, media: ['/a.jpg'],
+      code: 'media_failed', error: 'Ảnh chưa tải lên xong' },
+    { name: 'editor not focusable', page: scenarioPage({ focusEditorInPage: false }), code: 'editor_not_focusable',
+      error: 'Không đặt được con trỏ vào ô nhập nội dung' },
+    { name: 'last step has no publish', page: scenarioPage({ clickNextInDialog: true }), code: 'submit_not_ready',
+      error: 'Bước cuối của composer không hiện nút Đăng' },
+    { name: 'publish disabled', page: scenarioPage({ isPublishDisabledInPage: true }), code: 'submit_not_ready',
+      error: 'Nút Đăng đang tắt — Facebook chưa ghi nhận nội dung trong ô soạn' },
+    { name: 'publish not found', page: scenarioPage({ markPublishButtonInPage: false }), code: 'submit_not_found',
+      error: 'Không tìm thấy nút Đăng' },
+    { name: 'dialog not closed', page: scenarioPage({}, { waitForSelector: async () => { throw new Error('x'); } }),
+      code: 'uncertain_after_submit',
+      error: 'Đã click Đăng nhưng hộp soạn thảo không đóng — bài chưa lên — có thể bài đã lên, kiểm tra trước khi đăng lại' },
+  ];
+  for (const c of cases) {
+    const r = await runScenario(c.page, { mediaPaths: c.media });
+    assert.strictEqual(r.ok, false, c.name);
+    assert.strictEqual(r.errorCode, c.code, c.name);
+    assert.strictEqual(r.error, c.error, c.name);
+    assert.strictEqual(r.attempts, 1, c.name);
+  }
+});
+
+test('stop check maps to stopped', async () => {
+  const r = await runScenario(scenarioPage(), { deps: { getIsStopping: (() => { let n = 0; return () => ++n > 1; })() } });
+  assert.strictEqual(r.errorCode, 'stopped');
+  assert.strictEqual(r.error, 'Đã dừng');
+});
+
+test('goto throwing maps to navigation_failed', async () => {
+  const page = scenarioPage({}, { goto: async (u: string) => { if (u.includes('/groups/')) throw new Error('net::ERR_TIMED_OUT'); } });
+  const r = await runScenario(page);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.errorCode, 'navigation_failed');
+  assert.strictEqual(r.error, 'Không tải được trang nhóm: net::ERR_TIMED_OUT');
+});
+
+test('exception before enterCritical maps to unexpected_error', async () => {
+  const page = scenarioPage({}, { keyboard: { type: async () => { throw new Error('page closed'); } } });
+  const r = await runScenario(page);
+  assert.strictEqual(r.errorCode, 'unexpected_error');
+  assert.strictEqual(r.error, 'Lỗi bất ngờ: page closed');
+});
+
+test('exception after enterCritical maps to uncertain_after_submit', async () => {
+  const page = scenarioPage({}, { off: () => { throw new Error('page closed'); } });
+  const r = await runScenario(page, { deps: { enterCritical: () => {} } });
+  assert.strictEqual(r.errorCode, 'uncertain_after_submit');
+  assert.ok(r.error?.includes('page closed'));
+  assert.ok(r.error?.includes('có thể bài đã lên, kiểm tra trước khi đăng lại'));
+});
+
+test('success has empty errorCode and one attempt', async () => {
+  const r = await runScenario(pageSuccessful() as unknown as FakePage);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.errorCode, '');
+  assert.strictEqual(r.attempts, 1);
 });

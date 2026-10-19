@@ -363,9 +363,30 @@ function publishLabelShownInDialogsInPage(labels: string[]): boolean {
   );
 }
 
+/** Mã lỗi của một lần đăng. Nhóm thử lại được nằm ở RETRYABLE_POST_ERRORS. */
+export type PostErrorCode =
+  | 'navigation_failed' | 'composer_not_found' | 'media_failed' | 'editor_not_focusable'
+  | 'submit_not_ready' | 'submit_not_found' | 'unexpected_error' | 'uncertain_after_submit'
+  | 'draft_conflict' | 'not_logged_in' | 'launch_failed' | 'stopped' | 'unknown';
+
+/** Lỗi xảy ra trước cú bấm Đăng nên thử lại không gây đăng trùng. */
+export const RETRYABLE_POST_ERRORS: ReadonlySet<PostErrorCode> = new Set<PostErrorCode>([
+  'navigation_failed', 'composer_not_found', 'media_failed', 'editor_not_focusable',
+  'submit_not_ready', 'submit_not_found', 'unexpected_error',
+]);
+
+const UNCERTAIN_SUFFIX = ' — có thể bài đã lên, kiểm tra trước khi đăng lại';
+
+/** Cắt thông báo gốc còn tối đa 200 ký tự. */
+const clip = (message: string): string => message.slice(0, 200);
+
 interface SingleTargetOutcome {
   ok: boolean;
   postUrl: string | null;
+  errorCode?: PostErrorCode;
+  error?: string;
+  /** true khi cú bấm Đăng đã được gửi đi (không được thử lại). */
+  afterSubmit?: boolean;
   commentStatus?: CommentStatus;
   /** Danh tính đọc được từ lời mời soạn bài ('' nếu không đọc được). */
   identity: string;
@@ -410,12 +431,18 @@ async function postToSingleTarget(
   const { url, kind } = target;
   const { getIsStopping, sendLog } = deps;
   let identity = '';
-  const failed = (): SingleTargetOutcome => ({ ok: false, postUrl: null, identity });
+  const failed = (errorCode: PostErrorCode, error: string, afterSubmit = false): SingleTargetOutcome =>
+    ({ ok: false, postUrl: null, identity, errorCode, error, afterSubmit });
+  const stopped = () => failed('stopped', 'Đã dừng');
 
   sendLog(`[Đăng Bài] Đang truy cập: ${url}`, 'info');
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  } catch (e) {
+    return failed('navigation_failed', `Không tải được trang nhóm: ${clip((e as Error).message)}`);
+  }
   await delayRandom(1000, 2000);
-  if (getIsStopping()) return failed();
+  if (getIsStopping()) return stopped();
 
   // 1. Mở hộp soạn thảo — luôn luôn, kể cả khi có media. Lối tắt cũ (click
   // "Ảnh/Video" ngoài feed để mở thẳng composer kèm đính kèm) bắt trúng nút
@@ -454,9 +481,9 @@ async function postToSingleTarget(
   // Chốt chặn: thà báo lỗi còn hơn gõ nhầm vào ô bình luận của bài khác.
   if (!(await page.evaluate(composerIsOpenInPage, EDITOR_SELECTORS))) {
     sendLog(`[${kind}] [ERROR] Không mở được hộp soạn thảo: ${url}`, 'error');
-    return failed();
+    return failed('composer_not_found', 'Không mở được hộp soạn thảo (không thấy ô "Bạn đang nghĩ gì…")');
   }
-  if (getIsStopping()) return failed();
+  if (getIsStopping()) return stopped();
 
   // Composer Page dạng trang riêng: không có dialog, không có bước Next, và
   // bằng chứng đăng xong là RỜI TRANG /post/create chứ không phải dialog đóng.
@@ -473,7 +500,7 @@ async function postToSingleTarget(
       sendLog('[Đăng Bài] Đang mở phần đính kèm Ảnh/Video trong hộp soạn thảo...', 'info');
       if (!(await page.evaluate(clickMediaButtonInDialog))) {
         sendLog(`[${kind}] [ERROR] Không thấy nút Ảnh/Video trong hộp soạn thảo: ${url}`, 'error');
-        return failed();
+        return failed('media_failed', 'Không thấy nút Ảnh/Video trong hộp soạn thảo');
       }
       await page.waitForSelector(FILE_INPUT_SELECTOR, { state: 'attached', timeout: 20000 })
         .catch(() => {});
@@ -481,7 +508,7 @@ async function postToSingleTarget(
     }
     if (!input) {
       sendLog(`[${kind}] [ERROR] Không tìm thấy ô tải tệp trong hộp soạn thảo: ${url}`, 'error');
-      return failed();
+      return failed('media_failed', 'Không tìm thấy ô tải tệp trong hộp soạn thảo');
     }
     sendLog(`[Đăng Bài] Đang nạp ${mediaPaths.length} tệp media đính kèm...`, 'warning');
     // ĐO ĐƯỢC 07/10/2026 (hộp "Tạo bài viết" cá nhân): ô tải tệp có multiple=true,
@@ -497,7 +524,7 @@ async function postToSingleTarget(
         const slot = k === 1 ? input : await page.$(FILE_INPUT_SELECTOR).catch(() => null);
         if (!slot) {
           sendLog(`[${kind}] [ERROR] Không đính kèm được ảnh thứ ${k}: ${url}`, 'error');
-          return failed();
+          return failed('media_failed', `Không đính kèm được ảnh thứ ${k}`);
         }
         await slot.setInputFiles(mediaPaths[k - 1]);
         await delayRandom(1500, 2500);
@@ -512,7 +539,7 @@ async function postToSingleTarget(
     const maxPolls = 15 + 5 * mediaPaths.length;
     let uploaded = false;
     for (let i = 0; i < maxPolls && !uploaded; i++) {
-      if (getIsStopping()) return failed();
+      if (getIsStopping()) return stopped();
       const state = await page
         .evaluate(readUploadStateInPage, { editorSelectors: EDITOR_SELECTORS, labels: PUBLISH_LABELS })
         .catch(() => null);
@@ -522,29 +549,29 @@ async function postToSingleTarget(
     }
     if (!uploaded) {
       sendLog(`[${kind}] [ERROR] Ảnh chưa tải lên xong: ${url}`, 'error');
-      return failed();
+      return failed('media_failed', 'Ảnh chưa tải lên xong');
     }
   }
   // Hộp chọn tệp gốc không nhận nhiều tệp: không đăng bài thiếu ảnh.
   if (deps.attachShortfall?.()) {
     sendLog(`[${kind}] [ERROR] Không đính kèm được ảnh thứ 2: ${url}`, 'error');
-    return failed();
+    return failed('media_failed', 'Không đính kèm được ảnh thứ 2');
   }
-  if (getIsStopping()) return failed();
+  if (getIsStopping()) return stopped();
   await delayRandom(500, 1000);
 
   // 3. Gõ nội dung
   if (!(await page.evaluate(focusEditorInPage, EDITOR_SELECTORS))) {
     sendLog(`[${kind}] [ERROR] Không focus được ô nhập trong hộp soạn thảo: ${url}`, 'error');
-    return failed();
+    return failed('editor_not_focusable', 'Không đặt được con trỏ vào ô nhập nội dung');
   }
   for (const char of text) {
-    if (getIsStopping()) return failed();
+    if (getIsStopping()) return stopped();
     await page.keyboard.type(char);
     await delayRandom(50, 140);
   }
   await delayRandom(1000, 2000);
-  if (getIsStopping()) return failed();
+  if (getIsStopping()) return stopped();
 
   // 4. Bấm đăng. Composer DIALOG của Page (bản cũ) phải qua bước "Next" trước;
   // trang /post/create không có bước này (đo được) nên bỏ qua hẳn.
@@ -559,7 +586,7 @@ async function postToSingleTarget(
       .catch(() => false);
     if (!ready) {
       sendLog(`[${kind}] [ERROR] Bước cuối của composer không hiện nút Đăng: ${url}`, 'error');
-      return failed();
+      return failed('submit_not_ready', 'Bước cuối của composer không hiện nút Đăng');
     }
     await delayRandom(1000, 2000);
   }
@@ -595,10 +622,10 @@ async function postToSingleTarget(
     // Báo đúng nguyên nhân ngay, thay vì bấm hụt rồi chờ 30 giây báo mơ hồ.
     if (await page.evaluate(isPublishDisabledInPage, PUBLISH_LABELS).catch(() => false)) {
       sendLog(`[${kind}] [ERROR] Nút Đăng đang tắt — Facebook chưa ghi nhận nội dung trong ô soạn: ${url}`, 'error');
-      return failed();
+      return failed('submit_not_ready', 'Nút Đăng đang tắt — Facebook chưa ghi nhận nội dung trong ô soạn');
     }
     // Lần kiểm cuối: Hủy bấm trong lúc chờ ở trên thì không được bấm Đăng.
-    if (getIsStopping()) return failed();
+    if (getIsStopping()) return stopped();
     // Từ đây là điểm không quay lại: Hủy không được đóng trình duyệt tới khi có kết quả.
     deps.enterCritical?.();
     sendLog('[Đăng Bài] Đang click nút Đăng bài...', 'info');
@@ -633,7 +660,8 @@ async function postToSingleTarget(
 
     if (!published) {
       sendLog(`[${kind}] [ERROR] Không tìm thấy nút Đăng: ${url}`, 'error');
-      return failed();
+      // Chưa có cú bấm nào (dù đã enterCritical) nên vẫn là lỗi trước khi bấm.
+      return failed('submit_not_found', 'Không tìm thấy nút Đăng');
     }
 
     // Đóng modal gợi ý nếu Facebook chen vào, trước khi kết luận.
@@ -655,10 +683,11 @@ async function postToSingleTarget(
         .then(() => true).catch(() => false);
 
     if (!dialogClosed) {
-      sendLog(isStandalonePage
-        ? `[${kind}] [ERROR] Đã click Đăng nhưng vẫn ở trang /post/create — bài chưa lên: ${url}`
-        : `[${kind}] [ERROR] Đã click Đăng nhưng hộp soạn thảo không đóng — bài chưa lên: ${url}`, 'error');
-      return failed();
+      const reason = isStandalonePage
+        ? 'Đã click Đăng nhưng vẫn ở trang /post/create — bài chưa lên'
+        : 'Đã click Đăng nhưng hộp soạn thảo không đóng — bài chưa lên';
+      sendLog(`[${kind}] [ERROR] ${reason}: ${url}`, 'error');
+      return failed('uncertain_after_submit', reason + UNCERTAIN_SUFFIX, true);
     }
   } finally {
     page.off('response', listenToResponse);
@@ -715,6 +744,10 @@ export interface PostTargetResult {
   commentStatus: CommentStatus;
   /** Danh tính đọc được từ lời mời soạn bài của đích này ('' nếu không đọc được). */
   identity: string;
+  /** '' khi thành công. */
+  errorCode: PostErrorCode | '';
+  /** Số lần đã thử (≥ 1). */
+  attempts: number;
 }
 
 export interface PostInput {
@@ -796,23 +829,32 @@ export async function postToTargets(
       let commentStatus: CommentStatus = 'not_requested';
       let identity = '';
       let waitedMs = 0;
+      let errorCode: PostErrorCode | '' = '';
+      // Đã qua điểm không quay lại trong lần thử này chưa (để phân loại ngoại lệ).
+      let enteredCritical = false;
       chooserShortfall = false;
       try {
         try {
           const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment, commentDelayMin },
-            { getIsStopping, sendLog, enterCritical: deps.enterCritical, attachShortfall: () => chooserShortfall });
+            { getIsStopping, sendLog, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall });
           // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
           // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
           ok = single.ok;
           postUrl = single.postUrl;
           identity = single.identity;
           waitedMs = single.waitedMs ?? 0;
+          if (!single.ok) {
+            errorCode = single.errorCode ?? 'unknown';
+            error = single.error ?? null;
+          }
           if (single.commentStatus) commentStatus = single.commentStatus;
         } catch (err) {
-          error = (err as Error).message;
+          const message = clip((err as Error).message);
+          errorCode = enteredCritical ? 'uncertain_after_submit' : 'unexpected_error';
+          error = enteredCritical ? `Lỗi bất ngờ sau khi bấm Đăng: ${message}${UNCERTAIN_SUFFIX}` : `Lỗi bất ngờ: ${message}`;
           sendLog(`Lỗi khi đăng ${target.url}: ${(err as Error).message}`, 'error');
         }
-        const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity };
+        const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity, errorCode, attempts: 1 };
         results.push(entry);
         // Báo ngay khi đích này xong để nơi gọi ghi lịch sử/hiển thị từng bước,
         // không đợi cả lượt.
