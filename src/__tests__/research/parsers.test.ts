@@ -189,3 +189,61 @@ describe('describeShape', () => {
         expect(describeShape({ a: null, b: true })).toEqual(expect.arrayContaining(['a:null', 'b:bool']));
     });
 });
+
+describe('cursor rules', () => {
+    const edge = (id: string, extra: Record<string, unknown> = {}) => ({
+        rendering_strategy: { view_model: { click_model: { story: { post_id: id, ...extra } } } },
+    });
+    const wrap = (results: Record<string, unknown>) => JSON.stringify({ data: { serpResponse: { results } } });
+    it('last page with null cursor stops, even if a comment cursor exists nearby', () => {
+        const t = wrap({
+            edges: [edge('222222222222251', { comments: { edges: [], page_info: { end_cursor: 'CURSOR_COMMENT', has_next_page: true } } })],
+            page_info: { end_cursor: null, has_next_page: false },
+        });
+        const r = parseSearchPosts(t);
+        expect(r.items).toHaveLength(1);
+        expect(r.endCursor).toBeNull();
+    });
+    it('has_next_page false wins over a cursor', () => {
+        expect(parseSearchPosts(wrap({ edges: [edge('222222222222252')], page_info: { end_cursor: 'C', has_next_page: false } })).endCursor).toBeNull();
+    });
+    it('ignores page_info nested inside a story when the documented one is absent', () => {
+        const t = wrap({ edges: [edge('222222222222253', { comments: { edges: [], page_info: { end_cursor: 'CURSOR_COMMENT', has_next_page: true } } })] });
+        expect(parseSearchPosts(t).endCursor).toBeNull();
+    });
+    it('uses a page_info sibling of edges when the documented path is absent', () => {
+        const t = JSON.stringify({ data: { other: { edges: [edge('222222222222254')], page_info: { end_cursor: 'CURSOR_SIBLING', has_next_page: true } } } });
+        expect(parseSearchPosts(t).endCursor).toBe('CURSOR_SIBLING');
+    });
+    it('uses a defer chunk page_info for the same connection', () => {
+        expect(parseSearchPosts(fx('search-posts.txt')).endCursor).toBe('CURSOR_POSTS_NEXT');
+    });
+});
+
+describe('error classification: not found', () => {
+    it('only persisted-query related messages are query_changed', () => {
+        const mk = (message: string) => JSON.stringify({ data: null, errors: [{ message }] });
+        expect(parseSearchPosts(mk('Group not found')).errorCode).toBe('parse_failed');
+        expect(parseSearchPosts(mk('Page not found')).errorCode).toBe('parse_failed');
+        expect(parseSearchPosts(mk('Query not found')).errorCode).toBe('query_changed');
+        expect(parseSearchPosts(mk('Document not found for doc_id 1')).errorCode).toBe('query_changed');
+        expect(parseSearchPosts(mk('PersistedQueryNotFound')).errorCode).toBe('query_changed');
+    });
+});
+
+describe('describeShape key privacy', () => {
+    it('replaces id-like and name-like keys with <key>', () => {
+        const shape = describeShape({
+            byId: { '100000000000001': { n: 1 }, '100000000000002': { n: 2 } },
+            byName: { 'Người Dùng A': { n: 1 }, 'Người Dùng B': { n: 2 } },
+            long: { ['x'.repeat(41)]: 1 },
+        }, 8, 400);
+        const text = shape.join('\n');
+        expect(text).not.toContain('100000000000001');
+        expect(text).not.toContain('Người');
+        expect(text).not.toContain('xxxxxxxx');
+        expect(shape).toContain('byId.<key>.n:number');
+        expect(shape.filter((s) => s.startsWith('byId.<key>.n'))).toHaveLength(1);
+        expect(shape).toContain('byName.<key>:object');
+    });
+});

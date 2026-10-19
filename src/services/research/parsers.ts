@@ -51,17 +51,19 @@ function findKey(root: unknown, key: string, accept: (v: unknown) => boolean = (
     return walk(root, (n) => (key in n && accept(n[key]) ? n[key] : undefined));
 }
 
-/** Mọi giá trị của khoá `key` (không đi sâu vào bên trong giá trị đã khớp). */
-function findAllKeys(root: unknown, key: string, accept: (v: unknown) => boolean): unknown[] {
-    const found: unknown[] = [];
+/** Bên trong bài/bình luận/feedback: không lấy kết nối (edges, page_info) từ đây. */
+const NESTED_KEYS = new Set(['comet_sections', 'feedback', 'comments', 'story']);
+const isStoryNode = (n: Obj): boolean => 'post_id' in n;
+
+/** Mọi nút có khoá `key` hợp lệ (không đi sâu vào giá trị đã khớp, bỏ qua phần bên trong bài viết). */
+function findAllHolders(root: unknown, key: string, accept: (v: unknown) => boolean): Obj[] {
+    const found: Obj[] = [];
     const rec = (v: unknown, depth: number): void => {
         if (depth > MAX_DEPTH) return;
         if (Array.isArray(v)) { v.forEach((x) => rec(x, depth + 1)); return; }
-        if (!isObj(v)) return;
-        for (const [k, child] of Object.entries(v)) {
-            if (k === key && accept(child)) found.push(child);
-            else rec(child, depth + 1);
-        }
+        if (!isObj(v) || isStoryNode(v)) return;
+        if (key in v && accept(v[key])) { found.push(v); return; }
+        for (const [k, child] of Object.entries(v)) if (!NESTED_KEYS.has(k)) rec(child, depth + 1);
     };
     rec(root, 0);
     return found;
@@ -154,7 +156,7 @@ function detectError(chunks: unknown[]): ResearchErrorCode | null {
     if (codes.has('1357001') || codes.has('1357004')) return 'logged_out';
     if (['1390008', '368', '1675004'].some((c) => codes.has(c))
         || /temporarily blocked|tạm thời bị chặn|rate limit|too many/.test(t)) return 'rate_limited';
-    if (/persistedquerynotfound|doc_id|not found/.test(t)) return 'query_changed';
+    if (/persistedquery|doc_id|(?:query|document)\W+(?:\w+\W+){0,3}not found|not found\W+(?:\w+\W+){0,3}(?:query|document)/.test(t)) return 'query_changed';
     return null;
 }
 
@@ -179,17 +181,31 @@ function collectEdges(chunks: unknown[], documented: string[]): unknown[] {
         return Array.isArray(e) ? e : [];
     });
     if (direct.length > 0) return direct;
-    return chunks.flatMap((c) => findAllKeys(c, 'edges', Array.isArray).flatMap((e) => e as unknown[]));
+    return chunks.flatMap((c) => findAllHolders(c, 'edges', Array.isArray).flatMap((h) => h.edges as unknown[]));
 }
 
-function findCursor(chunks: unknown[], documented: string[]): string | null {
+/** Con trỏ trang kế: null nếu hết trang (end_cursor rỗng hoặc has_next_page === false). */
+function cursorOf(pageInfo: Obj): string | null {
+    const cursor = pageInfo.end_cursor;
+    return typeof cursor === 'string' && cursor !== '' && pageInfo.has_next_page !== false ? cursor : null;
+}
+
+/**
+ * Đường dẫn dự kiến quyết định nếu `page_info` tồn tại (kể cả khi hết trang).
+ * Chỉ khi vắng mặt mới dùng `page_info` cùng cấp với `edges` (ngoài bài viết), hoặc `data.page_info` của chunk defer.
+ */
+function findCursor(chunks: unknown[], documentedPageInfo: string[]): string | null {
     for (const c of chunks) {
-        const v = getPath(c, documented);
-        if (typeof v === 'string' && v) return v;
+        const pi = getPath(c, documentedPageInfo);
+        if (isObj(pi)) return cursorOf(pi);
     }
     for (const c of chunks) {
-        const v = findKey(c, 'end_cursor', (x) => typeof x === 'string' && x !== '');
-        if (typeof v === 'string') return v;
+        const holder = findAllHolders(c, 'page_info', isObj).find((h) => Array.isArray(h.edges));
+        if (holder) return cursorOf(holder.page_info as Obj);
+    }
+    for (const c of chunks) {
+        const pi = getPath(c, ['data', 'page_info']);
+        if (isObj(pi)) return cursorOf(pi);
     }
     return null;
 }
@@ -280,7 +296,7 @@ export function parseSearchPosts(text: string): ParseResult {
         const item = story ? parseStory(story) : null;
         if (item) items.push(item);
     }
-    return finish(items, chunks, findCursor(chunks, ['data', 'serpResponse', 'results', 'page_info', 'end_cursor']));
+    return finish(items, chunks, findCursor(chunks, ['data', 'serpResponse', 'results', 'page_info']));
 }
 
 export function parseGroupFeed(text: string, ctx?: GroupFeedContext): ParseResult {
@@ -293,7 +309,7 @@ export function parseGroupFeed(text: string, ctx?: GroupFeedContext): ParseResul
         const item = parseStory(story, ctx);
         if (item) items.push(item);
     }
-    return finish(items, chunks, findCursor(chunks, ['data', 'node', 'group_feed', 'page_info', 'end_cursor']));
+    return finish(items, chunks, findCursor(chunks, ['data', 'node', 'group_feed', 'page_info']));
 }
 
 // ---------- Nhóm và trang ----------
@@ -338,7 +354,7 @@ function parseProfileResults(text: string, kind: 'group' | 'page'): ParseResult 
         }
         items.push(item);
     }
-    return finish(items, chunks, findCursor(chunks, ['data', 'serpResponse', 'results', 'page_info', 'end_cursor']));
+    return finish(items, chunks, findCursor(chunks, ['data', 'serpResponse', 'results', 'page_info']));
 }
 
 export const parseSearchGroups = (text: string): ParseResult => parseProfileResults(text, 'group');
@@ -347,6 +363,11 @@ export const parseSearchPages = (text: string): ParseResult => parseProfileResul
 // ---------- Chẩn đoán hình dạng ----------
 
 const MAX_SHAPE_BYTES = 20 * 1024;
+
+/** Khoá có thể chứa dữ liệu cá nhân (ID, tên dùng làm khoá) được thay bằng `<key>`. */
+function safeKey(k: string): string {
+    return k.length > 40 || /^[\d.,-]+$/.test(k) || /[^A-Za-z0-9_$@.:-]/.test(k) ? '<key>' : k;
+}
 
 /** Danh sách "đường.dẫn:kiểu" của JSON, KHÔNG kèm giá trị (báo cáo spike mục 6). Độ sâu tính theo số khoá. */
 export function describeShape(value: unknown, maxDepth = 8, maxKeys = 400): string[] {
@@ -368,7 +389,7 @@ export function describeShape(value: unknown, maxDepth = 8, maxKeys = 400): stri
             if (path && !add(`${path}:object`)) return;
             for (const [k, child] of Object.entries(v)) {
                 if (out.size >= maxKeys) return;
-                rec(child, path ? `${path}.${k}` : k, depth + 1);
+                rec(child, path ? `${path}.${safeKey(k)}` : safeKey(k), depth + 1);
             }
         } else if (path) {
             add(`${path}:${v === null ? 'null' : typeof v === 'boolean' ? 'bool' : typeof v}`);
