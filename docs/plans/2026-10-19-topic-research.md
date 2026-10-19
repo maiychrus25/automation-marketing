@@ -299,3 +299,36 @@ Không viết code sản phẩm. Dùng một profile đã đăng nhập do anh c
   - Bot gọi `research.search` qua bridge (`maihub_bridge.py call`).
   - Hồi quy Đăng Facebook.
 - [ ] **Step 3:** Cập nhật version, changelog, dòng phiên bản trong tài liệu, trạng thái spec cùng "Ghi chú sau phát hành", và "Điều chỉnh khi triển khai" của plan. Merge, tag; anh push; kiểm tra CI.
+
+## Điều chỉnh khi triển khai (19/10/2026)
+
+1. **Task 0:** không đo được trên Facebook thật. Máy dev không có profile Facebook nào; VPS chỉ vào được qua Remmina (RDP) trên KDE Wayland, không có công cụ gửi phím/chuột. Thay vào đó:
+   - báo cáo cấu trúc viết từ kiến thức đã có (`docs/reports/2026-10-19-topic-research-spike.md`);
+   - dữ liệu mẫu tổng hợp;
+   - bộ đọc tìm theo tên khoá;
+   - `doc_id` học lúc chạy;
+   - chẩn đoán "hình dạng phản hồi" (chỉ khoá và kiểu, không giá trị).
+
+   Lần đo thật đầu tiên là khi chạy trên VPS.
+2. **Phân trang:**
+   - Con trỏ chỉ lấy từ `page_info` của đúng danh sách kết quả.
+   - Lặp con trỏ hoặc 2 trang liền không có mục mới thì dừng phần của profile đó. Tổng mỗi lượt tối đa `MAX_PAGES_PER_SCAN = 200` trang.
+   - Mỗi profile tối đa 50 mục mới (sau khi bỏ trùng). Mục thừa của trang được để lại cho profile sau đọc tiếp.
+   - Hai profile liên tiếp không dùng được con trỏ cũ thì dừng lượt quét với `details.note = 'cursor_not_portable'`.
+3. **Lỗi:**
+   - Request treo quá 30 giây thì bỏ qua profile đó (`rate_limited`).
+   - HTTP 401/403 tính là `rate_limited`, không đổi trạng thái đăng nhập.
+   - Chỉ khi bị chuyển tới `/login` hoặc `/checkpoint` mới tính là `logged_out` / `checkpoint`, và khi đó cập nhật trạng thái đăng nhập, gửi 🔒.
+   - Lỗi bất ngờ: `status = failed` với mã lỗi rỗng.
+   - Huỷ thì đóng ngay phiên trình duyệt đang mở.
+4. **Bảng tin nhóm:**
+   - Link nhóm dạng tên (slug) không bị dùng làm ID; MaiHub mở trang nhóm để lấy truy vấn đúng.
+   - Mỗi nhóm có trạng thái `not_member` / `unresolved` / `empty`.
+   - Không có nhóm nào để quét thì `details.note = 'no_groups'`.
+5. **An toàn:**
+   - Link lấy từ Facebook chỉ mở được khi là `https://` và thuộc `facebook.com` (kiểm ở main process, kênh `research:openLink`).
+   - Không cho bắt đầu quét khi đang đổi workspace.
+   - Lượt quét chưa dừng thì không cho đổi workspace.
+   - Ô Excel cắt còn 32.000 ký tự.
+6. **Thêm** `research:status`, `research:openLink` và `ResearchStore.countScans`. Tab Nghiên cứu được thêm vào menu Đăng Facebook.
+7. **Chạy thật ở dev** (dữ liệu tách riêng, profile chưa đăng nhập): mở trình duyệt, Facebook chuyển tới trang đăng nhập → `logged_out` → trạng thái đăng nhập cập nhật → lượt quét `done` / `no_profile_available`; giao diện cập nhật đúng.
