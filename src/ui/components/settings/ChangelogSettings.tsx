@@ -15,6 +15,33 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.20.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🔎 Nghiên cứu chủ đề: quét bài viết, nhóm, fanpage theo từ khoá và bài trong nhóm đã tham gia để lên chiến dịch',
+      '🤖 Bot AI gọi quét và đọc kết quả (tương tác, tỉ lệ trên số thành viên, người đăng) để tự đề xuất chiến dịch',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Đăng Facebook → Nghiên cứu: quét theo từ khoá (bài viết có lọc gần đây/theo năm, nhóm, fanpage) và bài trong các nhóm đã tham gia',
+          'Kết quả lưu theo từng lượt quét (giữ 180 ngày) để so sánh theo thời gian; bảng sắp theo tương tác, có người đăng và link; xuất Excel',
+          'Quét xoay vòng các profile sẵn có, mỗi profile có trần mỗi ngày (mặc định 500 mục) và ô "Không dùng để quét"; profile đang đăng bài không bị dùng',
+          'Gặp hết phiên hoặc checkpoint thì bỏ profile đó, cập nhật trạng thái đăng nhập và báo qua Telegram như kiểm tra đăng nhập',
+          'Control API thêm research.search, research.scanGroupFeeds, research.list, research.get, research.cancel và sự kiện research.finished',
+        ],
+      },
+      {
+        category: 'security',
+        items: [
+          'Chỉ mở link từ dữ liệu quét khi là https và thuộc facebook.com',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.19.0',
     date: '10/2026',
     type: 'minor',

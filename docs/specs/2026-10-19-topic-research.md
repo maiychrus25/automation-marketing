@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 19/10/2026 |
-| Trạng thái | Đã duyệt (19/10/2026) |
+| Trạng thái | Đã phát hành 26.20.0 (19/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-19-topic-research.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-19-topic-research.md` (đã duyệt) |
 | Nhánh | `feat/topic-research` |
@@ -273,3 +273,32 @@ Lỗi ở một profile (`logged_out`, `checkpoint`, `rate_limited`) không làm
 | Trái điều khoản Facebook | Anh đã chấp nhận rủi ro; chỉ đọc, giới hạn số lượng, không thu danh sách người dùng |
 | Hai trình duyệt chạy cùng lúc (đăng bài + quét) tốn RAM VPS | Một lượt quét mỗi lúc; lượt quét ngắn (vài phút) |
 | Dữ liệu cá nhân (tên, ID người đăng) | Chỉ lưu người đăng của bài (không quét danh sách thành viên hay người tương tác); chỉ dùng nội bộ; tự xoá sau 180 ngày; mẫu test trong repo dùng dữ liệu giả |
+
+## Ghi chú sau phát hành (26.20.0, 19/10/2026)
+
+Những chỗ code khác thân spec ở trên (chi tiết ở mục "Điều chỉnh khi triển khai" của plan):
+
+- **§2 Bước thử:** chưa đo được trên Facebook thật.
+  - Bộ đọc dựa trên cấu trúc API đã biết (`docs/reports/2026-10-19-topic-research-spike.md`), tìm theo tên khoá.
+  - `doc_id` và biến mẫu học lúc chạy.
+  - Khi đọc hỏng hoặc ra 0 mục, lượt quét lưu `details.shape` (chỉ đường dẫn khoá và kiểu, không có giá trị) để sửa nhanh.
+  - Lần chạy thật đầu tiên trên VPS là lần kiểm chứng.
+- **§3, §6 Phân trang và giới hạn:**
+  - Tối đa `MAX_PAGES_PER_SCAN = 200` trang mỗi lượt.
+  - Lặp con trỏ hoặc 2 trang liền không có mục mới thì dừng phần của profile đó.
+  - Hai profile liên tiếp không dùng lại được con trỏ thì dừng lượt quét với `details.note = 'cursor_not_portable'`.
+  - Request treo quá 30 giây thì bỏ qua profile đó.
+- **§7 Mã lỗi:**
+  - Chỉ chuyển hướng tới `/login` hoặc `/checkpoint` mới tính là `logged_out` / `checkpoint` (cập nhật trạng thái đăng nhập).
+  - HTTP 401/403 tính là `rate_limited`.
+  - Lỗi không lường trước: `status = failed`, `error_code` rỗng, câu `Lỗi nội bộ: …`.
+- **§4.1 `details_json`** có thêm:
+  - `note`: `cursor_not_portable` / `no_groups`;
+  - trạng thái nhóm: `not_member` / `unresolved` / `empty`;
+  - `shape`.
+- **Bảng tin nhóm:** link nhóm dạng tên (slug) được đổi sang ID thật bằng cách mở trang nhóm. Mỗi nhóm như vậy chậm thêm khoảng 18 giây.
+- **An toàn:**
+  - Link từ dữ liệu quét chỉ mở được qua kênh `research:openLink` (https, `facebook.com`).
+  - Không bắt đầu quét khi đang đổi workspace.
+  - Lượt quét chưa dừng thì không cho đổi workspace.
+- **Thêm kênh** `research:status`.
