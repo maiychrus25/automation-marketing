@@ -67,8 +67,15 @@ export function exportFileName(source: ResearchSource, at: number): string {
 const privacyLabel = (p: string) => (p === 'public' ? 'Công khai' : p === 'private' ? 'Riêng tư' : '');
 const cell = (v: number | null) => (v === null ? '' : v);
 
+const CELL_MAX = 32000; // Excel giới hạn 32.767 ký tự mỗi ô
+const clip = (v: string | number): string | number => (typeof v === 'string' && v.length > CELL_MAX ? v.slice(0, CELL_MAX) : v);
+
 /** Dòng cho một trang tính; cột theo nguồn (spec mục 9). Giá trị không biết để ô trống. */
 export function buildSheetRows(source: ResearchSource, items: ResearchItem[]): Record<string, string | number>[] {
+    return buildRawRows(source, items).map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, clip(v)])));
+}
+
+function buildRawRows(source: ResearchSource, items: ResearchItem[]): Record<string, string | number>[] {
     if (source === 'groups') {
         return items.map((i) => ({
             'Tên nhóm': i.title, 'Link': i.url, 'Quyền riêng tư': privacyLabel(i.privacy), 'Thành viên': cell(i.memberCount),

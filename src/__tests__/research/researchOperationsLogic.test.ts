@@ -47,6 +47,10 @@ describe('export rows', () => {
         expect(buildSheetRows('groups', [item({ kind: 'group', privacy: 'private', memberCount: 10 })])[0]).toMatchObject({ 'Quyền riêng tư': 'Riêng tư', 'Thành viên': 10 });
         expect(buildSheetRows('pages', [item({ kind: 'page', followerCount: 7 })])[0]).toMatchObject({ 'Người theo dõi': 7 });
     });
+    it('clips long strings to 32000 chars', () => {
+        const [row] = buildSheetRows('posts', [item({ title: 'x'.repeat(40000) })]);
+        expect((row['Nội dung'] as string).length).toBe(32000);
+    });
     it('names the file by source and local time', () => {
         expect(exportFileName('posts', new Date(2026, 9, 19, 8, 5).getTime())).toBe('nghien-cuu-posts-20261019-0805.xlsx');
     });

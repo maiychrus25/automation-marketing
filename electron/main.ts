@@ -1347,7 +1347,7 @@ app.on('before-quit', () => {
   } catch {}
 
   try {
-    cancelResearch();
+    cancelResearch(); // before-quit chạy đồng bộ nên không chờ; lượt dở dang được failInterruptedScans sửa ở lần mở sau
   } catch {}
 
   // Listener + sink closed synchronously. After the poster scheduler/jobs stop (so schedule.missed raised during quit is recorded), before DatabaseService.close() below.

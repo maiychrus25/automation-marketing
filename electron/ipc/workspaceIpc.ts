@@ -12,7 +12,7 @@ import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import { restartControlApi, stopControlApi, syncControlEventSink } from './controlApiIpc';
 import { closeAllBrowserProfiles } from './browserProfileIpc';
-import { cancelAndWaitResearch } from './researchIpc';
+import { RESEARCH_NOT_STOPPED_ERROR, cancelAndWaitResearch } from './researchIpc';
 import { POSTER_NOT_STOPPED_ERROR, cancelAndWaitFacebookPosterJobs, isFacebookPosterBusy, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './facebookPosterIpc';
 
 /**
@@ -93,13 +93,21 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
     const wm = () => WorkspaceManager.getInstance();
 
     /** Stops the scheduler and the running poster job. False = job still runs (scheduler restarted); never switch the DB then. */
+    let stopError = POSTER_NOT_STOPPED_ERROR;
     const stopPosterForSwitch = async (): Promise<boolean> => {
         if (isFacebookPosterBusy() && mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('workspace:waitingForJobs', {});
         }
         try { stopFacebookPosterScheduler(); } catch {}
-        // Lượt quét Nghiên cứu: huỷ và chờ tối đa 20 giây; không chặn việc đổi workspace nếu chưa dừng kịp.
-        try { await cancelAndWaitResearch(); } catch {}
+        stopError = POSTER_NOT_STOPPED_ERROR;
+        // Lượt quét Nghiên cứu: huỷ và chờ tối đa 20 giây; chưa dừng thì không đổi workspace (như lượt Đăng Facebook).
+        let researchStopped = false;
+        try { researchStopped = await cancelAndWaitResearch(); } catch {}
+        if (!researchStopped) {
+            stopError = RESEARCH_NOT_STOPPED_ERROR;
+            try { startFacebookPosterScheduler(); } catch {}
+            return false;
+        }
         if (await cancelAndWaitFacebookPosterJobs()) {
             // Poster events of the stopped job are recorded; now stop serving so no call hits the DB mid-switch
             try { await stopControlApi(); } catch {}
@@ -184,7 +192,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             switchInProgress = true;
             try {
                 if (!(await stopPosterForSwitch())) {
-                    return { success: false, error: POSTER_NOT_STOPPED_ERROR };
+                    return { success: false, error: stopError };
                 }
                 // The poster is stopped: whatever happens below, the scheduler must come back
                 try {
@@ -233,7 +241,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             const result = wm().switchWorkspace(id);
             if (result.success && result.workspace) {
                 // Stop the poster first: if it cannot stop, nothing else has changed and the catch restores the previous workspace
-                if (!(await stopPosterForSwitch())) throw new Error(POSTER_NOT_STOPPED_ERROR);
+                if (!(await stopPosterForSwitch())) throw new Error(stopError);
 
                 // Clear AppModeManager override so it derives mode from workspace
                 AppModeManager.getInstance().clearOverride();

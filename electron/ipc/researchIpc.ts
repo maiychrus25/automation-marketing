@@ -1,4 +1,5 @@
 import { dialog, ipcMain } from 'electron';
+import * as fs from 'fs';
 import * as XLSX from 'xlsx';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
@@ -19,6 +20,7 @@ import {
     isFacebookPosterEmployeeBlocked, listFacebookLoginStates, listFacebookPosterRunProfileIds, observeFacebookLogin,
 } from './facebookPosterIpc';
 
+export const RESEARCH_NOT_STOPPED_ERROR = 'Lượt quét Nghiên cứu chưa dừng được. Thử lại sau.';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RETENTION_MS = 180 * DAY_MS;
 const STOP_GRACE_MS = 20000;
@@ -52,6 +54,10 @@ function profileList(): { id: string; name: string }[] {
     return db().getBrowserProfiles().map((p) => ({ id: p.id, name: p.name }));
 }
 
+function isBusy(id: string): boolean {
+    return (getBrowserProfileService().isRunning(id) && !openedByResearch.has(id)) || listFacebookPosterRunProfileIds().includes(id);
+}
+
 function readConfig() {
     return parseResearchConfig(db().getSetting(RESEARCH_CONFIG_SETTING_KEY));
 }
@@ -77,8 +83,7 @@ function getService(): ResearchService {
             },
             listProfiles: profileList,
             // Bận = đang mở trình duyệt (kể cả đang kiểm tra đăng nhập, vì kiểm tra cũng mở profile) hoặc nằm trong lượt Đăng Facebook hiện tại.
-            isProfileBusy: (id) =>
-                (getBrowserProfileService().isRunning(id) && !openedByResearch.has(id)) || listFacebookPosterRunProfileIds().includes(id),
+            isProfileBusy: isBusy,
             loginStates: listFacebookLoginStates,
             groupMembership: () => {
                 const groups = new FacebookPosterStore(db()).listGroups(profileList().map((p) => p.id));
@@ -159,7 +164,6 @@ function profileUsage() {
     const cfg = readConfig();
     const since = Date.now() - DAY_MS;
     const states = new Map(listFacebookLoginStates().map((l) => [l.profileId, l.state]));
-    const runIds = new Set(listFacebookPosterRunProfileIds());
     return profileList().map((p) => ({
         id: p.id,
         name: p.name,
@@ -167,7 +171,7 @@ function profileUsage() {
         cap: cfg.perProfileDailyCap,
         loginState: states.get(p.id) ?? 'unknown',
         excluded: cfg.excludedProfileIds.includes(p.id),
-        busy: (getBrowserProfileService().isRunning(p.id) && !openedByResearch.has(p.id)) || runIds.has(p.id),
+        busy: isBusy(p.id),
     }));
 }
 
@@ -191,7 +195,7 @@ async function exportXlsx(params: any): Promise<{ saved: boolean; path?: string 
     const rows = buildSheetRows(scan.source, items);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows), 'Nghiên cứu');
-    XLSX.writeFile(book, result.filePath);
+    await fs.promises.writeFile(result.filePath, XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }));
     return { saved: true, path: result.filePath };
 }
 
