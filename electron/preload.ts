@@ -849,6 +849,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'facebookPoster:schedulesChanged',
       'facebookPoster:loginStateChanged',
       'facebookPoster:loginCheckProgress',
+      'facebookPoster:trackProgress',
+      'facebookPoster:trackFinished',
       // ─── Research events ─────────────────────────────────────────
       'research:progress',
       'research:finished',
@@ -944,5 +946,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getLoginStates: ()                            => ipcRenderer.invoke('facebookPoster:getLoginStates'),
     getLoginCheckConfig: ()                       => ipcRenderer.invoke('facebookPoster:getLoginCheckConfig'),
     setLoginCheckConfig: (config: { enabled: boolean; time: string }) => ipcRenderer.invoke('facebookPoster:setLoginCheckConfig', config),
+    trackPosts:     (params?: any)                => ipcRenderer.invoke('facebookPoster:trackPosts', params || {}),
+    trackStatus:    ()                            => ipcRenderer.invoke('facebookPoster:trackStatus'),
+    trackCancel:    ()                            => ipcRenderer.invoke('facebookPoster:trackCancel'),
+    listTracking:   (params?: any)                => ipcRenderer.invoke('facebookPoster:listTracking', params || {}),
+    postStats:      (params: any)                 => ipcRenderer.invoke('facebookPoster:postStats', params),
+    getTrackConfig: ()                            => ipcRenderer.invoke('facebookPoster:getTrackConfig'),
+    setTrackConfig: (config: any)                 => ipcRenderer.invoke('facebookPoster:setTrackConfig', config),
   },
 });

@@ -7,7 +7,9 @@ import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserPr
 import type { UpdateState, ActionResult as UpdateActionResult } from '../../services/update/UpdateService';
 import type { ResearchConfig } from '../../services/research/researchConfig';
 import type { ResearchItem, ResearchScan, ResearchSort, ResearchSource } from '../../models/research';
-import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState } from '../../models/facebookPoster';
+import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow } from '../../models/facebookPoster';
+import type { PostTrackingConfig } from '../../services/facebookPoster/postTracking';
+import type { TrackStatus } from '../../services/facebookPoster/PostTracker';
 
 
 declare global {
@@ -722,6 +724,13 @@ declare global {
         getLoginStates: () => Promise<{ success: boolean; states?: ProfileLoginState[]; error?: string }>;
         getLoginCheckConfig: () => Promise<{ success: boolean; config?: { enabled: boolean; time: string }; error?: string }>;
         setLoginCheckConfig: (config: { enabled: boolean; time: string }) => Promise<{ success: boolean; config?: { enabled: boolean; time: string }; error?: string }>;
+        trackPosts:     (params?: { sinceDays?: number; groupUrls?: string[]; profileIds?: string[] }) => Promise<{ success: boolean; jobId?: string; pairs?: { profileId: string; groupUrl: string }[]; error?: string }>;
+        trackStatus:    () => Promise<({ success: boolean; error?: string }) & Partial<TrackStatus>>;
+        trackCancel:    () => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
+        listTracking:   (params?: { from?: number; to?: number; linkStatus?: LinkStatus; groupUrl?: string; profileId?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; total?: number; rows?: (PostTrackingRow & { latestStats: PostStatsSnapshot | null })[]; error?: string }>;
+        postStats:      (params: { from?: number; to?: number; groupBy: PostStatsGroupBy; limit?: number }) => Promise<{ success: boolean; rows?: PostStatsReportRow[]; error?: string }>;
+        getTrackConfig: () => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
+        setTrackConfig: (config: PostTrackingConfig) => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
       };
       erp: {
       projectList:         (params?: { archived?: boolean }) => Promise<{ success: boolean; projects: any[]; error?: string }>;

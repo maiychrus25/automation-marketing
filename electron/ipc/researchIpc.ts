@@ -54,6 +54,11 @@ function store(): ResearchStore {
     return s;
 }
 
+/** Store Nghiên cứu của workspace hiện tại; theo dõi bài dùng chung bảng research_queries. */
+export function getResearchStore(): ResearchStore {
+    return store();
+}
+
 function profileList(): { id: string; name: string }[] {
     return db().getBrowserProfiles().map((p) => ({ id: p.id, name: p.name }));
 }

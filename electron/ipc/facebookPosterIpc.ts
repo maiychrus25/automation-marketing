@@ -16,12 +16,21 @@ import { LoginChecker } from '../../src/services/facebookPoster/loginCheck';
 import {
     LoginCheckScheduler, LOGIN_CHECK_SETTING_KEY, parseLoginCheckConfig, validateLoginCheckConfig,
 } from '../../src/services/facebookPoster/LoginCheckScheduler';
+import { PostTracker, MAX_TRACK_GROUPS, MAX_TRACK_SINCE_DAYS, DEFAULT_TRACK_SINCE_DAYS, type TrackParams } from '../../src/services/facebookPoster/PostTracker';
+import { PostTrackScheduler } from '../../src/services/facebookPoster/PostTrackScheduler';
+import {
+    POST_TRACKING_SETTING_KEY, parsePostTrackingConfig, validatePostTrackingConfig,
+} from '../../src/services/facebookPoster/postTracking';
+import { GraphqlSession } from '../../src/services/research/graphqlSession';
+import { checkProfileIds } from '../../src/services/research/researchOperationsLogic';
 import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
 import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished } from '../../src/services/control/controlEvents';
-import type { FbPosterRun, LoginCheckSource, ProfileLoginState } from '../../src/models/facebookPoster';
+import { getResearchStore } from './researchIpc';
+import { isWorkspaceSwitchInProgress } from './workspaceIpc';
+import type { FbPosterRun, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 
 
@@ -31,6 +40,10 @@ let checker: LoginChecker | null = null;
 let checkerDbPath: string | null = null;
 let checkerService: FacebookPosterService | null = null;
 let loginScheduler: LoginCheckScheduler | null = null;
+let tracker: PostTracker | null = null;
+let trackerDbPath: string | null = null;
+let trackerService: FacebookPosterService | null = null;
+let trackScheduler: PostTrackScheduler | null = null;
 let scheduler: FacebookPosterScheduler | null = null;
 let schedulerDbPath: string | null = null;
 // Missed-run notices not yet handed to the UI. Only the first takeMissed drains them; after that the UI is live
@@ -41,6 +54,14 @@ let uiReady = false;
 const MAX_PENDING_MISSED = 50;
 const MAX_SCHEDULES = 200;
 const CHECK_STOP_GRACE_MS = 45000; // same grace as FacebookPosterService.stopAndWait
+const TRACKING_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_TRACK_LIST_LIMIT = 500;
+const MAX_TRACK_LIST_SCAN = 5000;
+const DEFAULT_REPORT_DAYS = 30;
+const LINK_STATUSES: LinkStatus[] = ['known', 'missing', 'pending_approval', 'not_found'];
+const STATS_GROUP_BY: PostStatsGroupBy[] = ['group', 'profile', 'schedule', 'day', 'post'];
+export const WORKSPACE_SWITCHING_ERROR = 'Đang đổi workspace, thử lại sau';
 export const POSTER_NOT_STOPPED_ERROR = 'Việc Đăng Facebook chưa dừng được. Thử lại sau.';
 
 const startEnv: StartParamsEnv = {
@@ -59,6 +80,7 @@ function store(): FacebookPosterStore {
     const dbPath = db().getDbPath();
     if (dbPath !== lastDbPath) {
         s.failInterruptedRuns(Date.now());
+        safely('pruneTracking', () => { s.pruneTrackingOlderThan(Date.now() - TRACKING_RETENTION_MS); });
         lastDbPath = dbPath;
         // The service binds to a store, so a new database needs a new service (never while a run is active).
         // isBusy (run or login check): the checker holds the service's work slot, so never swap the service under it.
@@ -85,6 +107,7 @@ function getService(): FacebookPosterService {
                 }
             },
             onLoginObserved: (profileId, state) => safely('onLoginObserved', () => getChecker().observe(profileId, state, 'run')),
+            readTrackingConfig: readTrackingConfig,
         });
     }
     return service;
@@ -128,6 +151,47 @@ function getChecker(): LoginChecker {
         });
     }
     return checker;
+}
+
+function readTrackingConfig() {
+    return parsePostTrackingConfig(db().getSetting(POST_TRACKING_SETTING_KEY));
+}
+
+/** Post tracker bound to the active workspace DB and the service's work slot (same slot as the login checker); rebuilt when the DB or service changed and no job runs. */
+function getTracker(): PostTracker {
+    const svc = getService();
+    const dbPath = db().getDbPath();
+    if (tracker && (trackerDbPath !== dbPath || trackerService !== svc) && !tracker.isRunning()) tracker = null;
+    if (!tracker) {
+        trackerDbPath = dbPath;
+        trackerService = svc;
+        const trackerStore = store();
+        const researchStore = getResearchStore();
+        tracker = new PostTracker({
+            store: trackerStore,
+            openSession: async (profileId) => {
+                const session = await getBrowserProfileService().openForAutomation(profileId);
+                try {
+                    const page = session.context.pages()[0] ?? await session.context.newPage();
+                    return { session: new GraphqlSession(page, researchStore), close: () => session.close() };
+                } catch (err) {
+                    await session.close().catch(() => undefined);
+                    throw err;
+                }
+            },
+            slot: { acquire: () => svc.acquireExclusive(), release: () => svc.releaseExclusive() },
+            observeLogin: (profileId, state) => safely('trackObserveLogin', () => getChecker().observe(profileId, state, 'run')),
+            emit: (type, payload) => {
+                if (type === 'posts.trackProgress') EventBroadcaster.emit('facebookPoster:trackProgress', payload);
+                else if (type === 'posts.trackFinished') {
+                    EventBroadcaster.emit('facebookPoster:trackFinished', payload);
+                    safely('onRunFinished', () => scheduler?.onRunFinished()); // queued schedules start once the slot is free
+                }
+            },
+            getConfig: readTrackingConfig,
+        });
+    }
+    return tracker;
 }
 
 function emitLoginStatesChanged(): void {
@@ -181,19 +245,22 @@ export function isFacebookPosterSchedulerRunning(): boolean {
 
 /** True while a run or a login check is active; the updater refuses to restart then. */
 export function isFacebookPosterBusy(): boolean {
-    return service?.isBusy() ?? false;
+    return (service?.isBusy() ?? false) || (tracker?.isRunning() ?? false);
 }
 
 /** Stops a running job (if any). Called on app quit and before the workspace database is switched. */
 export function cancelFacebookPosterJobs(): void {
     service?.cancelAll();
     checker?.stop();
+    tracker?.stop();
 }
 
 /** Cancels the running job and waits (bounded) for it to end, so it cannot write into the next workspace DB. True = no job runs anymore. Never throws. */
 export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
     const theChecker = checker;
     theChecker?.stop(); // dừng sau profile đang dở
+    const theTracker = tracker;
+    theTracker?.stop();
     let ok = true;
     try {
         if (service) ok = await service.stopAndWait();
@@ -206,6 +273,13 @@ export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
         await Promise.race([theChecker.whenIdle().catch(() => undefined), timedOut]);
         clearTimeout(timer);
         if (theChecker.isRunning()) ok = false;
+    }
+    if (theTracker?.isRunning()) {
+        let timer: NodeJS.Timeout | undefined;
+        const timedOut = new Promise<void>((resolve) => { timer = setTimeout(resolve, CHECK_STOP_GRACE_MS); timer.unref?.(); });
+        await Promise.race([theTracker.whenIdle().catch(() => undefined), timedOut]);
+        clearTimeout(timer);
+        if (theTracker.isRunning()) ok = false;
     }
     return ok;
 }
@@ -267,21 +341,39 @@ export function startFacebookPosterScheduler(): void {
         },
         clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
         readConfig: () => parseLoginCheckConfig(db().getSetting(LOGIN_CHECK_SETTING_KEY)),
-        isBusy: () => service?.isBusy() ?? false,
+        isBusy: () => isFacebookPosterBusy(),
         runCheck: () => { checkFacebookLogins(null, 'daily'); },
         log: (msg) => Logger.warn(msg),
     });
     loginScheduler.start();
+    trackScheduler = new PostTrackScheduler({
+        now: Date.now,
+        setTimer: (fn, ms) => {
+            const handle = setTimeout(fn, ms);
+            handle.unref?.();
+            return handle;
+        },
+        clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+        readConfig: readTrackingConfig,
+        isBusy: () => isFacebookPosterBusy(),
+        duePairs: (now, limit) => store().listDuePairs(now, limit),
+        runTrack: (pairs, auto) => { getTracker().track({ pairs, auto }); },
+        log: (msg) => Logger.warn(msg),
+    });
+    trackScheduler.start();
 }
 
 export function stopFacebookPosterScheduler(): void {
     const current = scheduler;
     const currentLogin = loginScheduler;
+    const currentTrack = trackScheduler;
     scheduler = null;
     loginScheduler = null;
+    trackScheduler = null;
     schedulerDbPath = null;
     current?.stop();
     currentLogin?.stop();
+    currentTrack?.stop();
 }
 
 function clampLimit(value: any, fallback: number, max: number): number {
@@ -460,6 +552,73 @@ export const posterOperations = {
     },
 };
 
+function parseTimeRange(params: any): { from: number; to: number } {
+    const to = params.to === undefined ? Date.now() : Number(params.to);
+    const from = params.from === undefined ? to - DEFAULT_REPORT_DAYS * DAY_MS : Number(params.from);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) throw new Error('Khoảng thời gian không hợp lệ');
+    return { from, to };
+}
+
+/** Post-tracking handler bodies, shared by the IPC channels and the control API (parameter checks live here). */
+export const trackingOperations = {
+    track: (params: any, auto = false) => {
+        if (isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        const p = params ?? {};
+        const sinceDays = p.sinceDays === undefined ? DEFAULT_TRACK_SINCE_DAYS : p.sinceDays;
+        if (!Number.isInteger(sinceDays) || sinceDays < 1 || sinceDays > MAX_TRACK_SINCE_DAYS) {
+            throw new Error(`sinceDays phải là số nguyên từ 1 đến ${MAX_TRACK_SINCE_DAYS}`);
+        }
+        const trackParams: TrackParams = { sinceDays, auto };
+        if (p.groupUrls !== undefined) {
+            if (!Array.isArray(p.groupUrls) || p.groupUrls.length === 0 || p.groupUrls.length > MAX_TRACK_GROUPS
+                || p.groupUrls.some((u: unknown) => typeof u !== 'string' || !u)) {
+                throw new Error(`groupUrls phải là 1–${MAX_TRACK_GROUPS} link nhóm`);
+            }
+            trackParams.groupUrls = p.groupUrls;
+        }
+        trackParams.profileIds = checkProfileIds(p.profileIds, db().getBrowserProfiles().map((b) => b.id));
+        return getTracker().track(trackParams);
+    },
+
+    status: () => ({ ...getTracker().status() }),
+
+    cancel: () => ({ cancelled: tracker?.cancel() ?? false }),
+
+    list: (params: any) => {
+        const p = params ?? {};
+        const { from, to } = parseTimeRange(p);
+        if (p.linkStatus !== undefined && !LINK_STATUSES.includes(p.linkStatus)) throw new Error('linkStatus không hợp lệ');
+        for (const key of ['groupUrl', 'profileId']) {
+            if (p[key] !== undefined && (typeof p[key] !== 'string' || !p[key])) throw new Error(`${key} không hợp lệ`);
+        }
+        const limit = clampLimit(p.limit, 100, MAX_TRACK_LIST_LIMIT);
+        const offset = offsetOf(p.offset);
+        const s = store();
+        const matched = s.listTracking({
+            linkStatus: p.linkStatus, profileId: p.profileId, groupUrl: p.groupUrl, sinceMs: from, limit: MAX_TRACK_LIST_SCAN,
+        }).filter((r) => r.postedAt <= to);
+        const page = matched.slice(offset, offset + limit);
+        const latest = new Map(s.latestStats(page.map((r) => r.resultId)).map((x) => [x.resultId, x]));
+        return { total: matched.length, rows: page.map((r) => ({ ...r, latestStats: latest.get(r.resultId) ?? null })) };
+    },
+
+    stats: (params: any) => {
+        const p = params ?? {};
+        const { from, to } = parseTimeRange(p);
+        if (!STATS_GROUP_BY.includes(p.groupBy)) throw new Error(`groupBy phải là một trong: ${STATS_GROUP_BY.join(', ')}`);
+        const limit = clampLimit(p.limit, 200, MAX_TRACK_LIST_LIMIT);
+        return { rows: store().statsReport({ from, to, groupBy: p.groupBy, limit }) };
+    },
+
+    getConfig: () => ({ config: readTrackingConfig() }),
+
+    setConfig: (params: any) => {
+        const config = validatePostTrackingConfig(params);
+        db().setSetting(POST_TRACKING_SETTING_KEY, JSON.stringify(config));
+        return { config };
+    },
+};
+
 export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:start', posterOperations.start);
     handle('facebookPoster:scheduleCreate', posterOperations.scheduleCreate);
@@ -487,6 +646,13 @@ export function registerFacebookPosterIpc(): void {
         }
         return checkFacebookLogins(ids, 'manual');
     });
+    handle('facebookPoster:trackPosts', (params) => trackingOperations.track(params));
+    handle('facebookPoster:trackStatus', trackingOperations.status);
+    handle('facebookPoster:trackCancel', trackingOperations.cancel);
+    handle('facebookPoster:listTracking', trackingOperations.list);
+    handle('facebookPoster:postStats', trackingOperations.stats);
+    handle('facebookPoster:getTrackConfig', trackingOperations.getConfig);
+    handle('facebookPoster:setTrackConfig', trackingOperations.setConfig);
     handle('facebookPoster:getLoginStates', () => ({ states: listFacebookLoginStates() }));
     handle('facebookPoster:getLoginCheckConfig', () => ({ config: parseLoginCheckConfig(db().getSetting(LOGIN_CHECK_SETTING_KEY)) }));
     handle('facebookPoster:setLoginCheckConfig', (params) => {
