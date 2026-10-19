@@ -5,6 +5,8 @@ import type { ResearchErrorCode, ResearchSource } from '../../models/research';
 const FB_HOME = 'https://www.facebook.com/';
 const GRAPHQL_PATH = '/api/graphql/';
 const MAX_SCROLLS = 6;
+/** Một lệnh gọi GraphQL trong trang quá thời gian này thì huỷ (tránh treo cả lượt quét). */
+export const FETCH_TIMEOUT_MS = 30000;
 
 export class ResearchError extends Error {
     constructor(public readonly code: ResearchErrorCode, message: string) {
@@ -53,23 +55,34 @@ export function readTokensInPage(): { dtsg: string; lsd: string; userId: string;
 }
 
 /** Chạy TRONG trang: gọi fetch cùng nguồn gốc, trả mã HTTP và text thô. */
-async function fetchInPage(arg: { body: string; name: string; lsd: string }): Promise<{ status: number; text: string }> {
-    const res = await fetch('/api/graphql/', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'x-fb-friendly-name': arg.name,
-            'x-fb-lsd': arg.lsd,
-        },
-        body: arg.body,
-    });
-    return { status: res.status, text: await res.text() };
+async function fetchInPage(arg: { body: string; name: string; lsd: string; timeoutMs: number }): Promise<{ status: number; text: string }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), arg.timeoutMs);
+    try {
+        const res = await fetch('/api/graphql/', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'x-fb-friendly-name': arg.name,
+                'x-fb-lsd': arg.lsd,
+            },
+            body: arg.body,
+            signal: controller.signal,
+        });
+        return { status: res.status, text: await res.text() };
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 function shortMessage(e: unknown): string {
     const m = e instanceof Error ? e.message : String(e);
     return m.replace(/\s+/g, ' ').slice(0, 120);
+}
+
+function isAborted(e: unknown): boolean {
+    return /abort/i.test(e instanceof Error ? `${e.name} ${e.message}` : String(e));
 }
 
 function isConnectionLost(e: unknown): boolean {
@@ -111,10 +124,7 @@ export class GraphqlSession {
 
     async open(): Promise<void> {
         await gotoOrThrow(this.page, FB_HOME);
-        let path = '';
-        try { path = new URL(this.page.url()).pathname; } catch { path = ''; }
-        if (path.startsWith('/checkpoint')) throw new ResearchError('checkpoint', 'Profile bị Facebook yêu cầu xác minh (checkpoint).');
-        if (path.startsWith('/login')) throw new ResearchError('logged_out', 'Profile chưa đăng nhập Facebook.');
+        this.assertNotRedirected();
         const t = await this.page.evaluate(readTokensInPage);
         if (!t.dtsg) {
             throw new ResearchError('logged_out', t.loginForm
@@ -130,8 +140,17 @@ export class GraphqlSession {
         this.tokens = { dtsg: t.dtsg, lsd: t.lsd, userId };
     }
 
-    async ensureQuery(source: ResearchSource, friendlyName: string, triggerUrl: string): Promise<CapturedQuery> {
-        const stored = this.store.getQuery(`${friendlyName}:${source}`);
+    /** Trang vừa tải bị đưa sang /checkpoint hoặc /login thì ném đúng mã. */
+    private assertNotRedirected(): void {
+        let path = '';
+        try { path = new URL(this.page.url()).pathname; } catch { path = ''; }
+        if (path.startsWith('/checkpoint')) throw new ResearchError('checkpoint', 'Profile bị Facebook yêu cầu xác minh (checkpoint).');
+        if (path.startsWith('/login')) throw new ResearchError('logged_out', 'Profile chưa đăng nhập Facebook.');
+    }
+
+    /** `fresh`: bỏ qua mẫu đã lưu, bắt từ chính trang `triggerUrl` (nhóm có link rút gọn cần id thật của nhóm đó). */
+    async ensureQuery(source: ResearchSource, friendlyName: string, triggerUrl: string, fresh = false): Promise<CapturedQuery> {
+        const stored = fresh ? undefined : this.store.getQuery(`${friendlyName}:${source}`);
         if (stored) {
             try {
                 const parsed = JSON.parse(stored.variablesTemplate);
@@ -169,13 +188,15 @@ export class GraphqlSession {
         }).toString();
         let res: { status: number; text: string };
         try {
-            res = await this.page.evaluate(fetchInPage, { body, name: query.friendlyName, lsd: t.lsd });
+            res = await this.page.evaluate(fetchInPage, { body, name: query.friendlyName, lsd: t.lsd, timeoutMs: FETCH_TIMEOUT_MS });
         } catch (e) {
+            if (isAborted(e)) throw new ResearchError('rate_limited', `Facebook không phản hồi trong ${FETCH_TIMEOUT_MS / 1000} giây`);
             throw new ResearchError('parse_failed', isConnectionLost(e)
                 ? `Mất kết nối với trang: ${shortMessage(e)}`
                 : `Lỗi mạng khi gọi Facebook: ${shortMessage(e)}`);
         }
-        if (res.status === 401 || res.status === 403) throw new ResearchError('logged_out', `Facebook từ chối phiên (HTTP ${res.status}).`);
+        // 401/403 có thể do mã chống giả mạo hết hạn: chỉ bỏ qua profile này, KHÔNG coi là đăng xuất (đăng xuất chỉ nhận qua chuyển trang /login).
+        if (res.status === 401 || res.status === 403) throw new ResearchError('rate_limited', `Facebook từ chối yêu cầu (HTTP ${res.status}).`);
         if (res.status === 429) throw new ResearchError('rate_limited', 'Facebook giới hạn tần suất (HTTP 429).');
         if (res.status >= 400) throw new ResearchError('parse_failed', `Facebook trả HTTP ${res.status}.`);
         return res.text;
@@ -199,6 +220,7 @@ export class GraphqlSession {
         this.page.on('request', onRequest);
         try {
             await gotoOrThrow(this.page, triggerUrl);
+            this.assertNotRedirected();
             for (let i = 0; i < MAX_SCROLLS && !exact; i++) {
                 await this.page.mouse.wheel(0, 1500);
                 await this.sleep(1500 + Math.floor(this.random() * 1500));

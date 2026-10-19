@@ -38,6 +38,7 @@ function setup(opts: {
     loginStates?: any[]; membership?: Record<string, string[]>; scannedAt?: Record<string, number>; openFail?: string[];
     ensureThrows?: Record<string, Error>; onSleep?: (ms: number, svc: ResearchService) => void; excluded?: string[];
     ensureHook?: (profileId: string, svc: ResearchService) => void; recaptureThrows?: boolean; docIds?: string[];
+    hang?: boolean; feedQuery?: any; ensureThrowsFor?: (source: string, fresh: boolean, url: string) => Error | null;
 } = {}) {
     const store = new ResearchStore(memoryDb());
     store.ensureSchema();
@@ -49,15 +50,20 @@ function setup(opts: {
     const observed: [string, string][] = [];
     const ensured: string[] = [];
     let recaptures = 0;
+    const hangRejects: (() => void)[] = [];
+    const freshFlags: boolean[] = [];
     const profiles = (opts.profiles ?? ['p1', 'p2', 'p3', 'p4']).map((id) => ({ id, name: id }));
     const makeSession = (profileId: string): any => {
             return {
                 open: async () => undefined,
-                ensureQuery: async (source: string) => {
+                ensureQuery: async (source: string, _name: string, url: string, fresh = false) => {
                     ensured.push(profileId);
+                    freshFlags.push(fresh);
+                    const failure = opts.ensureThrowsFor?.(source, fresh, url);
+                    if (failure) throw failure;
                     if (opts.ensureThrows?.[profileId]) throw opts.ensureThrows[profileId];
                     opts.ensureHook?.(profileId, svc);
-                    return source === 'group_feed' ? FEED_Q : SEARCH_Q;
+                    return source === 'group_feed' ? (opts.feedQuery ?? FEED_Q) : SEARCH_Q;
                 },
                 recapture: async () => {
                     recaptures++;
@@ -67,6 +73,7 @@ function setup(opts: {
                 call: async (_q: any, vars: any) => {
                     const c = { profileId, vars };
                     calls.push(c);
+                    if (opts.hang) return new Promise<string>((_res, rej) => { hangRejects.push(() => rej(new ResearchError('parse_failed', 'Mất kết nối với trang: Target closed'))); });
                     const out = opts.script ? opts.script(c, calls.length - 1) : postsPage(1, 1, null);
                     if (out instanceof Error) throw out;
                     return out;
@@ -80,7 +87,7 @@ function setup(opts: {
         openSession: async (id) => {
             if (opts.openFail?.includes(id)) throw new Error('Profile đang mở');
             opened.push(id);
-            return { session: makeSession(id), close: async () => { closed.push(id); } };
+            return { session: makeSession(id), close: async () => { closed.push(id); hangRejects.forEach((f) => f()); } };
         },
         listProfiles: () => profiles,
         isProfileBusy: (id) => !!opts.busy?.includes(id),
@@ -95,7 +102,7 @@ function setup(opts: {
         random: () => 0,
         newId: () => `scan${++n}`,
     });
-    return { svc, store, calls, sleeps, opened, closed, emitted, observed, ensured, recaptures: () => recaptures };
+    return { svc, store, calls, sleeps, opened, closed, emitted, observed, ensured, freshFlags, recaptures: () => recaptures };
 }
 
 /** Phân trang giả: con trỏ `c<k>` là trang thứ k (10 bài mỗi trang, ID liên tục), vô hạn. */
@@ -311,11 +318,12 @@ describe('ResearchService keyword scan', () => {
         const p2 = h.calls.filter((c) => c.profileId === 'p2');
         expect(p2[0].vars.cursor).toBe('c5');
         expect(p2[1].vars.cursor).toBeNull();
-        // p2 đọc lại c0.. toàn mục trùng: 2 trang trống liên tiếp thì dừng phần của p2 (chốt cứng), không lặp vô hạn
-        expect(p2).toHaveLength(3);
-        expect(scan.itemCount).toBe(50);
-        expect(scan.errorCode).toBe('no_profile_available');
-        expect(new Set(h.store.listItems(scan.id, { limit: 500 }).items.map((i) => i.fbId)).size).toBe(50);
+        // p2 đọc lại c0..c4 (trang trùng không tính vào chuỗi trang trống), rồi lấy thêm 30 mục mới tới limit
+        expect(p2.length).toBeGreaterThan(5);
+        expect(scan.itemCount).toBe(80);
+        expect(scan.errorCode).toBe('');
+        expect((scan.details as any).note).toBeUndefined();
+        expect(new Set(h.store.listItems(scan.id, { limit: 500 }).items.map((i) => i.fbId)).size).toBe(80);
     });
 
     it('lỗi bất ngờ từ dep: failed (errorCode rỗng, Lỗi nội bộ), một sự kiện finished, không unhandled rejection', async () => {
@@ -350,8 +358,7 @@ describe('ResearchService keyword scan', () => {
         const bad = [
             { query: '' }, { query: 'x'.repeat(101) }, { query: 'a', limit: 0 }, { query: 'a', limit: 501 },
             { query: 'a', year: 2009 }, { query: 'a', year: 2999 }, { query: 'a', recent: true, source: 'groups' as const },
-            { query: 'a', year: 2024, source: 'pages' as const }, { query: 'a', profileIds: [] },
-            { query: 'a', profileIds: Array.from({ length: 51 }, (_, i) => `p${i}`) },
+            { query: 'a', year: 2024, source: 'pages' as const },
         ];
         for (const b of bad) expect(() => svc.search({ source: 'posts', origin: 'api', ...b })).toThrow(Error);
         expect(svc.isRunning()).toBe(false);
@@ -604,5 +611,163 @@ describe('ResearchService finish robustness', () => {
         expect(h.store.getScan(scanId)!.status).toBe('running');
         expect(finishedEvents(h)).toHaveLength(0);
         expect(h.svc.isRunning()).toBe(false);
+    });
+});
+
+
+describe('final review fixes', () => {
+    const G1 = 'https://www.facebook.com/groups/111';
+    const SLUG = 'https://www.facebook.com/groups/hoimebimsua/';
+    const day = 86400;
+    const nowSec = NOW / 1000;
+
+    it('I1: cancel() đóng phiên đang treo, lượt quét kết thúc cancelled ngay', async () => {
+        const h = setup({ profiles: ['p1'], hang: true });
+        const { scanId } = h.svc.search({ source: 'posts', query: 'x', origin: 'api' });
+        await new Promise((r) => setImmediate(r));
+        expect(h.calls).toHaveLength(1);
+        expect(h.svc.cancel()).toBe(true);
+        await h.svc.whenIdle();
+        const scan = h.store.getScan(scanId)!;
+        expect(scan.status).toBe('cancelled');
+        expect(scan.errorCode).toBe('cancelled');
+        expect(h.closed).toEqual(['p1']);
+        expect(h.svc.isRunning()).toBe(false);
+    });
+
+    it('I1: gọi quá hạn (rate_limited) chỉ bỏ qua profile, không đổi trạng thái đăng nhập', async () => {
+        const h = setup({
+            profiles: ['p1', 'p2'],
+            script: (c) => (c.profileId === 'p1' ? new ResearchError('rate_limited', 'Facebook không phản hồi trong 30 giây') : postsPage(1, 3, null)),
+        });
+        const scan = await run(h, { limit: 3 });
+        expect(scan.status).toBe('done');
+        expect(scan.itemCount).toBe(3);
+        expect((scan.details as any).profiles.p1.error).toBe('rate_limited');
+        expect(h.observed).toEqual([]);
+    });
+
+    it('I2: link nhóm dạng số: thay id bằng mã số của link', async () => {
+        const h = setup({ profiles: ['p1'], script: () => feedPage([['a1', nowSec - day]], null) });
+        h.svc.scanGroupFeeds({ groupUrls: [G1], origin: 'api' });
+        await h.svc.whenIdle();
+        expect(h.calls[0].vars.id).toBe('111');
+        expect(h.freshFlags).toEqual([false]);
+    });
+
+    it('I2: link rút gọn: bắt truy vấn từ chính trang nhóm và giữ nguyên id đã bắt', async () => {
+        const h = setup({
+            profiles: ['p1'], feedQuery: { ...FEED_Q, variables: { ...FEED_Q.variables, id: '4242' } },
+            script: () => feedPage([['a1', nowSec - day]], null),
+        });
+        const { scanId } = h.svc.scanGroupFeeds({ groupUrls: [SLUG], origin: 'api' });
+        await h.svc.whenIdle();
+        expect(h.freshFlags).toEqual([true]);
+        expect(h.calls[0].vars.id).toBe('4242');
+        expect(h.store.getScan(scanId)!.itemCount).toBe(1);
+    });
+
+    it('I2: link rút gọn mà truy vấn bắt được không có id số: unresolved, sang nhóm khác', async () => {
+        const h = setup({
+            profiles: ['p1'], feedQuery: { ...FEED_Q, variables: { count: 3, cursor: null, id: 'hoimebimsua' } },
+            script: () => feedPage([['a1', nowSec - day]], null),
+        });
+        const { scanId } = h.svc.scanGroupFeeds({ groupUrls: [SLUG, G1], origin: 'api' });
+        await h.svc.whenIdle();
+        const scan = h.store.getScan(scanId)!;
+        expect((scan.details as any).groups[SLUG]).toBe('unresolved');
+        expect(scan.status).toBe('done');
+        expect(h.calls.map((c) => c.vars.id)).toEqual(['111']);
+        expect(scan.itemCount).toBe(1);
+    });
+
+    it('I2: nhóm trang đầu 0 mục không lỗi: ghi empty; hình dạng chỉ lưu một lần', async () => {
+        const G2 = 'https://www.facebook.com/groups/222';
+        const empty = feedPage([], null);
+        const h = setup({ profiles: ['p1'], script: () => empty });
+        const { scanId } = h.svc.scanGroupFeeds({ groupUrls: [G1, G2], origin: 'api' });
+        await h.svc.whenIdle();
+        const scan = h.store.getScan(scanId)!;
+        expect((scan.details as any).groups).toEqual({ [G1]: 'empty', [G2]: 'empty' });
+        expect(Array.isArray((scan.details as any).shape)).toBe(true);
+    });
+
+    it('M4: bắt truy vấn lỗi ở một nhóm: chỉ đánh dấu nhóm đó, vẫn quét nhóm sau', async () => {
+        const G2 = 'https://www.facebook.com/groups/222';
+        const h = setup({
+            profiles: ['p1'], script: () => feedPage([['a1', nowSec - day]], null),
+            ensureThrowsFor: (_s, _f, url) => (url.includes('/111/') ? new ResearchError('query_changed', 'không bắt được') : null),
+        });
+        const { scanId } = h.svc.scanGroupFeeds({ groupUrls: [G1, G2], origin: 'api' });
+        await h.svc.whenIdle();
+        const scan = h.store.getScan(scanId)!;
+        expect(scan.status).toBe('done');
+        expect((scan.details as any).groups[G1]).toBe('unresolved');
+        expect(scan.itemCount).toBe(1);
+    });
+
+    it('M4: không nhóm nào bắt được truy vấn: failed query_changed', async () => {
+        const h = setup({ profiles: ['p1'], ensureThrowsFor: () => new ResearchError('query_changed', 'không bắt được') });
+        const { scanId } = h.svc.scanGroupFeeds({ groupUrls: [G1, 'https://www.facebook.com/groups/222'], origin: 'api' });
+        await h.svc.whenIdle();
+        const scan = h.store.getScan(scanId)!;
+        expect(scan.status).toBe('failed');
+        expect(scan.errorCode).toBe('query_changed');
+    });
+
+    it('M7: không có nhóm nào: done, errorCode rỗng, note no_groups, thông báo tiếng Việt', async () => {
+        const h = setup({ profiles: ['p1'] });
+        const { scanId } = h.svc.scanGroupFeeds({ origin: 'manual' });
+        await h.svc.whenIdle();
+        const scan = h.store.getScan(scanId)!;
+        expect(scan.status).toBe('done');
+        expect(scan.errorCode).toBe('');
+        expect(scan.error).toBe('Chưa có nhóm nào để quét — hãy quét nhóm ở profile hoặc nhập link nhóm');
+        expect((scan.details as any).note).toBe('no_groups');
+        expect(h.opened).toEqual([]);
+    });
+
+    describe('I3: con trỏ không chuyển được giữa tài khoản', () => {
+        /** Phân trang giả: con trỏ chỉ dùng được với profile đã phát ra nó. */
+        function strictCursors() {
+            const owner = new Map<string, string>();
+            return (c: Call) => {
+                const k = c.vars.cursor ? Number(String(c.vars.cursor).slice(1)) : 0;
+                if (c.vars.cursor && owner.get(c.vars.cursor) !== c.profileId) return postsPage(0, 0, null);
+                const next = `c${k + 1}`;
+                owner.set(next, c.profileId);
+                return postsPage(k * 10 + 1, 10, next);
+            };
+        }
+
+        it('dừng sau 2 lần bắt đầu lại liên tiếp, note cursor_not_portable, không đi hết mọi profile', async () => {
+            const h = setup({ profiles: ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'], script: strictCursors() });
+            const scan = await run(h, { limit: 500 });
+            expect(scan.status).toBe('done');
+            expect(scan.errorCode).toBe('');
+            expect((scan.details as any).note).toBe('cursor_not_portable');
+            expect(scan.itemCount).toBeGreaterThanOrEqual(50);
+            expect(scan.itemCount).toBe(100); // p1 lấy 50; p2 bắt đầu lại, đọc lại 50 trùng rồi lấy thêm 50; p3 bị từ chối lần 2
+            expect(h.opened).toEqual(['p1', 'p2', 'p3']);
+            expect(h.closed.sort()).toEqual(['p1', 'p2', 'p3']);
+            expect(new Set(h.store.listItems(scan.id, { limit: 500 }).items.map((i) => i.fbId)).size).toBe(100);
+        });
+
+        it('một profile dùng được con trỏ mang sang thì đếm lại từ đầu, không dừng sớm', async () => {
+            const owner = new Map<string, string>();
+            const h = setup({
+                profiles: ['p1', 'p2', 'p3', 'p4'],
+                script: (c) => {
+                    const k = c.vars.cursor ? Number(String(c.vars.cursor).slice(1)) : 0;
+                    if (c.vars.cursor && c.profileId !== 'p3' && owner.get(c.vars.cursor) !== c.profileId) return postsPage(0, 0, null);
+                    owner.set(`c${k + 1}`, c.profileId);
+                    return postsPage(k * 10 + 1, 10, `c${k + 1}`);
+                },
+            });
+            const scan = await run(h, { limit: 200 });
+            expect(scan.itemCount).toBe(200);
+            expect((scan.details as any).note).toBeUndefined();
+            expect(h.opened).toEqual(['p1', 'p2', 'p3', 'p4']);
+        });
     });
 });

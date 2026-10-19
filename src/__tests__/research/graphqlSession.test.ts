@@ -1,5 +1,5 @@
 import {
-    GraphqlSession, ResearchError, buildSearchVariables, buildGroupFeedVariables, readTokensInPage,
+    GraphqlSession, ResearchError, buildSearchVariables, buildGroupFeedVariables, readTokensInPage, FETCH_TIMEOUT_MS,
 } from '../../services/research/graphqlSession';
 
 const SEARCH = 'SearchCometResultsPaginatedResultsQuery';
@@ -183,15 +183,64 @@ describe('call', () => {
             server_timestamps: 'true', doc_id: '999',
         });
     });
-    it.each([[401, 'logged_out'], [403, 'logged_out'], [429, 'rate_limited'], [500, 'parse_failed']])('status %d -> %s', async (status, code) => {
+    it.each([[401, 'rate_limited'], [403, 'rate_limited'], [429, 'rate_limited'], [500, 'parse_failed']])('status %d -> %s', async (status, code) => {
         const { s } = await opened({ fetchResult: { status } });
         const err = await s.call(query, {}).catch((e) => e);
         expect(err.code).toBe(code);
         expect(err.message).toContain(String(status));
     });
+    it('401/403 never produce logged_out and mention the status (only a login redirect does)', async () => {
+        const { s } = await opened({ fetchResult: { status: 403 } });
+        const err = await s.call(query, {}).catch((e) => e);
+        expect(err.code).not.toBe('logged_out');
+    });
+    it('passes an AbortSignal and a 30 s timeout; the abort maps to rate_limited', async () => {
+        jest.useFakeTimers();
+        try {
+            const { page } = makePage();
+            const { s } = mk(page);
+            await s.open();
+            // fetch giả không bao giờ trả lời, chỉ từ chối khi signal bị huỷ
+            page.evaluate.mockImplementationOnce(async (fn: Function, arg: any) => {
+                (globalThis as any).fetch = jest.fn((_u: string, init: any) => new Promise((_res, rej) => {
+                    init.signal.addEventListener('abort', () => rej(Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' })));
+                }));
+                return fn(arg);
+            });
+            const pending = s.call(query, {}).catch((e) => e);
+            await jest.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS + 1);
+            const err = await pending;
+            expect(FETCH_TIMEOUT_MS).toBe(30000);
+            expect(err).toBeInstanceOf(ResearchError);
+            expect(err.code).toBe('rate_limited');
+            expect(err.message).toContain('30 giây');
+        } finally { jest.useRealTimers(); }
+    });
     it('throws if not opened', async () => {
         const { page } = makePage();
         await expect(mk(page).s.call(query, {})).rejects.toBeInstanceOf(ResearchError);
+    });
+});
+
+describe('capture redirects (M1)', () => {
+    const SEARCH_URL = 'https://www.facebook.com/search/posts?q=x';
+    it.each([['/checkpoint/1', 'checkpoint'], ['/login/?next=x', 'logged_out']])('redirect to %s while capturing -> %s', async (path, code) => {
+        const { page } = makePage();
+        const { s } = mk(page);
+        await s.open();
+        page.url.mockReturnValue(`https://www.facebook.com${path}`);
+        const err = await s.ensureQuery('posts', SEARCH, SEARCH_URL).catch((e) => e);
+        expect(err).toBeInstanceOf(ResearchError);
+        expect(err.code).toBe(code);
+    });
+    it('fresh=true ignores the stored query and captures again', async () => {
+        const { page } = makePage({ emitAt: [{ scroll: 1, req: req(SEARCH, { doc_id: '7' }) }] });
+        const store = makeStore();
+        store.m.set(`${SEARCH}:posts`, { friendlyName: SEARCH, docId: 'old', variablesTemplate: JSON.stringify({ friendlyName: SEARCH, variables: { id: 'other' } }), capturedAt: 1 });
+        const { s } = mk(page, store);
+        await s.open();
+        const q = await s.ensureQuery('posts', SEARCH, SEARCH_URL, true);
+        expect(q.docId).toBe('7');
     });
 });
 

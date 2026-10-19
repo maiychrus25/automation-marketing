@@ -94,7 +94,7 @@ interface Run {
     failed: string[];
     total: number;
     pages: number;
-    details: { profiles: Record<string, { items: number; error?: string }>; groups?: Record<string, string>; shape?: string[] };
+    details: { profiles: Record<string, { items: number; error?: string }>; groups?: Record<string, string>; shape?: string[]; note?: string };
 }
 
 interface OpenProfile { id: string; gql: ResearchGraphqlSession; close(): Promise<void> }
@@ -105,14 +105,6 @@ const shortMessage = (e: unknown): string => (e instanceof Error ? e.message : S
 
 function inRange(v: unknown, min: number, max: number): v is number {
     return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
-}
-
-function checkProfileIds(ids: unknown): string[] | undefined {
-    if (ids === undefined) return undefined;
-    if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_PROFILE_IDS || ids.some((x) => typeof x !== 'string' || !x)) {
-        throw new Error(`Danh sách profile phải có 1–${MAX_PROFILE_IDS} mã.`);
-    }
-    return ids as string[];
 }
 
 /** Mã hoặc tên rút gọn của nhóm trong link; rỗng nếu không phải link nhóm. */
@@ -126,6 +118,8 @@ export class ResearchService {
     private cancelled = false;
     private wake: (() => void) | null = null;
     private readonly lastUsedAt: Record<string, number> = {};
+    /** Đóng phiên trình duyệt đang mở (nếu có) để huỷ làm lệnh gọi đang treo bị từ chối ngay. */
+    private activeClose: (() => Promise<void>) | null = null;
     private wakeSignal: Promise<void> = Promise.resolve();
     private readonly now: () => number;
     private readonly sleepFn: (ms: number) => Promise<void>;
@@ -148,6 +142,8 @@ export class ResearchService {
         if (!this.running) return false;
         this.cancelled = true;
         this.wake?.();
+        const closeNow = this.activeClose;
+        if (closeNow) void closeNow();
         return true;
     }
 
@@ -166,7 +162,7 @@ export class ResearchService {
         if ((params.recent || params.year !== undefined) && params.source !== 'posts') {
             throw new Error('Bộ lọc gần đây/năm chỉ dùng cho bài viết.');
         }
-        const profileIds = checkProfileIds(params.profileIds);
+        const profileIds = params.profileIds; // đã kiểm tra ở researchOperationsLogic.checkProfileIds
         const stored = { query, limit, recent: !!params.recent, year: params.year ?? null, profileIds: profileIds ?? null };
         return this.start(params.source, query, stored, params.origin, profileIds,
             (run) => this.runKeyword(run, query, limit, !!params.recent, params.year));
@@ -177,7 +173,7 @@ export class ResearchService {
         if (!inRange(sinceDays, 1, MAX_SINCE_DAYS)) throw new Error(`Số ngày phải từ 1 đến ${MAX_SINCE_DAYS}.`);
         const limitPerGroup = params.limitPerGroup ?? DEFAULT_LIMIT_PER_GROUP;
         if (!inRange(limitPerGroup, 1, MAX_LIMIT_PER_GROUP)) throw new Error(`Số bài mỗi nhóm phải từ 1 đến ${MAX_LIMIT_PER_GROUP}.`);
-        const profileIds = checkProfileIds(params.profileIds);
+        const profileIds = params.profileIds; // đã kiểm tra ở researchOperationsLogic.checkProfileIds
         if (params.groupUrls !== undefined
             && (!Array.isArray(params.groupUrls) || params.groupUrls.length > GROUP_FEED_MAX_GROUPS
                 || params.groupUrls.some((u) => typeof u !== 'string' || !groupKey(u)))) {
@@ -214,7 +210,7 @@ export class ResearchService {
         } catch (e) {
             outcome = e instanceof ScanStop
                 ? e.outcome
-                : { status: 'failed', errorCode: '', error: `Lỗi nội bộ: ${shortMessage(e)}` };
+                : this.cancelled ? CANCELLED : { status: 'failed', errorCode: '', error: `Lỗi nội bộ: ${shortMessage(e)}` };
         }
         let itemCount = run.total;
         let written = false;
@@ -290,7 +286,11 @@ export class ResearchService {
         } catch (e) {
             throw new ProfileOpenError(shortMessage(e));
         }
-        const close = async (): Promise<void> => { try { await opened.close(); } catch { /* đã đóng */ } };
+        let closing: Promise<void> | null = null;
+        const close = (): Promise<void> => closing ||= (async () => {
+            try { await opened.close(); } catch { /* đã đóng */ } finally { if (this.activeClose === close) this.activeClose = null; }
+        })();
+        this.activeClose = close;
         try {
             await opened.session.open();
             return { id, gql: opened.session, close };
@@ -303,6 +303,7 @@ export class ResearchService {
     /** Lỗi ở một profile: ghi lại và chuyển profile; lỗi cấp lượt quét thì ném ScanStop. */
     private onProfileError(run: Run, id: string, e: unknown, setupPhase: boolean): void {
         if (e instanceof ScanStop) throw e;
+        if (this.cancelled) throw new ScanStop(CANCELLED); // huỷ làm phiên bị đóng: lỗi kèm theo không phải lỗi thật
         let code: string;
         if (e instanceof ProfileOpenError) {
             code = `open_failed: ${e.message}`;
@@ -366,7 +367,7 @@ export class ResearchService {
     private async runKeyword(run: Run, query: string, limit: number, recent: boolean, year?: number): Promise<Outcome> {
         const parse = { posts: parseSearchPosts, groups: parseSearchGroups, pages: parseSearchPages }[run.source as 'posts'];
         const triggerUrl = `https://www.facebook.com/search/${run.source}?q=${encodeURIComponent(query)}`;
-        const st = { cursor: null as string | null, finished: false };
+        const st = { cursor: null as string | null, finished: false, restarts: 0 };
         while (!st.finished && run.pages < MAX_PAGES_PER_SCAN) {
             this.checkCancel();
             const pool = this.eligible(run.used, run.restrictTo);
@@ -390,7 +391,7 @@ export class ResearchService {
 
     private async scanKeywordWithProfile(run: Run, profile: OpenProfile, o: {
         parse: (text: string) => ParseResult; triggerUrl: string; query: string; limit: number; recent: boolean; year?: number;
-        st: { cursor: string | null; finished: boolean }; cap: number; ready(): void;
+        st: { cursor: string | null; finished: boolean; restarts: number }; cap: number; ready(): void;
     }): Promise<void> {
         const { gql, id } = profile;
         const name = SEARCH_QUERY_NAME;
@@ -406,7 +407,8 @@ export class ResearchService {
         let firstCall = true;
         let emptyStreak = 0;
         let pages = 0;
-        const maxPages = chunkPageBound(PER_PROFILE_CHUNK);
+        let maxPages = chunkPageBound(PER_PROFILE_CHUNK);
+        let restarted = false;
         const seen = new Set<string>();
         for (;;) {
             run.pages++;
@@ -415,7 +417,17 @@ export class ResearchService {
             let { res, text } = await this.fetchPage(gql, state, buildVars, o.parse, o.st.cursor);
             if (firstCall && o.st.cursor !== null && (res.items.length === 0 || res.errorCode)) {
                 // Con trỏ mang từ profile trước không dùng được: bắt đầu lại, mục trùng sẽ bị bỏ.
+                if (++o.st.restarts >= 2) {
+                    // Hai profile liên tiếp đều không dùng được con trỏ: con trỏ không chuyển được giữa các tài khoản, xoay vòng không mở rộng được kết quả.
+                    run.details.note = 'cursor_not_portable';
+                    o.st.finished = true;
+                    return;
+                }
+                restarted = true;
+                // Cần đọc lại tới vị trí cũ (các trang trùng chưa tính là trang trống) rồi lấy thêm một phần.
+                maxPages = chunkPageBound(run.total + PER_PROFILE_CHUNK);
                 o.st.cursor = null;
+                seen.clear(); // con trỏ cũ đã bị từ chối; đọc lại từ đầu có thể gặp lại giá trị đó
                 ({ res, text } = await this.fetchPage(gql, state, buildVars, o.parse, null));
             }
             if (res.errorCode === 'parse_failed') {
@@ -423,11 +435,13 @@ export class ResearchService {
                 throw new ResearchError('parse_failed', 'Không đọc được phản hồi Facebook.');
             }
             if (firstCall && res.items.length === 0) this.noteShape(run, text);
+            if (firstCall && o.st.cursor !== null && !restarted) o.st.restarts = 0; // con trỏ mang sang dùng được
             firstCall = false;
             const room = Math.min(o.limit - run.total, PER_PROFILE_CHUNK - inProfile, o.cap - inProfile);
             const { added, leftover } = this.save(run, res.items, id, room);
             inProfile += added;
-            emptyStreak = added === 0 ? emptyStreak + 1 : 0;
+            if (added > 0) emptyStreak = 0;
+            else if (!(restarted && pages < maxPages)) emptyStreak++; // đang đọc lại tới vị trí cũ: trang trùng không tính
             if (run.total >= o.limit) { o.st.finished = true; return; }
             if (leftover) return; // giữ nguyên con trỏ: profile kế tiếp đọc lại trang này, mục trùng bị bỏ
             const next = res.endCursor;
@@ -465,7 +479,13 @@ export class ResearchService {
     private async runGroupFeed(run: Run, given: string[] | undefined, sinceDays: number, limitPerGroup: number): Promise<Outcome> {
         const groups = (given ?? this.recentGroups(run.restrictTo)).filter((u) => groupKey(u)).slice(0, GROUP_FEED_MAX_GROUPS);
         if (this.eligible([], run.restrictTo).ids.length === 0) return this.noProfile(run);
+        if (groups.length === 0) {
+            run.details.note = 'no_groups';
+            return { status: 'done', errorCode: '', error: 'Chưa có nhóm nào để quét — hãy quét nhóm ở profile hoặc nhập link nhóm' };
+        }
         let current: OpenProfile | null = null;
+        let captured = 0;
+        let captureFailed = 0;
         try {
             for (let i = 0; i < groups.length; i++) {
                 if (run.pages >= MAX_PAGES_PER_SCAN) break;
@@ -482,7 +502,8 @@ export class ResearchService {
                             current = null;
                             current = await this.openProfile(run, id);
                         }
-                        await this.scanGroup(run, current, groups[i], sinceDays, limitPerGroup, pool.remaining(id), () => { setup = false; });
+                        const gotQuery = await this.scanGroup(run, current, groups[i], sinceDays, limitPerGroup, pool.remaining(id), () => { setup = false; });
+                        if (gotQuery) captured++; else captureFailed++;
                         break;
                     } catch (e) {
                         await current?.close();
@@ -494,28 +515,42 @@ export class ResearchService {
         } finally {
             await current?.close();
         }
+        if (captureFailed > 0 && captured === 0) {
+            return { status: 'failed', errorCode: 'query_changed', error: 'Không bắt được truy vấn bài viết của nhóm nào.' };
+        }
         return { status: 'done', errorCode: '', error: '' };
     }
 
+    /** Trả false khi không lấy được truy vấn của nhóm (chỉ đánh dấu nhóm đó, lượt quét vẫn tiếp tục). */
     private async scanGroup(
         run: Run, profile: OpenProfile, url: string, sinceDays: number, limitPerGroup: number, cap: number, ready: () => void,
-    ): Promise<void> {
+    ): Promise<boolean> {
         const { gql, id } = profile;
         const key = groupKey(url);
+        const numeric = /^\d+$/.test(key);
         const triggerUrl = `https://www.facebook.com/groups/${key}/?sorting_setting=CHRONOLOGICAL`;
+        const query = await this.groupQuery(run, gql, url, triggerUrl, !numeric);
+        if (!query) return false;
         const state = {
-            query: await gql.ensureQuery('group_feed', GROUP_FEED_QUERY_NAME, triggerUrl),
+            query,
             recapture: () => gql.recapture('group_feed', GROUP_FEED_QUERY_NAME, triggerUrl),
         };
         this.checkCancel();
         ready();
+        // Link rút gọn: id thật nằm trong truy vấn bắt từ chính trang nhóm; không có id số thì không quét được.
+        const idKey = ['id', 'groupID'].find((k) => k in query.variables);
+        const groupId = numeric ? key : String(idKey ? query.variables[idKey] : '');
+        if (!/^\d+$/.test(groupId)) {
+            run.details.groups![url] = 'unresolved';
+            return true;
+        }
         const buildVars = (q: CapturedQuery, cursor: string | null) => {
             const vars = buildGroupFeedVariables(q.variables, { cursor, count: PAGE_COUNT });
-            // Mẫu bắt từ một nhóm khác: đổi sang nhóm đang quét.
-            for (const k of ['id', 'groupID']) if (k in vars) vars[k] = key;
+            // Mẫu có thể bắt từ một nhóm khác: chỉ đổi id khi link có mã số; link rút gọn dùng id đã bắt từ chính trang nhóm.
+            if (numeric) for (const k of ['id', 'groupID']) if (k in vars) vars[k] = key;
             return vars;
         };
-        const parse = (text: string) => parseGroupFeed(text, { groupId: /^\d+$/.test(key) ? key : undefined });
+        const parse = (text: string) => parseGroupFeed(text, { groupId });
         const cutoff = this.now() - sinceDays * DAY_MS;
         let cursor: string | null = null;
         let got = 0;
@@ -530,10 +565,10 @@ export class ResearchService {
             const { res, text } = await this.fetchPage(gql, state, buildVars, parse, cursor);
             if (res.items.length === 0) {
                 if (first || res.errorCode) {
-                    this.noteShape(run, text);
-                    if (first && res.errorCode) run.details.groups![url] = 'not_member';
+                    if (!run.details.shape) this.noteShape(run, text);
+                    if (first) run.details.groups![url] = res.errorCode ? 'not_member' : 'empty';
                 }
-                return;
+                return true;
             }
             const fresh = res.items.filter((it) => it.postedAt === null || it.postedAt >= cutoff);
             const { added, leftover } = this.save(run, fresh, id, Math.min(limitPerGroup - got, cap - got));
@@ -542,9 +577,24 @@ export class ResearchService {
             const next = res.endCursor;
             if (fresh.length < res.items.length || leftover || got >= limitPerGroup || got >= cap
                 || next === null || seen.has(next) || next === cursor
-                || emptyStreak >= MAX_EMPTY_PAGES || pages >= maxPages || run.pages >= MAX_PAGES_PER_SCAN) return;
+                || emptyStreak >= MAX_EMPTY_PAGES || pages >= maxPages || run.pages >= MAX_PAGES_PER_SCAN) return true;
             await this.pause(PAGE_DELAY_MIN_MS, PAGE_DELAY_MAX_MS);
             cursor = next;
+        }
+    }
+
+    /** Lấy truy vấn bài viết nhóm; không bắt được thì đánh dấu riêng nhóm này (null), các lỗi khác ném tiếp. */
+    private async groupQuery(
+        run: Run, gql: ResearchGraphqlSession, url: string, triggerUrl: string, fresh: boolean,
+    ): Promise<CapturedQuery | null> {
+        try {
+            return await gql.ensureQuery('group_feed', GROUP_FEED_QUERY_NAME, triggerUrl, fresh);
+        } catch (e) {
+            if (e instanceof ResearchError && e.code === 'query_changed') {
+                run.details.groups![url] = 'unresolved';
+                return null;
+            }
+            throw e;
         }
     }
 }
