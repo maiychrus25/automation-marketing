@@ -483,7 +483,7 @@ export class FacebookPosterStore {
                     (SELECT r.profile_name FROM fb_poster_results r WHERE r.profile_id = t.profile_id ORDER BY r.id DESC LIMIT 1) AS profile_name,
                     COALESCE(
                         (SELECT g.name FROM fb_poster_groups g WHERE g.profile_id = t.profile_id AND g.url = t.group_url),
-                        (SELECT NULLIF(r.target_name, '') FROM fb_poster_results r WHERE r.id = t.result_id)
+                        (SELECT g.name FROM fb_poster_groups g WHERE g.url = t.group_url AND g.name <> '' LIMIT 1)
                     ) AS group_name
              FROM fb_poster_post_tracking t LEFT JOIN fb_poster_schedules sc ON sc.id = t.schedule_id
              WHERE t.posted_at >= ? AND t.posted_at <= ? ORDER BY t.posted_at DESC, t.result_id DESC`,
