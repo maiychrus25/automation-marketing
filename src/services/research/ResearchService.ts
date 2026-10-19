@@ -7,7 +7,7 @@ import type {
 import {
     ResearchError, type GraphqlSession, buildSearchVariables, type CapturedQuery,
 } from './graphqlSession';
-import { fetchGraphqlPage, groupKey, prepareGroupFeed } from './groupFeed';
+import { fetchGraphqlPage, groupKey, isUnresolved, prepareGroupFeed } from './groupFeed';
 import {
     describeShape, parseGraphqlChunks, parseGroupFeed, parseSearchGroups, parseSearchPages, parseSearchPosts,
     type ParseResult,
@@ -514,13 +514,13 @@ export class ResearchService {
     ): Promise<boolean> {
         const { gql, id } = profile;
         const prepared = await prepareGroupFeed(gql, url, PAGE_COUNT);
-        if (prepared.unresolved && prepared.reason === 'no_query') {
+        if (isUnresolved(prepared) && prepared.reason === 'no_query') {
             run.details.groups![url] = 'unresolved';
             return false;
         }
         this.checkCancel();
         ready();
-        if (prepared.unresolved) {
+        if (isUnresolved(prepared)) {
             run.details.groups![url] = 'unresolved';
             return true;
         }

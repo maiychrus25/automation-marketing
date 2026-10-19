@@ -1,5 +1,5 @@
 import { ResearchError } from '../../services/research/graphqlSession';
-import { GROUP_FEED_QUERY_NAME, groupFeedTriggerUrl, groupKey, prepareGroupFeed } from '../../services/research/groupFeed';
+import { GROUP_FEED_QUERY_NAME, groupFeedTriggerUrl, groupKey, isUnresolved, prepareGroupFeed } from '../../services/research/groupFeed';
 
 const TEMPLATE = { id: '111', cursor: null, count: 3, scale: 1 };
 const query = (vars: Record<string, any> = TEMPLATE) => ({ friendlyName: GROUP_FEED_QUERY_NAME, docId: 'd', variables: vars });
@@ -26,8 +26,8 @@ describe('prepareGroupFeed', () => {
     it('numeric: stored template allowed, id substituted', async () => {
         const gql = fakeGql();
         const p = await prepareGroupFeed(gql as any, 'https://www.facebook.com/groups/999', 10);
-        expect(p.unresolved).toBeFalsy();
-        if (p.unresolved) return;
+        expect(p.unresolved).toBe(false);
+        if (isUnresolved(p)) return;
         expect(gql.ensureQuery).toHaveBeenCalledWith('group_feed', GROUP_FEED_QUERY_NAME, groupFeedTriggerUrl('999'), false);
         expect(p.groupId).toBe('999');
         expect(p.buildVars(p.query, 'CUR')).toMatchObject({ id: '999', cursor: 'CUR', count: 10, scale: 1 });
@@ -37,7 +37,7 @@ describe('prepareGroupFeed', () => {
     it('slug: fresh capture, id taken from the captured query and not substituted', async () => {
         const gql = fakeGql({ query: query({ groupID: '777', cursor: null, count: 3 }) });
         const p = await prepareGroupFeed(gql as any, 'https://www.facebook.com/groups/my.slug', 10);
-        if (p.unresolved) throw new Error('should resolve');
+        if (isUnresolved(p)) throw new Error('should resolve');
         expect(gql.ensureQuery).toHaveBeenCalledWith('group_feed', GROUP_FEED_QUERY_NAME, groupFeedTriggerUrl('my.slug'), true);
         expect(p.groupId).toBe('777');
         expect(p.buildVars(p.query, null).groupID).toBe('777');

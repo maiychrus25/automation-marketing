@@ -21,7 +21,7 @@ export const groupFeedTriggerUrl = (key: string): string =>
     `https://www.facebook.com/groups/${key}/?sorting_setting=CHRONOLOGICAL`;
 
 export interface PreparedGroupFeed {
-    unresolved?: false;
+    unresolved: false;
     query: CapturedQuery;
     groupId: string;
     buildVars(query: CapturedQuery, cursor: string | null): Record<string, any>;
@@ -33,6 +33,9 @@ export interface PreparedGroupFeed {
  * Hai trường hợp khác nhau vì Nghiên cứu đếm chúng khác nhau.
  */
 export interface UnresolvedGroupFeed { unresolved: true; reason: 'no_query' | 'no_id' }
+
+/** Type guard (tsconfig không bật strict nên không tự thu hẹp theo `unresolved`). */
+export const isUnresolved = (p: PreparedGroupFeed | UnresolvedGroupFeed): p is UnresolvedGroupFeed => p.unresolved === true;
 
 /**
  * Lấy truy vấn bảng tin của một nhóm. Link rút gọn bắt truy vấn mới từ chính trang nhóm (cần id thật);
@@ -56,6 +59,7 @@ export async function prepareGroupFeed(
     const groupId = numeric ? key : String(idKey ? query.variables[idKey] : '');
     if (!/^\d+$/.test(groupId)) return { unresolved: true, reason: 'no_id' };
     return {
+        unresolved: false,
         query,
         groupId,
         buildVars: (q, cursor) => {
