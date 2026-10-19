@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { AutomationSession } from '../browser/BrowserProfileService';
-import type { FbPosterMode, FbPosterRun } from '../../models/facebookPoster';
+import type { FbPosterMode, FbPosterRun, LinkStatus } from '../../models/facebookPoster';
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import type { LaunchedPage, LogLevel, TaskDeps } from './types';
 import { collectComments } from './collectComments';
@@ -9,6 +9,7 @@ import { isLoggedIn, FB_HOME } from './loginState';
 import { postToTargets } from './postToTargets';
 import { scanGroups } from './scanGroups';
 import { normalizeTarget } from './targets';
+import { computeNextCheckAt, DEFAULT_POST_TRACKING_CONFIG, normalizeHead, type PostTrackingConfig } from './postTracking';
 
 export interface ProfileInfo { id: string; name: string; }
 
@@ -30,6 +31,8 @@ export interface FacebookPosterServiceDeps {
     random?: () => number;
     sleep?: (ms: number, isStopping: () => boolean) => Promise<void>;
     newId?: () => string;
+    /** Cấu hình theo dõi bài (mốc thử lấy link/đo); mặc định DEFAULT_POST_TRACKING_CONFIG. */
+    readTrackingConfig?: () => PostTrackingConfig;
     /** Báo trạng thái đăng nhập quan sát được trong lượt đăng (lỗi của hàm này bị bỏ qua). */
     onLoginObserved?: (profileId: string, state: 'ok' | 'logged_out') => void;
     tasks?: Partial<{ postToTargets: typeof postToTargets; scanGroups: typeof scanGroups; searchAndJoinGroups: typeof searchAndJoinGroups; collectComments: typeof collectComments }>;
@@ -69,7 +72,7 @@ interface ProfilePlan {
     posted: boolean;
 }
 interface ActiveRun { run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number }; }
-interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; identity?: string; errorCode?: string; attempts?: number; }
+interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; pendingApproval?: boolean; identity?: string; errorCode?: string; attempts?: number; }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -394,6 +397,7 @@ export class FacebookPosterService {
                             attempts: r.attempts,
                             postUrl: r.postUrl,
                             commentStatus: r.commentStatus,
+                            pendingApproval: r.pendingApproval,
                             identity: r.identity,
                         }),
                     },
@@ -454,7 +458,7 @@ export class FacebookPosterService {
     private record(active: ActiveRun, plan: ProfilePlan, original: ResultRow, { stopAware = true } = {}): void {
         const row = stopAware ? this.stopAwareRow(active, plan, original) : original;
         try {
-            this.store.addResult({
+            const resultId = this.store.addResult({
                 runId: active.run.id,
                 profileId: plan.profileId,
                 profileName: plan.name,
@@ -470,6 +474,7 @@ export class FacebookPosterService {
                 identity: row.identity ?? '',
                 createdAt: this.now(),
             });
+            this.trackPostedResult(active, plan, row, resultId);
         } catch (err) {
             this.rememberStoreError(err);
         }
@@ -477,6 +482,31 @@ export class FacebookPosterService {
         plan.reachedCritical = false;
         plan.progress.done += 1;
         this.emitProgress(active);
+    }
+
+    /** Tạo dòng theo dõi cho bài nhóm đã đăng. Mọi lỗi chỉ ghi log, không ảnh hưởng kết quả đăng. */
+    private trackPostedResult(active: ActiveRun, plan: ProfilePlan, row: ResultRow, resultId: number): void {
+        const params = active.params;
+        if (params.kind !== 'post' || params.mode !== 'group' || row.outcome !== 'posted') return;
+        try {
+            const postedAt = this.now();
+            const postUrl = row.postUrl ?? null;
+            const linkStatus: LinkStatus = postUrl ? 'known'
+                : row.pendingApproval || row.commentStatus === 'pending_approval' ? 'pending_approval' : 'missing';
+            const tracking = {
+                resultId, runId: active.run.id, scheduleId: active.run.scheduleId, profileId: plan.profileId,
+                groupUrl: row.url,
+                groupId: /\/groups\/(\d+)/.exec(row.url)?.[1] ?? '',
+                postId: postUrl ? /\/(?:posts|permalink)\/(\d+)|[?&]story_fbid=(\d+)/.exec(postUrl)?.slice(1).find(Boolean) ?? '' : '',
+                postUrl, postedAt, textHead: normalizeHead(params.text), linkStatus,
+                removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null as number | null, statsDone: [] as string[],
+            };
+            const config = this.deps.readTrackingConfig?.() ?? DEFAULT_POST_TRACKING_CONFIG;
+            tracking.nextCheckAt = computeNextCheckAt(tracking, config, postedAt);
+            this.store.createTracking(tracking);
+        } catch (err) {
+            this.emit('facebookPoster:log', { runId: active.run.id, profileId: plan.profileId, level: 'warning', message: `Không tạo được dòng theo dõi bài: ${errorMessage(err)}`, at: this.now() });
+        }
     }
 
     /** A failure caused by our own cancel is a stop, not an error; one after a critical step stays a failure (forced close gets its own text). */

@@ -5,7 +5,7 @@ import type { TaskDeps } from './types';
 import { delayRandom, humanClick, sleepStoppable } from './humanize';
 import { normalizeTarget, pickDelaySeconds } from './targets';
 import { FB_HOME, isLoggedIn } from './loginState';
-import { postFirstComment, type CommentStatus } from './firstComment';
+import { postFirstComment, PENDING_APPROVAL_MARKERS, type CommentStatus } from './firstComment';
 
 export const PUBLISH_LABELS = ['Đăng', 'Post', 'Chia sẻ', 'Share', 'Đăng ngay', 'Publish'];
 
@@ -122,6 +122,20 @@ function findOwnPostLinkInPage(selfId: string): string | null {
  * chấp nhận bài do chính mình đăng. Vớ nhầm bài ghim của người khác sẽ khiến
  * công cụ đi quét bình luận của người lạ — thà không có link còn hơn.
  */
+/** Trang đang hiện câu chờ duyệt không? Chỉ đọc chữ, không điều hướng. CHẠY TRONG TRÌNH DUYỆT. */
+function pendingApprovalInPage(markers: string[]): boolean {
+  const text = String(document.body?.innerText ?? '').slice(0, 200_000).toLowerCase();
+  return markers.some((m) => text.includes(m));
+}
+
+async function detectPendingApproval(page: Page): Promise<boolean> {
+  try {
+    return (await page.evaluate(pendingApprovalInPage, PENDING_APPROVAL_MARKERS)) === true;
+  } catch {
+    return false;
+  }
+}
+
 async function findOwnPostUrl(page: Page, ctx: BrowserContext): Promise<string | null> {
   let selfId: string | null = null;
   try {
@@ -425,6 +439,8 @@ interface SingleTargetOutcome {
   /** true khi cú bấm Đăng đã được gửi đi (không được thử lại). */
   afterSubmit?: boolean;
   commentStatus?: CommentStatus;
+  /** Bài đã đăng, chưa có link và trang đang hiện câu chờ duyệt. */
+  pendingApproval?: boolean;
   /** Danh tính đọc được từ lời mời soạn bài ('' nếu không đọc được). */
   identity: string;
   /** Thời gian đã chờ trước khi bình luận (ms), để trừ vào khoảng nghỉ kế tiếp. */
@@ -795,6 +811,7 @@ async function postToSingleTarget(
   if (!postUrl) {
     postUrl = await findOwnPostUrl(page, ctx);
   }
+  const pendingApproval = !postUrl && (await detectPendingApproval(page));
   if (!postUrl) {
     sendLog(
       `[${kind}] Đã đăng nhưng không lấy được link bài — bài này sẽ không quét bình luận được: ${url}`,
@@ -816,7 +833,7 @@ async function postToSingleTarget(
       waitedMs += step;
     }
     if (getIsStopping()) {
-      return { ok: true, postUrl, commentStatus: 'failed', identity, waitedMs };
+      return { ok: true, postUrl, commentStatus: 'failed', identity, waitedMs, pendingApproval };
     }
   }
   const outcome = await postFirstComment(page, { postUrl, comment, text }, { sendLog, getIsStopping });
@@ -824,7 +841,7 @@ async function postToSingleTarget(
     sendLog(`[${kind}] Bình luận chưa vào được (${url}): ${outcome.reason}`, 'warning');
   }
 
-  return { ok: true, postUrl, commentStatus: outcome.status, identity, waitedMs };
+  return { ok: true, postUrl, commentStatus: outcome.status, identity, waitedMs, pendingApproval };
 }
 
 export interface PostTargetResult {
@@ -835,6 +852,8 @@ export interface PostTargetResult {
   commentStatus: CommentStatus;
   /** Danh tính đọc được từ lời mời soạn bài của đích này ('' nếu không đọc được). */
   identity: string;
+  /** Đăng được nhưng chưa có link và trang báo chờ duyệt. */
+  pendingApproval: boolean;
   /** '' khi thành công. */
   errorCode: PostErrorCode | '';
   /** Số lần đã thử (≥ 1). */
@@ -941,11 +960,12 @@ export async function postToTargets(
       let identity = '';
       let waitedMs = 0;
       let errorCode: PostErrorCode | '' = '';
+      let pendingApproval = false;
       let attempts = 0;
       try {
         for (let attempt = 1; ; attempt++) {
           attempts = attempt;
-          ok = false; error = null; postUrl = null; errorCode = ''; commentStatus = 'not_requested';
+          ok = false; error = null; postUrl = null; errorCode = ''; commentStatus = 'not_requested'; pendingApproval = false;
           // Đã qua điểm không quay lại trong lần thử này chưa (để phân loại ngoại lệ).
           let enteredCritical = false;
           let afterSubmit = false;
@@ -969,6 +989,7 @@ export async function postToTargets(
             ok = single.ok;
             postUrl = single.postUrl;
             identity = single.identity;
+            pendingApproval = !!single.pendingApproval;
             waitedMs = single.waitedMs ?? 0;
             if (!single.ok) {
               errorCode = single.errorCode ?? 'unknown';
@@ -1008,7 +1029,7 @@ export async function postToTargets(
             break;
           }
         }
-        const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity, errorCode, attempts };
+        const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity, pendingApproval, errorCode, attempts };
         results.push(entry);
         // Báo ngay khi đích này xong để nơi gọi ghi lịch sử/hiển thị từng bước,
         // không đợi cả lượt.

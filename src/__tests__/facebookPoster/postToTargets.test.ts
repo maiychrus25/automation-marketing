@@ -223,8 +223,8 @@ test('đăng thành công 2 targets: tổng hợp kết quả đúng, đóng con
       // Không có phản hồi GraphQL và không có bài "[role=article]" nào trong
       // DOM giả lập, nên đường dự phòng cũng không bắt được link — đúng theo
       // thiết kế: thà không có link còn hơn vớ nhầm bài của người khác.
-      { url: 'https://www.facebook.com/groups/123456789/', ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '', errorCode: '', attempts: 1 },
-      { url: 'https://www.facebook.com/mytrang', ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '', errorCode: '', attempts: 1 },
+      { url: 'https://www.facebook.com/groups/123456789/', ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '', pendingApproval: false, errorCode: '', attempts: 1 },
+      { url: 'https://www.facebook.com/mytrang', ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '', pendingApproval: false, errorCode: '', attempts: 1 },
     ],
   });
   assert.deepStrictEqual(clicked, ['publish', 'publish'], 'nút Đăng phải được bấm bằng click tin cậy qua locator, mỗi đích một lần');
@@ -274,6 +274,7 @@ test('không mở được hộp soạn thảo thì phải báo lỗi, không g�
       postUrl: null,
       commentStatus: 'not_requested',
       identity: '',
+      pendingApproval: false,
       errorCode: 'unexpected_error',
       attempts: 3,
     },
@@ -1798,4 +1799,68 @@ test('non-string editor read on retry -> draft_conflict, nothing typed', async (
   assert.strictEqual(r.error, 'Không đọc được nội dung ô soạn thảo, không thử lại để tránh đăng trùng');
   assert.strictEqual(r.attempts, 2);
   assert.ok(!events.includes('type') && !events.includes('press:Control+A'));
+});
+
+describe('pendingApproval khi đăng thành công mà không có link', () => {
+  const target = ['https://www.facebook.com/groups/777/'];
+  const run = async (page: FakePage, ctx = loggedInCtx([])) => runWithFakeTimers(() => postToTargets(
+    { text: 'nội dung', targets: target, minDelay: 0, maxDelay: 0 },
+    makeDeps(ctx, page),
+  ));
+  const withPending = (page: FakePage, answer: (fn: AnyFn, arg: unknown) => unknown) => {
+    const base = page.evaluate as (fn: AnyFn, arg?: unknown) => Promise<unknown>;
+    page.evaluate = async (fn: AnyFn, arg?: unknown) => (fn.name === 'pendingApprovalInPage' ? answer(fn, arg) : base(fn, arg));
+    return page;
+  };
+
+  test('trang có câu chờ duyệt, không link: pendingApproval = true', async () => {
+    const page = withPending(pageSuccessful({ graphqlBody: null }), () => true);
+    const ra = await run(page);
+    assert.strictEqual(ra.results[0].ok, true);
+    assert.strictEqual(ra.results[0].postUrl, null);
+    assert.strictEqual(ra.results[0].pendingApproval, true);
+  });
+
+  test('không có câu chờ duyệt: pendingApproval = false', async () => {
+    const ra = await run(pageSuccessful({ graphqlBody: null }));
+    assert.strictEqual(ra.results[0].pendingApproval, false);
+  });
+
+  test('có link thì không đọc trang và pendingApproval = false', async () => {
+    let asked = 0;
+    const page = withPending(pageSuccessful({ graphqlBody: '{"data":{"story_create":{"story":{"post_id":"123456","id":"abc"}}}}' }), () => { asked++; return true; });
+    const ra = await run(page);
+    assert.ok(ra.results[0].postUrl);
+    assert.strictEqual(ra.results[0].pendingApproval, false);
+    assert.strictEqual(asked, 0);
+  });
+
+  test('evaluate ném lỗi: pendingApproval = false, vẫn ok', async () => {
+    const page = withPending(pageSuccessful({ graphqlBody: null }), () => { throw new Error('trang đóng'); });
+    const ra = await run(page);
+    assert.strictEqual(ra.results[0].ok, true);
+    assert.strictEqual(ra.results[0].pendingApproval, false);
+  });
+
+  test('hàm đọc trang: so khớp chữ thường, cắt 200k ký tự, tìm được câu chờ duyệt', async () => {
+    let fn: ((m: string[]) => boolean) | undefined;
+    const page = withPending(pageSuccessful({ graphqlBody: null }), (f) => { fn = f as never; return false; });
+    await run(page);
+    const g = global as unknown as { document: unknown };
+    const old = g.document;
+    try {
+      g.document = { body: { innerText: 'Bài viết ĐANG CHỜ PHÊ DUYỆT' } };
+      assert.strictEqual(fn!(['đang chờ phê duyệt']), true);
+      g.document = { body: { innerText: 'x'.repeat(200_000) + 'pending approval' } };
+      assert.strictEqual(fn!(['pending approval']), false);
+    } finally { g.document = old; }
+  });
+
+  test('lần thử lại không giữ pendingApproval của lần trước', async () => {
+    // Đường thử lại đã có test riêng; ở đây chỉ chốt giá trị mặc định cho đích thất bại.
+    const page = pageSuccessful({ graphqlBody: null });
+    page.waitForSelector = async () => { throw new Error('hết giờ'); };
+    const ra = await run(page);
+    assert.strictEqual(ra.results[0].pendingApproval, false);
+  });
 });

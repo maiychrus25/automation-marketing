@@ -1282,3 +1282,69 @@ describe('FacebookPosterService error codes', () => {
   });
 });
 
+
+describe('FacebookPosterService post tracking rows', () => {
+  const one = (over: Record<string, unknown>) => jest.fn(async (input: any, deps: any) => {
+    await deps.launch();
+    deps.onResult({ url: input.targets[0], ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: 'Me', ...over });
+  });
+  const params = (over: Partial<Extract<StartParams, { kind: 'post' }>> = {}) =>
+    postParams({ profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123/'] }], ...over });
+
+  test('known link creates a known row with ids, head and next check', async () => {
+    const h = harness({ postToTargets: one({ postUrl: 'https://www.facebook.com/groups/123/posts/456/' }) });
+    h.service.start(params({ text: '  Xin   CHÀO ' }), 'sch-1');
+    await h.service.whenIdle();
+    const rows = h.store.listTracking({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      groupUrl: 'https://www.facebook.com/groups/123/', groupId: '123', postId: '456', linkStatus: 'known',
+      textHead: 'xin chào', scheduleId: 'sch-1', profileId: 'p1', postedAt: 1_000_000, nextCheckAt: 1_000_000 + 60 * 60_000,
+    });
+    expect(rows[0].resultId).toBe((h.results(rows[0].runId) as any[])[0].id);
+  });
+
+  test('pending approval (flag or comment status) creates pending_approval row', async () => {
+    const a = harness({ postToTargets: one({ pendingApproval: true }) });
+    a.service.start(params());
+    await a.service.whenIdle();
+    expect(a.store.listTracking({})[0]).toMatchObject({ linkStatus: 'pending_approval', postUrl: null, postId: '', nextCheckAt: 1_000_000 + 30 * 60_000 });
+    const b = harness({ postToTargets: one({ commentStatus: 'pending_approval' }) });
+    b.service.start(params());
+    await b.service.whenIdle();
+    expect(b.store.listTracking({})[0].linkStatus).toBe('pending_approval');
+  });
+
+  test('no link and no marker creates a missing row; custom config sets next check', async () => {
+    const h = harness({ postToTargets: one({}) }, { readTrackingConfig: () => ({ autoEnabled: true, linkRetryMinutes: [10], statsAtMinutes: [60] }) });
+    h.service.start(params());
+    await h.service.whenIdle();
+    expect(h.store.listTracking({})[0]).toMatchObject({ linkStatus: 'missing', nextCheckAt: 1_000_000 + 10 * 60_000 });
+  });
+
+  test('page mode, failed posts and non-post kinds create no rows', async () => {
+    const page = harness({ postToTargets: one({ postUrl: 'https://www.facebook.com/p/posts/1/' }) });
+    page.service.start(params({ mode: 'page' }));
+    await page.service.whenIdle();
+    expect(page.store.listTracking({})).toHaveLength(0);
+    const failed = harness({ postToTargets: one({ ok: false, error: 'lỗi', errorCode: 'unknown' }) });
+    failed.service.start(params());
+    await failed.service.whenIdle();
+    expect(failed.store.listTracking({})).toHaveLength(0);
+    const scan = harness({ scanGroups: jest.fn(async (deps: any) => { await deps.launch(); return { groups: [], scrollError: false, hitScrollLimit: false }; }) });
+    scan.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 30, staggerMaxSec: 90 });
+    await scan.service.whenIdle();
+    expect(scan.store.listTracking({})).toHaveLength(0);
+  });
+
+  test('a store error while tracking still records the result, logs a warning and keeps the run done', async () => {
+    const h = harness({ postToTargets: one({ postUrl: 'https://www.facebook.com/groups/123/posts/456/' }) });
+    jest.spyOn(h.store, 'createTracking').mockImplementation(() => { throw new Error('disk full'); });
+    const { runId } = h.service.start(params());
+    await h.service.whenIdle();
+    expect(h.results(runId)).toHaveLength(1);
+    expect(h.results(runId)[0].outcome).toBe('posted');
+    expect(h.run(runId).status).not.toBe('failed');
+    expect(h.emitted.some((e) => e.channel === 'facebookPoster:log' && e.data.level === 'warning' && e.data.message.includes('disk full'))).toBe(true);
+  });
+});
