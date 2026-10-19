@@ -431,6 +431,23 @@ describe('post tracking store', () => {
     expect(s.listDuePairs(1, 10)).toEqual([]);
   });
 
+  test('latestStats chunks large id lists (more than 500 ids)', () => {
+    const s = store();
+    const ids = Array.from({ length: 1200 }, (_, i) => i + 1);
+    for (const id of [1, 600, 1200]) s.addPostStats(id, { capturedAt: 10, reactions: id, comments: 0, shares: 0 });
+    s.addPostStats(600, { capturedAt: 20, reactions: 7, comments: 0, shares: 0 });
+    expect(s.latestStats(ids).map((g) => [g.resultId, g.reactions])).toEqual([[1, 1], [600, 7], [1200, 1200]]);
+  });
+
+  test('listTracking untilMs filters posted_at in SQL', () => {
+    const s = store();
+    s.createTracking(trackRow(1, { postedAt: 100 }));
+    s.createTracking(trackRow(2, { postedAt: 200 }));
+    s.createTracking(trackRow(3, { postedAt: 300 }));
+    expect(s.listTracking({ sinceMs: 100, untilMs: 200 }).map((r) => r.resultId)).toEqual([2, 1]);
+    expect(s.listTracking({ untilMs: 200, limit: 1 }).map((r) => r.resultId)).toEqual([2]);
+  });
+
   test('addPostStats và latestStats trả lần đo mới nhất mỗi bài', () => {
     const s = store();
     s.addPostStats(1, { capturedAt: 10, reactions: 1, comments: 0, shares: 0 });

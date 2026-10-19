@@ -596,8 +596,8 @@ export const trackingOperations = {
         const offset = offsetOf(p.offset);
         const s = store();
         const matched = s.listTracking({
-            linkStatus: p.linkStatus, profileId: p.profileId, groupUrl: p.groupUrl, sinceMs: from, limit: MAX_TRACK_LIST_SCAN,
-        }).filter((r) => r.postedAt <= to);
+            linkStatus: p.linkStatus, profileId: p.profileId, groupUrl: p.groupUrl, sinceMs: from, untilMs: to, limit: MAX_TRACK_LIST_SCAN,
+        });
         const page = matched.slice(offset, offset + limit);
         const latest = new Map(s.latestStats(page.map((r) => r.resultId)).map((x) => [x.resultId, x]));
         return { total: matched.length, rows: page.map((r) => ({ ...r, latestStats: latest.get(r.resultId) ?? null })) };

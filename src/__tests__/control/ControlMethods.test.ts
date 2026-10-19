@@ -208,6 +208,8 @@ describe('toControlError', () => {
         expect(toControlError(new Error(BUSY_ERROR)).code).toBe('BUSY');
         expect(toControlError(new Error(`${BUSY_ERROR} khác`)).code).toBe('BUSY');
         expect(toControlError(new Error(ENGINE_MISSING_ERROR)).code).toBe('ENGINE_MISSING');
+        // Cùng chuỗi với WORKSPACE_SWITCHING_ERROR của facebookPosterIpc/researchIpc.
+        expect(toControlError(new Error('Đang đổi workspace, thử lại sau')).code).toBe('BUSY');
         expect(toControlError(new Error('Tối đa 200 lịch cho một workspace')).code).toBe('LIMIT_REACHED');
         for (const m of ['Không tìm thấy lịch', 'Không tìm thấy bản nháp', 'Không tìm thấy lần chạy']) {
             expect(toControlError(new Error(m)).code).toBe('NOT_FOUND');

@@ -110,6 +110,13 @@ const TRACKING_PATCH_COLUMNS: Record<string, string> = {
     lastSeenAt: 'last_seen_at', lastCheckedAt: 'last_checked_at', checkCount: 'check_count', nextCheckAt: 'next_check_at', statsDone: 'stats_done',
 };
 
+const IN_CHUNK = 500;
+function chunk<T>(items: T[], size: number): T[][] {
+    const out: T[][] = [];
+    for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+    return out;
+}
+
 const engagementOf = (s: PostStatsSnapshot) => (s.reactions ?? 0) + (s.comments ?? 0) + (s.shares ?? 0);
 
 function localDay(ms: number): string {
@@ -396,13 +403,14 @@ export class FacebookPosterStore {
         );
     }
 
-    listTracking(filter: { linkStatus?: LinkStatus; profileId?: string; groupUrl?: string; sinceMs?: number; limit?: number }): PostTrackingRow[] {
+    listTracking(filter: { linkStatus?: LinkStatus; profileId?: string; groupUrl?: string; sinceMs?: number; untilMs?: number; limit?: number }): PostTrackingRow[] {
         const where: string[] = [];
         const params: any[] = [];
         if (filter.linkStatus !== undefined) { where.push('link_status = ?'); params.push(filter.linkStatus); }
         if (filter.profileId !== undefined) { where.push('profile_id = ?'); params.push(filter.profileId); }
         if (filter.groupUrl !== undefined) { where.push('group_url = ?'); params.push(filter.groupUrl); }
         if (filter.sinceMs !== undefined) { where.push('posted_at >= ?'); params.push(filter.sinceMs); }
+        if (filter.untilMs !== undefined) { where.push('posted_at <= ?'); params.push(filter.untilMs); }
         params.push(filter.limit ?? 1000);
         return this.db.query<any>(
             `SELECT * FROM fb_poster_post_tracking ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY posted_at DESC, result_id DESC LIMIT ?`,
@@ -454,15 +462,18 @@ export class FacebookPosterStore {
 
     /** Lần đo mới nhất của mỗi bài trong `resultIds` (bài chưa đo không có mặt). */
     latestStats(resultIds: number[]): PostStatsSnapshot[] {
-        if (resultIds.length === 0) return [];
-        const marks = resultIds.map(() => '?').join(',');
-        return this.db.query<any>(
-            `SELECT s.* FROM fb_poster_post_stats s
-             WHERE s.result_id IN (${marks})
-               AND s.id = (SELECT x.id FROM fb_poster_post_stats x WHERE x.result_id = s.result_id ORDER BY x.captured_at DESC, x.id DESC LIMIT 1)
-             ORDER BY s.result_id`,
-            resultIds,
-        ).map(mapPostStats);
+        const out: PostStatsSnapshot[] = [];
+        for (const ids of chunk(resultIds, IN_CHUNK)) {
+            const marks = ids.map(() => '?').join(',');
+            out.push(...this.db.query<any>(
+                `SELECT s.* FROM fb_poster_post_stats s
+                 WHERE s.result_id IN (${marks})
+                   AND s.id = (SELECT x.id FROM fb_poster_post_stats x WHERE x.result_id = s.result_id ORDER BY x.captured_at DESC, x.id DESC LIMIT 1)
+                 ORDER BY s.result_id`,
+                ids,
+            ).map(mapPostStats));
+        }
+        return out.sort((a, b) => a.resultId - b.resultId);
     }
 
     /** Báo cáo hiệu quả bài đã đăng (spec mục 5). Bài tính theo `posted_at` trong [from, to]. */
@@ -538,10 +549,12 @@ export class FacebookPosterStore {
         const kept = ordered.slice(0, opts.limit);
         if (opts.groupBy === 'post' && kept.length > 0) {
             const byId = new Map(kept.map((k) => [k.row.post!.resultId, k.row.post!]));
-            const marks = [...byId.keys()].map(() => '?').join(',');
-            for (const snap of this.db.query<any>(
-                `SELECT * FROM fb_poster_post_stats WHERE result_id IN (${marks}) ORDER BY captured_at, id`, [...byId.keys()],
-            )) byId.get(snap.result_id)?.snapshots.push(mapPostStats(snap));
+            for (const ids of chunk([...byId.keys()], IN_CHUNK)) {
+                const marks = ids.map(() => '?').join(',');
+                for (const snap of this.db.query<any>(
+                    `SELECT * FROM fb_poster_post_stats WHERE result_id IN (${marks}) ORDER BY captured_at, id`, ids,
+                )) byId.get(snap.result_id)?.snapshots.push(mapPostStats(snap));
+            }
         }
         return kept.map(({ row, rates, engagement }) => {
             row.avgEngagement = row.measured > 0 ? engagement / row.measured : null;

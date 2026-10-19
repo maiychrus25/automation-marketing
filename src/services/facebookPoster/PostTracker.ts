@@ -7,7 +7,7 @@ import { describeShape, parseGraphqlChunks, parseGroupFeed } from '../research/p
 import { BUSY_ERROR } from './FacebookPosterService';
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import {
-    DEFAULT_POST_TRACKING_CONFIG, computeNextCheckAt, linkRetryExhausted, pickBestMatch,
+    DEFAULT_POST_TRACKING_CONFIG, computeNextCheckAt, linkRetryExhausted, markOverdueStatsDone, pickBestMatch,
     type PostTrackingConfig,
 } from './postTracking';
 
@@ -27,7 +27,6 @@ const GROUP_DELAY_MAX_MS = 15000;
 const MAX_EMPTY_PAGES = 2;
 const STOP_MARGIN_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MINUTE_MS = 60_000;
 const ROW_LIMIT = 5000;
 const SHAPE_DEPTH = 16;
 
@@ -127,7 +126,8 @@ export class PostTracker {
         this.cancelled = false;
         this.jobId = jobId;
         this.progress = { done: 0, total: pairs.length };
-        const sinceMs = this.now() - (params.pairs ? MAX_TRACK_SINCE_DAYS : sinceDays) * DAY_MS;
+        // Cặp của bộ hẹn giờ nạp mọi dòng đến hạn (trackPair làm nguội dòng quá cũ), không giới hạn theo ngày.
+        const sinceMs = params.pairs ? 0 : this.now() - sinceDays * DAY_MS;
         this.running = this.run(jobId, !!params.auto, pairs, sinceMs).catch(() => undefined);
         return { jobId, pairs };
     }
@@ -192,16 +192,21 @@ export class PostTracker {
         const errors: TrackError[] = [];
         const skipped = new Set<string>();
         const shape: { value?: string[] } = {};
+        // Nhường một nhịp để `trackFinished` luôn phát sau khi `track()` đã trả về (kể cả khi không có cặp nào).
+        await Promise.resolve();
         try {
           try {
             for (let i = 0; i < pairs.length && !this.cancelled; i++) {
                 const pair = pairs[i];
                 if (i > 0) await this.pause(GROUP_DELAY_MIN_MS, GROUP_DELAY_MAX_MS);
                 if (this.cancelled) break;
-                if (!skipped.has(pair.profileId)) {
+                if (skipped.has(pair.profileId)) {
+                    this.backOffPair(pair, totals);
+                } else {
                     try {
                         await this.trackPair(pair, sinceMs, totals, shape);
                     } catch (e) {
+                        this.backOffPair(pair, totals);
                         const code = e instanceof ResearchError ? e.code : 'error';
                         const message = e instanceof ResearchError ? e.code : (e instanceof Error ? e.message : String(e));
                         errors.push({ groupUrl: pair.groupUrl, profileId: pair.profileId, error: message });
@@ -236,8 +241,12 @@ export class PostTracker {
     }
 
     private async trackPair(pair: TrackPair, sinceMs: number, totals: Counters, shape: { value?: string[] }): Promise<void> {
-        const rows = this.deps.store.listTrackingForPair(pair.profileId, pair.groupUrl, sinceMs)
+        const all = this.deps.store.listTrackingForPair(pair.profileId, pair.groupUrl, sinceMs)
             .filter((r) => r.linkStatus !== 'not_found');
+        // Dòng quá cửa sổ 14 ngày không đọc nữa: làm nguội để không đến hạn mãi (spec 4.5).
+        const staleBefore = this.now() - MAX_TRACK_SINCE_DAYS * DAY_MS;
+        this.settleUnread(all.filter((r) => r.postedAt < staleBefore && this.isDue(r)), totals);
+        const rows = all.filter((r) => r.postedAt >= staleBefore);
         if (rows.length === 0) return;
         const opened = await this.deps.openSession(pair.profileId);
         try {
@@ -245,6 +254,37 @@ export class PostTracker {
             this.applyReading(rows, reading, totals);
         } finally {
             await opened.close().catch(() => undefined);
+        }
+    }
+
+    private isDue(row: PostTrackingRow): boolean {
+        return row.nextCheckAt !== null && row.nextCheckAt <= this.now();
+    }
+
+    /** Cặp lỗi: các dòng đến hạn được lên lịch như một lần kiểm tra không đọc được gì, để không bị chọn lại ở nhịp sau. */
+    private backOffPair(pair: TrackPair, totals: Counters): void {
+        try {
+            const rows = this.deps.store.listTrackingForPair(pair.profileId, pair.groupUrl, 0)
+                .filter((r) => r.linkStatus !== 'not_found' && this.isDue(r));
+            this.settleUnread(rows, totals);
+        } catch { /* lên lịch lại không được làm hỏng lượt theo dõi */ }
+    }
+
+    /** Lần kiểm tra không đọc được gì: hết mốc lấy link thì not_found, mốc đo đã qua coi như xong, rồi sang mốc tương lai hoặc NULL. */
+    private settleUnread(rows: PostTrackingRow[], totals: Counters): void {
+        const config = this.deps.getConfig?.() ?? DEFAULT_POST_TRACKING_CONFIG;
+        const now = this.now();
+        for (const row of rows) {
+            const patch: Partial<PostTrackingRow> = {};
+            if (row.linkStatus !== 'known' && linkRetryExhausted(row, config, now)) {
+                patch.linkStatus = 'not_found';
+                totals.notFound++;
+            } else if (row.linkStatus === 'known') {
+                patch.statsDone = markOverdueStatsDone(row, config, now);
+            }
+            this.deps.store.updateTracking(row.resultId, {
+                ...patch, nextCheckAt: computeNextCheckAt({ ...row, ...patch }, config, now),
+            });
         }
     }
 
@@ -310,6 +350,8 @@ export class PostTracker {
             const hit = hits.get(row.resultId);
             const patch = hit ? this.foundPatch(row, hit, reading.groupId, config, now, totals)
                 : this.missPatch(row, reading.oldest !== null && reading.oldest < row.postedAt, config, now, totals);
+            // Đã kiểm tra mà không thấy: mốc đo đã qua coi như xong để lần sau sang mốc tương lai (không kết luận gì thêm).
+            if (!hit && row.linkStatus === 'known') patch.statsDone = markOverdueStatsDone(row, config, now);
             const merged: PostTrackingRow = { ...row, ...patch, lastCheckedAt: now };
             this.deps.store.updateTracking(row.resultId, {
                 ...patch, lastCheckedAt: now, nextCheckAt: computeNextCheckAt(merged, config, now),
@@ -326,11 +368,7 @@ export class PostTracker {
             capturedAt: now, reactions: item.reactions ?? null, comments: item.comments ?? null, shares: item.shares ?? null,
         });
         // Một lần đo tính cho mọi mốc đã đến hạn (spec 4.5 + phán quyết của Task 1).
-        const done = [...row.statsDone];
-        for (const m of config.statsAtMinutes) {
-            const label = `${m}m`;
-            if (row.postedAt + m * MINUTE_MS <= now && !done.includes(label)) done.push(label);
-        }
+        const done = markOverdueStatsDone(row, config, now);
         return {
             postId: item.fbId, postUrl: row.postUrl ?? (item.url || null), groupId: row.groupId || groupId,
             linkStatus: 'known', lastSeenAt: now, checkCount: 0, removedSuspected: false, statsDone: done,

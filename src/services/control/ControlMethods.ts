@@ -19,6 +19,9 @@ export class ControlError extends Error {
 const INTERNAL_MESSAGE = 'Lỗi nội bộ của MaiHub, thử lại sau';
 const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy', SCAN_NOT_FOUND_ERROR];
 
+/** Trùng `WORKSPACE_SWITCHING_ERROR` của facebookPosterIpc/researchIpc (có test đối chiếu); không import để tránh kéo Electron vào đây. */
+const WORKSPACE_SWITCHING_MESSAGE = 'Đang đổi workspace, thử lại sau';
+
 /**
  * Đổi lỗi ném ra từ posterOperations thành mã giao thức. Chỉ `new Error(msg)` thuần (lỗi kiểm tra có thông báo tiếng Việt)
  * mới thành INVALID_PARAMS; mọi lỗi khác (TypeError, lỗi SQLite/hệ thống tệp…) là INTERNAL, không lộ thông báo gốc.
@@ -30,7 +33,7 @@ export function toControlError(err: unknown): ControlError {
     const plain = err instanceof Error && err.constructor === Error && typeof (err as { code?: unknown }).code !== 'string';
     if (!plain) return new ControlError('INTERNAL', INTERNAL_MESSAGE);
     const message = (err as Error).message;
-    if (message.includes(BUSY_ERROR)) return new ControlError('BUSY', message);
+    if (message.includes(BUSY_ERROR) || message === WORKSPACE_SWITCHING_MESSAGE) return new ControlError('BUSY', message);
     if (message === ENGINE_MISSING_ERROR) return new ControlError('ENGINE_MISSING', message);
     if (/Tối đa \d+ lịch/.test(message)) return new ControlError('LIMIT_REACHED', message);
     if (NOT_FOUND_MESSAGES.includes(message)) return new ControlError('NOT_FOUND', message);

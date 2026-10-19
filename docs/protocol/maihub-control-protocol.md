@@ -115,7 +115,7 @@ Lỗi: `{ "ok": false, "error": { "code": "…", "message": "<tiếng Việt>", 
 | `INVALID_PARAMS` | 400 | Thân không phải JSON hợp lệ hoặc không phải đối tượng; thiếu `method`; `params` không phải đối tượng; `idempotencyKey` không phải chuỗi 1–64 ký tự; tham số sai kiểm tra của app (kèm `details.field` khi biết trường); lỗi header của `/v1/media`; `mediaId` lạ hoặc hết hạn. Sai phương thức HTTP: 405 |
 | `NOT_FOUND` | 404 | Đường dẫn lạ; không có bản nháp / lịch / lần chạy với mã đã gửi |
 | `CONFIRMATION_REQUIRED` | 409 | Thao tác `destructive` mà thiếu `confirm: true`. Không làm gì cả |
-| `BUSY` | 409 | Đang có việc Đăng Facebook chạy (`Đang có việc chạy`), thao tác cần máy rảnh |
+| `BUSY` | 409 | Đang có việc Đăng Facebook chạy (`Đang có việc chạy`), đang kiểm tra đăng nhập, đang theo dõi bài hoặc đang chuyển workspace (`posts.track`), thao tác cần máy rảnh |
 | `BUSY` | 503 | MaiHub đang ở chế độ nhân viên, không nhận lệnh điều khiển |
 | `ENGINE_MISSING` | 503 | Chưa cài nhân trình duyệt trong MaiHub |
 | `LIMIT_REACHED` | 422 | Đã đủ tối đa 200 lịch cho workspace, hoặc hộp thư `/v1/media` đã đủ 200 tệp |

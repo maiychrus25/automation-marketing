@@ -66,7 +66,8 @@ export default function PerformancePanel() {
     try {
       const res = await ipc.facebookPoster.trackPosts({ sinceDays: Math.min(days, MAX_TRACK_SINCE_DAYS) });
       if (!res?.success) showNotification(res?.error || 'Không bắt đầu được việc theo dõi', 'error');
-      else { setRunning(true); setProgress({ done: 0, total: res.pairs?.length ?? 0 }); }
+      else if (!res.pairs?.length) showNotification('Không có bài nào cần theo dõi', 'info'); // việc đã kết thúc ngay, không treo "Đang theo dõi"
+      else { setRunning(true); setProgress({ done: 0, total: res.pairs.length }); }
     } catch (err) {
       showNotification(err instanceof Error && err.message ? err.message : 'Không bắt đầu được việc theo dõi', 'error');
     } finally {

@@ -126,7 +126,7 @@ function pendingStatsMilestones(row: PostTrackingRow, config: PostTrackingConfig
     return todo;
 }
 
-/** Lần tự kiểm tra kế tiếp (ms) hoặc null khi không còn gì cần làm (spec 4.5). Mốc đã qua trả về đúng mốc đó (đến hạn ngay). */
+/** Lần tự kiểm tra kế tiếp (ms) hoặc null khi không còn gì cần làm (spec 4.5). Chỉ trả về mốc trong tương lai: mốc đã qua mà chưa đo thì bị bỏ qua (người gọi đánh dấu bằng `markOverdueStatsDone`). */
 export function computeNextCheckAt(row: PostTrackingRow, config: PostTrackingConfig, now: number): number | null {
     if (row.linkStatus === 'not_found') return null;
     if (isLinkPending(row)) {
@@ -134,8 +134,18 @@ export function computeNextCheckAt(row: PostTrackingRow, config: PostTrackingCon
         return next ?? null;
     }
     if (row.removedSuspected) return null;
-    const todo = pendingStatsMilestones(row, config, now);
-    return todo.length === 0 ? null : row.postedAt + todo[0] * MINUTE_MS;
+    const next = pendingStatsMilestones(row, config, now).map((m) => row.postedAt + m * MINUTE_MS).find((t) => t > now);
+    return next ?? null;
+}
+
+/** `statsDone` sau khi coi mọi mốc đo đã qua là xong (kể cả khi không đo được lần nào). */
+export function markOverdueStatsDone(row: PostTrackingRow, config: PostTrackingConfig, now: number): string[] {
+    const done = [...row.statsDone];
+    for (const m of config.statsAtMinutes) {
+        const label = `${m}m`;
+        if (row.postedAt + m * MINUTE_MS <= now && !done.includes(label)) done.push(label);
+    }
+    return done;
 }
 
 /** Nhãn (`${phút}m`) của mốc đo sớm nhất đã đến hạn và chưa làm, hoặc null. */

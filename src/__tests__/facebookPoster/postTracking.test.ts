@@ -1,5 +1,5 @@
 import {
-    DEFAULT_POST_TRACKING_CONFIG, POST_TRACKING_SETTING_KEY, computeNextCheckAt, dueStatsMilestone, linkRetryExhausted,
+    DEFAULT_POST_TRACKING_CONFIG, POST_TRACKING_SETTING_KEY, computeNextCheckAt, dueStatsMilestone, markOverdueStatsDone, linkRetryExhausted,
     matchesOwnPost, normalizeHead, parsePostTrackingConfig, pickBestMatch, validatePostTrackingConfig,
 } from '../../services/facebookPoster/postTracking';
 import type { PostTrackingRow } from '../../models/facebookPoster';
@@ -89,14 +89,24 @@ describe('computeNextCheckAt', () => {
         expect(computeNextCheckAt({ ...r, statsDone: ['60m', '1440m'] }, cfg, at(1500))).toBe(at(4320));
         expect(computeNextCheckAt({ ...r, statsDone: ['60m', '1440m', '4320m'] }, cfg, at(1500))).toBeNull();
     });
-    test('mốc đo đã qua mà chưa làm thì đến hạn ngay', () => {
+    test('mốc đo đã qua mà chưa làm bị bỏ qua: chỉ trả mốc trong tương lai', () => {
         const r = row({ linkStatus: 'known', postId: 'p' });
-        expect(computeNextCheckAt(r, cfg, at(100))).toBe(at(60));
+        expect(computeNextCheckAt(r, cfg, at(100))).toBe(at(1440));
+        expect(computeNextCheckAt(r, cfg, at(1440))).toBe(at(4320));
+        expect(computeNextCheckAt(r, cfg, at(4320))).toBeNull();
+    });
+    test('markOverdueStatsDone đánh dấu mọi mốc đã qua', () => {
+        const r = row({ linkStatus: 'known', postId: 'p', statsDone: ['60m'] });
+        expect(markOverdueStatsDone(r, cfg, at(1500))).toEqual(['60m', '1440m']);
+        expect(markOverdueStatsDone(r, cfg, at(10))).toEqual(['60m']);
     });
     test('mốc đo cuối trễ hơn 24 giờ thì bỏ', () => {
         const r = row({ linkStatus: 'known', postId: 'p' });
-        expect(computeNextCheckAt(r, cfg, at(4320) + 24 * HOUR)).not.toBeNull();
-        expect(computeNextCheckAt(r, cfg, at(4320) + 24 * HOUR + 1)).toBeNull();
+        const done = row({ linkStatus: 'known', postId: 'p', statsDone: ['60m', '1440m'] });
+        // Mốc cuối 4320 đã qua nên không còn mốc tương lai; trước đó mốc 4320 còn ở tương lai.
+        expect(computeNextCheckAt(done, cfg, at(4320) - 1)).toBe(at(4320));
+        expect(computeNextCheckAt(done, cfg, at(4320) + 24 * HOUR)).toBeNull();
+        expect(computeNextCheckAt(done, cfg, at(4320) + 24 * HOUR + 1)).toBeNull();
     });
     test('removed_suspected và not_found thì null', () => {
         expect(computeNextCheckAt(row({ linkStatus: 'known', removedSuspected: true }), cfg, at(1))).toBeNull();

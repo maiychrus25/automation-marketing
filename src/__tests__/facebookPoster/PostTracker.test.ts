@@ -494,3 +494,95 @@ describe('selection', () => {
         expect(rowOf(h.store, id).statsDone).toEqual(['30m']);
     });
 });
+
+describe('backing off failed, stale and unseen rows (final review C1/I1/I3)', () => {
+    const failing = (code: string) => ({
+        open: async () => { throw new ResearchError(code as any, code); },
+        userId: () => UID, ensureQuery: jest.fn(), recapture: jest.fn(), call: jest.fn(),
+    });
+    const due = (h: ReturnType<typeof setup>) => h.store.listDuePairs(NOW, 10);
+
+    test.each(['logged_out', 'checkpoint', 'rate_limited', 'unresolved'])('%s pair is not due again on the next tick', async (code) => {
+        const h = setup({ sessionFor: () => failing(code) });
+        const id = addRow(h.store, { postedAt: NOW - 3 * HOUR });
+        expect(due(h)).toHaveLength(1);
+        await run(h, { pairs: due(h) });
+        expect(due(h)).toEqual([]);
+        expect(rowOf(h.store, id)).toMatchObject({ linkStatus: 'missing', nextCheckAt: NOW - 3 * HOUR + 360 * MIN, checkCount: 0, lastCheckedAt: null });
+        const opened = h.opened.length;
+        await run(h, { pairs: due(h) });
+        expect(h.opened).toHaveLength(opened); // không mở lại trình duyệt ở nhịp sau
+    });
+
+    test('a profile launch error also backs the pair off, and a skipped profile\'s other pairs too', async () => {
+        const h = setup({ sessionFor: () => failing('rate_limited') });
+        addRow(h.store, { profileId: 'p1' });
+        addRow(h.store, { profileId: 'p1', groupUrl: G2 });
+        await run(h, { pairs: due(h) });
+        expect(h.opened).toHaveLength(1);
+        expect(due(h)).toEqual([]);
+        const h2 = setup();
+        addRow(h2.store);
+        (h2.tracker as any).deps.openSession = async () => { throw new Error('Profile đang mở'); };
+        await run(h2, { pairs: due(h2) });
+        expect(due(h2)).toEqual([]);
+    });
+
+    test('an errored pair past the last retry milestone becomes not_found with next_check_at NULL', async () => {
+        const h = setup({ sessionFor: () => failing('logged_out') });
+        const id = addRow(h.store, { postedAt: NOW - 9 * DAY });
+        await run(h, { pairs: due(h) });
+        expect(rowOf(h.store, id)).toMatchObject({ linkStatus: 'not_found', nextCheckAt: null });
+        expect(finished(h.events)[0].payload.notFound).toBe(1);
+    });
+
+    test('an errored known pair marks overdue stats milestones done and moves to the next future one', async () => {
+        const h = setup({ sessionFor: () => failing('checkpoint') });
+        const postedAt = NOW - 2 * DAY;
+        const id = addRow(h.store, { linkStatus: 'known', postId: 'P1', lastSeenAt: 1, postedAt, nextCheckAt: postedAt + HOUR });
+        await run(h, { pairs: due(h) });
+        expect(rowOf(h.store, id)).toMatchObject({ statsDone: ['60m', '1440m'], nextCheckAt: postedAt + 4320 * MIN, linkStatus: 'known' });
+    });
+
+    test('rows not due are untouched by a pair error', async () => {
+        const h = setup({ sessionFor: () => failing('logged_out') });
+        const id = addRow(h.store, { nextCheckAt: NOW + HOUR });
+        addRow(h.store, { groupUrl: G1, nextCheckAt: NOW - 1 });
+        await run(h, { pairs: [{ profileId: 'p1', groupUrl: G1 }] });
+        expect(rowOf(h.store, id).nextCheckAt).toBe(NOW + HOUR);
+    });
+
+    test('scheduler pairs settle due rows older than 14 days without reading', async () => {
+        const h = setup();
+        const missing = addRow(h.store, { postedAt: NOW - 20 * DAY });
+        const known = addRow(h.store, { linkStatus: 'known', postId: 'P1', lastSeenAt: 1, postedAt: NOW - 16 * DAY, nextCheckAt: NOW - 5 * DAY });
+        expect(due(h)).toHaveLength(1);
+        await run(h, { pairs: due(h) });
+        expect(h.opened).toEqual([]);
+        expect(rowOf(h.store, missing)).toMatchObject({ linkStatus: 'not_found', nextCheckAt: null });
+        expect(rowOf(h.store, known)).toMatchObject({ nextCheckAt: null, statsDone: ['60m', '1440m', '4320m'] });
+        expect(due(h)).toEqual([]);
+    });
+
+    test('a known row checked but not seen moves to the next future milestone, concluding nothing', async () => {
+        const h = setup();
+        const postedAt = NOW - 2 * HOUR;
+        const id = addRow(h.store, { linkStatus: 'known', postId: 'P1', lastSeenAt: null, postedAt, nextCheckAt: postedAt + HOUR });
+        feeds['111|null'] = page([item('x', NOW - HOUR)], null);
+        await run(h);
+        expect(rowOf(h.store, id)).toMatchObject({
+            removedSuspected: false, statsDone: ['60m'], nextCheckAt: postedAt + 1440 * MIN, lastCheckedAt: NOW,
+        });
+        expect(due(h)).toEqual([]);
+    });
+
+    test('with no pairs, trackFinished is emitted after track() returns', async () => {
+        const h = setup();
+        const res = h.tracker.track();
+        expect(res.pairs).toEqual([]);
+        expect(finished(h.events)).toHaveLength(0);
+        await h.tracker.whenIdle();
+        expect(finished(h.events)).toHaveLength(1);
+        expect(h.slot.release).toHaveBeenCalledTimes(1);
+    });
+});
