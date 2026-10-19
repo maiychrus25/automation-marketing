@@ -28,6 +28,16 @@ export function checkProfileIds(ids: unknown, knownIds: string[]): string[] | un
     return ids as string[];
 }
 
+/** Link mở được từ kết quả quét: chỉ https tới facebook.com hoặc tên miền con (www., m., web., ...). Trả link chuẩn hoá, hoặc null. */
+export function safeFacebookUrl(value: unknown): string | null {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 2048) return null;
+    let url: URL;
+    try { url = new URL(value.trim()); } catch { return null; }
+    if (url.protocol !== 'https:' || url.username || url.password || (url.port !== '' && url.port !== '443')) return null;
+    const host = url.hostname.toLowerCase();
+    return host === 'facebook.com' || host.endsWith('.facebook.com') ? url.href : null;
+}
+
 function intInRange(value: unknown, name: string, min: number, max: number, fallback: number): number {
     if (value === undefined) return fallback;
     if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {

@@ -22,7 +22,7 @@ describe('isEmployeeChannelAllowed', () => {
     'facebookPoster:start', 'facebookPoster:stop',
     'facebookPoster:checkLogins', 'facebookPoster:getLoginStates', 'facebookPoster:getLoginCheckConfig', 'facebookPoster:setLoginCheckConfig',
     'research:getConfig', 'research:setConfig', 'research:search', 'research:scanGroupFeeds', 'research:list',
-    'research:get', 'research:cancel', 'research:profileUsage', 'research:exportXlsx',
+    'research:get', 'research:cancel', 'research:profileUsage', 'research:exportXlsx', 'research:status', 'research:openLink',
     'controlApi:createKey', 'controlApi:setConfig', 'controlApi:getConfig', 'controlApi:listKeys', 'controlApi:revokeKey',
     'controlApi:listAudit', 'controlApi:firewallCommand', 'controlApi:regenerateCertificate',
     'controlApi:createPairing', 'controlApi:cancelPairing',

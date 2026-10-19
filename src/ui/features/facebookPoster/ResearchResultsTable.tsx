@@ -6,11 +6,18 @@ import { SCAN_STATUS, SOURCE_LABEL, errorLabel, formatCount, formatRate, formatT
 import type { ResearchItem, ResearchScan, ResearchSort } from '../../../models/research';
 
 const PAGE_SIZE = 50;
-const openLink = (url: string) => { if (ipc.shell?.openExternal) ipc.shell.openExternal(url); else window.open(url, '_blank'); };
-
-const LinkBtn = ({ url, children, label }: { url: string; children: React.ReactNode; label?: string }) => (
-  <button type="button" onClick={() => openLink(url)} title={url} aria-label={label} className="text-blue-400 hover:underline text-left">{children}</button>
-);
+// Link lấy từ dữ liệu Facebook (không tin cậy): để tiến trình chính kiểm tra (chỉ https tới facebook.com) rồi mới mở.
+const LinkBtn = ({ url, children, label }: { url: string; children: React.ReactNode; label?: string }) => {
+  const showNotification = useAppStore((s) => s.showNotification);
+  const open = () => {
+    ipc.research?.openLink(url).then((res) => {
+      if (!res?.success) showNotification(res?.error || 'Không mở được link', 'error');
+    }).catch(() => showNotification('Không mở được link', 'error'));
+  };
+  return (
+    <button type="button" onClick={open} title={url} aria-label={label} className="text-blue-400 hover:underline text-left">{children}</button>
+  );
+};
 
 interface Props { scanId: string; reloadKey: number }
 

@@ -19,6 +19,9 @@ export default function ResearchTab() {
   const [resultsTick, setResultsTick] = useState(0);
   const [progress, setProgress] = useState<{ items: number; profileId: string } | null>(null);
   const [loadTick, setLoadTick] = useState(0);
+  // Trạng thái chạy lấy trực tiếp từ tiến trình chính, không phụ thuộc trang danh sách lượt quét đang xem.
+  const [running, setRunning] = useState(false);
+  const reloadedForScan = useRef<string | null>(null);
   const profilesRef = useRef(profiles);
   profilesRef.current = profiles;
   const pageRef = useRef(page);
@@ -35,6 +38,12 @@ export default function ResearchTab() {
   useEffect(() => { loadProfiles(); }, [loadProfiles]);
 
   useEffect(() => {
+    ipc.research?.status().then((res) => {
+      if (res?.success) setRunning(!!res.running);
+    }).catch(() => { /* giữ nguyên; sự kiện tiến độ sẽ cập nhật */ });
+  }, []);
+
+  useEffect(() => {
     let alive = true;
     ipc.research?.list({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }).then((res) => {
       if (!alive) return;
@@ -46,8 +55,14 @@ export default function ResearchTab() {
   }, [page, loadTick]);
 
   useEffect(() => {
-    const offProgress = ipc.on?.('research:progress', (data: { items: number; profileId: string }) => setProgress({ items: data.items, profileId: data.profileId }));
+    const offProgress = ipc.on?.('research:progress', (data: { scanId?: string; items: number; profileId: string }) => {
+      setRunning(true);
+      setProgress({ items: data.items, profileId: data.profileId });
+      // Lượt do bot khởi động: tải lại danh sách một lần để thấy lượt mới.
+      if (data.scanId && reloadedForScan.current !== data.scanId) { reloadedForScan.current = data.scanId; setLoadTick((n) => n + 1); }
+    });
     const offFinished = ipc.on?.('research:finished', () => {
+      setRunning(false);
       setProgress(null);
       setLoadTick((n) => n + 1);
       setResultsTick((n) => n + 1);
@@ -56,7 +71,6 @@ export default function ResearchTab() {
     return () => { offProgress?.(); offFinished?.(); };
   }, [loadProfiles]);
 
-  const running = scans.some((s) => s.status === 'running');
   const profileName = progress ? profiles.find((p) => p.id === progress.profileId)?.name : undefined;
   const progressText = progress ? `Đã thu ${formatCount(progress.items)} mục${profileName ? ` · profile ${profileName}` : ''}` : '';
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -65,7 +79,7 @@ export default function ResearchTab() {
     <div className="space-y-4 min-w-0">
       <ResearchProfilesPanel profiles={profiles} onChanged={loadProfiles} />
       <ResearchScanForm running={running} progressText={progressText}
-        onStarted={(id) => { setPage(0); setSelected(id); setLoadTick((n) => n + 1); setResultsTick((n) => n + 1); loadProfiles(); }} />
+        onStarted={(id) => { setRunning(true); setPage(0); setSelected(id); setLoadTick((n) => n + 1); setResultsTick((n) => n + 1); loadProfiles(); }} />
       <section aria-label="Lượt quét" className="space-y-2 min-w-0">
         <h3 className="text-sm font-medium text-white">Lượt quét</h3>
         {scans.length === 0 ? <p className="text-sm text-gray-400 py-4">Chưa có lượt quét nào.</p> : (

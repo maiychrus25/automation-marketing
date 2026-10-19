@@ -85,6 +85,11 @@ const SWITCH_BUSY_ERROR = 'Đang chuyển workspace, thử lại sau.';
 /** The stop-and-switch wait can last ~55 s: a second switch/delete-of-active must not start meanwhile. */
 let switchInProgress = false;
 
+/** Cho các module khác (ví dụ Nghiên cứu) từ chối việc mới khi đang đổi workspace. */
+export function isWorkspaceSwitchInProgress(): boolean {
+    return switchInProgress;
+}
+
 /**
  * registerWorkspaceIpc - IPC handlers for Workspace CRUD + switching.
  * 8 channels total.

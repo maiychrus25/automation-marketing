@@ -116,6 +116,7 @@ function groupKey(url: string): string {
 export class ResearchService {
     private running: Promise<void> | null = null;
     private cancelled = false;
+    private currentScanId: string | null = null;
     private wake: (() => void) | null = null;
     private readonly lastUsedAt: Record<string, number> = {};
     /** Đóng phiên trình duyệt đang mở (nếu có) để huỷ làm lệnh gọi đang treo bị từ chối ngay. */
@@ -134,6 +135,9 @@ export class ResearchService {
     }
 
     isRunning(): boolean { return this.running !== null; }
+
+    /** Trạng thái nhẹ cho giao diện: có lượt đang chạy không và mã lượt đó. */
+    status(): { running: boolean; scanId: string | null } { return { running: this.running !== null, scanId: this.currentScanId }; }
 
     async whenIdle(): Promise<void> { await this.running; }
 
@@ -198,8 +202,9 @@ export class ResearchService {
             details: { profiles: {}, ...(source === 'group_feed' ? { groups: {} } : {}) },
         };
         this.cancelled = false;
+        this.currentScanId = scanId;
         this.wakeSignal = new Promise<void>((resolve) => { this.wake = resolve; });
-        this.running = this.execute(run, query, body).finally(() => { this.running = null; this.wake = null; });
+        this.running = this.execute(run, query, body).finally(() => { this.running = null; this.wake = null; this.currentScanId = null; });
         return { scanId };
     }
 

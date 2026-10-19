@@ -1,4 +1,4 @@
-import { dialog, ipcMain } from 'electron';
+import { dialog, ipcMain, shell } from 'electron';
 import * as fs from 'fs';
 import * as XLSX from 'xlsx';
 import DatabaseService from '../../src/services/database/DatabaseService';
@@ -12,15 +12,18 @@ import {
     RESEARCH_CONFIG_SETTING_KEY, parseResearchConfig, validateResearchConfig,
 } from '../../src/services/research/researchConfig';
 import {
-    SCAN_NOT_FOUND_ERROR, buildSheetRows, checkProfileIds, exportFileName, parseGetParams, parseListParams,
+    SCAN_NOT_FOUND_ERROR, buildSheetRows, checkProfileIds, exportFileName, parseGetParams, parseListParams, safeFacebookUrl,
 } from '../../src/services/research/researchOperationsLogic';
 import type { ResearchItem, ResearchOrigin } from '../../src/models/research';
 import { buildResearchFinished, emitControlEvent } from '../../src/services/control/controlEvents';
 import { getBrowserProfileService } from './browserProfileIpc';
+import { isWorkspaceSwitchInProgress } from './workspaceIpc';
 import {
     isFacebookPosterEmployeeBlocked, listFacebookLoginStates, listFacebookPosterRunProfileIds, observeFacebookLogin,
 } from './facebookPosterIpc';
 
+export const WORKSPACE_SWITCHING_ERROR = 'Đang đổi workspace, thử lại sau';
+export const INVALID_LINK_ERROR = 'Link không hợp lệ: chỉ mở được link Facebook (https).';
 export const RESEARCH_NOT_STOPPED_ERROR = 'Lượt quét Nghiên cứu chưa dừng được. Thử lại sau.';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RETENTION_MS = 180 * DAY_MS;
@@ -131,6 +134,7 @@ export const researchOperations = {
     },
 
     search: (params: any, origin: ResearchOrigin) => {
+        if (isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
         const profileIds = checkProfileIds(params?.profileIds, profileList().map((p) => p.id));
         return getService().search({
             source: params?.source, query: params?.query, recent: params?.recent, year: params?.year,
@@ -139,6 +143,7 @@ export const researchOperations = {
     },
 
     scanGroupFeeds: (params: any, origin: ResearchOrigin) => {
+        if (isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
         const profileIds = checkProfileIds(params?.profileIds, profileList().map((p) => p.id));
         return getService().scanGroupFeeds({
             groupUrls: params?.groupUrls, sinceDays: params?.sinceDays, limitPerGroup: params?.limitPerGroup, profileIds, origin,
@@ -161,6 +166,16 @@ export const researchOperations = {
     },
 
     cancel: () => ({ cancelled: service?.cancel() ?? false }),
+
+    status: () => service?.status() ?? { running: false, scanId: null },
+
+    /** Mở link lấy từ dữ liệu quét (không tin cậy): chỉ https tới facebook.com. */
+    openLink: async (params: any) => {
+        const url = safeFacebookUrl(params?.url);
+        if (!url) throw new Error(INVALID_LINK_ERROR);
+        await shell.openExternal(url);
+        return {};
+    },
 };
 
 function profileUsage() {
@@ -227,6 +242,8 @@ export function registerResearchIpc(): void {
     handle('research:list', researchOperations.list);
     handle('research:get', researchOperations.get);
     handle('research:cancel', researchOperations.cancel);
+    handle('research:status', researchOperations.status);
+    handle('research:openLink', researchOperations.openLink);
     handle('research:profileUsage', () => ({ profiles: profileUsage() }));
     handle('research:exportXlsx', exportXlsx);
 }

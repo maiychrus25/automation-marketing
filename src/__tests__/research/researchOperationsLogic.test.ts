@@ -1,5 +1,5 @@
 import {
-    UnknownProfilesError, buildSheetRows, checkProfileIds, exportFileName, parseGetParams, parseListParams,
+    UnknownProfilesError, buildSheetRows, checkProfileIds, exportFileName, parseGetParams, parseListParams, safeFacebookUrl,
 } from '../../services/research/researchOperationsLogic';
 import type { ResearchItem } from '../../models/research';
 
@@ -53,5 +53,32 @@ describe('export rows', () => {
     });
     it('names the file by source and local time', () => {
         expect(exportFileName('posts', new Date(2026, 9, 19, 8, 5).getTime())).toBe('nghien-cuu-posts-20261019-0805.xlsx');
+    });
+});
+
+describe('safeFacebookUrl', () => {
+    it.each([
+        ['https://www.facebook.com/groups/1/', 'https://www.facebook.com/groups/1/'],
+        ['https://facebook.com/x', 'https://facebook.com/x'],
+        ['https://m.facebook.com/x?a=1', 'https://m.facebook.com/x?a=1'],
+        ['https://web.facebook.com/x', 'https://web.facebook.com/x'],
+        ['  https://WWW.Facebook.com/x  ', 'https://www.facebook.com/x'],
+        ['https://www.facebook.com:443/x', 'https://www.facebook.com/x'],
+    ])('accepts %s', (input, out) => {
+        expect(safeFacebookUrl(input)).toBe(out);
+    });
+
+    it.each([
+        'http://www.facebook.com/x', 'javascript:alert(1)', 'file:///etc/passwd', 'ftp://facebook.com/x', 'data:text/html,hi',
+        'https://evilfacebook.com/x', 'https://facebook.com.evil.test/x', 'https://www.facebook.com.evil.test/',
+        'https://evil.test/?u=https://www.facebook.com/', 'https://user:pw@www.facebook.com/x', 'https://www.facebook.com:8443/x',
+        'https://notfacebook.com/', 'facebook.com/x', '//www.facebook.com/x', '', 'ms-msdt:/id', 'https://facebook.com./x',
+    ])('rejects %s', (input) => {
+        expect(safeFacebookUrl(input)).toBeNull();
+    });
+
+    it('rejects non-strings and overlong values', () => {
+        for (const v of [undefined, null, 5, {}, ['https://www.facebook.com/']]) expect(safeFacebookUrl(v)).toBeNull();
+        expect(safeFacebookUrl(`https://www.facebook.com/${'a'.repeat(2100)}`)).toBeNull();
     });
 });

@@ -771,3 +771,15 @@ describe('final review fixes', () => {
         });
     });
 });
+
+describe('ResearchService status (M9)', () => {
+    it('status() báo running + scanId trong lúc quét, rảnh thì running=false', async () => {
+        const h = setup({ profiles: ['p1'], hang: true });
+        expect(h.svc.status()).toEqual({ running: false, scanId: null });
+        const { scanId } = h.svc.search({ source: 'posts', query: 'x', origin: 'api' });
+        expect(h.svc.status()).toEqual({ running: true, scanId });
+        h.svc.cancel();
+        await h.svc.whenIdle();
+        expect(h.svc.status()).toEqual({ running: false, scanId: null });
+    });
+});

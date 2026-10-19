@@ -917,6 +917,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     get:             (params: any)          => ipcRenderer.invoke('research:get', params),
     cancel:          ()                     => ipcRenderer.invoke('research:cancel'),
     profileUsage:    ()                     => ipcRenderer.invoke('research:profileUsage'),
+    status:          ()                     => ipcRenderer.invoke('research:status'),
+    openLink:        (url: string)          => ipcRenderer.invoke('research:openLink', { url }),
     exportXlsx:      (scanId: string)       => ipcRenderer.invoke('research:exportXlsx', { scanId }),
   },
   facebookPoster: {

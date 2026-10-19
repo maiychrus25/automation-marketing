@@ -695,6 +695,8 @@ declare global {
         get:            (params: { scanId: string; sort?: ResearchSort; limit?: number; offset?: number }) => Promise<{ success: boolean; scan?: ResearchScan; total?: number; items?: ResearchItem[]; error?: string }>;
         cancel:         () => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
         profileUsage:   () => Promise<{ success: boolean; profiles?: { id: string; name: string; itemsLast24h: number; cap: number; loginState: string; excluded: boolean; busy: boolean }[]; error?: string }>;
+        status:         () => Promise<{ success: boolean; running?: boolean; scanId?: string | null; error?: string }>;
+        openLink:       (url: string) => Promise<{ success: boolean; error?: string }>;
         exportXlsx:     (scanId: string) => Promise<{ success: boolean; saved?: boolean; path?: string; error?: string }>;
       };
       facebookPoster: {
