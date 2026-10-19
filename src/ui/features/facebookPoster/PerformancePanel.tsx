@@ -90,12 +90,12 @@ export default function PerformancePanel() {
     <section aria-label="Hiệu quả bài đăng" className="rounded-lg border border-gray-700 p-3 space-y-2 min-w-0">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h3 className="text-sm font-medium text-white">Hiệu quả</h3>
-        <label className="flex items-center gap-1 text-xs text-gray-400">Khoảng
+        <label className="flex items-center gap-1 text-xs text-gray-400 whitespace-nowrap">Khoảng
           <select value={days} onChange={(e) => setDays(Number(e.target.value))} className={`${select} ${FOCUS}`}>
             {RANGE_OPTIONS.map((o) => <option key={o.days} value={o.days}>{o.label}</option>)}
           </select>
         </label>
-        <label className="flex items-center gap-1 text-xs text-gray-400">Gom theo
+        <label className="flex items-center gap-1 text-xs text-gray-400 whitespace-nowrap">Gom theo
           <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as PostStatsGroupBy)} className={`${select} ${FOCUS}`}>
             {GROUP_BY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>

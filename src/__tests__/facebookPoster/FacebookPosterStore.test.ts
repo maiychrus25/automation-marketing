@@ -468,6 +468,17 @@ describe('post tracking store', () => {
       expect(g2).toMatchObject({ posts: 1, removedSuspected: 1, reactions: 2, avgEngagement: 2 });
     });
 
+    test('nhãn nhóm: ưu tiên tên nhóm đã quét, rồi tên đích của kết quả, cuối cùng là link', () => {
+      const s = seed();
+      const db = (s as any).db;
+      db.run(`UPDATE fb_poster_results SET target_name = 'Tên đích hai' WHERE id = 3`);
+      const label = (key: string) => s.statsReport({ ...range, groupBy: 'group' }).find((r) => r.key === key)!.label;
+      expect(label('https://www.facebook.com/groups/1/')).toBe('https://www.facebook.com/groups/1/');
+      expect(label('https://www.facebook.com/groups/2/')).toBe('Tên đích hai');
+      db.run(`INSERT INTO fb_poster_groups (profile_id, url, name, scanned_at) VALUES ('p2', 'https://www.facebook.com/groups/2/', 'Tên đã quét', 1)`);
+      expect(label('https://www.facebook.com/groups/2/')).toBe('Tên đã quét');
+    });
+
     test('engagementRate dùng member_count mới nhất của nhóm trong research_items', () => {
       const s = seed();
       const db = (s as any).db;
