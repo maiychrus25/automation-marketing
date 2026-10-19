@@ -51,7 +51,7 @@ export default function TrackConfigPopover() {
       if (!res?.success || !res.config) throw new Error(res?.error || 'Không lưu được cài đặt');
       apply(res.config);
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : 'Không lưu được cài đặt');
+      setError(err instanceof Error && err.message ? fieldLabels(err.message) : 'Không lưu được cài đặt');
     } finally {
       setSaving(false);
     }
@@ -71,7 +71,7 @@ export default function TrackConfigPopover() {
       <button ref={gearRef} type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="dialog" aria-label="Cài đặt tự lấy link và đo tương tác" title="Tự lấy link và đo"
         className={`px-2 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 ${FOCUS}`}>⚙</button>
       {open && (
-        <div ref={popoverRef} tabIndex={-1} role="dialog" aria-label="Tự lấy link và đo" className="absolute right-0 top-full mt-1 z-20 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-gray-700 bg-gray-900 p-3 focus:outline-none space-y-2 shadow-lg">
+        <div ref={popoverRef} tabIndex={-1} role="dialog" aria-label="Tự lấy link và đo" className="absolute right-0 top-full mt-1 z-20 w-[min(20rem,calc(100vw-8rem))] rounded-lg border border-gray-700 bg-gray-900 p-3 focus:outline-none space-y-2 shadow-lg">
           <p className="text-sm text-gray-200">Tự lấy link và đo</p>
           {config ? (
             <form onSubmit={submit} className="space-y-2">
@@ -98,4 +98,12 @@ export default function TrackConfigPopover() {
       )}
     </div>
   );
+}
+
+// Lỗi kiểm tra cấu hình dùng chung với Control API nên mang tên trường; đổi sang nhãn hiển thị.
+function fieldLabels(message: string): string {
+  return message
+    .replace(/\blinkRetryMinutes\b/g, 'Mốc thử lấy link')
+    .replace(/\bstatsAtMinutes\b/g, 'Mốc đo tương tác')
+    .replace(/\bautoEnabled\b/g, 'Bật tự động');
 }
