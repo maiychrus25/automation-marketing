@@ -23,6 +23,7 @@ import { registerTelegramIpc } from './ipc/telegramIpc';
 import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
 import { registerProxyIpc } from './ipc/proxyIpc';
 import { registerBrowserProfileIpc, closeAllBrowserProfiles } from './ipc/browserProfileIpc';
+import { registerResearchIpc, cancelResearch } from './ipc/researchIpc';
 import { registerFacebookPosterIpc, cancelFacebookPosterJobs, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './ipc/facebookPosterIpc';
 import { registerUpdateIpc } from './ipc/updateIpc';
 import { registerErpTaskIpc } from './ipc/erpTaskIpc';
@@ -1176,6 +1177,7 @@ app.whenReady().then(async () => {
   registerProxyIpc();
   registerBrowserProfileIpc();
   registerFacebookPosterIpc();
+  registerResearchIpc();
   registerControlApiIpc();
   syncControlEventSink(); // sink first, synchronously: the scheduler below may fire schedule.missed / run.started at once
   startControlApi().catch((err: any) => Logger.error(`[ControlApi] start failed: ${err?.message}`));
@@ -1342,6 +1344,10 @@ app.on('before-quit', () => {
 
   try {
     cancelFacebookPosterJobs();
+  } catch {}
+
+  try {
+    cancelResearch();
   } catch {}
 
   // Listener + sink closed synchronously. After the poster scheduler/jobs stop (so schedule.missed raised during quit is recorded), before DatabaseService.close() below.

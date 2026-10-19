@@ -145,6 +145,16 @@ export function checkFacebookLogins(profileIds: string[] | null, source: LoginCh
     return getChecker().check(ids, source);
 }
 
+/** Records a login state seen outside a poster run (topic research); like a run, this raises profile.loginProblem. Never throws. */
+export function observeFacebookLogin(profileId: string, state: 'logged_out' | 'checkpoint'): void {
+    safely('researchObserveLogin', () => getChecker().observe(profileId, state, 'run'));
+}
+
+/** Profiles in the current poster run (any state): topic research must not pick them. */
+export function listFacebookPosterRunProfileIds(): string[] {
+    return service?.current()?.progress.profiles.map((p) => p.profileId) ?? [];
+}
+
 /** Control API event run.finished (additive; counts come from the stored results). Recorded before the scheduler may start the next run. */
 function recordRunFinished(data: unknown): void {
     if (!hasControlEventSink()) return;

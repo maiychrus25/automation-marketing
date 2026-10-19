@@ -143,6 +143,13 @@ export class ResearchStore {
             .map(mapScan);
     }
 
+    countScans(source?: ResearchSource): number {
+        const row = source
+            ? this.db.queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM research_scans WHERE source = ?', [source])
+            : this.db.queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM research_scans');
+        return row?.n ?? 0;
+    }
+
     getScan(id: string): ResearchScan | undefined {
         const row = this.db.queryOne<any>('SELECT * FROM research_scans WHERE id = ?', [id]);
         return row ? mapScan(row) : undefined;

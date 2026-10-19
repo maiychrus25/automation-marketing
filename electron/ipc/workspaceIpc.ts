@@ -12,6 +12,7 @@ import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import { restartControlApi, stopControlApi, syncControlEventSink } from './controlApiIpc';
 import { closeAllBrowserProfiles } from './browserProfileIpc';
+import { cancelAndWaitResearch } from './researchIpc';
 import { POSTER_NOT_STOPPED_ERROR, cancelAndWaitFacebookPosterJobs, isFacebookPosterBusy, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './facebookPosterIpc';
 
 /**
@@ -97,6 +98,8 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             mainWindow.webContents.send('workspace:waitingForJobs', {});
         }
         try { stopFacebookPosterScheduler(); } catch {}
+        // Lượt quét Nghiên cứu: huỷ và chờ tối đa 20 giây; không chặn việc đổi workspace nếu chưa dừng kịp.
+        try { await cancelAndWaitResearch(); } catch {}
         if (await cancelAndWaitFacebookPosterJobs()) {
             // Poster events of the stopped job are recorded; now stop serving so no call hits the DB mid-switch
             try { await stopControlApi(); } catch {}

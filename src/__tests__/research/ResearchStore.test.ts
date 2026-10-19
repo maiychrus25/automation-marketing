@@ -167,4 +167,12 @@ describe('ResearchStore', () => {
         expect(store.getScan('d')).toMatchObject({ status: 'done', finishedAt: 5 });
         expect(store.failInterruptedScans(9100)).toBe(0);
     });
+
+    it('countScans counts all or by source', () => {
+        const { store } = setup();
+        store.createScan(scan('a', 'posts'));
+        store.createScan(scan('b', 'groups'));
+        expect(store.countScans()).toBe(2);
+        expect(store.countScans('groups')).toBe(1);
+    });
 });

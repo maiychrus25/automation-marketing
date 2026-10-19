@@ -5,6 +5,8 @@ import { useAppStore } from '../store/appStore';
 import type { TelegramForumTopicContext } from '../../models/telegram';
 import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
 import type { UpdateState, ActionResult as UpdateActionResult } from '../../services/update/UpdateService';
+import type { ResearchConfig } from '../../services/research/researchConfig';
+import type { ResearchItem, ResearchScan, ResearchSort, ResearchSource } from '../../models/research';
 import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState } from '../../models/facebookPoster';
 
 
@@ -684,6 +686,17 @@ declare global {
         createPairing:         (input: { name: string; botIp: string; publicHost: string }) => Promise<{ success: boolean; code?: string; command?: string; firewall?: string; expiresAt?: number; publicHost?: string | null; detectedPublicHost?: string | null; bridgeSha256?: string | null; fingerprint?: string | null; running?: boolean; error?: string }>;
         cancelPairing:         (botIp: string) => Promise<{ success: boolean; error?: string }>;
       };
+      research: {
+        getConfig:      () => Promise<{ success: boolean; config?: ResearchConfig; error?: string }>;
+        setConfig:      (config: ResearchConfig) => Promise<{ success: boolean; config?: ResearchConfig; error?: string }>;
+        search:         (params: { source: 'posts' | 'groups' | 'pages'; query: string; recent?: boolean; year?: number; limit?: number; profileIds?: string[] }) => Promise<{ success: boolean; scanId?: string; error?: string }>;
+        scanGroupFeeds: (params?: { groupUrls?: string[]; sinceDays?: number; limitPerGroup?: number; profileIds?: string[] }) => Promise<{ success: boolean; scanId?: string; error?: string }>;
+        list:           (params?: { limit?: number; offset?: number; source?: ResearchSource }) => Promise<{ success: boolean; total?: number; scans?: ResearchScan[]; error?: string }>;
+        get:            (params: { scanId: string; sort?: ResearchSort; limit?: number; offset?: number }) => Promise<{ success: boolean; scan?: ResearchScan; total?: number; items?: ResearchItem[]; error?: string }>;
+        cancel:         () => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
+        profileUsage:   () => Promise<{ success: boolean; profiles?: { id: string; name: string; itemsLast24h: number; cap: number; loginState: string; excluded: boolean; busy: boolean }[]; error?: string }>;
+        exportXlsx:     (scanId: string) => Promise<{ success: boolean; saved?: boolean; path?: string; error?: string }>;
+      };
       facebookPoster: {
         start:          (kind: FbPosterKind, params: Record<string, unknown>) => Promise<{ success: boolean; runId?: string; error?: string }>;
         cancel:         () => Promise<{ success: boolean; error?: string }>;
@@ -867,6 +880,7 @@ export const ipc = {
   browserProfile: window.electronAPI?.browserProfile,
   controlApi: window.electronAPI?.controlApi,
   facebookPoster: window.electronAPI?.facebookPoster,
+  research: window.electronAPI?.research,
   update: window.electronAPI?.update,
 
   erp,

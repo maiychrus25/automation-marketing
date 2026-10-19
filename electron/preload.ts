@@ -849,6 +849,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'facebookPoster:schedulesChanged',
       'facebookPoster:loginStateChanged',
       'facebookPoster:loginCheckProgress',
+      // ─── Research events ─────────────────────────────────────────
+      'research:progress',
+      'research:finished',
       'controlApi:paired',
     ];
     if (validChannels.includes(channel)) {
@@ -905,6 +908,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ─── Facebook poster ─────────────────────────────────────────────────────
+  research: {
+    getConfig:       ()                     => ipcRenderer.invoke('research:getConfig'),
+    setConfig:       (config: any)          => ipcRenderer.invoke('research:setConfig', config),
+    search:          (params: any)          => ipcRenderer.invoke('research:search', params),
+    scanGroupFeeds:  (params?: any)         => ipcRenderer.invoke('research:scanGroupFeeds', params || {}),
+    list:            (params?: any)         => ipcRenderer.invoke('research:list', params || {}),
+    get:             (params: any)          => ipcRenderer.invoke('research:get', params),
+    cancel:          ()                     => ipcRenderer.invoke('research:cancel'),
+    profileUsage:    ()                     => ipcRenderer.invoke('research:profileUsage'),
+    exportXlsx:      (scanId: string)       => ipcRenderer.invoke('research:exportXlsx', { scanId }),
+  },
   facebookPoster: {
     start:          (kind: string, params: any)  => ipcRenderer.invoke('facebookPoster:start', { kind, params }),
     cancel:         ()                            => ipcRenderer.invoke('facebookPoster:cancel'),
