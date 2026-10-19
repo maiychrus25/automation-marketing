@@ -263,6 +263,7 @@ const FACEBOOK_POSTER_ITEMS: { section: FacebookPosterSection; label: string; ic
   { section: 'schedule', label: 'Lịch đăng', icon: 'posterSchedule' },
   { section: 'join', label: 'Tham gia nhóm', icon: 'friends' },
   { section: 'comments', label: 'Thu bình luận', icon: 'chat' },
+  { section: 'research', label: 'Nghiên cứu', icon: 'analytics' },
   { section: 'history', label: 'Lịch sử', icon: 'posterHistory' },
 ];
 

@@ -7,7 +7,7 @@ import { type AppTheme, type ThemePreference, THEME_STORAGE_KEY, parseThemePrefe
 type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser' | 'facebookPoster';
 export type { AppTheme, ThemePreference };
 /** Màn con của Đăng Facebook, chọn từ sub-nav ở sidebar chính. */
-export type FacebookPosterSection = 'schedule' | 'join' | 'comments' | 'history';
+export type FacebookPosterSection = 'schedule' | 'join' | 'comments' | 'research' | 'history';
 
 export interface GroupMember {
   userId: string;
