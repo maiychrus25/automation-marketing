@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 19/10/2026 |
-| Trạng thái | Chờ duyệt |
+| Trạng thái | Đã duyệt (19/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-19-topic-research.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-19-topic-research.md` (đã duyệt) |
 | Nhánh | `feat/topic-research` |
