@@ -1,0 +1,1 @@
+for (;;);{"data":{"serpResponse":{"results":{"edges":[{"node":{"__typename":"SearchRenderable"},"rendering_strategy":{"view_model":{"click_model":{"story":{"__typename":"Story","post_id":"222222222222241","url":"https://www.facebook.com/groups/111111111111111/posts/222222222222241/"}}}}}]}}}}

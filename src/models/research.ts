@@ -47,6 +47,9 @@ export interface ResearchItemInput {
     postedAt?: number | null;
 }
 
+/** Mục do bộ đọc GraphQL trả về: đủ mọi trường của research_items (trừ id, scan, thời điểm thu, profile). */
+export type ParsedItem = Required<ResearchItemInput>;
+
 export interface ResearchItem extends Required<ResearchItemInput> {
     id: number;
     scanId: string;
