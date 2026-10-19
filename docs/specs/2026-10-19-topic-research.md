@@ -26,13 +26,13 @@ Facebook đổi cấu trúc thường xuyên. Vì vậy chi tiết bắt truy v�
 
 1. **Mã phiên:** lấy `fb_dtsg`, `lsd` và ID người dùng ở đâu trong trang (vd. module `DTSGInitialData`, `LSD`, `CurrentUserInitialData`, hoặc đọc từ HTML).
 2. **Trang kết quả đầu tiên** của mỗi nguồn đến từ đâu: request GraphQL, hay dữ liệu nhúng sẵn trong HTML. Cách bắt `doc_id` và biến mẫu của truy vấn phân trang.
-3. **Đường dẫn tới từng trường** ở mục 4.2 trong phản hồi của mỗi nguồn. Cách nhận biết người đăng là cá nhân hay trang/nhóm.
+3. **Đường dẫn tới từng trường** ở mục 4.2 trong phản hồi của mỗi nguồn, gồm người đăng (tên, ID, link) và cách nhận biết người đăng là cá nhân hay trang.
 4. **Lỗi khi phiên hỏng:** dạng phản hồi khi hết phiên, bị checkpoint, bị chặn tạm thời, hoặc `doc_id` không còn hợp lệ.
 5. Bộ lọc "gần đây" và theo năm của tìm bài được truyền thế nào.
 
 **Kết quả của bước thử:**
 - Báo cáo `docs/reports/2026-10-19-topic-research-spike.md`.
-- Mẫu phản hồi **đã làm sạch** (bỏ tên và ID cá nhân, giữ cấu trúc) đặt trong `src/__tests__/research/fixtures/` để test bộ đọc.
+- Mẫu phản hồi **đã làm sạch** (thay tên và ID cá nhân thật bằng dữ liệu giả, giữ cấu trúc) đặt trong `src/__tests__/research/fixtures/` để test bộ đọc. Dữ liệu thật chỉ nằm trong DB của app, không đưa vào repo.
 
 Nếu bước thử cho thấy một nguồn không lấy được ổn định, nguồn đó được hoãn và ghi vào spec (mục 10). Các nguồn còn lại vẫn làm.
 
@@ -80,9 +80,13 @@ Nếu bước thử cho thấy một nguồn không lấy được ổn định,
 | `fb_id` | TEXT | ID bài / nhóm / trang |
 | `url` | TEXT | link bài / nhóm / trang |
 | `title` | TEXT | nội dung bài (≤ 5000 ký tự) hoặc tên nhóm/trang |
-| `place_kind` | TEXT | bài: `group` / `page` / `person` / `unknown` |
-| `place_id` | TEXT | `''` khi `person` |
-| `place_name` | TEXT | tên nhóm/trang; `person` → `'Cá nhân'` |
+| `place_kind` | TEXT | bài: nơi đăng — `group` / `page` / `person` (trang cá nhân) / `unknown` |
+| `place_id` | TEXT | ID nơi đăng |
+| `place_name` | TEXT | tên nơi đăng |
+| `author_kind` | TEXT | bài: `person` / `page` / `unknown` |
+| `author_id` | TEXT | ID người đăng (`''` nếu không đọc được) |
+| `author_name` | TEXT | tên người đăng |
+| `author_url` | TEXT | link người đăng |
 | `privacy` | TEXT | nhóm: `public` / `private` / `''` |
 | `member_count` | INTEGER NULL | nhóm |
 | `follower_count` | INTEGER NULL | trang |
@@ -117,14 +121,15 @@ Hàm thuần, không phụ thuộc trình duyệt, nằm trong `src/services/res
 - Số dạng chữ như "1,2K" hay "3 N" đổi thành số nguyên.
 - Trường không đọc được thì `null`, **không** ghi 0.
 - Mục thiếu ID thì bỏ qua.
-- Người đăng là cá nhân: `place_kind = 'person'`, **không lưu** tên hay ID người đó.
+- Người đăng (cá nhân hoặc trang) được lưu tên, ID và link để truy vết (anh yêu cầu 19/10/2026). Đọc không được thì để `''` / `author_kind = 'unknown'`.
 
 ## 5. Profile quét và cấu hình
 
 - `app_settings` khoá `research_config` gồm:
   - `profileId`: string hoặc null;
   - `dailyCap`: số nguyên, mặc định `3000`, khoảng 100–20000.
-- Tab Nghiên cứu có ô chọn profile quét. Nếu profile được chọn đang nằm trong một lịch đăng đang bật, hiện cảnh báo "Profile này đang dùng để đăng bài — nên dùng profile riêng".
+- Tab Nghiên cứu có ô chọn profile quét. Khuyến nghị (không bắt buộc) dùng một tài khoản Facebook riêng để quét. Nếu profile được chọn đang nằm trong một lịch đăng đang bật, chỉ hiện cảnh báo "Profile này đang dùng để đăng bài — nếu bị Facebook giới hạn do quét nhiều, việc đăng bài cũng bị ảnh hưởng".
+- Profile quét đang bận (đang mở hoặc đang có lượt đăng dùng nó) thì lượt quét không chạy, báo `profile_busy`.
 - Chưa chọn profile quét thì mọi lệnh quét bị từ chối với câu `Chưa chọn profile quét`.
 
 ## 6. Giới hạn an toàn
@@ -179,7 +184,7 @@ Lượt quét dừng giữa chừng vì `rate_limited`, `daily_cap_reached` ho�
 - **Form:** nguồn, từ khoá (hoặc chọn nhóm cho `group_feed`), bộ lọc (gần đây/năm), số lượng, nút **Quét**, tiến độ, nút **Huỷ**.
 - **Danh sách lượt quét:** nguồn, từ khoá, thời gian, số mục, trạng thái/mã lỗi.
 - **Bảng kết quả** của lượt quét đang chọn:
-  - bài: nội dung (cắt), nơi đăng, cảm xúc, bình luận, chia sẻ, tổng tương tác, tỉ lệ, thời gian, nút mở link;
+  - bài: nội dung (cắt), nơi đăng, người đăng (bấm mở link người đăng), cảm xúc, bình luận, chia sẻ, tổng tương tác, tỉ lệ, thời gian, nút mở link bài;
   - nhóm: tên, công khai/riêng tư, thành viên;
   - trang: tên, người theo dõi.
   - Sắp xếp theo cột, có phân trang.
@@ -212,7 +217,7 @@ Lượt quét dừng giữa chừng vì `rate_limited`, `daily_cap_reached` ho�
   - đủ trường;
   - phản hồi nhiều dòng;
   - trường thiếu → `null`;
-  - người đăng cá nhân không lộ tên/ID;
+  - đọc đúng người đăng (cá nhân và trang: tên, ID, link);
   - số dạng "1,2K";
   - phản hồi lỗi → mã ở mục 7.
 - **`graphqlSession`:**
@@ -242,4 +247,4 @@ Lượt quét dừng giữa chừng vì `rate_limited`, `daily_cap_reached` ho�
 | Facebook đổi cấu trúc phản hồi | Bộ đọc thuần có test trên mẫu; trường không đọc được thì `null` thay vì sai; `parse_failed` khi hỏng hẳn |
 | Trái điều khoản Facebook | Anh đã chấp nhận rủi ro; chỉ đọc, giới hạn số lượng, không thu danh sách người dùng |
 | Hai trình duyệt chạy cùng lúc (đăng bài + quét) tốn RAM VPS | Một lượt quét mỗi lúc; lượt quét ngắn (vài phút) |
-| Dữ liệu cá nhân | Không lưu tên/ID người đăng cá nhân; tên nhóm/trang là thông tin công khai |
+| Dữ liệu cá nhân (tên, ID người đăng) | Chỉ lưu người đăng của bài (không quét danh sách thành viên hay người tương tác); chỉ dùng nội bộ; tự xoá sau 180 ngày; mẫu test trong repo dùng dữ liệu giả |

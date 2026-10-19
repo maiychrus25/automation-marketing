@@ -26,19 +26,19 @@ MaiHub có tính năng **Nghiên cứu chủ đề**:
 
 ## Constraints
 
-- Không lưu danh sách người dùng. Người đăng là cá nhân chỉ ghi là "Cá nhân", không lưu tên hay ID.
+- Mỗi bài lưu người đăng (tên, ID, link, kể cả người đăng là cá nhân) để truy vết, theo yêu cầu của anh (19/10/2026). Không quét danh sách thành viên nhóm hay danh sách người bình luận/thả cảm xúc. Dữ liệu cá nhân chỉ dùng nội bộ và tự xoá sau 180 ngày (Nghị định 13/2023).
 - Giữ an toàn cho tài khoản:
   - giới hạn số mục mỗi lần quét và mỗi ngày;
   - nghỉ giữa các trang kết quả;
   - dừng ngay khi gặp checkpoint, chặn tạm thời hoặc hết phiên.
-- Profile quét phải là profile riêng, không dùng để đăng bài.
+- Nên dùng một profile (tài khoản Facebook) riêng để quét, không dùng để đăng bài, để nếu Facebook giới hạn hay checkpoint vì quét nhiều thì tài khoản đăng bài không bị ảnh hưởng. Đây là khuyến nghị, không bắt buộc: chọn profile đăng bài thì app chỉ cảnh báo.
 - Không chép code babyvibe. Tự viết, chỉ tham khảo cách tiếp cận và tên truy vấn GraphQL (là thông tin công khai của Facebook).
 - Control API chỉ được thêm thao tác và sự kiện mới; bot cũ không ảnh hưởng.
 - Test dùng dữ liệu mẫu đã làm sạch, không gọi Facebook thật. Bước thử thật chỉ đọc và cần anh cho phép.
 
 ## Success criteria
 
-- Bot gọi `research.search` với từ khoá X và nhận được tối đa N bài, mỗi bài có nội dung, số cảm xúc, bình luận, chia sẻ, thời gian, nơi đăng và link. Kết quả được lưu lại.
+- Bot gọi `research.search` với từ khoá X và nhận được tối đa N bài, mỗi bài có nội dung, số cảm xúc, bình luận, chia sẻ, thời gian, nơi đăng, người đăng và link. Kết quả được lưu lại.
 - Quét lại cùng từ khoá vài ngày sau thì so được sự thay đổi.
 - Facebook đổi `doc_id` thì lần quét sau vẫn chạy (tự bắt lại), không phải phát hành bản mới.
 - Gặp checkpoint thì dừng, báo lỗi rõ ràng, không quét tiếp.
