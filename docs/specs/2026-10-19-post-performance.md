@@ -39,6 +39,8 @@ Mỗi kết quả đăng nhóm thành công có một dòng.
 | `last_seen_at` | INTEGER NULL | lần cuối thấy bài trong bảng tin |
 | `last_checked_at` | INTEGER NULL | lần cuối kiểm tra nhóm này cho bài này |
 | `check_count` | INTEGER | số lần đã kiểm tra mà chưa thấy |
+| `next_check_at` | INTEGER NULL | lần tự kiểm tra kế tiếp (mục 4.5); `NULL` khi không còn gì cần tự làm |
+| `stats_done` | TEXT | các mốc đo đã làm, ví dụ `"1h,24h"` |
 
 ### 2.2 `fb_poster_post_stats`
 
@@ -123,6 +125,28 @@ Mã người dùng của profile lấy từ `GraphqlSession` khi mở trang (mã
 - Kết quả của lần chạy gần nhất (gồm lỗi từng nhóm và `shape` chẩn đoán khi đọc hỏng) giữ trong bộ nhớ để xem bằng `posts.trackStatus`.
 - Huỷ: `posts.trackCancel`. Dừng sau trang đang đọc và đóng phiên ngay, giống Nghiên cứu.
 
+### 4.5 Tự động lấy link và đo tương tác (anh yêu cầu 19/10/2026)
+
+MaiHub **tự** chạy theo dõi, không chờ anh hay bot.
+
+- **Cấu hình** `app_settings` khoá `fb_poster_post_tracking_config`:
+  - `autoEnabled`: mặc định `true`;
+  - `linkRetryMinutes`: mặc định `[30, 120, 360, 1440, 2880, 4320, 10080]` (30 phút, 2 giờ, 6 giờ, 24 giờ, 48 giờ, 72 giờ, 7 ngày);
+  - `statsAtMinutes`: mặc định `[60, 1440, 4320]` (1 giờ, 24 giờ, 72 giờ).
+
+  Kiểm tra đầu vào: mỗi mảng 1–10 phần tử, tăng dần, mỗi phần tử trong khoảng 5–20160 phút.
+- **`next_check_at`:**
+  - Bài `pending_approval` / `missing`: mốc kế tiếp trong `linkRetryMinutes` tính từ `posted_at`. Qua mốc cuối mà chưa thấy → `not_found`, `next_check_at = NULL`.
+  - Bài đã có link: mốc kế tiếp trong `statsAtMinutes` chưa nằm trong `stats_done`. Hết mốc → `NULL`.
+  - Bài có `removed_suspected = 1` không đo nữa.
+  - Đặt lại sau mỗi lần kiểm tra và khi tạo dòng.
+- **Bộ hẹn giờ** `PostTrackScheduler`, đồng hồ và timer được tiêm vào; khởi động và dừng cùng lịch đăng; không chạy ở chế độ nhân viên. Cứ `TRACK_TICK_MINUTES = 15` phút:
+  - nếu `autoEnabled` và Đăng Facebook đang rảnh (không lượt đăng, không kiểm tra, không theo dõi) và có dòng `next_check_at <= now`: chạy `PostTracker` chỉ với các cặp (profile, nhóm) đến hạn, tối đa `AUTO_TRACK_GROUPS = 10` cặp, ưu tiên bài chờ duyệt;
+  - đang bận thì bỏ qua lượt này, lượt sau thử lại.
+- **Gom theo nhóm:** một lần đọc bảng tin xử lý mọi bài đến hạn **và** chưa đến hạn của cặp đó. Bài chưa đến hạn mà tình cờ thấy vẫn được gắn link hoặc đo; một lần đo chỉ được tính cho mốc đã đến hạn.
+- **Ghi lần đo:** khi đo xong ở một mốc đến hạn, thêm mốc đó vào `stats_done`.
+- **Telegram:** sự kiện `posts.trackFinished` có thêm `auto: true` khi do bộ hẹn giờ chạy. `watch` dùng cùng định dạng tin ở mục 6 và chỉ gửi khi có link mới hoặc có bài nghi bị xoá.
+
 ## 5. Báo cáo (`posts.stats`)
 
 **Tham số:**
@@ -148,6 +172,7 @@ Với `groupBy = 'post'`, mỗi dòng là một bài, có thêm link, nhóm, n�
 | `posts.trackCancel` | không | `{ cancelled }` |
 | `posts.list` | `from?`, `to?`, `linkStatus?`, `groupUrl?`, `profileId?`, `limit?` (≤ 500), `offset?` | các dòng theo dõi kèm lần đo mới nhất |
 | `posts.stats` | như mục 5 | `{ rows[] }` |
+| `posts.trackConfig` | `config?` (khi có thì lưu; không có thì chỉ đọc) | cấu hình mục 4.5 |
 
 **Lỗi:** `BUSY` (đang đăng, đang kiểm tra hoặc đang theo dõi), `INVALID_PARAMS`, `NOT_FOUND` (`profileIds` lạ).
 
@@ -161,7 +186,8 @@ Với `groupBy = 'post'`, mỗi dòng là một bài, có thêm link, nhóm, n�
 - **Mục "Hiệu quả"** đầu tab Lịch sử:
   - chọn khoảng (7/30 ngày) và gom theo (nhóm / profile / lịch);
   - bảng báo cáo theo mục 5;
-  - nút **Cập nhật số liệu** (chạy `posts.track`), kèm tiến độ và nút Huỷ.
+  - nút **Cập nhật số liệu** (chạy `posts.track`), kèm tiến độ và nút Huỷ;
+  - nút ⚙ **Tự lấy link và đo** (bật/tắt, các mốc thời gian theo mục 4.5).
 - Theo `DESIGN.md`: sáng/tối, 1280 và 390 px, bảng cuộn ngang trong khung riêng.
 
 ## 8. Kiểm thử
@@ -183,6 +209,14 @@ Với `groupBy = 'post'`, mỗi dòng là một bài, có thêm link, nhóm, n�
   - huỷ;
   - checkpoint → `observe`;
   - sự kiện kết thúc.
+- **`PostTrackScheduler`:**
+  - tính `next_check_at` theo từng mốc;
+  - bài chờ duyệt qua mốc cuối → `not_found`;
+  - mốc đo 1h/24h/72h;
+  - bận thì bỏ lượt;
+  - giới hạn 10 cặp, ưu tiên bài chờ duyệt;
+  - tắt `autoEnabled` thì không chạy;
+  - gom theo cặp.
 - **Báo cáo:** từng kiểu `groupBy`; lần đo mới nhất mỗi bài; trung bình; tỉ lệ với số thành viên từ Nghiên cứu.
 - **Control API:** tham số, `BUSY`, sự kiện; định dạng tin `watch`.
 
@@ -196,4 +230,5 @@ Với `groupBy = 'post'`, mỗi dòng là một bài, có thêm link, nhóm, n�
 | Bảng tin nhóm sắp xếp khác thứ tự thời gian | Dùng `sorting_setting=CHRONOLOGICAL`; dừng theo giới hạn trang; chỉ kết luận "bị xoá" khi đã đọc qua mốc thời gian |
 | Theo dõi chiếm profile lúc đến giờ đăng | Chung khe việc với lượt đăng; lịch vào hàng đợi (tối đa 2 giờ); mỗi lượt giới hạn 30 nhóm × 10 trang |
 | Facebook đổi cấu trúc | Dùng lại bộ đọc và chẩn đoán `shape` của Nghiên cứu |
+| Tự chạy quá nhiều | Chỉ chạy khi có dòng đến hạn; tối đa 10 cặp mỗi lần; mốc thưa dần (tối đa 7 lần lấy link + 3 lần đo cho mỗi bài); gom theo nhóm |
 | Đọc nhiều làm tài khoản bị giới hạn | Nghỉ giữa trang/nhóm; dừng profile khi gặp tín hiệu; bot quyết định tần suất (gợi ý 1h, 24h, 72h sau khi đăng) |
