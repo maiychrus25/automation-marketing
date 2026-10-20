@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 import { useAppStore } from '@/store/appStore';
 import MediaPicker from './MediaPicker';
 import type { MediaItem } from '../../../services/facebookPoster/mediaRules';
@@ -31,6 +32,38 @@ export default function VideoTemplateForm({ template, music, submitting, error, 
   const [musicId, setMusicId] = useState(music[0]?.id ?? '');
   const [musicPath, setMusicPath] = useState('');
   const [touched, setTouched] = useState(false);
+  const [previewState, setPreviewState] = useState<'idle' | 'loading' | 'playing'>('idle');
+  const audioRef = useRef<HTMLAudioElement>(null);
+  // Mỗi lần bấm/đổi bài tăng số này; phản hồi tải nhạc cũ hơn bị bỏ.
+  const previewSeq = useRef(0);
+
+  const stopPreview = () => {
+    previewSeq.current += 1;
+    audioRef.current?.pause();
+    setPreviewState('idle');
+  };
+  useEffect(() => () => { previewSeq.current += 1; audioRef.current?.pause(); }, []);
+  useEffect(() => { stopPreview(); }, [musicId, musicMode]);
+
+  const togglePreview = async () => {
+    if (previewState !== 'idle') { stopPreview(); return; }
+    const seq = ++previewSeq.current;
+    setPreviewState('loading');
+    try {
+      const res = await ipc.video?.musicPreview(musicId);
+      if (seq !== previewSeq.current) return;
+      if (!res?.success || !res.path) throw new Error(res?.error || 'Không tải được nhạc nghe thử');
+      const audio = audioRef.current;
+      if (!audio) return;
+      audio.src = toLocalMediaUrl(res.path);
+      await audio.play();
+      if (seq === previewSeq.current) setPreviewState('playing');
+    } catch (err) {
+      if (seq !== previewSeq.current) return;
+      setPreviewState('idle');
+      showNotification(err instanceof Error && err.message ? err.message : 'Không phát được nhạc nghe thử', 'error');
+    }
+  };
 
   const errors = validateVideoForm(template, {
     name, aspect, variables, imagePaths: images.map((i) => i.path),
@@ -126,6 +159,12 @@ export default function VideoTemplateForm({ template, music, submitting, error, 
             <select className={FIELD} aria-label="Chọn nhạc có sẵn" value={musicId} onChange={(e) => setMusicId(e.target.value)}>
               {music.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.durationSec}s)</option>)}
             </select>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" className="poster-button" onClick={togglePreview} aria-pressed={previewState === 'playing'}>
+                {previewState === 'loading' ? 'Đang tải…' : previewState === 'playing' ? 'Dừng nghe thử' : 'Nghe thử'}
+              </button>
+              <audio ref={audioRef} onEnded={() => setPreviewState('idle')} onError={() => setPreviewState('idle')} />
+            </div>
             {selected && <p className="poster-muted text-xs break-words">Giấy phép: {selected.license} · Nguồn: {selected.source}</p>}
           </div>)}
         {musicMode === 'upload' && (

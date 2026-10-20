@@ -257,3 +257,15 @@ test('huỷ trong lúc tick thấy done: không ghi đè trạng thái đã hu�
     expect(status).toBe('cancelled'); // DELETE trên việc vừa xong xoá việc phía máy chủ: coi như đã huỷ
     expect(finished()).toHaveLength(1);
 });
+
+test('musicPreview tải một lần vào music-cache rồi dùng lại; mã lạ bị từ chối', async () => {
+    const svc = makeService();
+    const [a, b] = await Promise.all([svc.musicPreview('m1'), svc.musicPreview('m1')]);
+    expect(a).toBe(path.join(dir, 'videos', 'music-cache', 'm1.mp3'));
+    expect(b).toBe(a);
+    expect(fs.readFileSync(a, 'utf8')).toBe('fake-mp3');
+    await svc.musicPreview('m1');
+    expect(server.downloads.filter((d) => d === '/v1/music/m1')).toHaveLength(1);
+    await expect(svc.musicPreview('../x')).rejects.toMatchObject({ code: 'not_found' });
+    expect(fs.readdirSync(path.join(dir, 'videos', 'music-cache'))).toEqual(['m1.mp3']);
+});

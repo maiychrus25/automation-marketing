@@ -933,6 +933,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     settingsSet:    (input: { url: string; apiKey?: string }) => ipcRenderer.invoke('video:settingsSet', input),
     testConnection: ()                            => ipcRenderer.invoke('video:testConnection'),
     templates:      ()                            => ipcRenderer.invoke('video:templates'),
+    musicPreview:   (musicId: string)             => ipcRenderer.invoke('video:musicPreview', { musicId }),
     render:         (params: any)                 => ipcRenderer.invoke('video:render', params),
     status:         (videoId: string)             => ipcRenderer.invoke('video:status', { videoId }),
     list:           (params?: any)                => ipcRenderer.invoke('video:list', params || {}),

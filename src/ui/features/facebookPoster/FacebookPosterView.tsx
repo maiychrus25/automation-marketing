@@ -71,7 +71,9 @@ export default function FacebookPosterView() {
   const compose = (at?: number, mediaPaths: string[] = []) => {
     setEditingDraft(null);
     // Chỉ khi có tệp gắn sẵn mới dựng lại composer; mở thường vẫn giữ nội dung đang soạn dở.
-    if (mediaPaths.length) { setComposeMedia(mediaPaths); setComposeSeq((n) => n + 1); }
+    // Gán luôn (rỗng khi mở thường) để tệp gắn sẵn cũ không bao giờ bám sang bài mới khác.
+    setComposeMedia(mediaPaths);
+    if (mediaPaths.length) setComposeSeq((n) => n + 1);
     setChannelsOpen(false);
     setComposeAt(at);
     setComposerMounted(true);
@@ -81,6 +83,7 @@ export default function FacebookPosterView() {
     const res = await ipc.facebookPoster?.draftGet(id);
     if (!res?.success || !res.draft) { showNotification(res?.error || 'Không mở được bản nháp', 'error'); return; }
     setChannelsOpen(false);
+    setComposeMedia([]);
     setEditingDraft({ schedule: res.draft, media: res.media ?? [] });
     setDraftOpenSeq((n) => n + 1);
     setComposeAt(undefined);

@@ -183,6 +183,15 @@ Biến người dùng (`variables`) và danh sách ảnh (`images`) được ghi
 
 Nhạc đóng sẵn trong `music/` (kèm `manifest.json` có giấy phép, tác giả, nguồn). Năm bản lấy từ FreePD.com (bản lưu Wayback Machine ngày 2025-01-06, trang ghi miền công cộng, dùng thương mại được): Advertime, Happy Whistling Ukulele, Inspiration (Rafael Krux); City Sunshine, Fresh Focus (Kevin MacLeod). Đã mã hoá lại 128 kbps. Thêm nhạc: chỉ dùng nhạc CC0/miền công cộng, đặt tệp `<id>.mp3` vào `music/` và thêm một mục vào `manifest.json` (cả `api` lẫn `worker` đọc manifest và tệp từ image, nên cần build lại).
 
+Nghe thử: `GET /v1/music/<id>` (cần khoá API) phát tệp MP3 của bản nhạc có trong `manifest.json` (hỗ trợ Range); mã lạ trả 404.
+
+| Endpoint | Ghi chú |
+|---|---|
+| `GET /v1/health` | không cần khoá |
+| `GET /v1/templates` | mẫu và danh sách nhạc |
+| `GET /v1/music/:id` | phát nhạc có sẵn (audio/mpeg) |
+| `POST /v1/jobs`, `GET /v1/jobs/:id[/video\|/thumb]`, `DELETE /v1/jobs/:id` | việc render |
+
 ## 8. Phát triển cục bộ
 
 ```bash

@@ -22,6 +22,7 @@ function setup(over: Partial<VideoOperationsDeps> = {}) {
         render: jest.fn(async (_input: any) => job({ status: 'queued' })),
         get: jest.fn((id: string): VideoJob | null => (id === 'v1' ? job() : null)),
         list: jest.fn((_opts: any) => ({ videos: [job()], total: 1 })),
+        musicPreview: jest.fn(async (id: string) => path.join(dir, `${id}.mp3`)),
         cancel: jest.fn(async (_id: string) => ({ cancelled: true })),
         delete: jest.fn(async (_id: string) => undefined),
     };
@@ -197,6 +198,19 @@ describe('status, list, cancel, delete', () => {
         await ops.delete({ videoId: 'v1' });
         expect(service.delete).toHaveBeenCalledWith('v1');
         await expect(ops.delete({ videoId: '' })).rejects.toThrow('videoId');
+    });
+});
+
+describe('musicPreview', () => {
+    test('trả đường dẫn nhạc đã tải', async () => {
+        const { ops, service } = setup();
+        expect(await ops.musicPreview({ musicId: 'm1' })).toEqual({ path: path.join(dir, 'm1.mp3') });
+        expect(service.musicPreview).toHaveBeenCalledWith('m1');
+    });
+    test('thiếu musicId bị từ chối', async () => {
+        const { ops } = setup();
+        await expect(ops.musicPreview({})).rejects.toMatchObject({ code: 'invalid' });
+        await expect(ops.musicPreview({ musicId: 5 })).rejects.toMatchObject({ code: 'invalid' });
     });
 });
 

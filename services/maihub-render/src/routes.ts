@@ -14,7 +14,7 @@ import { TemplateDef, loadTemplates } from './templates';
 const MAX_UPLOADS_PER_KEY = 2;
 const MAX_UPLOADS_GLOBAL = 4;
 
-export interface MusicInfo { id: string; name: string; durationSec: number; license: string; source: string }
+export interface MusicInfo { id: string; name: string; durationSec: number; license: string; source: string; file?: string }
 
 /** Phần Orchestrator mà route cần (tránh phụ thuộc vòng với main-api). */
 export interface JobCanceller { requestCancel(id: string): void }
@@ -26,6 +26,8 @@ export interface ApiDeps {
   orchestrator: JobCanceller;
   templatesDir: string;
   music: MusicInfo[];
+  /** Thư mục chứa tệp nhạc có sẵn (để nghe thử qua /v1/music/:id). */
+  musicDir?: string;
   version: string;
   hyperframes: string;
   limits?: Partial<UploadLimits>;
@@ -211,6 +213,15 @@ export function createRouter(deps: ApiDeps): (req: IncomingMessage, res: ServerR
     if (!owner) return sendError(res, 401, 'Thiếu hoặc sai khoá API.');
 
     if (method === 'GET' && p === '/v1/templates') return sendJson(res, 200, { templates, music: deps.music });
+    const mm = method === 'GET' ? /^\/v1\/music\/([^/]+)$/.exec(p) : null;
+    if (mm) {
+      let id: string;
+      try { id = decodeURIComponent(mm[1]); } catch { return sendError(res, 404, 'Không tìm thấy nhạc.'); }
+      // chỉ nhận mã có trong manifest; tên tệp lấy từ manifest và phải là tên trơn
+      const track = deps.music.find((t) => t.id === id);
+      if (!track?.file || !deps.musicDir || track.file !== path.basename(track.file)) return sendError(res, 404, 'Không tìm thấy nhạc.');
+      return sendFile(req, res, path.join(deps.musicDir, track.file), 'audio/mpeg');
+    }
     if (method === 'POST' && p === '/v1/jobs') return createJob(req, res, owner);
 
     const jm = /^\/v1\/jobs\/([^/]+)(\/video|\/thumb)?$/.exec(p);

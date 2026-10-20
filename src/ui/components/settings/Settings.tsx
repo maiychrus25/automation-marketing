@@ -183,7 +183,7 @@ export default function Settings() {
     if (!perm) return true; // no permission required
     return useEmployeeStore.getState().hasPermission(perm);
   };
-  const visibleNavItems = NAV_ITEMS.filter(item => hasSettingsPerm(item.requiredPerm) && (item.id !== 'controlApi' || empMode !== 'employee'));
+  const visibleNavItems = NAV_ITEMS.filter(item => hasSettingsPerm(item.requiredPerm) && (!['controlApi', 'renderServer'].includes(item.id) || empMode !== 'employee'));
 
   // Guard: nếu activeTab không còn trong visibleNavItems (do đổi workspace/quyền) → reset về tab đầu tiên
   useEffect(() => {
@@ -558,7 +558,7 @@ export default function Settings() {
         {activeTab === 'proxy' && <ProxySettings />}
         {activeTab === 'webhooks' && <TunnelSettings />}
         {activeTab === 'controlApi' && empMode !== 'employee' && <ControlApiSettings />}
-        {activeTab === 'renderServer' && <RenderServerSettings />}
+        {activeTab === 'renderServer' && empMode !== 'employee' && <RenderServerSettings />}
         {activeTab === 'employees' && <EmployeeSettings />}
         {activeTab === 'workspace' && <WorkspaceSettings />}
 

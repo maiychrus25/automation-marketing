@@ -29,7 +29,7 @@ describe('isEmployeeChannelAllowed', () => {
     'facebookPoster:campaignUpdate', 'facebookPoster:campaignDelete',
     'research:getConfig', 'research:setConfig', 'research:search', 'research:scanGroupFeeds', 'research:list',
     'research:get', 'research:cancel', 'research:profileUsage', 'research:exportXlsx', 'research:status', 'research:openLink',
-    'video:settingsGet', 'video:settingsSet', 'video:testConnection', 'video:templates', 'video:render',
+    'video:settingsGet', 'video:settingsSet', 'video:testConnection', 'video:templates', 'video:musicPreview', 'video:render',
     'video:status', 'video:list', 'video:cancel', 'video:delete', 'video:exportFile',
     'controlApi:createKey', 'controlApi:setConfig', 'controlApi:getConfig', 'controlApi:listKeys', 'controlApi:revokeKey',
     'controlApi:listAudit', 'controlApi:firewallCommand', 'controlApi:regenerateCertificate',

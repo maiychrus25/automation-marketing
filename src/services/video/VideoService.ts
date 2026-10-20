@@ -65,6 +65,7 @@ export class VideoService {
     private timer: unknown = null;
     private running = false;
     private ticking = false;
+    private readonly musicDownloads = new Map<string, Promise<void>>();
     private readonly lastContact = new Map<string, number>();
 
     constructor(private readonly deps: VideoServiceDeps) {}
@@ -75,6 +76,21 @@ export class VideoService {
         const data = await this.deps.client().templates();
         this.catalog = { at: now, data };
         return data;
+    }
+
+    /** Nhạc có sẵn để nghe thử: tải một lần về videosDir/music-cache/<id>.mp3, các lần sau dùng lại. Mã phải có trong danh sách của máy chủ. */
+    async musicPreview(id: string): Promise<string> {
+        if (!(await this.templates()).music.some((m) => m.id === id)) throw new RenderError('not_found', 'Không tìm thấy bản nhạc');
+        const dest = path.join(this.deps.videosDir, 'music-cache', `${id}.mp3`);
+        if (fs.existsSync(dest)) return dest;
+        let pending = this.musicDownloads.get(id);
+        if (!pending) {
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            pending = this.deps.client().downloadMusic(id, dest).finally(() => this.musicDownloads.delete(id));
+            this.musicDownloads.set(id, pending);
+        }
+        await pending;
+        return dest;
     }
 
     async render(input: VideoRenderInput): Promise<VideoJob> {

@@ -16,7 +16,7 @@ export type VideoOrigin = 'app' | 'bot';
 
 /** Phần phụ thuộc ngoài (Electron, DB, hộp thư) được tiêm vào để kiểm tra tham số chạy được trong Jest. */
 export interface VideoOperationsDeps {
-    service(): Pick<VideoService, 'templates' | 'render' | 'get' | 'list' | 'cancel' | 'delete'>;
+    service(): Pick<VideoService, 'templates' | 'musicPreview' | 'render' | 'get' | 'list' | 'cancel' | 'delete'>;
     loadSettings(): VideoSettings;
     saveSettings(input: { url: string; apiKey?: string }): VideoSettings;
     client(): Pick<RenderClient, 'health' | 'templates'>;
@@ -155,6 +155,13 @@ export function createVideoOperations(deps: VideoOperationsDeps) {
             if (!Number.isInteger(offset) || offset < 0) bad('offset phải là số nguyên ≥ 0');
             const { videos, total } = deps.service().list({ status: p.status, limit, offset });
             return { total, videos: origin === 'bot' ? videos.map(publicView) : videos };
+        },
+
+        /** Đường dẫn tệp nhạc có sẵn đã tải về máy để nghe thử; chỉ dùng trong app. */
+        musicPreview: async (params: any): Promise<{ path: string }> => {
+            const id = params?.musicId;
+            if (typeof id !== 'string' || !id) bad('Thiếu tham số musicId');
+            return { path: await deps.service().musicPreview(id) };
         },
 
         cancel: async (params: any) => deps.service().cancel(readVideoId(params)),

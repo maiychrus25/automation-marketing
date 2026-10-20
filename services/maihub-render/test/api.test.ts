@@ -95,7 +95,8 @@ describe('API maihub-render', () => {
       keys: new Map([['alpha', hashKey(KEY_A)], ['beta', hashKey(KEY_B)]]),
       store, queue, orchestrator: orch,
       templatesDir: path.join(root, 'templates'),
-      music: [{ id: 'm1', name: 'Nhạc 1', durationSec: 30, license: 'CC0', source: 'x' }],
+      music: [{ id: 'm1', name: 'Nhạc 1', durationSec: 30, license: 'CC0', source: 'x', file: 'm1.mp3' }, { id: 'bad', name: 'x', durationSec: 1, license: 'CC0', source: 'x', file: '../secret.txt' }],
+      musicDir: path.join(root, 'music'),
       version: '1.0.0', hyperframes: '0.8.181',
       limits: { maxTotalBytes: 3 * 1024 * 1024 },
     });
@@ -130,7 +131,24 @@ describe('API maihub-render', () => {
     const r = await call('GET', '/v1/templates', { key: KEY_A });
     expect(r.status).toBe(200);
     expect(r.json.templates.map((t: any) => t.id)).toEqual(['t1']);
-    expect(r.json.music).toEqual([{ id: 'm1', name: 'Nhạc 1', durationSec: 30, license: 'CC0', source: 'x' }]);
+    expect(r.json.music.map((x: any) => x.id)).toEqual(['m1', 'bad']);
+  });
+
+  it('/v1/music/:id cần khoá, chỉ phát nhạc trong manifest, hỗ trợ Range', async () => {
+    fs.mkdirSync(path.join(root, 'music'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'music', 'm1.mp3'), Buffer.from('0123456789'));
+    fs.writeFileSync(path.join(root, 'secret.txt'), 'bí mật');
+    expect((await call('GET', '/v1/music/m1')).status).toBe(401);
+    const ok = await call('GET', '/v1/music/m1', { key: KEY_A });
+    expect(ok.status).toBe(200);
+    expect(ok.headers['content-type']).toBe('audio/mpeg');
+    expect(ok.body.toString()).toBe('0123456789');
+    const part = await call('GET', '/v1/music/m1', { key: KEY_A, headers: { Range: 'bytes=2-4' } });
+    expect(part.status).toBe(206);
+    expect(part.body.toString()).toBe('234');
+    expect((await call('GET', '/v1/music/khong-co', { key: KEY_A })).status).toBe(404);
+    expect((await call('GET', '/v1/music/bad', { key: KEY_A })).status).toBe(404);
+    expect((await call('GET', '/v1/music/..%2Fsecret', { key: KEY_A })).status).toBe(404);
   });
 
   it('tạo việc theo mẫu: đổi tên tệp, bỏ qua tên client', async () => {

@@ -64,7 +64,16 @@ export class RenderClient {
 
     /** Tải về `dest` qua tệp tạm rồi đổi tên: không bao giờ để lại tệp dở ở `dest`. */
     async download(id: string, kind: 'video' | 'thumb', dest: string): Promise<void> {
-        const res = await this.request('GET', `/v1/jobs/${encodeURIComponent(id)}/${kind}`, undefined, true, TRANSFER_TIMEOUT_MS);
+        await this.downloadTo(`/v1/jobs/${encodeURIComponent(id)}/${kind}`, dest);
+    }
+
+    /** Tải nhạc có sẵn (nghe thử) về `dest`, cùng cách ghi an toàn như `download`. */
+    async downloadMusic(id: string, dest: string): Promise<void> {
+        await this.downloadTo(`/v1/music/${encodeURIComponent(id)}`, dest);
+    }
+
+    private async downloadTo(urlPath: string, dest: string): Promise<void> {
+        const res = await this.request('GET', urlPath, undefined, true, TRANSFER_TIMEOUT_MS);
         if (!res.body) throw new RenderError('server', 'Máy chủ render trả về tệp rỗng');
         const part = `${dest}.part`;
         try {

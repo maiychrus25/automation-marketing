@@ -157,7 +157,8 @@ export function main(): void {
   const sharedDir = env.SHARED_DIR ?? path.resolve('shared');
   const port = Number(env.PORT ?? 8080);
   const templatesDir = env.TEMPLATES_DIR ?? path.resolve('templates');
-  const musicFile = path.join(env.MUSIC_DIR ?? path.resolve('music'), 'manifest.json');
+  const musicDir = env.MUSIC_DIR ?? path.resolve('music');
+  const musicFile = path.join(musicDir, 'manifest.json');
   const music: MusicInfo[] = fs.existsSync(musicFile) ? JSON.parse(fs.readFileSync(musicFile, 'utf8')) : [];
   const version = (JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8')) as { version: string }).version;
 
@@ -167,7 +168,7 @@ export function main(): void {
   orchestrator.init();
   orchestrator.start();
   createServer({
-    keys, store, queue, orchestrator, templatesDir, music, version, hyperframes: env.HYPERFRAMES_VERSION ?? '0.8.181',
+    keys, store, queue, orchestrator, templatesDir, music, musicDir, version, hyperframes: env.HYPERFRAMES_VERSION ?? '0.8.181',
   }).listen(port, () => console.log(`[render] API đang chạy ở cổng ${port}`));
 }
 

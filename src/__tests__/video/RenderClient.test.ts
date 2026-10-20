@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RenderClient, RenderError } from '../../services/video/RenderClient';
-import { FakeRenderServer, MP4, TEST_KEY } from './helpers';
+import { FakeRenderServer, MP3, MP4, TEST_KEY } from './helpers';
 
 const server = new FakeRenderServer();
 let dir: string;
@@ -42,6 +42,14 @@ test('download lỗi không để lại tệp', async () => {
     const dest = path.join(dir, 'v.mp4');
     expect(await code(client().download('missing', 'video', dest))).toBe('not_found');
     expect(fs.readdirSync(dir)).toEqual([]);
+});
+
+test('downloadMusic ghi nhạc, mã lạ báo not_found và không để lại tệp', async () => {
+    const dest = path.join(dir, 'm1.mp3');
+    await client().downloadMusic('m1', dest);
+    expect(fs.readFileSync(dest)).toEqual(MP3);
+    expect(await code(client().downloadMusic('zzz', path.join(dir, 'z.mp3')))).toBe('not_found');
+    expect(fs.readdirSync(dir)).toEqual(['m1.mp3']);
 });
 
 test('lỗi được phân loại', async () => {

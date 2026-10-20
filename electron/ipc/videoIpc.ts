@@ -94,6 +94,7 @@ export function registerVideoIpc(): void {
     handle('video:settingsSet', videoOperations.settingsSet);
     handle('video:testConnection', videoOperations.testConnection);
     handle('video:templates', videoOperations.templates);
+    handle('video:musicPreview', videoOperations.musicPreview);
     handle('video:render', (p) => videoOperations.render(p, 'app'));
     handle('video:status', (p) => videoOperations.status(p, 'app'));
     handle('video:list', (p) => videoOperations.list(p, 'app'));

@@ -4,6 +4,7 @@ import type { AddressInfo } from 'net';
 export const TEST_KEY = 'secret-key-1234567890';
 const MP4 = Buffer.from('fake-mp4-bytes');
 const JPG = Buffer.from('fake-jpg');
+const MP3 = Buffer.from('fake-mp3');
 
 export interface FakeJob { status: string; progress: number; error?: string; durationSec?: number; sizeBytes?: number }
 
@@ -52,7 +53,7 @@ export class FakeRenderServer {
                         durationSec: { type: 'number', label: 'Thời lượng', default: 20 },
                     },
                 }],
-                music: [],
+                music: [{ id: 'm1', name: 'Nhạc 1', durationSec: 30, license: 'CC0', source: 'x' }],
             });
         }
         if (req.method === 'POST' && p === '/v1/jobs') {
@@ -63,6 +64,10 @@ export class FakeRenderServer {
             const jobId = `remote-${this.uploads.length}`;
             this.jobs.set(jobId, { status: 'queued', progress: 0 });
             return this.send(res, 201, { jobId, status: 'queued', position: 0, files: Object.fromEntries(files.map((f, i) => [f, `img${i + 1}.jpg`])) });
+        }
+        if (req.method === 'GET' && p.startsWith('/v1/music/')) {
+            this.downloads.push(p);
+            return p === '/v1/music/m1' ? this.send(res, 200, MP3, 'audio/mpeg') : this.send(res, 404, { error: { code: 'NOT_FOUND', message: 'Không tìm thấy nhạc.' } });
         }
         const m = /^\/v1\/jobs\/([^/]+)(\/video|\/thumb)?$/.exec(p);
         const job = m ? this.jobs.get(m[1]) : undefined;
@@ -82,4 +87,4 @@ export class FakeRenderServer {
     }
 }
 
-export { MP4, JPG };
+export { MP4, JPG, MP3 };
