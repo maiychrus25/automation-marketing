@@ -1,6 +1,7 @@
 import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from './schema';
 import { MIN_MEASURED_FOR_COMPARISON } from './postTracking';
 import { keyOf, type CollectedComment } from './collectComments';
+import type { GroupScoreInput } from './groupScores';
 import type {
     FbPosterComment, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
     CampaignStatus, FbPosterCampaign, FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
@@ -560,12 +561,13 @@ export class FacebookPosterStore {
     }
 
     /** Báo cáo hiệu quả bài đã đăng (spec mục 5). Bài tính theo `posted_at` trong [from, to]. */
-    statsReport(opts: { from: number; to: number; groupBy: PostStatsGroupBy; limit: number; campaignId?: string; scheduleId?: string }): PostStatsReportRow[] {
+    statsReport(opts: { from: number; to: number; groupBy: PostStatsGroupBy; limit: number; campaignId?: string; scheduleId?: string; groupUrl?: string }): PostStatsReportRow[] {
         const where = ['t.posted_at >= ?', 't.posted_at <= ?'];
         const params: any[] = [opts.from, opts.to];
         if (opts.campaignId === '') where.push('t.campaign_id IS NULL');
         else if (opts.campaignId !== undefined) { where.push('t.campaign_id = ?'); params.push(opts.campaignId); }
         if (opts.scheduleId !== undefined) { where.push('t.schedule_id = ?'); params.push(opts.scheduleId); }
+        if (opts.groupUrl !== undefined) { where.push('t.group_url = ?'); params.push(opts.groupUrl); }
         const rows = this.db.query<any>(
             `SELECT t.*, sc.name AS schedule_name, cp.name AS campaign_name,
                     (SELECT r.profile_name FROM fb_poster_results r WHERE r.profile_id = t.profile_id ORDER BY r.id DESC LIMIT 1) AS profile_name,
@@ -599,6 +601,8 @@ export class FacebookPosterStore {
                         return [`${r.schedule_id ?? ''}:${r.variant}`, r.variant === '' ? base : `${base} · ${r.variant}`];
                     }
                     case 'day': return [localDay(r.posted_at), localDay(r.posted_at)];
+                    case 'hour': { const hour = String(new Date(r.posted_at).getHours()).padStart(2, '0'); return [hour, `${hour}h`]; }
+                    case 'weekday': { const day = new Date(r.posted_at).getDay() || 7; return [String(day), day === 7 ? 'Chủ nhật' : `Thứ ${day + 1}`]; }
                     default: return [String(r.result_id), r.group_name || r.group_url];
                 }
             })();
@@ -640,6 +644,7 @@ export class FacebookPosterStore {
         if (opts.groupBy === 'group' || opts.groupBy === 'profile' || opts.groupBy === 'schedule' || opts.groupBy === 'campaign' || opts.groupBy === 'variant') {
             ordered.sort((a, c) => c.row.posts - a.row.posts || c.latestAt - a.latestAt);
         }
+        if (opts.groupBy === 'hour' || opts.groupBy === 'weekday') ordered.sort((a, c) => (a.row.key < c.row.key ? -1 : 1));
         const kept = ordered.slice(0, opts.limit);
         if (opts.groupBy === 'post' && kept.length > 0) {
             const byId = new Map(kept.map((k) => [k.row.post!.resultId, k.row.post!]));
@@ -657,6 +662,45 @@ export class FacebookPosterStore {
             row.engagementRate = rates.length > 0 ? rates.reduce((a, c) => a + c, 0) / rates.length : null;
             return row;
         });
+    }
+
+    /**
+     * Số liệu đầu vào chấm điểm nhóm (spec 26.23 §2.1): lượt đăng từ kết quả chạy (bỏ lỗi do profile) ghép với số liệu theo dõi bài.
+     * Nhóm chỉ có ở một phía vẫn có dòng; nhóm chỉ có theo dõi lấy `attempted` = số bài.
+     */
+    groupScoreInputs(opts: { from: number; to: number; campaignId?: string }): GroupScoreInput[] {
+        const where = [
+            "r.kind = 'post'", "r.mode = 'group'", 'r.started_at >= ?', 'r.started_at <= ?',
+            "NOT (x.outcome = 'failed' AND x.error_code IN ('not_logged_in', 'launch_failed', 'stopped'))",
+        ];
+        const params: any[] = [opts.from, opts.to];
+        if (opts.campaignId === '') where.push('r.campaign_id IS NULL');
+        else if (opts.campaignId !== undefined) { where.push('r.campaign_id = ?'); params.push(opts.campaignId); }
+        const attempts = this.db.query<any>(
+            `SELECT x.target_url AS url, MAX(x.target_name) AS name, COUNT(*) AS attempted,
+                    SUM(CASE WHEN x.outcome = 'posted' THEN 1 ELSE 0 END) AS posted,
+                    SUM(CASE WHEN x.outcome = 'failed' THEN 1 ELSE 0 END) AS failed
+             FROM fb_poster_results x JOIN fb_poster_runs r ON r.id = x.run_id
+             WHERE ${where.join(' AND ')} GROUP BY x.target_url`,
+            params,
+        );
+        const tracked = new Map(this.statsReport({ from: opts.from, to: opts.to, groupBy: 'group', campaignId: opts.campaignId, limit: 100000 }).map((t) => [t.key, t]));
+        const out: GroupScoreInput[] = attempts.map((a) => {
+            const t = tracked.get(a.url);
+            tracked.delete(a.url);
+            return {
+                groupUrl: a.url, label: t?.label ?? (a.name || a.url), attempted: a.attempted, posted: a.posted, failed: a.failed,
+                held: (t?.pending ?? 0) + (t?.notFound ?? 0), removed: t?.removedSuspected ?? 0, withLink: t?.withLink ?? 0,
+                measured: t?.measured ?? 0, engagementRate: t?.engagementRate ?? null, avgEngagement: t?.avgEngagement ?? null,
+            };
+        });
+        for (const t of tracked.values()) {
+            out.push({
+                groupUrl: t.key, label: t.label, attempted: t.posts, posted: 0, failed: 0, held: t.pending + t.notFound, removed: t.removedSuspected,
+                withLink: t.withLink, measured: t.measured, engagementRate: t.engagementRate, avgEngagement: t.avgEngagement,
+            });
+        }
+        return out;
     }
 
     /** Số thành viên từ mục 'group' mới nhất của Nghiên cứu; bảng không tồn tại hoặc không có mục thì null. */

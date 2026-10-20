@@ -533,6 +533,80 @@ describe('post tracking store', () => {
     });
   });
 
+  describe('statsReport hour / weekday / groupUrl', () => {
+    test('groupBy hour: 23:59 và 00:00 vào hai khung, sắp theo key tăng dần', () => {
+      const s = store();
+      s.createTracking(trackRow(1, { postedAt: new Date(2026, 0, 6, 23, 59).getTime() }));
+      s.createTracking(trackRow(2, { postedAt: new Date(2026, 0, 7, 0, 0).getTime() }));
+      s.createTracking(trackRow(3, { postedAt: new Date(2026, 0, 7, 9, 5).getTime() }));
+      s.createTracking(trackRow(4, { postedAt: new Date(2026, 0, 8, 9, 30).getTime() }));
+      const rows = s.statsReport({ from: 0, to: Date.now() * 2, groupBy: 'hour', limit: 100 });
+      expect(rows.map((r) => [r.key, r.label, r.posts, r.insufficient])).toEqual([['00', '00h', 1, true], ['09', '09h', 2, true], ['23', '23h', 1, true]]);
+    });
+
+    test('groupBy weekday: Chủ nhật = 7, Thứ 2 = 1, sắp theo key', () => {
+      const s = store();
+      s.createTracking(trackRow(1, { postedAt: new Date(2026, 0, 4, 10).getTime() })); // Chủ nhật
+      s.createTracking(trackRow(2, { postedAt: new Date(2026, 0, 5, 10).getTime() })); // Thứ 2
+      s.createTracking(trackRow(3, { postedAt: new Date(2026, 0, 5, 11).getTime() }));
+      const rows = s.statsReport({ from: 0, to: Date.now() * 2, groupBy: 'weekday', limit: 100 });
+      expect(rows.map((r) => [r.key, r.label, r.posts])).toEqual([['1', 'Thứ 2', 2], ['7', 'Chủ nhật', 1]]);
+    });
+
+    test('lọc groupUrl', () => {
+      const s = store();
+      s.createTracking(trackRow(1, { groupUrl: 'g-a', postedAt: 10 }));
+      s.createTracking(trackRow(2, { groupUrl: 'g-b', postedAt: 11 }));
+      const rows = s.statsReport({ from: 0, to: 100, groupBy: 'day', limit: 100, groupUrl: 'g-a' });
+      expect(rows.map((r) => r.posts)).toEqual([1]);
+    });
+  });
+
+  describe('groupScoreInputs', () => {
+    const G1 = 'https://www.facebook.com/groups/1/';
+    const G2 = 'https://www.facebook.com/groups/2/';
+    const G3 = 'https://www.facebook.com/groups/3/';
+    const range = { from: 0, to: 10_000 };
+
+    test('bỏ lỗi do profile, chỉ tính lượt đăng nhóm, ghép hai phía và nhóm chỉ có lỗi', () => {
+      const s = store();
+      s.createRun({ ...newRun('r1', 100) });
+      s.createRun({ ...newRun('rj', 100, 'join') });
+      s.createRun({ ...newRun('rold', 99_999) });
+      for (const outcome of ['posted', 'posted']) s.addResult(newResult('r1', { outcome }));
+      s.addResult(newResult('r1', { outcome: 'failed', errorCode: 'not_logged_in' }));
+      s.addResult(newResult('r1', { outcome: 'failed', errorCode: 'launch_failed' }));
+      s.addResult(newResult('r1', { outcome: 'failed', errorCode: 'stopped' }));
+      s.addResult(newResult('r1', { outcome: 'failed', errorCode: 'post_failed' }));
+      s.addResult(newResult('rj', { outcome: 'posted' }));
+      s.addResult(newResult('rold', { outcome: 'posted' }));
+      s.addResult(newResult('r1', { targetUrl: G3, targetName: 'Nhóm 3', outcome: 'failed', errorCode: 'post_failed' }));
+      s.createTracking(trackRow(1, { groupUrl: G1, postedAt: 150, linkStatus: 'known' }));
+      s.createTracking(trackRow(2, { groupUrl: G1, postedAt: 160, linkStatus: 'not_found' }));
+      s.createTracking(trackRow(3, { groupUrl: G2, postedAt: 170, linkStatus: 'pending_approval', removedSuspected: true }));
+      s.addPostStats(1, { capturedAt: 1, reactions: 4, comments: 0, shares: 0 });
+
+      const rows = s.groupScoreInputs(range);
+      const by = (u: string) => rows.find((r) => r.groupUrl === u)!;
+      expect(rows).toHaveLength(3);
+      expect(by(G1)).toMatchObject({ attempted: 3, posted: 2, failed: 1, held: 1, removed: 0, withLink: 1, measured: 1, avgEngagement: 4 });
+      expect(by(G2)).toMatchObject({ attempted: 1, posted: 0, failed: 0, held: 1, removed: 1, withLink: 0, measured: 0 });
+      expect(by(G3)).toMatchObject({ label: 'Nhóm 3', attempted: 1, posted: 0, failed: 1, held: 0, measured: 0, avgEngagement: null });
+    });
+
+    test('lọc chiến dịch theo run; chuỗi rỗng = không thuộc chiến dịch', () => {
+      const s = store();
+      (s as any).db.run(`INSERT INTO fb_poster_campaigns (id, name, created_at, updated_at) VALUES ('c1', 'CD', 1, 1)`);
+      s.createRun({ ...newRun('r1', 100), campaignId: 'c1' });
+      s.createRun({ ...newRun('r2', 100) });
+      s.addResult(newResult('r1'));
+      s.addResult(newResult('r2', { targetUrl: G2 }));
+      expect(s.groupScoreInputs({ ...range, campaignId: 'c1' }).map((r) => r.groupUrl)).toEqual([G1]);
+      expect(s.groupScoreInputs({ ...range, campaignId: '' }).map((r) => r.groupUrl)).toEqual([G2]);
+      expect(s.groupScoreInputs(range).map((r) => r.groupUrl).sort()).toEqual([G1, G2]);
+    });
+  });
+
   test('statsReport: limit giữ bài mới nhất (post/day) và nhóm nhiều bài nhất (group)', () => {
     const s = store();
     s.createTracking(trackRow(1, { postedAt: 1 * DAY, groupUrl: 'g-old' }));

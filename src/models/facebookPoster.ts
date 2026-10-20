@@ -140,7 +140,7 @@ export interface PostStatsSnapshot {
     shares: number | null;
 }
 
-export type PostStatsGroupBy = 'group' | 'profile' | 'schedule' | 'campaign' | 'variant' | 'day' | 'post';
+export type PostStatsGroupBy = 'group' | 'profile' | 'schedule' | 'campaign' | 'variant' | 'day' | 'post' | 'hour' | 'weekday';
 
 export interface PostStatsReportRow {
     key: string;
