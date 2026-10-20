@@ -45,7 +45,7 @@ wait_job() {
 
 echo "== 3. Việc từ mẫu (product-slideshow, 1:1)"
 spec='{"template":{"id":"product-slideshow","aspect":"1:1","variables":{"title":"Thử nghiệm máy chủ render","price":"199.000đ","cta":"Nhắn tin đặt ngay"},"images":["sample1.jpg","sample2.jpg","sample3.jpg"]}}'
-resp=$(curl -fsS "${auth[@]}" -F "spec=$spec" -F "files=@$OUT/sample1.jpg" -F "files=@$OUT/sample2.jpg" -F "files=@$OUT/sample3.jpg" "$URL/v1/jobs")
+resp=$(curl -fsS "${auth[@]}" --form-string "spec=$spec" -F "files=@$OUT/sample1.jpg" -F "files=@$OUT/sample2.jpg" -F "files=@$OUT/sample3.jpg" "$URL/v1/jobs")
 echo "$resp"
 job=$(printf '%s' "$resp" | json_field jobId)
 [ -n "$job" ] || { echo "Không nhận được jobId." >&2; exit 1; }
@@ -57,7 +57,7 @@ echo "   Đã tải $OUT/template.mp4 ($(wc -c < "$OUT/template.mp4") byte)"
 echo "== 4. HTML \"xấu\" (gọi mạng, đọc file://, leo thư mục)"
 # Một dòng, chỉ dùng nháy đơn để nhúng thẳng vào JSON. Trang tự ghi kết quả thử lên hình.
 html="<!doctype html><html><head><meta charset='UTF-8'><style>body{margin:0;width:1080px;height:1080px;background:#222;color:#fff;font:40px sans-serif}</style></head><body><div id='root' data-composition-id='main' data-start='0' data-duration='3' data-width='1080' data-height='1080'><div class='clip' data-start='0' data-duration='3' data-track-index='0'><p id='net'>net: pending</p><p id='file'>file: pending</p><p id='loc'>loc: pending</p><img src='https://example.com/x.png' width='100' height='100'><iframe src='file:///etc/hostname' width='900' height='120' style='background:#fff'></iframe><iframe src='http://169.254.169.254/latest/meta-data/' width='900' height='120' style='background:#fff'></iframe></div></div><script>fetch('https://example.com/').then(function(r){document.getElementById('net').textContent='net: LEAK '+r.status}).catch(function(e){document.getElementById('net').textContent='net: BLOCKED'});fetch('/..%2f..%2f..%2f..%2fetc%2fpasswd').then(function(r){return r.text()}).then(function(t){document.getElementById('loc').textContent='loc: '+t.slice(0,40)}).catch(function(){document.getElementById('loc').textContent='loc: BLOCKED'});fetch('file:///etc/passwd').then(function(r){return r.text()}).then(function(t){document.getElementById('file').textContent='file: LEAK '+t.slice(0,30)}).catch(function(){document.getElementById('file').textContent='file: BLOCKED'});window.__timelines={main:{duration:function(){return 3},seek:function(){},time:function(){return 0},pause:function(){}}};</script></body></html>"
-resp=$(curl -fsS "${auth[@]}" -F "spec={\"html\":\"$html\",\"width\":1080,\"height\":1080}" "$URL/v1/jobs")
+resp=$(curl -fsS "${auth[@]}" --form-string "spec={\"html\":\"$html\",\"width\":1080,\"height\":1080}" "$URL/v1/jobs")
 echo "$resp"
 evil=$(printf '%s' "$resp" | json_field jobId)
 [ -n "$evil" ] || { echo "Không nhận được jobId của việc HTML." >&2; exit 1; }
