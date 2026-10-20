@@ -32,6 +32,8 @@ import { getResearchStore } from './researchIpc';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
 import type { FbPosterRun, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
+import { campaignBlockReason, readCampaignRef } from '../../src/services/facebookPoster/campaigns';
+import { createCampaignOperations } from '../../src/services/facebookPoster/campaignOperations';
 
 
 let service: FacebookPosterService | null = null;
@@ -60,7 +62,7 @@ const MAX_TRACK_LIST_LIMIT = 500;
 const MAX_TRACK_LIST_SCAN = 5000;
 const DEFAULT_REPORT_DAYS = 30;
 const LINK_STATUSES: LinkStatus[] = ['known', 'missing', 'pending_approval', 'not_found'];
-const STATS_GROUP_BY: PostStatsGroupBy[] = ['group', 'profile', 'schedule', 'day', 'post'];
+const STATS_GROUP_BY: PostStatsGroupBy[] = ['group', 'profile', 'schedule', 'campaign', 'variant', 'day', 'post'];
 export const WORKSPACE_SWITCHING_ERROR = 'Đang đổi workspace, thử lại sau';
 export const POSTER_NOT_STOPPED_ERROR = 'Việc Đăng Facebook chưa dừng được. Thử lại sau.';
 
@@ -318,7 +320,14 @@ export function startFacebookPosterScheduler(): void {
             const params = { ...s.params, mediaPaths: resolveScheduleMedia(scheduleBaseDir(), s.id, names) };
             const startParams = validateStartParams({ kind: 'post', params }, { ...startEnv, profileExists: () => true });
             if (!isBrowserEngineInstalled()) throw new Error(ENGINE_MISSING_ERROR);
-            return startParams;
+            // Cột campaign_id của lịch là nguồn đúng; campaignId trong params_json bị bỏ qua.
+            return startParams.kind === 'post' ? { ...startParams, campaignId: s.campaignId } : startParams;
+        },
+        // Lịch trỏ tới chiến dịch không còn thì không bị chặn.
+        campaignBlock: (s, t) => {
+            if (!s.campaignId) return null;
+            const campaign = store().getCampaign(s.campaignId);
+            return campaign ? campaignBlockReason(campaign, t) : null;
         },
         startRun: (params, scheduleId) => startRun(params, scheduleId),
         newId: randomUUID,
@@ -427,6 +436,7 @@ export const posterOperations = {
         const timing = readTiming(kind, params, now);
         const name = readName(params.name) || startParams.text.trim().slice(0, 40);
         const theStore = store();
+        const campaignId = readCampaignRef(params.campaignId, (cid) => theStore.getCampaign(cid)) ?? null;
         if (theStore.countSchedules() >= MAX_SCHEDULES) throw new Error('Tối đa 200 lịch cho một workspace');
 
         const id = randomUUID();
@@ -436,6 +446,7 @@ export const posterOperations = {
             theStore.createSchedule({
                 id, name, kind, ...timing,
                 params: { ...startParams, mediaPaths: names },
+                campaignId,
                 enabled: true,
                 nextRunAt: computeNextRun({ kind, ...timing }, now),
                 createdAt: now,
@@ -449,17 +460,23 @@ export const posterOperations = {
         return { schedule: theStore.getSchedule(id) };
     },
 
-    scheduleList: (_params?: any) => ({
-        schedules: store().listSchedules(),
-        queuedIds: scheduler?.queuedIds() ?? [],
-    }),
+    scheduleList: (params?: any) => {
+        if (params?.campaignId !== undefined && typeof params.campaignId !== 'string') throw new Error('campaignId không hợp lệ');
+        return {
+            schedules: store().listSchedules(params?.campaignId === undefined ? {} : { campaignId: params.campaignId }),
+            queuedIds: scheduler?.queuedIds() ?? [],
+        };
+    },
 
     scheduleUpdate: (params: any) => {
         const now = Date.now();
         const theStore = store();
         const current = typeof params.id === 'string' ? theStore.getSchedule(params.id) : null;
         if (!current) throw new Error('Không tìm thấy lịch');
-        theStore.updateSchedule(current.id, planScheduleUpdate(current, params, now), now);
+        const fields = planScheduleUpdate(current, params, now);
+        // Giữ nguyên khi không đổi (kể cả chiến dịch đã lưu trữ); chỉ kiểm khi gắn sang chiến dịch khác.
+        const campaignId = params.campaignId === current.campaignId ? undefined : readCampaignRef(params.campaignId, (cid) => theStore.getCampaign(cid));
+        theStore.updateSchedule(current.id, { ...fields, campaignId }, now);
         scheduler?.reschedule();
         emitSchedulesChanged();
         return { schedule: theStore.getSchedule(current.id) };
@@ -560,6 +577,16 @@ function parseTimeRange(params: any): { from: number; to: number } {
     return { from, to };
 }
 
+/** campaignId của bộ lọc báo cáo: chuỗi, '' = bài không thuộc chiến dịch. */
+function readCampaignFilter(p: any): void {
+    if (p.campaignId !== undefined && typeof p.campaignId !== 'string') throw new Error('campaignId không hợp lệ');
+}
+
+/** Campaign handler bodies, shared by the IPC channels and the control API. Changes make the scheduler re-evaluate its campaign gates. */
+export const campaignOperations = createCampaignOperations({
+    store, now: Date.now, newId: randomUUID, reschedule: () => scheduler?.reschedule(),
+});
+
 /** Post-tracking handler bodies, shared by the IPC channels and the control API (parameter checks live here). */
 export const trackingOperations = {
     track: (params: any, auto = false) => {
@@ -589,14 +616,15 @@ export const trackingOperations = {
         const p = params ?? {};
         const { from, to } = parseTimeRange(p);
         if (p.linkStatus !== undefined && !LINK_STATUSES.includes(p.linkStatus)) throw new Error('linkStatus không hợp lệ');
-        for (const key of ['groupUrl', 'profileId']) {
+        for (const key of ['groupUrl', 'profileId', 'scheduleId']) {
             if (p[key] !== undefined && (typeof p[key] !== 'string' || !p[key])) throw new Error(`${key} không hợp lệ`);
         }
+        readCampaignFilter(p);
         const limit = clampLimit(p.limit, 100, MAX_TRACK_LIST_LIMIT);
         const offset = offsetOf(p.offset);
         const s = store();
         const matched = s.listTracking({
-            linkStatus: p.linkStatus, profileId: p.profileId, groupUrl: p.groupUrl, sinceMs: from, untilMs: to, limit: MAX_TRACK_LIST_SCAN,
+            linkStatus: p.linkStatus, profileId: p.profileId, groupUrl: p.groupUrl, campaignId: p.campaignId, scheduleId: p.scheduleId, sinceMs: from, untilMs: to, limit: MAX_TRACK_LIST_SCAN,
         });
         const page = matched.slice(offset, offset + limit);
         const latest = new Map(s.latestStats(page.map((r) => r.resultId)).map((x) => [x.resultId, x]));
@@ -607,8 +635,10 @@ export const trackingOperations = {
         const p = params ?? {};
         const { from, to } = parseTimeRange(p);
         if (!STATS_GROUP_BY.includes(p.groupBy)) throw new Error(`groupBy phải là một trong: ${STATS_GROUP_BY.join(', ')}`);
+        if (p.scheduleId !== undefined && (typeof p.scheduleId !== 'string' || !p.scheduleId)) throw new Error('scheduleId không hợp lệ');
+        readCampaignFilter(p);
         const limit = clampLimit(p.limit, 200, MAX_TRACK_LIST_LIMIT);
-        return { rows: store().statsReport({ from, to, groupBy: p.groupBy, limit }) };
+        return { rows: store().statsReport({ from, to, groupBy: p.groupBy, limit, campaignId: p.campaignId, scheduleId: p.scheduleId }) };
     },
 
     getConfig: () => ({ config: readTrackingConfig() }),
@@ -626,6 +656,11 @@ export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:scheduleList', posterOperations.scheduleList);
     handle('facebookPoster:scheduleUpdate', posterOperations.scheduleUpdate);
     handle('facebookPoster:scheduleDelete', posterOperations.scheduleDelete);
+    handle('facebookPoster:campaignList', campaignOperations.list);
+    handle('facebookPoster:campaignGet', campaignOperations.get);
+    handle('facebookPoster:campaignCreate', campaignOperations.create);
+    handle('facebookPoster:campaignUpdate', campaignOperations.update);
+    handle('facebookPoster:campaignDelete', campaignOperations.delete);
     handle('facebookPoster:draftSave', posterOperations.draftSave);
     handle('facebookPoster:draftGet', posterOperations.draftGet);
     handle('facebookPoster:draftApprove', posterOperations.draftApprove);

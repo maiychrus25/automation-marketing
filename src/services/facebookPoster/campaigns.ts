@@ -14,6 +14,19 @@ export function campaignBlockReason(c: FbPosterCampaign, t: number): string | nu
 
 export const isCampaignRunnable = (c: FbPosterCampaign, t: number): boolean => campaignBlockReason(c, t) === null;
 
+/**
+ * Đọc `campaignId` khi gắn lịch/bài nháp vào chiến dịch: `undefined` = không đổi, `null` = bỏ gắn,
+ * chuỗi = phải tồn tại và không `archived`.
+ */
+export function readCampaignRef(value: unknown, getCampaign: (id: string) => FbPosterCampaign | null): string | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    const c = typeof value === 'string' && value ? getCampaign(value) : null;
+    if (!c) throw new Error('Không tìm thấy chiến dịch');
+    if (c.status === 'archived') throw new Error('Chiến dịch đã lưu trữ');
+    return c.id;
+}
+
 export interface CampaignInput { name: string; goal: string; startAt: number | null; endAt: number | null; status: CampaignStatus }
 
 function readTime(v: unknown, fallback: number | null, label: string): number | null {

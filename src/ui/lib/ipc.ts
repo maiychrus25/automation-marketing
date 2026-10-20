@@ -7,7 +7,8 @@ import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserPr
 import type { UpdateState, ActionResult as UpdateActionResult } from '../../services/update/UpdateService';
 import type { ResearchConfig } from '../../services/research/researchConfig';
 import type { ResearchItem, ResearchScan, ResearchSort, ResearchSource } from '../../models/research';
-import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow } from '../../models/facebookPoster';
+import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, CampaignStatus } from '../../models/facebookPoster';
+import type { CampaignView } from '../../services/facebookPoster/campaignOperations';
 import type { PostTrackingConfig } from '../../services/facebookPoster/postTracking';
 import type { TrackStatus } from '../../services/facebookPoster/PostTracker';
 
@@ -712,13 +713,18 @@ declare global {
         listPostedUrls: () => Promise<{ success: boolean; posts?: { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number }[]; error?: string }>;
         pickMedia:      () => Promise<{ success: boolean; items?: { path: string; size: number }[]; error?: string }>;
         exportRunCsv:   (runId: string) => Promise<{ success: boolean; path?: string | null; error?: string }>;
-        scheduleCreate: (params: { name?: string; kind: 'once' | 'recurring'; runAt?: number; days?: number[]; time?: string; params: Record<string, unknown> }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
-        scheduleList:   () => Promise<{ success: boolean; schedules?: FbPosterScheduleView[]; queuedIds?: string[]; error?: string }>;
-        scheduleUpdate: (params: { id: string; name?: string; enabled?: boolean; runAt?: number; days?: number[]; time?: string }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
+        scheduleCreate: (params: { name?: string; kind: 'once' | 'recurring'; runAt?: number; days?: number[]; time?: string; campaignId?: string | null; params: Record<string, unknown> }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
+        scheduleList:   (params?: { campaignId?: string }) => Promise<{ success: boolean; schedules?: FbPosterScheduleView[]; queuedIds?: string[]; error?: string }>;
+        scheduleUpdate: (params: { id: string; name?: string; enabled?: boolean; runAt?: number; days?: number[]; time?: string; campaignId?: string | null }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
         scheduleDelete: (id: string) => Promise<{ success: boolean; error?: string }>;
-        draftSave: (params: { id?: string; name?: string; plannedAt?: number | null; params: Record<string, unknown> }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
+        draftSave: (params: { id?: string; name?: string; plannedAt?: number | null; campaignId?: string | null; params: Record<string, unknown> }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
         draftGet: (id: string) => Promise<{ success: boolean; draft?: FbPosterSchedule; media?: { path: string; size: number }[]; error?: string }>;
-        draftApprove: (params: { id: string; when: 'now' } | { id: string; when: 'schedule'; kind: 'once' | 'recurring'; runAt?: number; days?: number[]; time?: string }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
+        draftApprove: (params: { id: string; when: 'now'; campaignId?: string | null } | { id: string; when: 'schedule'; kind: 'once' | 'recurring'; runAt?: number; days?: number[]; time?: string; campaignId?: string | null }) => Promise<{ success: boolean; schedule?: FbPosterSchedule; error?: string }>;
+        campaignList:   (params?: { status?: CampaignStatus }) => Promise<{ success: boolean; campaigns?: CampaignView[]; error?: string }>;
+        campaignGet:    (id: string) => Promise<{ success: boolean; campaign?: CampaignView & { schedules: { id: string; name: string; kind: 'once' | 'recurring'; enabled: boolean; draft: boolean; nextRunAt: number | null }[] }; error?: string }>;
+        campaignCreate: (params: { name: string; goal?: string; startAt?: number | null; endAt?: number | null }) => Promise<{ success: boolean; campaign?: CampaignView; error?: string }>;
+        campaignUpdate: (params: { id: string; name?: string; goal?: string; status?: CampaignStatus; startAt?: number | null; endAt?: number | null }) => Promise<{ success: boolean; campaign?: CampaignView; error?: string }>;
+        campaignDelete: (id: string) => Promise<{ success: boolean; deleted?: boolean; error?: string }>;
         takeMissed:     () => Promise<{ success: boolean; notices?: { scheduleId: string; name: string; reason: string; at: number }[]; error?: string }>;
         checkLogins:    (profileIds?: string[]) => Promise<{ success: boolean; checkId?: string; profileIds?: string[]; error?: string }>;
         getLoginStates: () => Promise<{ success: boolean; states?: ProfileLoginState[]; error?: string }>;
@@ -727,8 +733,8 @@ declare global {
         trackPosts:     (params?: { sinceDays?: number; groupUrls?: string[]; profileIds?: string[] }) => Promise<{ success: boolean; jobId?: string; pairs?: { profileId: string; groupUrl: string }[]; error?: string }>;
         trackStatus:    () => Promise<({ success: boolean; error?: string }) & Partial<TrackStatus>>;
         trackCancel:    () => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
-        listTracking:   (params?: { from?: number; to?: number; linkStatus?: LinkStatus; groupUrl?: string; profileId?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; total?: number; rows?: (PostTrackingRow & { latestStats: PostStatsSnapshot | null })[]; error?: string }>;
-        postStats:      (params: { from?: number; to?: number; groupBy: PostStatsGroupBy; limit?: number }) => Promise<{ success: boolean; rows?: PostStatsReportRow[]; error?: string }>;
+        listTracking:   (params?: { from?: number; to?: number; linkStatus?: LinkStatus; groupUrl?: string; profileId?: string; campaignId?: string; scheduleId?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; total?: number; rows?: (PostTrackingRow & { latestStats: PostStatsSnapshot | null })[]; error?: string }>;
+        postStats:      (params: { from?: number; to?: number; groupBy: PostStatsGroupBy; campaignId?: string; scheduleId?: string; limit?: number }) => Promise<{ success: boolean; rows?: PostStatsReportRow[]; error?: string }>;
         getTrackConfig: () => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
         setTrackConfig: (config: PostTrackingConfig) => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
       };

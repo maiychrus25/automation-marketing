@@ -4,6 +4,7 @@ import { validateDraftParams, validateStartParams, type StartParamsEnv } from '.
 import { copyScheduleMedia, replaceScheduleMedia, resolveScheduleMedia, removeScheduleMedia } from './scheduleMedia';
 import { readName, readTiming } from './scheduleUpdate';
 import { computeNextRun } from './scheduleTime';
+import { readCampaignRef } from './campaigns';
 
 /**
  * Bản nháp (GĐ2): một dòng fb_poster_schedules với draft = 1, luôn enabled = 0 và next_run_at = NULL nên scheduler
@@ -17,11 +18,11 @@ export interface DraftDeps {
     newId: () => string;
     maxSchedules: number;
 }
-export interface SaveDraftInput { id?: unknown; name?: unknown; plannedAt?: unknown; params: unknown }
+export interface SaveDraftInput { id?: unknown; name?: unknown; plannedAt?: unknown; campaignId?: unknown; params: unknown }
 export interface DraftForEdit { draft: FbPosterSchedule; media: { path: string; size: number }[] }
 export type ApproveDraftInput =
-    | { id: unknown; when: 'now' }
-    | { id: unknown; when: 'schedule'; kind: unknown; runAt?: unknown; days?: unknown; time?: unknown };
+    | { id: unknown; when: 'now'; campaignId?: unknown }
+    | { id: unknown; when: 'schedule'; kind: unknown; runAt?: unknown; days?: unknown; time?: unknown; campaignId?: unknown };
 
 const NOT_FOUND = 'Không tìm thấy bản nháp';
 
@@ -41,6 +42,11 @@ function readPlannedAt(value: unknown, current: number | null, now: number): num
     return readTiming('once', { runAt: value }, now).runAt;
 }
 
+/** Chiến dịch mới của bản nháp/lịch: giữ nguyên khi không đổi (kể cả đã lưu trữ), chỉ kiểm khi gắn sang chiến dịch khác. */
+function readCampaignChange(deps: DraftDeps, value: unknown, current: string | null): string | null | undefined {
+    return value === current ? undefined : readCampaignRef(value, (id) => deps.store.getCampaign(id));
+}
+
 export function saveDraft(deps: DraftDeps, input: SaveDraftInput): FbPosterSchedule {
     const { store, env, baseDir } = deps;
     const now = deps.now();
@@ -48,6 +54,8 @@ export function saveDraft(deps: DraftDeps, input: SaveDraftInput): FbPosterSched
     const name = readName(input.name) || String(params.text).trim().slice(0, 40);
     const sources = params.mediaPaths as string[];
     const id = typeof input.id === 'string' && input.id ? input.id : null;
+    const existingDraft = id ? store.getSchedule(id) : null;
+    const campaignId = readCampaignChange(deps, input.campaignId, existingDraft?.campaignId ?? null);
 
     if (id) {
         const existing = store.getSchedule(id);
@@ -55,7 +63,7 @@ export function saveDraft(deps: DraftDeps, input: SaveDraftInput): FbPosterSched
         if (!existing.draft) throw new Error('Chỉ sửa được bản nháp');
         const runAt = readPlannedAt(input.plannedAt, existing.runAt, now);
         const names = replaceScheduleMedia(baseDir, id, sources);
-        store.updateSchedule(id, { name, runAt, params: { ...params, mediaPaths: names } }, now);
+        store.updateSchedule(id, { name, runAt, campaignId, params: { ...params, mediaPaths: names } }, now);
         return store.getSchedule(id)!;
     }
 
@@ -66,7 +74,7 @@ export function saveDraft(deps: DraftDeps, input: SaveDraftInput): FbPosterSched
     try {
         store.createSchedule({
             id: newId, name, kind: 'once', params: { ...params, mediaPaths: names },
-            runAt, days: [], time: '', enabled: false, nextRunAt: null, createdAt: now, draft: true,
+            runAt, days: [], time: '', enabled: false, nextRunAt: null, createdAt: now, draft: true, campaignId: campaignId ?? null,
         });
     } catch (err) {
         removeScheduleMedia(baseDir, newId);
@@ -91,17 +99,18 @@ export function approveDraft(deps: DraftDeps, input: ApproveDraftInput): FbPoste
         { kind: 'post', params: { ...draft.params, mediaPaths: resolveScheduleMedia(baseDir, draft.id, names) } }, env);
     if (checked.kind !== 'post') throw new Error('Loại lịch không hợp lệ');
     const params = { ...checked, mediaPaths: names };
+    const campaignId = readCampaignChange(deps, input.campaignId, draft.campaignId);
 
     if (input.when === 'now') {
         store.updateSchedule(draft.id, {
-            kind: 'once', runAt: now, days: [], time: '', params, draft: false, enabled: true, nextRunAt: now,
+            kind: 'once', runAt: now, days: [], time: '', params, campaignId, draft: false, enabled: true, nextRunAt: now,
         }, now);
     } else {
         if (input.kind !== 'once' && input.kind !== 'recurring') throw new Error('Loại lịch không hợp lệ');
         const kind: 'once' | 'recurring' = input.kind;
         const timing = readTiming(kind, input, now);
         store.updateSchedule(draft.id, {
-            kind, ...timing, params, draft: false, enabled: true, nextRunAt: computeNextRun({ kind, ...timing }, now),
+            kind, ...timing, params, campaignId, draft: false, enabled: true, nextRunAt: computeNextRun({ kind, ...timing }, now),
         }, now);
     }
     return store.getSchedule(draft.id)!;

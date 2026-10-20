@@ -116,4 +116,49 @@ describe('drafts', () => {
     assert.strictEqual(media[0].size, 3);
     assert.throws(() => getDraft(deps, 'nope'), /Không tìm thấy bản nháp/);
   });
+
+  describe('chiến dịch', () => {
+    const camp = (store: FacebookPosterStore, id: string, status: 'active' | 'paused' | 'archived' = 'active') =>
+      store.createCampaign({ id, name: id, goal: '', status, startAt: null, endAt: null, createdAt: NOW, updatedAt: NOW });
+
+    test('saveDraft lưu campaignId vào cột, null để bỏ gắn, vắng thì giữ', () => {
+      const { deps, store } = setup();
+      camp(store, 'c1');
+      const d = saveDraft(deps, { params: content(), campaignId: 'c1' });
+      assert.strictEqual(store.getSchedule(d.id)!.campaignId, 'c1');
+      saveDraft(deps, { id: d.id, params: content({ text: 'Mới' }) });
+      assert.strictEqual(store.getSchedule(d.id)!.campaignId, 'c1');
+      saveDraft(deps, { id: d.id, params: content(), campaignId: null });
+      assert.strictEqual(store.getSchedule(d.id)!.campaignId, null);
+    });
+
+    test('saveDraft từ chối chiến dịch lạ hoặc đã lưu trữ', () => {
+      const { deps, store } = setup();
+      camp(store, 'old', 'archived');
+      assert.throws(() => saveDraft(deps, { params: content(), campaignId: 'nope' }), /^Error: Không tìm thấy chiến dịch$/);
+      assert.throws(() => saveDraft(deps, { params: content(), campaignId: 'old' }), /^Error: Chiến dịch đã lưu trữ$/);
+      assert.strictEqual(store.countSchedules(), 0);
+    });
+
+    test('nháp đã gắn chiến dịch sau đó bị lưu trữ vẫn lưu lại được khi không đổi chiến dịch', () => {
+      const { deps, store } = setup();
+      camp(store, 'c1');
+      const d = saveDraft(deps, { params: content(), campaignId: 'c1' });
+      store.updateCampaign('c1', { status: 'archived' }, NOW);
+      saveDraft(deps, { id: d.id, params: content({ text: 'Sửa' }), campaignId: 'c1' });
+      assert.strictEqual(store.getSchedule(d.id)!.params.text, 'Sửa');
+    });
+
+    test('approveDraft đổi chiến dịch, kiểm chiến dịch lưu trữ trước khi ghi gì', () => {
+      const { deps, store } = setup();
+      camp(store, 'c1'); camp(store, 'old', 'archived');
+      const d = saveDraft(deps, { params: full(), campaignId: 'c1' });
+      assert.throws(() => approveDraft(deps, { id: d.id, when: 'now', campaignId: 'old' }), /Chiến dịch đã lưu trữ/);
+      assert.strictEqual(store.getSchedule(d.id)!.draft, true);
+      assert.strictEqual(approveDraft(deps, { id: d.id, when: 'now' }).campaignId, 'c1');
+      camp(store, 'c2');
+      const d2 = saveDraft(deps, { params: full(), campaignId: 'c1' });
+      assert.strictEqual(approveDraft(deps, { id: d2.id, when: 'schedule', kind: 'recurring', days: [1], time: '09:30', campaignId: 'c2' }).campaignId, 'c2');
+    });
+  });
 });

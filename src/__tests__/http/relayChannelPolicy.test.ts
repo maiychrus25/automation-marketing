@@ -23,6 +23,8 @@ describe('isEmployeeChannelAllowed', () => {
     'facebookPoster:checkLogins', 'facebookPoster:getLoginStates', 'facebookPoster:getLoginCheckConfig', 'facebookPoster:setLoginCheckConfig',
     'facebookPoster:trackPosts', 'facebookPoster:trackStatus', 'facebookPoster:trackCancel', 'facebookPoster:listTracking',
     'facebookPoster:postStats', 'facebookPoster:getTrackConfig', 'facebookPoster:setTrackConfig',
+    'facebookPoster:campaignList', 'facebookPoster:campaignGet', 'facebookPoster:campaignCreate',
+    'facebookPoster:campaignUpdate', 'facebookPoster:campaignDelete',
     'research:getConfig', 'research:setConfig', 'research:search', 'research:scanGroupFeeds', 'research:list',
     'research:get', 'research:cancel', 'research:profileUsage', 'research:exportXlsx', 'research:status', 'research:openLink',
     'controlApi:createKey', 'controlApi:setConfig', 'controlApi:getConfig', 'controlApi:listKeys', 'controlApi:revokeKey',
