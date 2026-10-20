@@ -16,6 +16,8 @@ const POST_DELAY_MIN_SEC = 10;
 const POST_DELAY_MAX_SEC = 20;
 /** Sau khi ghi kho lỗi, không tự thu lại trong khoảng này (tránh mở lại cùng các bài mỗi chu kỳ khi kho hỏng). */
 export const STORE_FAILURE_BACKOFF_MS = 60 * 60_000;
+/** Profile đang mở tay / bởi Nghiên cứu: thử lại sau một chu kỳ tự thu (15 phút). */
+export const BUSY_PROFILE_RETRY_MS = 15 * 60_000;
 
 export interface CommentCollectError { postUrl: string; profileId: string; error: string }
 export interface CommentCollectResult {
@@ -228,7 +230,18 @@ export class CommentCollector {
             // Profile đang được mở thủ công / bởi Nghiên cứu: không mở Facebook nên chưa tiêu mốc, lần sau thử lại.
             const error = errorText(failure);
             this.log(`Bỏ qua lượt thu của profile ${profileId}: ${error}`, 'warning');
-            for (const row of rows) errors.push({ postUrl: row.postUrl as string, profileId, error });
+            for (const row of rows) {
+                errors.push({ postUrl: row.postUrl as string, profileId, error });
+                // Dời sang chu kỳ sau (không tiêu mốc) để các bài này không chiếm chỗ của profile khác trong hàng đợi.
+                if (auto) {
+                    try {
+                        this.deps.store.updateCommentSchedule(row.resultId, { commentsDone: row.commentsDone, nextCommentAt: this.now() + BUSY_PROFILE_RETRY_MS });
+                    } catch (e) {
+                        this.abortForStoreFailure(`Không lưu được lịch thu bình luận: ${errorText(e)}`);
+                        break;
+                    }
+                }
+            }
             return;
         }
         const problem = result?.loginProblem ?? loginProblemOfError(failure);

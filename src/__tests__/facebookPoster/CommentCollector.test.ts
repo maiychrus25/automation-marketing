@@ -342,7 +342,8 @@ describe('CommentCollector', () => {
             const h = setup({ launchFor: async () => { throw new Error('Profile đang mở. Đóng profile trước khi chạy tự động'); } });
             const a = addPost(h.store);
             await run(h, { auto: true });
-            expect(rowOf(h.store, a).nextCommentAt).toBe(NOW - 3 * HOUR + 120 * MIN);
+            // Không tiêu mốc, chỉ dời sang chu kỳ sau để không chiếm chỗ của profile khác trong hàng đợi.
+            expect(rowOf(h.store, a).nextCommentAt).toBe(NOW + 15 * MIN);
             expect(rowOf(h.store, a).commentsDone).toEqual([]);
             expect(h.logs.some((l) => l.level === 'warning' && l.message.includes('Profile đang mở'))).toBe(true);
             expect(h.observeLogin).not.toHaveBeenCalled();
