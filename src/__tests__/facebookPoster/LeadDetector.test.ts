@@ -1,5 +1,5 @@
 import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
-import { LeadDetector } from '../../services/facebookPoster/LeadDetector';
+import { LeadDetector, buildLeadsFoundPayload } from '../../services/facebookPoster/LeadDetector';
 import { DEFAULT_LEAD_CONFIG, type LeadConfig } from '../../services/facebookPoster/leadRules';
 import type { FbPosterComment } from '../../models/facebookPoster';
 import { memoryDb } from './helpers';
@@ -110,5 +110,28 @@ describe('LeadDetector', () => {
     jest.spyOn(store, 'createLeads').mockImplementation(() => { throw new Error('locked'); });
     expect(await detector.process([comment(1, 'ib')], { auto: false })).toEqual([]);
     expect(logs.some((l) => l.includes('locked'))).toBe(true);
+  });
+
+  test('emit:false returns the leads without an event; buildLeadsFoundPayload aggregates', async () => {
+    const { detector, emitted } = setup();
+    const a = await detector.process([comment(1, 'ib giá'), comment(2, 'ib nhé')], { auto: true, emit: false });
+    const b = await detector.process([comment(3, 'ib ship'), comment(4, 'ib size')], { auto: true, emit: false });
+    expect(emitted).toHaveLength(0);
+    const payload = buildLeadsFoundPayload([...a, ...b], true);
+    expect(payload.count).toBe(4);
+    expect(payload.auto).toBe(true);
+    expect(payload.samples.map((x) => x.authorName)).toEqual(['Khách 4', 'Khách 3', 'Khách 2']);
+  });
+
+  test('a shared aiState skips the AI after the first failure across calls, with one warning', async () => {
+    const classify = jest.fn(async () => { throw new Error('timeout'); });
+    const { detector, logs } = setup({ aiEnabled: true }, classify);
+    const aiState = { failed: false };
+    const first = await detector.process([comment(1, 'ib giá')], { auto: true, emit: false, aiState });
+    const second = await detector.process([comment(2, 'ib giá')], { auto: true, emit: false, aiState });
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect(logs.filter((m) => m.includes('AI không dùng được'))).toHaveLength(1);
   });
 });

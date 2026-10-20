@@ -7,7 +7,7 @@ const row = (i: number) => ({ resultId: i, profileId: `p${i}`, postUrl: `u${i}` 
 
 function setup() {
   const env = {
-    t: 1000, busy: false, autoCollect: true, readThrows: false, due: [] as any[],
+    t: 1000, blockedUntil: 0, busy: false, autoCollect: true, readThrows: false, due: [] as any[],
     runErr: null as Error | null, runs: [] as any[][], logs: [] as string[],
     dueArgs: [] as { now: number; limit: number }[],
     timers: [] as { fn: () => void; ms: number; cleared: boolean }[],
@@ -18,6 +18,7 @@ function setup() {
     clearTimer: (h) => { (h as { cleared: boolean }).cleared = true; },
     readConfig: () => { if (env.readThrows) throw new Error('boom'); return { autoCollect: env.autoCollect } as any; },
     isBusy: () => env.busy,
+    blockedUntil: () => env.blockedUntil,
     duePosts: (now, limit) => { env.dueArgs.push({ now, limit }); return env.due.slice(0, limit); },
     runCollect: (rows) => { if (env.runErr) throw env.runErr; env.runs.push(rows); },
     log: (m) => env.logs.push(m),
@@ -96,5 +97,17 @@ describe('CommentCollectScheduler', () => {
     sched.tickNow();
     assert.strictEqual(env.runs.length, 1);
     assert.strictEqual(env.logs.length, 1);
+  });
+
+  test('skips ticks while blockedUntil is in the future and resumes after', () => {
+    const { env, sched } = setup();
+    env.due = [row(1)];
+    env.blockedUntil = 5000;
+    sched.tickNow();
+    assert.strictEqual(env.runs.length, 0);
+    assert.strictEqual(env.dueArgs.length, 0);
+    env.t = 5000;
+    sched.tickNow();
+    assert.strictEqual(env.runs.length, 1);
   });
 });

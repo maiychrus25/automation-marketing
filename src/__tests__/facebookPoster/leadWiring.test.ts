@@ -1,3 +1,4 @@
+import { buildLeadPrompt } from '../../services/facebookPoster/leadAi';
 import { createLeadClassifier, openLoggedInSession, buildLeadSheetRows } from '../../services/facebookPoster/leadWiring';
 
 const reply = '[{"i":0,"intent":"buy","score":80,"reason":"x"}]';
@@ -5,22 +6,22 @@ const reply = '[{"i":0,"intent":"buy","score":80,"reason":"x"}]';
 describe('createLeadClassifier', () => {
   test('gửi lời nhắc tới trợ lý mặc định và đọc kết quả', async () => {
     const chat = jest.fn().mockResolvedValue({ result: reply });
-    const out = await createLeadClassifier({ getAssistantId: () => 'a1', chat })([{ text: 'giá' }]);
-    expect(chat).toHaveBeenCalledWith('a1', expect.any(Array));
+    const out = await createLeadClassifier({ getAssistantId: () => 'a1', complete: chat })([{ text: 'giá' }]);
+    expect(chat).toHaveBeenCalledWith('a1', buildLeadPrompt([{ text: 'giá' }])); // đúng lời nhắc của chính nó, không thêm gì
     expect(out).toEqual([{ intent: 'buy', score: 80, reason: 'x' }]);
   });
   test('không có trợ lý mặc định -> null, không gọi AI', async () => {
     const chat = jest.fn();
-    expect(await createLeadClassifier({ getAssistantId: () => null, chat })([{ text: 'a' }])).toBeNull();
+    expect(await createLeadClassifier({ getAssistantId: () => null, complete: chat })([{ text: 'a' }])).toBeNull();
     expect(chat).not.toHaveBeenCalled();
   });
   test('AI ném lỗi hoặc trả JSON hỏng -> null', async () => {
-    expect(await createLeadClassifier({ getAssistantId: () => 'a', chat: async () => { throw new Error('quota'); } })([{ text: 'a' }])).toBeNull();
-    expect(await createLeadClassifier({ getAssistantId: () => 'a', chat: async () => ({ result: 'xin lỗi' }) })([{ text: 'a' }])).toBeNull();
+    expect(await createLeadClassifier({ getAssistantId: () => 'a', complete: async () => { throw new Error('quota'); } })([{ text: 'a' }])).toBeNull();
+    expect(await createLeadClassifier({ getAssistantId: () => 'a', complete: async () => ({ result: 'xin lỗi' }) })([{ text: 'a' }])).toBeNull();
   });
   test('quá hạn theo lô -> null', async () => {
     const never = () => new Promise<{ result: string }>(() => undefined);
-    const out = await createLeadClassifier({ getAssistantId: () => 'a', chat: never, timeoutMs: 20 })([{ text: 'a' }]);
+    const out = await createLeadClassifier({ getAssistantId: () => 'a', complete: never, timeoutMs: 20 })([{ text: 'a' }]);
     expect(out).toBeNull();
   });
 });

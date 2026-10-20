@@ -924,6 +924,11 @@ def clip(text, limit):
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
+def _one_line(value):
+    """Gộp mọi khoảng trắng / xuống dòng thành một dấu cách để mỗi mẫu nằm gọn trên một dòng."""
+    return " ".join(str(value or "").split())
+
+
 def _first_item(value):
     for part in (value or "").split(","):
         if part.strip():
@@ -1095,12 +1100,12 @@ def format_event(event, fetch_run):
             lines = ["📈 Theo dõi bài: kiểm tra %d nhóm, lấy được %d link, %d bài có thể đã bị xoá" % (int(payload.get("groups") or 0), linked, removed)]
     elif etype == "leads.found":
         count = payload.get("count")
-        if isinstance(count, int) and count > 0:  # không có khách mới thì không báo
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0:  # không có khách mới thì không báo
             lines = ["🎯 %d khách tiềm năng mới" % count]
             samples = payload.get("samples")
             for sample in (samples if isinstance(samples, list) else [])[:MAX_LEAD_SAMPLES]:
                 if isinstance(sample, dict) and (sample.get("authorName") or sample.get("text")):
-                    lines.append("%s: %s" % (clip(sample.get("authorName") or "", MAX_FIELD_CHARS), clip(sample.get("text") or "", LEAD_TEXT_CHARS)))
+                    lines.append("%s: %s" % (clip(_one_line(sample.get("authorName")), MAX_FIELD_CHARS), clip(_one_line(sample.get("text")), LEAD_TEXT_CHARS)))
     return clip("\n".join(lines), MAX_MESSAGE_CHARS) if lines else None
 
 

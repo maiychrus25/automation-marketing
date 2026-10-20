@@ -460,14 +460,13 @@ export class FacebookPosterStore {
             for (const c of rows) {
                 const key = keyOf(c);
                 const commentedAtMs = parseCommentTime(c.commentedAt, collectedAt);
-                const before = this.count('SELECT COUNT(*) AS n FROM fb_poster_comments');
                 this.db.run(
                     `INSERT OR IGNORE INTO fb_poster_comments
                         (key, profile_id, post_url, author_id, author_name, author_url, text, commented_at, commented_at_ms, collected_at)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     [key, profileId, c.postUrl, c.authorId, c.authorName, c.authorUrl, c.text, c.commentedAt, commentedAtMs, collectedAt],
                 );
-                if (this.count('SELECT COUNT(*) AS n FROM fb_poster_comments') > before) {
+                if (this.count('SELECT changes() AS n') > 0) { // INSERT OR IGNORE: 0 = trùng khoá, không quét cả bảng
                     created.push({
                         key, profileId, postUrl: c.postUrl, authorId: c.authorId, authorName: c.authorName, authorUrl: c.authorUrl,
                         text: c.text, commentedAt: c.commentedAt, commentedAtMs, collectedAt,
@@ -625,7 +624,6 @@ export class FacebookPosterStore {
         return this.db.transaction(() => {
             const created: FbPosterLead[] = [];
             for (const l of leads) {
-                const before = this.count('SELECT COUNT(*) AS n FROM fb_poster_leads');
                 const id = this.db.runInsert(
                     `INSERT OR IGNORE INTO fb_poster_leads
                        (comment_key, post_url, result_id, group_url, campaign_id, variant, profile_id, author_id, author_name, author_url, text,
@@ -634,7 +632,7 @@ export class FacebookPosterStore {
                     [l.commentKey, l.postUrl, l.resultId, l.groupUrl, l.campaignId, l.variant, l.profileId, l.authorId, l.authorName, l.authorUrl, l.text,
                      l.commentedAtMs, l.matched.join(','), l.aiIntent, l.aiScore, l.aiReason, l.status, l.note, l.detectedAt, l.updatedAt],
                 );
-                if (this.count('SELECT COUNT(*) AS n FROM fb_poster_leads') > before) created.push({ ...l, id });
+                if (this.count('SELECT changes() AS n') > 0) created.push({ ...l, id });
             }
             return created;
         });
@@ -645,7 +643,8 @@ export class FacebookPosterStore {
         const where: string[] = [];
         const params: any[] = [];
         if (filter.status !== undefined) { where.push('status = ?'); params.push(filter.status); }
-        if (filter.campaignId !== undefined) { where.push('campaign_id = ?'); params.push(filter.campaignId); }
+        if (filter.campaignId === '') where.push('campaign_id IS NULL');
+        else if (filter.campaignId !== undefined) { where.push('campaign_id = ?'); params.push(filter.campaignId); }
         if (filter.from !== undefined) { where.push('detected_at >= ?'); params.push(filter.from); }
         if (filter.to !== undefined) { where.push('detected_at <= ?'); params.push(filter.to); }
         const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';

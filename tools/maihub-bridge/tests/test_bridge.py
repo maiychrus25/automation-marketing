@@ -1019,6 +1019,12 @@ class FormatLeadsFoundTests(unittest.TestCase):
         self.assertEqual(len(lines), 4)
         self.assertEqual(lines[1], "N0: " + "x" * 79 + "…")
 
+    def test_bool_count_is_not_a_count(self):
+        self.assertIsNone(self.fmt(count=True))
+
+    def test_newlines_in_sample_text_become_spaces(self):
+        self.assertEqual(self.fmt(count=1, samples=[{"authorName": "Lan\n", "text": "giá\nbao nhiêu\r\n vậy"}]), "🎯 1 khách tiềm năng mới\nLan: giá bao nhiêu vậy")
+
     def test_tolerates_missing_fields(self):
         self.assertEqual(self.fmt(count=1, samples=[{}, "bad"]), "🎯 1 khách tiềm năng mới")
         self.assertEqual(self.fmt(count=1, samples=None), "🎯 1 khách tiềm năng mới")

@@ -556,6 +556,17 @@ YÊU CẦU BẮT BUỘC:
   }
 
   /**
+   * Gọi thẳng LLM với đúng các tin nhắn được đưa vào (không thêm persona, kho kiến thức, tra cứu POS hay luật trả lời workflow).
+   * Dùng cho việc phân loại có prompt riêng, ví dụ lọc khách tiềm năng từ bình luận.
+   */
+  public async completeRaw(assistantId: string, messages: ChatMessage[], maxTokensOverride?: number): Promise<{ result: string; totalTokens: number; promptTokens: number; completionTokens: number }> {
+    const assistant = this.getAssistant(assistantId);
+    if (!assistant) throw new Error('Trợ lý AI không tồn tại');
+    if (!assistant.enabled) throw new Error('Trợ lý AI đã bị tắt');
+    return await this.callLLM(assistant, messages, maxTokensOverride);
+  }
+
+  /**
    * Gen ảnh qua ahvchat (model ảnh, mặc định cx/gpt-5.5-image). Wrapper mỏng quanh runImageGeneration
    * (logic + test ở aiImage.ts). baseImages (template/tham chiếu) có → edit mode; không có → gen mode.
    */

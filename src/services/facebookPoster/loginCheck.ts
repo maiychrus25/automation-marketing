@@ -6,7 +6,7 @@ import type { ProfileInfo } from './FacebookPosterService';
 import { FB_HOME, isLoggedIn } from './loginState';
 
 const GOTO_TIMEOUT_MS = 45000;
-const PROFILE_OPEN_PREFIX = 'Profile đang mở';
+export const PROFILE_OPEN_PREFIX = 'Profile đang mở';
 /** Các luồng xác minh của Facebook (checkpoint cũ và xác minh hai bước / auth_platform mới). */
 export const CHECKPOINT_PATHS = ['/checkpoint', '/two_step_verification', '/auth_platform'];
 

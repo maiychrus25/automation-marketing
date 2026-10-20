@@ -10,7 +10,8 @@ export const AI_BATCH_TIMEOUT_MS = 60_000;
 export interface LeadClassifierDeps {
     /** Trợ lý AI mặc định; null = chưa cấu hình. */
     getAssistantId: () => string | null;
-    chat: (assistantId: string, messages: { role: string; content: string }[]) => Promise<{ result: string }>;
+    /** Gọi AI với đúng các tin nhắn đưa vào (AIAssistantService.completeRaw), không qua persona / kho kiến thức / luật workflow. */
+    complete: (assistantId: string, messages: { role: 'system' | 'user' | 'assistant'; content: string }[]) => Promise<{ result: string }>;
     timeoutMs?: number;
 }
 
@@ -22,7 +23,7 @@ export function createLeadClassifier(deps: LeadClassifierDeps): LeadClassifier {
             const assistantId = deps.getAssistantId();
             if (!assistantId) return null;
             const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), deps.timeoutMs ?? AI_BATCH_TIMEOUT_MS); });
-            const reply = await Promise.race([deps.chat(assistantId, buildLeadPrompt(comments)), timeout]);
+            const reply = await Promise.race([deps.complete(assistantId, buildLeadPrompt(comments)), timeout]);
             return reply ? parseLeadVerdicts(reply.result, comments.length) : null;
         } catch {
             return null;

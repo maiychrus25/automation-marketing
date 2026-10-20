@@ -35,6 +35,7 @@ function setup(opts: { collect?: FakeCollect; launchFor?: (id: string) => Promis
     const events: { type: string; payload: any }[] = [];
     const launched: string[] = [];
     const closed: string[] = [];
+    const logs: { message: string; level: string }[] = [];
     const processed: { rows: any[]; auto: boolean }[] = [];
     const slot = { acquire: jest.fn(() => { if (opts.busy) throw new Error(BUSY_ERROR); }), release: jest.fn() };
     const observeLogin = jest.fn();
@@ -57,12 +58,13 @@ function setup(opts: { collect?: FakeCollect; launchFor?: (id: string) => Promis
         detector: { process: async (rows, o) => { if (opts.processThrows) throw new Error('ai'); processed.push({ rows, auto: o.auto }); return rows.map((_, i) => ({ id: i }) as any); } },
         readConfig: () => CONFIG,
         emit: (type, payload) => { events.push({ type, payload }); },
+        log: (message, level) => { logs.push({ message, level }); },
         now: () => NOW,
         sleep: async (ms) => { sleeps.push(ms); },
         random: () => 0,
         newId: () => 'job1',
     });
-    return { store, collector, events, launched, closed, processed, slot, observeLogin, sleeps };
+    return { store, collector, events, logs, launched, closed, processed, slot, observeLogin, sleeps };
 }
 
 async function run(h: ReturnType<typeof setup>, params: any = {}) {
@@ -273,5 +275,95 @@ describe('CommentCollector', () => {
         await h.collector.whenIdle();
         expect(finished(h.events)).toHaveLength(1);
         expect(h.launched).toEqual([]);
+    });
+
+    describe('final-review fixes', () => {
+        test('settle failure is logged, aborts the rest of the run and blocks auto runs for 60 minutes', async () => {
+            const h = setup();
+            const a = addPost(h.store);
+            const b = addPost(h.store, { profileId: 'p2' });
+            jest.spyOn(h.store, 'updateCommentSchedule').mockImplementation(() => { throw new Error('SQLITE_FULL'); });
+            await run(h, { auto: true });
+            expect(h.logs.some((l) => l.level === 'error' && l.message.includes('SQLITE_FULL'))).toBe(true);
+            expect(h.launched).toEqual(['p1']); // p2 not opened after the abort
+            expect(h.collector.blockedUntil).toBe(NOW + 60 * MIN);
+            expect(h.collector.status().last!.errors.some((e) => e.error.includes('SQLITE_FULL'))).toBe(true);
+            expect(rowOf(h.store, a).nextCommentAt).not.toBeNull();
+            expect(rowOf(h.store, b).commentsDone).toEqual([]);
+        });
+
+        test('comment insert failure aborts, keeps the milestone and blocks auto runs', async () => {
+            const h = setup();
+            const a = addPost(h.store);
+            jest.spyOn(h.store, 'insertCommentsReturningNew').mockImplementation(() => { throw new Error('readonly'); });
+            await run(h, { auto: true });
+            expect(h.logs.some((l) => l.level === 'error' && l.message.includes('readonly'))).toBe(true);
+            expect(h.collector.blockedUntil).toBe(NOW + 60 * MIN);
+            expect(rowOf(h.store, a).nextCommentAt).toBe(NOW - 3 * HOUR + 120 * MIN); // still due, not settled
+        });
+
+        test('emits one leads.found per run with the total and at most 3 newest samples', async () => {
+            const h = setup();
+            for (let i = 0; i < 5; i++) addPost(h.store);
+            (h.collector as any).deps.detector = {
+                process: async (rows: any[], o: any) => {
+                    expect(o.emit).toBe(false);
+                    return rows.map((r) => ({ authorName: r.authorName, text: r.text, postUrl: r.postUrl }) as any);
+                },
+            };
+            await run(h, { auto: true });
+            const found = h.events.filter((e) => e.type === 'leads.found');
+            expect(found).toHaveLength(1);
+            expect(found[0].payload.count).toBe(5);
+            expect(found[0].payload.samples).toHaveLength(3);
+            expect(found[0].payload.auto).toBe(true);
+            expect(h.events.map((e) => e.type).indexOf('leads.found')).toBeLessThan(h.events.map((e) => e.type).indexOf('comments.collectFinished'));
+        });
+
+        test('no leads.found when no leads were created', async () => {
+            const h = setup();
+            addPost(h.store);
+            (h.collector as any).deps.detector = { process: async () => [] };
+            await run(h, { auto: true });
+            expect(h.events.some((e) => e.type === 'leads.found')).toBe(false);
+        });
+
+        test('shares one AI state across the whole run', async () => {
+            const h = setup();
+            addPost(h.store); addPost(h.store);
+            const states: unknown[] = [];
+            (h.collector as any).deps.detector = { process: async (_r: any, o: any) => { states.push(o.aiState); return []; } };
+            await run(h, { auto: true });
+            expect(states).toHaveLength(2);
+            expect(states[0]).toBe(states[1]);
+        });
+
+        test('a profile that is already open skips the run without consuming the milestone', async () => {
+            const h = setup({ launchFor: async () => { throw new Error('Profile đang mở. Đóng profile trước khi chạy tự động'); } });
+            const a = addPost(h.store);
+            await run(h, { auto: true });
+            expect(rowOf(h.store, a).nextCommentAt).toBe(NOW - 3 * HOUR + 120 * MIN);
+            expect(rowOf(h.store, a).commentsDone).toEqual([]);
+            expect(h.logs.some((l) => l.level === 'warning' && l.message.includes('Profile đang mở'))).toBe(true);
+            expect(h.observeLogin).not.toHaveBeenCalled();
+        });
+
+        test.each(['logged_out', 'checkpoint'])('auto run skips a known %s profile without launching and moves to the next milestone', async (state) => {
+            const h = setup();
+            const a = addPost(h.store);
+            h.store.setLoginState('p1', state as any, 'check', NOW);
+            await run(h, { auto: true });
+            expect(h.launched).toEqual([]);
+            expect(rowOf(h.store, a).commentsDone).toEqual(['120m']);
+            expect(h.collector.status().last!.errors).toHaveLength(1);
+        });
+
+        test('a manual run still tries a profile whose stored state is bad', async () => {
+            const h = setup();
+            const a = addPost(h.store);
+            h.store.setLoginState('p1', 'logged_out' as any, 'check', NOW);
+            await run(h, { postUrls: [rowOf(h.store, a).postUrl as string] });
+            expect(h.launched).toEqual(['p1']);
+        });
     });
 });

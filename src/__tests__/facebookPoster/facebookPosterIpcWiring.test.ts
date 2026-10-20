@@ -33,6 +33,7 @@ jest.mock('../../services/facebookPoster/FacebookPosterScheduler', () => ({
         constructor(deps: any) { capturedDeps = deps; }
         start() {}
         stop() {}
+        onRunFinished() {}
         reschedule() { mockReschedule(); }
         bypassCampaignGateOnce(id: string) { mockBypass(id); }
         clearCampaignGateBypass(id: string) { mockClearBypass(id); }
@@ -220,21 +221,27 @@ describe('facebookPosterIpc wiring', () => {
             commentedAt: '', commentedAtMs: null, collectedAt: Date.now(),
         }]);
         expect(leadOperations.list({ search: 'hỏi giá' }).total).toBe(1);
+        mockServiceDeps.emit('facebookPoster:runFinished', { runId: 'none', status: 'completed' }); // đóng lượt: xả khách đã gom
     });
 
-    test('khách mới phát sự kiện control leads.found một lần mỗi lượt, không phát lại cho bình luận cũ', async () => {
+    test('khách mới phát sự kiện control leads.found đúng một lần cho cả lượt (khi lượt kết thúc), không phát lại cho bình luận cũ', async () => {
         posterOperations.current();
         const emit = require('../../services/control/controlEvents').emitControlEvent as jest.Mock;
         emit.mockClear();
-        const row = {
-            key: 'ctl-k1', profileId: 'p1', postUrl: 'https://x/ctl', authorId: 'a9', authorName: 'Hoa', authorUrl: '', text: 'ib mình báo giá nhé',
+        const mk = (n: number) => ({
+            key: `ctl-k${n}`, profileId: 'p1', postUrl: `https://x/ctl${n}`, authorId: `a${n}`, authorName: `Hoa ${n}`, authorUrl: '', text: 'ib mình báo giá nhé',
             commentedAt: '', commentedAtMs: null, collectedAt: Date.now(),
-        };
-        await mockServiceDeps.onCommentsSaved([row]);
+        });
         const leadCalls = () => emit.mock.calls.filter((c) => c[0] === 'leads.found');
+        await mockServiceDeps.onCommentsSaved([mk(1)]);
+        await mockServiceDeps.onCommentsSaved([mk(2)]); // bài thứ hai của cùng lượt
+        expect(leadCalls()).toHaveLength(0); // chưa phát trước khi lượt kết thúc
+        mockServiceDeps.emit('facebookPoster:runFinished', { runId: 'none', status: 'completed' });
         expect(leadCalls()).toHaveLength(1);
-        expect(leadCalls()[0][1]).toMatchObject({ count: 1, auto: false });
-        await mockServiceDeps.onCommentsSaved([row]);
+        expect(leadCalls()[0][1]).toMatchObject({ count: 2, auto: false });
+        // Lượt sau: bình luận cũ không tạo khách mới nên không phát
+        await mockServiceDeps.onCommentsSaved([mk(1)]);
+        mockServiceDeps.emit('facebookPoster:runFinished', { runId: 'none', status: 'completed' });
         expect(leadCalls()).toHaveLength(1);
     });
 

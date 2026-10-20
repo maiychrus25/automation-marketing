@@ -13,6 +13,8 @@ export interface CommentCollectSchedulerDeps {
     clearTimer: (handle: unknown) => void;
     readConfig: () => LeadConfig;
     isBusy: () => boolean;
+    /** Mốc (ms) trước đó không được tự thu vì lần ghi kho gần nhất bị lỗi. */
+    blockedUntil?: () => number;
     duePosts: (now: number, limit: number) => PostTrackingRow[];
     /** Đồng bộ; ném `BUSY_ERROR` khi đang có việc chạy. Luôn thu với `auto = true`. */
     runCollect: (rows: PostTrackingRow[]) => void;
@@ -47,6 +49,7 @@ export class CommentCollectScheduler {
                 config = DEFAULT_LEAD_CONFIG;
             }
             if (!config.autoCollect || isBusy()) return;
+            if (now() < (this.deps.blockedUntil?.() ?? 0)) return;
             const rows = duePosts(now(), MAX_COMMENT_POSTS);
             if (rows.length === 0) return;
             runCollect(rows);

@@ -51,6 +51,9 @@ describe('validateLeadConfig', () => {
         expect(LEAD_CONFIG_SETTING_KEY).toBe('fb_poster_lead_config');
         expect(DEFAULT_LEAD_KEYWORDS).toHaveLength(19);
     });
+    it('từ khoá chứa dấu phẩy bị từ chối', () => {
+        expect(() => validateLeadConfig({ ...base(), keywords: ['giá, ship'] })).toThrow('dấu phẩy');
+    });
     it('mốc: 1-10 phần tử, tăng dần, 30-20160', () => {
         expect(() => validateLeadConfig({ ...base(), collectAtMinutes: [] })).toThrow();
         expect(() => validateLeadConfig({ ...base(), collectAtMinutes: Array.from({ length: 11 }, (_, i) => 30 + i) })).toThrow();

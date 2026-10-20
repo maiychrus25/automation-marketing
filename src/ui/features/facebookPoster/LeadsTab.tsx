@@ -70,6 +70,14 @@ export default function LeadsTab() {
     search: search || undefined,
   }), [status, campaignId, days, search]);
 
+  // Đổi bộ lọc / trang: bỏ dòng và lỗi của bộ lọc cũ ngay (tải lại do sự kiện thì giữ nguyên bảng).
+  useEffect(() => {
+    setLeads([]);
+    setTotal(0);
+    setLoadError('');
+    setLoading(true);
+  }, [filter, page]);
+
   // Chỉ phản hồi của lần gọi mới nhất được ghi vào state; không ghi sau khi tab đã gỡ.
   useEffect(() => {
     const seq = ++loadSeq.current;
@@ -154,7 +162,8 @@ export default function LeadsTab() {
       if (!res?.success) throw new Error(res?.error || 'Không cập nhật được trạng thái');
       if (alive.current && res.lead) patchLocal(lead.id, { status: res.lead.status, updatedAt: res.lead.updatedAt });
     } catch (err) {
-      if (alive.current) patchLocal(lead.id, { status: previous });
+      // Chỉ trả về nếu dòng vẫn mang giá trị lạc quan của lần đổi này (tải lại có thể đã thay dòng).
+      if (alive.current) setLeads((prev) => prev.map((l) => (l.id === lead.id && l.status === next ? { ...l, status: previous } : l)));
       showNotification(errorText(err, 'Không cập nhật được trạng thái'), 'error');
     }
   };

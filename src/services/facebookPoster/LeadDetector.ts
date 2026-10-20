@@ -18,6 +18,23 @@ export interface LeadDetectorDeps {
     log: (message: string) => void;
 }
 
+/** Trạng thái AI dùng chung cho cả một lượt thu: sau một lần AI lỗi / hết hạn thì các bài còn lại không gọi AI nữa. */
+export interface LeadAiState { failed: boolean }
+export interface LeadProcessOptions {
+    auto: boolean;
+    /** Mặc định true. Lượt thu nhiều bài truyền false rồi tự gom và phát một sự kiện qua `buildLeadsFoundPayload`. */
+    emit?: boolean;
+    aiState?: LeadAiState;
+}
+type LeadsFoundPayload = Parameters<LeadDetectorDeps['emit']>[1];
+
+/** Gộp các khách mới của một lượt thành nội dung sự kiện `leads.found`: tổng số + tối đa 3 mẫu mới nhất. */
+export function buildLeadsFoundPayload(leads: FbPosterLead[], auto: boolean): LeadsFoundPayload {
+    const samples = leads.slice(-MAX_SAMPLES).reverse()
+        .map((l) => ({ authorName: l.authorName, text: l.text, postUrl: l.postUrl }));
+    return { count: leads.length, samples, auto };
+}
+
 interface Candidate { comment: FbPosterComment; matched: string[]; verdict: LeadVerdict | null }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -25,7 +42,7 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 export class LeadDetector {
     constructor(private readonly deps: LeadDetectorDeps) {}
 
-    async process(comments: FbPosterComment[], opts: { auto: boolean }): Promise<FbPosterLead[]> {
+    async process(comments: FbPosterComment[], opts: LeadProcessOptions): Promise<FbPosterLead[]> {
         try {
             const config = this.deps.readConfig();
             let candidates: Candidate[] = [];
@@ -35,22 +52,21 @@ export class LeadDetector {
                 if (matched) candidates.push({ comment, matched, verdict: null });
             }
             if (candidates.length === 0) return [];
-            if (config.aiEnabled) candidates = await this.applyAi(candidates, config.aiMinScore);
+            if (config.aiEnabled) candidates = await this.applyAi(candidates, config.aiMinScore, opts.aiState ?? { failed: false });
             if (candidates.length === 0) return [];
-            return this.save(candidates, opts.auto);
+            return this.save(candidates, opts.auto, opts.emit !== false);
         } catch (err) {
             this.safeLog(`Lọc khách tiềm năng lỗi: ${errorText(err)}`);
             return [];
         }
     }
 
-    /** Chấm theo lô; lỗi / không dùng được thì giữ nguyên các bình luận chưa chấm (cảnh báo một lần mỗi lượt). */
-    private async applyAi(candidates: Candidate[], minScore: number): Promise<Candidate[]> {
+    /** Chấm theo lô; lỗi / không dùng được thì giữ nguyên các bình luận chưa chấm (cảnh báo một lần mỗi lượt, rồi bỏ AI cho phần còn lại của lượt). */
+    private async applyAi(candidates: Candidate[], minScore: number, state: LeadAiState): Promise<Candidate[]> {
         const classify = this.deps.classify;
-        let warned = false;
         const warn = (reason: string) => {
-            if (warned) return;
-            warned = true;
+            if (state.failed) return;
+            state.failed = true;
             this.safeLog(`AI không dùng được (${reason}), giữ các bình luận khớp từ khoá làm khách tiềm năng`);
         };
         if (!classify) {
@@ -61,7 +77,7 @@ export class LeadDetector {
         for (let from = 0; from < candidates.length; from += AI_BATCH_SIZE) {
             const batch = candidates.slice(from, from + AI_BATCH_SIZE);
             let verdicts: (LeadVerdict | null)[] | null = null;
-            if (!warned) {
+            if (!state.failed) {
                 try {
                     verdicts = await classify(batch.map((c) => ({ text: c.comment.text })));
                 } catch (err) {
@@ -78,7 +94,7 @@ export class LeadDetector {
         return kept;
     }
 
-    private save(candidates: Candidate[], auto: boolean): FbPosterLead[] {
+    private save(candidates: Candidate[], auto: boolean, emit: boolean): FbPosterLead[] {
         const { store } = this.deps;
         const now = (this.deps.now ?? Date.now)();
         let created: FbPosterLead[];
@@ -100,11 +116,9 @@ export class LeadDetector {
             this.safeLog(`Không lưu được khách tiềm năng: ${errorText(err)}`);
             return [];
         }
-        if (created.length > 0) {
-            const samples = created.slice(-MAX_SAMPLES).reverse()
-                .map((l) => ({ authorName: l.authorName, text: l.text, postUrl: l.postUrl }));
+        if (emit && created.length > 0) {
             try {
-                this.deps.emit('leads.found', { count: created.length, samples, auto });
+                this.deps.emit('leads.found', buildLeadsFoundPayload(created, auto));
             } catch (err) {
                 this.safeLog(`Không phát được sự kiện khách tiềm năng: ${errorText(err)}`);
             }

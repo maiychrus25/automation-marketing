@@ -10,7 +10,12 @@ type PostedUrl = { postUrl: string; profileId: string; profileName: string; targ
 
 interface Props { busy: boolean; onStarted: () => void }
 
-const openLink = (url: string) => { if (ipc.shell?.openExternal) ipc.shell.openExternal(url); else window.open(url, '_blank'); };
+// Link lấy từ dữ liệu Facebook (không tin cậy): tiến trình chính kiểm tra (chỉ https tới facebook.com) rồi mới mở.
+const openLink = (url: string) => {
+  ipc.research?.openLink(url).then((res) => {
+    if (!res?.success) useAppStore.getState().showNotification(res?.error || 'Không mở được link', 'error');
+  }).catch(() => useAppStore.getState().showNotification('Không mở được link', 'error'));
+};
 const formatTime = (at: number) => new Date(at).toLocaleString('vi-VN', { hour12: false });
 
 export default function CommentsTab({ busy, onStarted }: Props) {

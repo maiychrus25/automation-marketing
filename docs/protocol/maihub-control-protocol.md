@@ -183,7 +183,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `campaigns.update` | **`id`**, và tuỳ chọn `name`, `goal`, `status`, `startAt`, `endAt` (`null` để bỏ giới hạn) | `{ campaign }`. Chiến dịch `paused`/`archived` hoặc ngoài khoảng ngày thì lịch của nó không tự chạy | không |
 | `campaigns.delete` | **`id`**, **`confirm`** | `{ deleted: true }`. `INVALID_PARAMS` nếu còn lịch / bài nháp | có |
 | `posts.trackConfig` | `config` (`{ autoEnabled, linkRetryMinutes[], statsAtMinutes[] }`; mỗi mảng 1–10 số tăng dần, 5–20160 phút). Không truyền = chỉ đọc | `{ config }`. `INVALID_PARAMS` nếu `config` sai | không |
-| `comments.collect` | `postUrls` (1–50 link bài; bỏ trống = các bài đến hạn thu; mỗi lượt xử lý tối đa 10 bài) | `{ jobId, posts }`. Thu bình luận bài đã đăng (chỉ đọc), chạy nền; bình luận mới khớp thành khách thì có sự kiện `leads.found`. `BUSY` nếu đang đăng, kiểm tra đăng nhập hoặc đang thu | không |
+| `comments.collect` | `postUrls` (1–50 link bài; bỏ trống = các bài đến hạn thu; mỗi lượt xử lý tối đa 10 bài) | `{ jobId, posts }`. Thu bình luận bài đã đăng (chỉ đọc), chạy nền; bình luận mới khớp thành khách thì có sự kiện `leads.found`. Link không có dòng theo dõi bị bỏ qua (`posts` không tính); không có phương thức hỏi trạng thái hay sự kiện xong cho lượt này. `BUSY` nếu đang đăng, kiểm tra đăng nhập hoặc đang thu | không |
 | `comments.list` | `postUrl`, `since` (epoch ms, theo thời điểm thu), `limit` (1–500), `offset` | `{ total, comments[] }` | không |
 | `leads.list` | `status` (`new`/`contacted`/`won`/`ignored`), `campaignId` (`""` = không thuộc chiến dịch), `from`, `to`, `search`, `limit` (1–500), `offset` | `{ total, leads[] }` (mới nhất trước) | không |
 | `leads.update` | **`id`**, và `status` hoặc `note` (≤ 1000 ký tự; cần ít nhất một) | `{ lead }`. `NOT_FOUND` nếu `id` lạ; `INVALID_PARAMS` nếu tham số sai | không |
@@ -229,7 +229,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `profiles.checkFinished` | Một lượt kiểm tra đăng nhập kết thúc | `{ checkId, source: "manual"\|"api"\|"daily", results: [{ profileId, profileName, outcome, error? }] }`; `outcome` là `ok`, `logged_out`, `checkpoint`, `error`, `skipped`; `error` chỉ có khi `outcome = error` |
 | `research.finished` | Một lượt quét Nghiên cứu kết thúc (xong, lỗi hoặc bị huỷ) | `{ scanId, source, query, status, errorCode, itemCount }`; lấy kết quả bằng `research.get` |
 | `posts.trackFinished` | Một lượt theo dõi bài đăng kết thúc (xong, huỷ hoặc có lỗi; cả lượt do người dùng bấm hay MaiHub tự chạy) | `{ jobId, auto, cancelled, groups, checked, found, linked, removedSuspected, notFound, errors }`; `auto` là `true` khi MaiHub tự chạy, `errors` là số nhóm lỗi; chi tiết bằng `posts.trackStatus` |
-| `leads.found` | Có khách tiềm năng mới sau một lượt thu bình luận (một sự kiện mỗi lượt, cả thu tay lẫn tự thu; không phát khi không có khách mới) | `{ count, samples: [{ authorName, text, postUrl }] (tối đa 3), auto }`; xem đầy đủ bằng `leads.list` |
+| `leads.found` | Có khách tiềm năng mới sau một lượt thu bình luận (một sự kiện cho cả lượt, `count` là tổng khách của lượt chứ không phải mỗi bài, cả thu tay lẫn tự thu; không phát khi không có khách mới) | `{ count, samples: [{ authorName, text, postUrl }] (tối đa 3), auto }`; xem đầy đủ bằng `leads.list` |
 
 Sau `run.finished`, gọi `runs.get` với `runId` để lấy link bài và chi tiết từng đích.
 

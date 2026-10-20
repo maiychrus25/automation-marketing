@@ -24,7 +24,7 @@ import {
 } from '../../src/services/facebookPoster/postTracking';
 import { CommentCollector } from '../../src/services/facebookPoster/CommentCollector';
 import { CommentCollectScheduler } from '../../src/services/facebookPoster/CommentCollectScheduler';
-import { LeadDetector } from '../../src/services/facebookPoster/LeadDetector';
+import { LeadDetector, buildLeadsFoundPayload, type LeadAiState } from '../../src/services/facebookPoster/LeadDetector';
 import { LEAD_CONFIG_SETTING_KEY, parseLeadConfig, validateLeadConfig } from '../../src/services/facebookPoster/leadRules';
 import { createLeadClassifier, openLoggedInSession, buildLeadSheetRows } from '../../src/services/facebookPoster/leadWiring';
 import { isLoggedIn } from '../../src/services/facebookPoster/loginState';
@@ -39,7 +39,7 @@ import { getBrowserProfileService, isBrowserEngineInstalled } from './browserPro
 import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound } from '../../src/services/control/controlEvents';
 import { getResearchStore } from './researchIpc';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
-import type { FbPosterRun, LeadStatus, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
+import type { FbPosterLead, FbPosterRun, LeadStatus, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 import { campaignBlockReason, readCampaignRef } from '../../src/services/facebookPoster/campaigns';
 import { scoreGroups } from '../../src/services/facebookPoster/groupScores';
@@ -127,6 +127,7 @@ function getService(): FacebookPosterService {
             emit: (channel, data) => {
                 EventBroadcaster.emit(channel, data);
                 if (channel === 'facebookPoster:runFinished') {
+                    safely('flushManualLeads', flushManualLeads);
                     recordRunFinished(data);
                     scheduler?.onRunFinished();
                 }
@@ -135,7 +136,10 @@ function getService(): FacebookPosterService {
             readTrackingConfig: readTrackingConfig,
             readLeadConfig,
             // Lượt thu bình luận thủ công (collect_comments) cũng lọc khách; lỗi lọc không làm hỏng lượt thu.
-            onCommentsSaved: async (rows) => { await getDetector().process(rows, { auto: false }); },
+            // Khách của cả lượt được gom, phát một sự kiện khi lượt kết thúc (flushManualLeads).
+            onCommentsSaved: async (rows) => {
+                manualLeads.push(...await getDetector().process(rows, { auto: false, emit: false, aiState: manualLeadAi }));
+            },
         });
     }
     return service;
@@ -218,6 +222,7 @@ function getTracker(): PostTracker {
                 }
             },
             getConfig: readTrackingConfig,
+            getLeadConfig: readLeadConfig,
         });
     }
     return tracker;
@@ -225,6 +230,17 @@ function getTracker(): PostTracker {
 
 function readLeadConfig() {
     return parseLeadConfig(db().getSetting(LEAD_CONFIG_SETTING_KEY));
+}
+
+// Khách của lượt thu bình luận thủ công đang chạy; phát một lần khi lượt kết thúc.
+let manualLeads: FbPosterLead[] = [];
+let manualLeadAi: LeadAiState = { failed: false };
+
+function flushManualLeads(): void {
+    const found = manualLeads;
+    manualLeads = [];
+    manualLeadAi = { failed: false };
+    if (found.length > 0) emitLeadsFound(buildLeadsFoundPayload(found, false));
 }
 
 /** Phát khi có khách mới: cho giao diện và cho Control API (`leads.found`, vào Telegram qua bridge). */
@@ -240,7 +256,7 @@ function getDetector(): LeadDetector {
         readConfig: readLeadConfig,
         classify: createLeadClassifier({
             getAssistantId: () => AIAssistantService.getInstance().getDefaultAssistant()?.id ?? null,
-            chat: (assistantId, messages) => AIAssistantService.getInstance().chat(assistantId, messages, true),
+            complete: (assistantId, messages) => AIAssistantService.getInstance().completeRaw(assistantId, messages),
         }),
         emit: (_type, payload) => emitLeadsFound(payload),
         log: (message) => Logger.warn(`[facebookPosterIpc] ${message}`),
@@ -263,8 +279,13 @@ function getCollector(): CommentCollector {
             observeLogin: (profileId, state) => safely('commentObserveLogin', () => getChecker().observe(profileId, state, 'run')),
             detector: { process: (rows, opts) => getDetector().process(rows, opts) },
             readConfig: readLeadConfig,
+            log: (message, level) => {
+                if (level === 'error') Logger.error(`[facebookPosterIpc] thu bình luận: ${message}`);
+                else if (level === 'warning') Logger.warn(`[facebookPosterIpc] thu bình luận: ${message}`);
+            },
             emit: (type, payload) => {
-                if (type === 'comments.collectProgress') EventBroadcaster.emit('facebookPoster:commentCollectProgress', payload);
+                if (type === 'leads.found') emitLeadsFound(payload as Parameters<typeof emitLeadsFound>[0]);
+                else if (type === 'comments.collectProgress') EventBroadcaster.emit('facebookPoster:commentCollectProgress', payload);
                 else if (type === 'comments.collectFinished') {
                     EventBroadcaster.emit('facebookPoster:commentCollectFinished', payload);
                     safely('onRunFinished', () => scheduler?.onRunFinished()); // lịch đăng đã xếp hàng chạy khi khe rảnh
@@ -469,6 +490,7 @@ export function startFacebookPosterScheduler(): void {
         clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
         readConfig: readLeadConfig,
         isBusy: () => isWorkspaceSwitchInProgress() || isFacebookPosterBusy(),
+        blockedUntil: () => collector?.blockedUntil ?? 0,
         duePosts: (now, limit) => store().listDueCommentPosts(now, limit),
         runCollect: () => { getCollector().collect({ auto: true }); },
         log: (msg) => Logger.warn(msg),

@@ -931,6 +931,13 @@ describe('comment leads store', () => {
     expect(s.listLeads({ limit: 2, offset: 2 })).toMatchObject({ total: 3, leads: [{ commentKey: 'k1' }] });
   });
 
+  test("listLeads campaignId '' means leads outside any campaign", () => {
+    const s = store();
+    s.createLeads([lead({ commentKey: 'k1', campaignId: 'c1' }), lead({ commentKey: 'k2', campaignId: null })]);
+    expect(s.listLeads({ campaignId: '', limit: 10, offset: 0 }).leads.map((l) => l.commentKey)).toEqual(['k2']);
+    expect(s.listLeads({ campaignId: 'c1', limit: 10, offset: 0 }).leads.map((l) => l.commentKey)).toEqual(['k1']);
+  });
+
   test('updateLead patches status and note, returns null for an unknown id', () => {
     const s = store();
     const [created] = s.createLeads([lead()]);

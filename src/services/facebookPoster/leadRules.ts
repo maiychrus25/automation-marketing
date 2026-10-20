@@ -67,6 +67,7 @@ function validateKeywords(value: unknown): string[] {
         if (text.length < 1 || text.length > MAX_KEYWORD_LENGTH) {
             throw new Error(`Mỗi từ khoá phải dài từ 1 đến ${MAX_KEYWORD_LENGTH} ký tự`);
         }
+        if (text.includes(',')) throw new Error('Từ khoá không được chứa dấu phẩy');
         return text;
     });
 }
