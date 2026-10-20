@@ -1364,3 +1364,102 @@ describe('FacebookPosterService post tracking rows', () => {
     expect(h.emitted.some((e) => e.channel === 'facebookPoster:log' && e.data.level === 'warning' && e.data.message.includes('disk full'))).toBe(true);
   });
 });
+
+describe('FacebookPosterService campaigns and variants', () => {
+  const G = (n: number) => `https://www.facebook.com/groups/${n}/`;
+  const camp = (over: Record<string, unknown> = {}) => ({ id: 'c1', name: 'Tết', goal: '', status: 'active' as const, startAt: null, endAt: null, createdAt: 1, updatedAt: 1, ...over });
+  const twoByThree = (over: Partial<Extract<StartParams, { kind: 'post' }>> = {}) => postParams({
+    variants: ['bản B'],
+    profiles: [{ profileId: 'p1', targets: [G(1), G(2), G(3)] }, { profileId: 'p2', targets: [G(1), G(2), G(3)] }],
+    ...over,
+  });
+  /** postToTargets giả ghi lại chữ của từng đích theo profile. */
+  const recorder = (posted: Map<string, string>) => jest.fn(async (input: any, deps: any) => {
+    const { page } = await deps.launch();
+    for (const url of input.targets) {
+      posted.set(`${page.id}|${url}`, input.textFor ? input.textFor(url) : input.text);
+      deps.onResult({ url, ok: true, error: null, postUrl: `${url}posts/1/`, commentStatus: 'not_requested', identity: 'Me' });
+    }
+  });
+
+  test('chia chữ theo assignVariants, ghi variant vào kết quả và dòng theo dõi', async () => {
+    const seen = new Map<string, string>();
+    const h = harness({ postToTargets: recorder(seen) });
+    const { runId } = h.service.start(twoByThree());
+    await h.service.whenIdle();
+    // 6 cặp xếp theo url rồi profileId, n = 2, offset 0: A B A B A B.
+    const expected: [string, string, string][] = [
+      ['p1', G(1), 'A'], ['p2', G(1), 'B'], ['p1', G(2), 'A'], ['p2', G(2), 'B'], ['p1', G(3), 'A'], ['p2', G(3), 'B'],
+    ];
+    const rows = h.results(runId);
+    for (const [profileId, url, label] of expected) {
+      const row = rows.find((r: any) => r.profileId === profileId && r.targetUrl === url);
+      expect(row.variant).toBe(label);
+      expect(seen.get(`page-${profileId}|${url}`)).toBe(label === 'A' ? 'xin chào' : 'bản B');
+      const tr = h.store.listTracking({}).find((t) => t.profileId === profileId && t.groupUrl === url)!;
+      expect(tr.variant).toBe(label);
+      expect(tr.textHead).toBe(label === 'A' ? 'xin chào' : 'bản b');
+    }
+  });
+
+  test('lịch đã có 1 lượt done thì offset = 1; lượt missed không tính', async () => {
+    const h = harness({ postToTargets: postAll() });
+    for (const [id, status] of [['old-1', 'done'], ['old-2', 'missed']] as const) {
+      h.store.createRun({ id, kind: 'post', mode: 'group', params: {}, startedAt: 1, scheduleId: 'sch-1' });
+      h.store.finishRun(id, status, '', 2);
+    }
+    const { runId } = h.service.start(postParams({ variants: ['bản B'], profiles: [{ profileId: 'p1', targets: [G(1), G(2)] }] }), 'sch-1');
+    await h.service.whenIdle();
+    const byUrl = (u: string) => h.results(runId).find((r: any) => r.targetUrl === u).variant;
+    expect([byUrl(G(1)), byUrl(G(2))]).toEqual(['B', 'A']);
+  });
+
+  test('đăng ngay (không scheduleId) có offset 0', async () => {
+    const h = harness({ postToTargets: postAll() });
+    const { runId } = h.service.start(postParams({ variants: ['bản B'], profiles: [{ profileId: 'p1', targets: [G(1), G(2)] }] }));
+    await h.service.whenIdle();
+    expect(h.results(runId).map((r: any) => r.variant)).toEqual(['A', 'B']);
+  });
+
+  test('textFor ổn định cho mọi lần gọi của một đích (thử lại dùng cùng chữ)', async () => {
+    let first: string[] = [];
+    const task = jest.fn(async (input: any, deps: any) => {
+      await deps.launch();
+      first = [input.textFor(G(2)), input.textFor(G(2)), input.textFor(G(1))];
+      for (const url of input.targets) deps.onResult({ url, ok: true, error: null, postUrl: null, commentStatus: 'not_requested', identity: '' });
+    });
+    const h = harness({ postToTargets: task });
+    h.service.start(postParams({ variants: ['bản B'], profiles: [{ profileId: 'p1', targets: [G(1), G(2)] }] }));
+    await h.service.whenIdle();
+    expect(first).toEqual(['bản B', 'bản B', 'xin chào']);
+  });
+
+  test('campaignId được ghi trên run và dòng theo dõi', async () => {
+    const h = harness({ postToTargets: postAll() });
+    h.store.createCampaign(camp());
+    const { runId } = h.service.start(postParams({ campaignId: 'c1', profiles: [{ profileId: 'p1', targets: [G(1)] }] }));
+    await h.service.whenIdle();
+    expect(h.run(runId).campaignId).toBe('c1');
+    expect(h.store.listTracking({})[0].campaignId).toBe('c1');
+  });
+
+  test('chiến dịch không có hoặc đã lưu trữ: start ném lỗi, không tạo run', () => {
+    const h = harness({ postToTargets: postAll() });
+    expect(() => h.service.start(postParams({ campaignId: 'nope' }))).toThrow('Không tìm thấy chiến dịch');
+    h.store.createCampaign(camp({ status: 'archived' }));
+    expect(() => h.service.start(postParams({ campaignId: 'c1' }))).toThrow('Chiến dịch đã lưu trữ');
+    expect(h.order).not.toContain('createRun');
+    expect(h.store.listRuns({ limit: 10, offset: 0 }).total).toBe(0);
+  });
+
+  test('không có variants: không truyền textFor, variant rỗng, campaign null', async () => {
+    const task = postAll();
+    const h = harness({ postToTargets: task });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(task.mock.calls[0][0]).not.toHaveProperty('textFor');
+    expect(task.mock.calls[0][0].text).toBe('xin chào');
+    expect(h.results(runId).every((r: any) => r.variant === '')).toBe(true);
+    expect(h.run(runId).campaignId).toBeNull();
+  });
+});

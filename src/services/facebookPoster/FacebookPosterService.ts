@@ -7,6 +7,7 @@ import { collectComments } from './collectComments';
 import { searchAndJoinGroups } from './joinGroups';
 import { isLoggedIn, FB_HOME } from './loginState';
 import { postToTargets } from './postToTargets';
+import { assignVariants, variantKey, variantText, VARIANT_LABELS } from './variants';
 import { scanGroups } from './scanGroups';
 import { normalizeTarget } from './targets';
 import { computeNextCheckAt, DEFAULT_POST_TRACKING_CONFIG, normalizeHead, type PostTrackingConfig } from './postTracking';
@@ -71,7 +72,9 @@ interface ProfilePlan {
     /** Có ít nhất một kết quả 'posted': tài khoản chắc chắn còn đăng nhập. */
     posted: boolean;
 }
-interface ActiveRun { run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number }; }
+interface ActiveRun { run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number };
+    /** Chỉ có khi bài có biến thể: chỉ số biến thể (0 = A) của cặp (profile, đích), chia một lần cho cả lượt. */
+    variantIndex?: (profileId: string, url: string) => number | undefined; }
 interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; pendingApproval?: boolean; identity?: string; errorCode?: string; attempts?: number; }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -117,7 +120,14 @@ export class FacebookPosterService {
 
     start(params: StartParams, scheduleId?: string): { runId: string } {
         if (this.active || this.exclusive) throw new Error(BUSY_ERROR);
+        if (params.kind === 'post' && params.campaignId) {
+            const campaign = this.store.getCampaign(params.campaignId);
+            if (!campaign) throw new Error('Không tìm thấy chiến dịch');
+            if (campaign.status === 'archived') throw new Error('Chiến dịch đã lưu trữ');
+        }
         const plans = this.plan(params);
+        // Đếm trước khi tạo run để lượt mới không tự tính vào độ lệch.
+        const variantIndex = this.assignRunVariants(params, plans, scheduleId);
         const run: FbPosterRun = {
             id: this.newId(),
             kind: params.kind,
@@ -128,10 +138,10 @@ export class FacebookPosterService {
             startedAt: this.now(),
             finishedAt: null,
             scheduleId: scheduleId ?? null,
-            campaignId: null,
+            campaignId: params.kind === 'post' ? params.campaignId ?? null : null,
             scheduleName: null,
         };
-        this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt, scheduleId: run.scheduleId });
+        this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt, scheduleId: run.scheduleId, campaignId: run.campaignId });
         this.stopping = false;
         this.forced = false;
         this.storeError = null;
@@ -141,7 +151,7 @@ export class FacebookPosterService {
         const staggerMs = parallel
             ? { min: parallel.staggerMinSec * 1000, spread: Math.max(0, parallel.staggerMaxSec - parallel.staggerMinSec) * 1000 }
             : { min: STAGGER_MIN_MS, spread: STAGGER_SPREAD_MS };
-        this.active = { run, params, plans, concurrency, staggerMs };
+        this.active = { run, params, plans, concurrency, staggerMs, variantIndex };
         this.idle = this.execute(this.active);
         return { runId: run.id };
     }
@@ -210,6 +220,15 @@ export class FacebookPosterService {
     /** Fire and forget: close() is idempotent and its failure must not surface. */
     private closeSessions(plan: ProfilePlan): void {
         void Promise.allSettled(plan.sessions.map((session) => session.close()));
+    }
+
+    /** Chia biến thể A/B một lần cho cả lượt; undefined khi bài không có biến thể. */
+    private assignRunVariants(params: StartParams, plans: ProfilePlan[], scheduleId?: string): ActiveRun['variantIndex'] {
+        if (params.kind !== 'post' || !params.variants?.length) return undefined;
+        const offset = scheduleId ? this.store.countStartedRuns(scheduleId) : 0;
+        const pairs = plans.flatMap((p) => p.targets.map((t) => ({ profileId: p.profileId, url: t.url })));
+        const assigned = assignVariants(pairs, params.variants.length + 1, offset);
+        return (profileId, url) => assigned.get(variantKey(profileId, url));
     }
 
     // ─── Planning ────────────────────────────────────────────────────────────
@@ -381,6 +400,7 @@ export class FacebookPosterService {
                 await this.tasks.postToTargets(
                     {
                         text: params.text,
+                        ...(active.variantIndex ? { textFor: (url: string) => variantText(params, active.variantIndex!(profileId, url) ?? 0) } : {}),
                         mediaPaths: params.mediaPaths,
                         comment: params.comment,
                         commentDelayMin: params.commentDelayMin ?? 0,
@@ -474,6 +494,7 @@ export class FacebookPosterService {
                 postUrl: row.postUrl ?? null,
                 commentStatus: row.commentStatus ?? 'not_requested',
                 identity: row.identity ?? '',
+                variant: VARIANT_LABELS[active.variantIndex?.(plan.profileId, row.url) ?? -1] ?? '',
                 createdAt: this.now(),
             });
             this.trackPostedResult(active, plan, row, resultId);
@@ -492,15 +513,17 @@ export class FacebookPosterService {
         if (params.kind !== 'post' || params.mode !== 'group' || row.outcome !== 'posted') return;
         try {
             const postedAt = this.now();
+            const index = active.variantIndex?.(plan.profileId, row.url) ?? 0;
+            const variantLabel = VARIANT_LABELS[active.variantIndex?.(plan.profileId, row.url) ?? -1] ?? '';
             const postUrl = row.postUrl ?? null;
             const linkStatus: LinkStatus = postUrl ? 'known'
                 : row.pendingApproval || row.commentStatus === 'pending_approval' ? 'pending_approval' : 'missing';
             const tracking = {
-                resultId, runId: active.run.id, scheduleId: active.run.scheduleId, campaignId: null as string | null, variant: '', profileId: plan.profileId,
+                resultId, runId: active.run.id, scheduleId: active.run.scheduleId, campaignId: active.run.campaignId, variant: variantLabel, profileId: plan.profileId,
                 groupUrl: row.url,
                 groupId: /\/groups\/(\d+)/.exec(row.url)?.[1] ?? '',
                 postId: postUrl ? /\/(?:posts|permalink)\/(\d+)|[?&]story_fbid=(\d+)/.exec(postUrl)?.slice(1).find(Boolean) ?? '' : '',
-                postUrl, postedAt, textHead: normalizeHead(params.text), linkStatus,
+                postUrl, postedAt, textHead: normalizeHead(variantText(params, index)), linkStatus,
                 removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null as number | null, statsDone: [] as string[],
             };
             const config = this.deps.readTrackingConfig?.() ?? DEFAULT_POST_TRACKING_CONFIG;

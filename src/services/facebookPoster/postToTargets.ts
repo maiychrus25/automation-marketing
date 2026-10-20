@@ -862,6 +862,8 @@ export interface PostTargetResult {
 
 export interface PostInput {
   text: string;
+  /** Chữ riêng của từng đích (biến thể A/B); thiếu = dùng `text`. Mọi lần thử của một đích dùng cùng chữ. */
+  textFor?: (url: string) => string;
   /** Rỗng/thiếu = không đính kèm. Thứ tự là thứ tự ảnh trong bài. */
   mediaPaths?: string[];
   comment?: string | null;
@@ -899,7 +901,7 @@ export async function postToTargets(
     pickRetryDelaySec?: () => number;
   },
 ): Promise<{ posted: number; failed: number; results: PostTargetResult[] }> {
-  const { text, mediaPaths, comment = null, commentDelayMin = 0, targets, minDelay = 30, maxDelay = 60 } = (input || {}) as Partial<PostInput>;
+  const { text, textFor, mediaPaths, comment = null, commentDelayMin = 0, targets, minDelay = 30, maxDelay = 60 } = (input || {}) as Partial<PostInput>;
   const files = Array.isArray(mediaPaths) ? mediaPaths : [];
   const { getIsStopping, sendLog, updateProgress, onResult } = deps;
 
@@ -983,7 +985,7 @@ export async function postToTargets(
             try { page.on('dialog', dialogHandler); dialogHandlerOn = true; } catch { /* trang giả/đã đóng */ }
           }
           try {
-            const single = await postToSingleTarget(page, ctx, target, { text, mediaPaths: files, comment, commentDelayMin },
+            const single = await postToSingleTarget(page, ctx, target, { text: textFor?.(target.url) ?? text, mediaPaths: files, comment, commentDelayMin },
               { getIsStopping, sendLog, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall, attempt, onNavigated: dropDialogHandler });
             // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
             // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).

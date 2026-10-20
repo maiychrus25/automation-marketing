@@ -1903,3 +1903,26 @@ describe('pendingApproval khi đăng thành công mà không có link', () => {
     assert.strictEqual(ra.results[0].pendingApproval, false);
   });
 });
+
+test('textFor: each target types its own text, including on the retry attempt', async () => {
+  const typedPerGoto: string[] = [];
+  const page = retryPage({ answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}) });
+  const baseGoto = (page as any).goto;
+  (page as any).goto = async (u: string) => { if (u.includes('/groups/')) typedPerGoto.push(''); return baseGoto(u); };
+  (page as any).keyboard.type = async (c: string) => { typedPerGoto[typedPerGoto.length - 1] += c; };
+  const texts: Record<string, string> = { 'https://www.facebook.com/groups/1/': 'bản B', 'https://www.facebook.com/groups/2/': 'bản A' };
+  const out = await runWithFakeTimers(() => postToTargets(
+    { text: 'mặc định', textFor: (u: string) => texts[u], targets: Object.keys(texts), minDelay: 0, maxDelay: 0 },
+    { ...makeDeps(loggedInCtx([]), page), pickRetryDelaySec: () => 12 } as never,
+  ));
+  assert.strictEqual(out.results[0].attempts, 2);
+  assert.deepStrictEqual(typedPerGoto, ['', 'bản B', 'bản A'], 'attempt 1 fails before typing; retry types the target text');
+});
+
+test('without textFor every target types text', async () => {
+  const typed: string[] = [];
+  const page = retryPage();
+  (page as any).keyboard.type = async (c: string) => { typed.push(c); };
+  await runRetry(page);
+  assert.strictEqual(typed.join(''), 'hi');
+});
