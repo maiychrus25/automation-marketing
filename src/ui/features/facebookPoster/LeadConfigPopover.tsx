@@ -21,8 +21,9 @@ export default function LeadConfigPopover() {
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
-  const apply = (c: LeadConfig) => {
+  const apply = (c: LeadConfig, keepDrafts = false) => {
     setConfig(c);
+    if (keepDrafts) return;
     setKeywordText(c.keywords.join(', '));
     setMinutesText(formatMinutesList(c.collectAtMinutes));
     setScoreText(String(c.aiMinScore));
@@ -47,14 +48,15 @@ export default function LeadConfigPopover() {
     return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onDown); };
   }, [open]);
 
-  const save = async (next: LeadConfig) => {
+  // Công tắc lưu ngay nhưng giữ chữ đang gõ chưa lưu ở các ô văn bản.
+  const save = async (next: LeadConfig, keepDrafts = false) => {
     if (saving) return;
     setSaving(true);
     setError('');
     try {
       const res = await ipc.facebookPoster.leadConfigSet(next);
       if (!res?.success || !res.config) throw new Error(res?.error || 'Không lưu được cài đặt');
-      if (alive.current) apply(res.config);
+      if (alive.current) apply(res.config, keepDrafts);
     } catch (err) {
       if (alive.current) setError(err instanceof Error && err.message ? fieldLabels(err.message) : 'Không lưu được cài đặt');
     } finally {
@@ -81,7 +83,7 @@ export default function LeadConfigPopover() {
           {config ? (
             <form onSubmit={submit} className="space-y-2">
               <label className="flex items-center gap-2 text-sm text-gray-300">
-                <input type="checkbox" checked={config.autoCollect} disabled={saving} onChange={(e) => save({ ...config, autoCollect: e.target.checked })} className={FOCUS} />
+                <input type="checkbox" checked={config.autoCollect} disabled={saving} onChange={(e) => save({ ...config, autoCollect: e.target.checked }, true)} className={FOCUS} />
                 Tự thu bình luận theo mốc
               </label>
               <label className="block text-xs text-gray-400">
@@ -94,11 +96,11 @@ export default function LeadConfigPopover() {
                 <textarea rows={4} value={keywordText} onChange={(e) => setKeywordText(e.target.value)} disabled={saving} className={`input-field text-sm w-full mt-1 ${FOCUS}`} />
               </label>
               <label className="flex items-center gap-2 text-sm text-gray-300">
-                <input type="checkbox" checked={config.detectPhone} disabled={saving} onChange={(e) => save({ ...config, detectPhone: e.target.checked })} className={FOCUS} />
+                <input type="checkbox" checked={config.detectPhone} disabled={saving} onChange={(e) => save({ ...config, detectPhone: e.target.checked }, true)} className={FOCUS} />
                 Nhận cả bình luận có số điện thoại
               </label>
               <label className="flex items-center gap-2 text-sm text-gray-300">
-                <input type="checkbox" checked={config.aiEnabled} disabled={saving} onChange={(e) => save({ ...config, aiEnabled: e.target.checked })} className={FOCUS} />
+                <input type="checkbox" checked={config.aiEnabled} disabled={saving} onChange={(e) => save({ ...config, aiEnabled: e.target.checked }, true)} className={FOCUS} />
                 Dùng AI chấm ý định mua
               </label>
               <label className="block text-xs text-gray-400">
@@ -121,5 +123,7 @@ function fieldLabels(message: string): string {
   return message
     .replace(/\bcollectAtMinutes\b/g, 'Mốc thu')
     .replace(/\baiMinScore\b/g, 'Ngưỡng điểm AI')
-    .replace(/\bautoCollect\b/g, 'Tự thu bình luận');
+    .replace(/\bautoCollect\b/g, 'Tự thu bình luận')
+    .replace(/\bdetectPhone\b/g, 'Nhận số điện thoại')
+    .replace(/\baiEnabled\b/g, 'Dùng AI');
 }

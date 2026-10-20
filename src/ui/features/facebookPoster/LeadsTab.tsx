@@ -15,7 +15,6 @@ const BTN = `px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300
 const TH = 'px-2 py-1.5 text-left font-medium whitespace-nowrap';
 const TD = 'px-2 py-1.5 align-top';
 
-const openLink = (url: string) => { if (ipc.shell?.openExternal) ipc.shell.openExternal(url); else window.open(url, '_blank'); };
 const errorText = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback);
 
 export default function LeadsTab() {
@@ -40,6 +39,13 @@ export default function LeadsTab() {
   const loadSeq = useRef(0);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+
+  // Link lấy từ dữ liệu Facebook (không tin cậy): tiến trình chính kiểm tra (chỉ https tới facebook.com) rồi mới mở.
+  const openLink = (url: string) => {
+    ipc.research?.openLink(url).then((res) => {
+      if (!res?.success) showNotification(res?.error || 'Không mở được link', 'error');
+    }).catch(() => showNotification('Không mở được link', 'error'));
+  };
 
   const campaignNames = useMemo(() => new Map(campaigns.map((c) => [c.id, c.name])), [campaigns]);
 
