@@ -1,5 +1,6 @@
 import type { StartParams } from './FacebookPosterService';
 import { dedupePaths, validateMediaSelection } from './mediaRules';
+import { readVariants } from './variants';
 import { normalizeTarget, parseFacebookUrl } from './targets';
 
 export interface StartParamsEnv {
@@ -79,6 +80,13 @@ function readMediaPaths(p: Record<string, any>, env: StartParamsEnv): string[] {
     return paths;
 }
 
+/** Chỉ kiểm kiểu; việc chiến dịch có tồn tại được kiểm ở nơi có store. */
+function readCampaignId(v: unknown): string | null {
+    if (v === null) return null;
+    if (typeof v !== 'string' || !v) throw new Error('Mã chiến dịch không hợp lệ');
+    return v;
+}
+
 function validatePost(p: Record<string, any>, env: StartParamsEnv): StartParams {
     if (p.mode !== 'group' && p.mode !== 'page') throw new Error('Chế độ đăng không hợp lệ');
     const text = typeof p.text === 'string' ? p.text : '';
@@ -103,6 +111,7 @@ function validatePost(p: Record<string, any>, env: StartParamsEnv): StartParams 
     }
     if (total > MAX_TARGETS) throw new Error(`Tối đa ${MAX_TARGETS} đích cho một lần chạy`);
 
+    const variants = readVariants({ text, variants: p.variants });
     return {
         kind: 'post', mode: p.mode, text,
         mediaPaths: readMediaPaths(p, env),
@@ -110,6 +119,8 @@ function validatePost(p: Record<string, any>, env: StartParamsEnv): StartParams 
         commentDelayMin: readCommentDelay(p),
         profiles: [...byProfile].map(([profileId, targets]) => ({ profileId, targets })),
         ...readDelays(p), concurrency: readConcurrency(p), ...readStagger(p),
+        ...(variants.length ? { variants } : {}),
+        ...(p.campaignId !== undefined ? { campaignId: readCampaignId(p.campaignId) } : {}),
     };
 }
 
@@ -166,5 +177,8 @@ export function validateDraftParams(raw: unknown, env: StartParamsEnv): Record<s
             profileId: entry.profileId as string,
             targets: asArray(entry.targets).filter((t): t is string => typeof t === 'string' && t.trim() !== ''),
         }));
-    return { ...p, mode: p.mode, text, comment, mediaPaths: readMediaPaths(p, env), profiles };
+    const extra: Record<string, unknown> = {};
+    if (p.variants !== undefined) extra.variants = readVariants({ text, variants: p.variants });
+    if (p.campaignId !== undefined) extra.campaignId = readCampaignId(p.campaignId);
+    return { ...p, mode: p.mode, text, comment, mediaPaths: readMediaPaths(p, env), profiles, ...extra };
 }

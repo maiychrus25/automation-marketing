@@ -265,3 +265,29 @@ describe('validateDraftParams', () => {
     expect(() => validateDraftParams({ mode: 'group', text: 'hi', mediaPaths: ['/missing.jpg'] }, env)).toThrow('Không tìm thấy tệp ảnh/video');
   });
 });
+
+describe('validateStartParams: variants and campaign', () => {
+  test('output is unchanged when new fields are absent', () => {
+    const out = validateStartParams(post(), env) as unknown as Record<string, unknown>;
+    expect(Object.keys(out)).not.toContain('variants');
+    expect(Object.keys(out)).not.toContain('campaignId');
+  });
+  test('variants are validated and kept', () => {
+    const out = validateStartParams(post({ variants: ['b', 'c'] }), env) as any;
+    expect(out.variants).toEqual(['b', 'c']);
+    fails(post({ variants: ['hello'] }), 'Biến thể B trùng với nội dung khác');
+  });
+  test('campaignId type only', () => {
+    expect((validateStartParams(post({ campaignId: 'c1' }), env) as any).campaignId).toBe('c1');
+    expect((validateStartParams(post({ campaignId: null }), env) as any).campaignId).toBeNull();
+    fails(post({ campaignId: '' }), 'Mã chiến dịch không hợp lệ');
+    fails(post({ campaignId: 5 }), 'Mã chiến dịch không hợp lệ');
+  });
+  test('drafts validate variants and campaignId too', () => {
+    const d = { mode: 'group', text: 'hello', profiles: [] };
+    expect((validateDraftParams({ ...d, variants: ['b'], campaignId: 'c1' }, env) as any).variants).toEqual(['b']);
+    expect(() => validateDraftParams({ ...d, variants: ['hello'] }, env)).toThrow('Biến thể B trùng với nội dung khác');
+    expect(() => validateDraftParams({ ...d, campaignId: 3 }, env)).toThrow('Mã chiến dịch không hợp lệ');
+    expect(Object.keys(validateDraftParams(d, env))).not.toContain('variants');
+  });
+});

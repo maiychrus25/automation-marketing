@@ -14,7 +14,7 @@ import { computeNextCheckAt, DEFAULT_POST_TRACKING_CONFIG, normalizeHead, type P
 export interface ProfileInfo { id: string; name: string; }
 
 export type StartParams =
-    | { kind: 'post'; mode: FbPosterMode; text: string; mediaPaths: string[]; comment: string | null; commentDelayMin?: number; profiles: { profileId: string; targets: string[] }[]; minDelaySec: number; maxDelaySec: number; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
+    | { kind: 'post'; mode: FbPosterMode; text: string; mediaPaths: string[]; comment: string | null; commentDelayMin?: number; profiles: { profileId: string; targets: string[] }[]; minDelaySec: number; maxDelaySec: number; concurrency: number; staggerMinSec: number; staggerMaxSec: number; variants?: string[]; campaignId?: string | null }
     | { kind: 'scan_groups'; profileIds: string[]; concurrency: number; staggerMinSec: number; staggerMaxSec: number }
     | { kind: 'join'; profileId: string; keywords: string[]; limit: number; minDelaySec: number; maxDelaySec: number }
     | { kind: 'collect_comments'; profileId: string; postUrls: string[] };
