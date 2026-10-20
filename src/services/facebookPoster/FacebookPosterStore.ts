@@ -2,7 +2,7 @@ import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from './schema';
 import { keyOf, type CollectedComment } from './collectComments';
 import type {
     FbPosterComment, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
-    FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
+    CampaignStatus, FbPosterCampaign, FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
     LinkStatus, PostStatsGroupBy, PostStatsReportRow, PostStatsSnapshot, PostTrackingRow,
 } from '../../models/facebookPoster';
 
@@ -35,6 +35,15 @@ function mapRun(row: any): FbPosterRun {
         finishedAt: row.finished_at ?? null,
         scheduleId: row.schedule_id ?? null,
         scheduleName: row.schedule_name ?? null,
+        campaignId: row.campaign_id ?? null,
+    };
+}
+
+function mapCampaign(row: any): FbPosterCampaign {
+    return {
+        id: row.id, name: row.name, goal: row.goal, status: row.status,
+        startAt: row.start_at ?? null, endAt: row.end_at ?? null,
+        createdAt: row.created_at, updatedAt: row.updated_at,
     };
 }
 
@@ -49,6 +58,7 @@ function mapSchedule(row: any): FbPosterSchedule {
         time: row.time,
         enabled: row.enabled === 1,
         draft: row.draft === 1,
+        campaignId: row.campaign_id ?? null,
         nextRunAt: row.next_run_at ?? null,
         lastRunId: row.last_run_id ?? null,
         createdAt: row.created_at,
@@ -68,6 +78,7 @@ function mapResult(row: any): FbPosterResult {
         error: row.error,
         errorCode: row.error_code ?? '',
         attempts: row.attempts ?? 1,
+        variant: row.variant ?? '',
         postUrl: row.post_url ?? null,
         commentStatus: row.comment_status,
         identity: row.identity,
@@ -80,6 +91,8 @@ function mapTracking(row: any): PostTrackingRow {
         resultId: row.result_id,
         runId: row.run_id,
         scheduleId: row.schedule_id ?? null,
+        campaignId: row.campaign_id ?? null,
+        variant: row.variant ?? '',
         profileId: row.profile_id,
         groupUrl: row.group_url,
         groupId: row.group_id,
@@ -151,10 +164,10 @@ export class FacebookPosterStore {
 
     // ─── Runs ────────────────────────────────────────────────────────────────
 
-    createRun(run: { id: string; kind: FbPosterKind; mode: FbPosterMode | ''; params: Record<string, unknown>; startedAt: number; scheduleId?: string | null }): void {
+    createRun(run: { id: string; kind: FbPosterKind; mode: FbPosterMode | ''; params: Record<string, unknown>; startedAt: number; scheduleId?: string | null; campaignId?: string | null }): void {
         this.db.run(
-            `INSERT INTO fb_poster_runs (id, kind, mode, params_json, status, started_at, schedule_id) VALUES (?, ?, ?, ?, 'running', ?, ?)`,
-            [run.id, run.kind, run.mode, JSON.stringify(run.params), run.startedAt, run.scheduleId ?? null],
+            `INSERT INTO fb_poster_runs (id, kind, mode, params_json, status, started_at, schedule_id, campaign_id) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)`,
+            [run.id, run.kind, run.mode, JSON.stringify(run.params), run.startedAt, run.scheduleId ?? null, run.campaignId ?? null],
         );
     }
 
@@ -183,12 +196,12 @@ export class FacebookPosterStore {
         });
     }
 
-    addResult(r: Omit<FbPosterResult, 'id'>): number {
+    addResult(r: Omit<FbPosterResult, 'id' | 'variant'> & { variant?: string }): number {
         return this.db.runInsert(
             `INSERT INTO fb_poster_results
-                (run_id, profile_id, profile_name, target_url, target_name, outcome, error, error_code, attempts, post_url, comment_status, identity, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [r.runId, r.profileId, r.profileName, r.targetUrl, r.targetName, r.outcome, r.error, r.errorCode, r.attempts, r.postUrl, r.commentStatus, r.identity, r.createdAt],
+                (run_id, profile_id, profile_name, target_url, target_name, outcome, error, error_code, attempts, variant, post_url, comment_status, identity, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [r.runId, r.profileId, r.profileName, r.targetUrl, r.targetName, r.outcome, r.error, r.errorCode, r.attempts, r.variant ?? '', r.postUrl, r.commentStatus, r.identity, r.createdAt],
         );
     }
 
@@ -229,12 +242,12 @@ export class FacebookPosterStore {
 
     // ─── Schedules ───────────────────────────────────────────────────────────
 
-    createSchedule(s: Omit<FbPosterSchedule, 'lastRunId' | 'updatedAt' | 'draft'> & { draft?: boolean }): void {
+    createSchedule(s: Omit<FbPosterSchedule, 'lastRunId' | 'updatedAt' | 'draft' | 'campaignId'> & { draft?: boolean; campaignId?: string | null }): void {
         this.db.run(
             `INSERT INTO fb_poster_schedules
-                (id, name, kind, params_json, run_at, days, time, enabled, draft, next_run_at, last_run_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-            [s.id, s.name, s.kind, JSON.stringify(s.params), s.runAt, s.days.join(','), s.time, s.enabled ? 1 : 0, s.draft ? 1 : 0, s.nextRunAt, s.createdAt, s.createdAt],
+                (id, name, kind, params_json, run_at, days, time, enabled, draft, campaign_id, next_run_at, last_run_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+            [s.id, s.name, s.kind, JSON.stringify(s.params), s.runAt, s.days.join(','), s.time, s.enabled ? 1 : 0, s.draft ? 1 : 0, s.campaignId ?? null, s.nextRunAt, s.createdAt, s.createdAt],
         );
     }
 
@@ -243,11 +256,15 @@ export class FacebookPosterStore {
         return row ? mapSchedule(row) : null;
     }
 
-    listSchedules(): FbPosterScheduleView[] {
+    /** filter.campaignId: id = lịch của chiến dịch đó, '' = lịch không thuộc chiến dịch nào. */
+    listSchedules(filter: { campaignId?: string } = {}): FbPosterScheduleView[] {
+        const where = filter.campaignId === undefined ? '' : filter.campaignId === '' ? 'WHERE s.campaign_id IS NULL' : 'WHERE s.campaign_id = ?';
         const rows = this.db.query<any>(
             `SELECT s.*, r.status AS lr_status, r.started_at AS lr_started_at, r.error AS lr_error
              FROM fb_poster_schedules s LEFT JOIN fb_poster_runs r ON r.id = s.last_run_id
+             ${where}
              ORDER BY s.enabled DESC, s.next_run_at IS NULL, s.next_run_at, s.created_at`,
+            filter.campaignId ? [filter.campaignId] : [],
         );
         return rows.map((row) => ({
             ...mapSchedule(row),
@@ -257,7 +274,7 @@ export class FacebookPosterStore {
 
     updateSchedule(
         id: string,
-        fields: Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId' | 'kind' | 'draft' | 'params'>>,
+        fields: Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId' | 'kind' | 'draft' | 'params' | 'campaignId'>>,
         updatedAt: number,
     ): void {
         const sets: string[] = [];
@@ -273,12 +290,21 @@ export class FacebookPosterStore {
         if (fields.kind !== undefined) set('kind', fields.kind);
         if (fields.draft !== undefined) set('draft', fields.draft ? 1 : 0);
         if (fields.params !== undefined) set('params_json', JSON.stringify(fields.params));
+        if (fields.campaignId !== undefined) set('campaign_id', fields.campaignId);
         set('updated_at', updatedAt);
         this.db.run(`UPDATE fb_poster_schedules SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
     }
 
     deleteSchedule(id: string): void {
         this.db.run('DELETE FROM fb_poster_schedules WHERE id = ?', [id]);
+    }
+
+    /** Số lượt đã thực sự bắt đầu của lịch (running / done / cancelled; bỏ missed / failed). */
+    countStartedRuns(scheduleId: string): number {
+        return this.count(
+            `SELECT COUNT(*) AS n FROM fb_poster_runs WHERE schedule_id = ? AND status IN ('running', 'done', 'cancelled')`,
+            [scheduleId],
+        );
     }
 
     countSchedules(): number {
@@ -294,6 +320,59 @@ export class FacebookPosterStore {
 
     nextScheduledAt(): number | null {
         return this.db.queryOne<{ t: number | null }>('SELECT MIN(next_run_at) AS t FROM fb_poster_schedules WHERE enabled = 1 AND draft = 0')?.t ?? null;
+    }
+
+    // ─── Campaigns ───────────────────────────────────────────────────────────
+
+    createCampaign(c: FbPosterCampaign): void {
+        this.db.run(
+            `INSERT INTO fb_poster_campaigns (id, name, goal, status, start_at, end_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [c.id, c.name, c.goal, c.status, c.startAt, c.endAt, c.createdAt, c.updatedAt],
+        );
+    }
+
+    getCampaign(id: string): FbPosterCampaign | null {
+        const row = this.db.queryOne<any>('SELECT * FROM fb_poster_campaigns WHERE id = ?', [id]);
+        return row ? mapCampaign(row) : null;
+    }
+
+    /** Mặc định bỏ 'archived'; opts.status lọc đúng một trạng thái (kể cả 'archived'). */
+    listCampaigns(opts: { status?: CampaignStatus; includeArchived?: boolean } = {}): FbPosterCampaign[] {
+        const where = opts.status ? 'WHERE status = ?' : opts.includeArchived ? '' : `WHERE status != 'archived'`;
+        return this.db.query<any>(
+            `SELECT * FROM fb_poster_campaigns ${where} ORDER BY created_at DESC, rowid DESC`,
+            opts.status ? [opts.status] : [],
+        ).map(mapCampaign);
+    }
+
+    updateCampaign(id: string, patch: Partial<Pick<FbPosterCampaign, 'name' | 'goal' | 'status' | 'startAt' | 'endAt'>>, at: number): void {
+        const sets: string[] = [];
+        const values: any[] = [];
+        const set = (column: string, value: any) => { sets.push(`${column} = ?`); values.push(value); };
+        if (patch.name !== undefined) set('name', patch.name);
+        if (patch.goal !== undefined) set('goal', patch.goal);
+        if (patch.status !== undefined) set('status', patch.status);
+        if (patch.startAt !== undefined) set('start_at', patch.startAt);
+        if (patch.endAt !== undefined) set('end_at', patch.endAt);
+        set('updated_at', at);
+        this.db.run(`UPDATE fb_poster_campaigns SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
+    }
+
+    deleteCampaign(id: string): void {
+        this.db.run('DELETE FROM fb_poster_campaigns WHERE id = ?', [id]);
+    }
+
+    /** Tên đã trim, không phân biệt hoa thường (so sánh trong JS để hoa thường Unicode đúng). */
+    findCampaignByName(name: string): FbPosterCampaign | null {
+        const wanted = name.trim().toLowerCase();
+        return this.listCampaigns({ includeArchived: true }).find((c) => c.name.trim().toLowerCase() === wanted) ?? null;
+    }
+
+    countCampaignSchedules(id: string): { schedules: number; drafts: number } {
+        return {
+            schedules: this.count('SELECT COUNT(*) AS n FROM fb_poster_schedules WHERE campaign_id = ? AND draft = 0', [id]),
+            drafts: this.count('SELECT COUNT(*) AS n FROM fb_poster_schedules WHERE campaign_id = ? AND draft = 1', [id]),
+        };
     }
 
     // ─── Groups ──────────────────────────────────────────────────────────────
@@ -391,13 +470,13 @@ export class FacebookPosterStore {
 
     // ─── Theo dõi bài đã đăng ────────────────────────────────────────────────
 
-    createTracking(row: PostTrackingRow): void {
+    createTracking(row: Omit<PostTrackingRow, 'campaignId' | 'variant'> & { campaignId?: string | null; variant?: string }): void {
         this.db.run(
             `INSERT OR IGNORE INTO fb_poster_post_tracking
-               (result_id, run_id, schedule_id, profile_id, group_url, group_id, post_id, post_url, posted_at, text_head,
+               (result_id, run_id, schedule_id, campaign_id, variant, profile_id, group_url, group_id, post_id, post_url, posted_at, text_head,
                 link_status, removed_suspected, last_seen_at, last_checked_at, check_count, next_check_at, stats_done)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [row.resultId, row.runId, row.scheduleId, row.profileId, row.groupUrl, row.groupId, row.postId, row.postUrl, row.postedAt,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [row.resultId, row.runId, row.scheduleId, row.campaignId ?? null, row.variant ?? '', row.profileId, row.groupUrl, row.groupId, row.postId, row.postUrl, row.postedAt,
              row.textHead, row.linkStatus, row.removedSuspected ? 1 : 0, row.lastSeenAt, row.lastCheckedAt, row.checkCount,
              row.nextCheckAt, row.statsDone.join(',')],
         );

@@ -105,6 +105,18 @@ CREATE TABLE IF NOT EXISTS fb_poster_post_stats (
     shares      INTEGER DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fb_poster_post_stats_result ON fb_poster_post_stats(result_id, captured_at);
+
+-- Chiến dịch: docs/specs/2026-10-20-campaigns-variants.md mục 2
+CREATE TABLE IF NOT EXISTS fb_poster_campaigns (
+    id         TEXT PRIMARY KEY,           -- uuid
+    name       TEXT NOT NULL,
+    goal       TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'active', -- 'active' | 'paused' | 'archived'
+    start_at   INTEGER DEFAULT NULL,
+    end_at     INTEGER DEFAULT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 `;
 
 // Chạy sau FB_POSTER_SCHEMA_SQL, từng câu trong try/catch (cột đã có thì ALTER ném lỗi, bỏ qua).
@@ -113,4 +125,12 @@ export const FB_POSTER_MIGRATIONS: string[] = [
     'ALTER TABLE fb_poster_schedules ADD COLUMN draft INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE fb_poster_results ADD COLUMN error_code TEXT NOT NULL DEFAULT ''",
     'ALTER TABLE fb_poster_results ADD COLUMN attempts INTEGER NOT NULL DEFAULT 1',
+    // 26.22: chiến dịch và biến thể. Index tạo sau ALTER vì DB cũ chưa có cột.
+    'ALTER TABLE fb_poster_schedules ADD COLUMN campaign_id TEXT DEFAULT NULL',
+    'ALTER TABLE fb_poster_runs ADD COLUMN campaign_id TEXT DEFAULT NULL',
+    "ALTER TABLE fb_poster_results ADD COLUMN variant TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE fb_poster_post_tracking ADD COLUMN campaign_id TEXT DEFAULT NULL',
+    "ALTER TABLE fb_poster_post_tracking ADD COLUMN variant TEXT NOT NULL DEFAULT ''",
+    'CREATE INDEX IF NOT EXISTS idx_fb_poster_schedules_campaign ON fb_poster_schedules(campaign_id)',
+    'CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_campaign ON fb_poster_post_tracking(campaign_id)',
 ];

@@ -128,6 +128,7 @@ export class FacebookPosterService {
             startedAt: this.now(),
             finishedAt: null,
             scheduleId: scheduleId ?? null,
+            campaignId: null,
             scheduleName: null,
         };
         this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt, scheduleId: run.scheduleId });
@@ -495,7 +496,7 @@ export class FacebookPosterService {
             const linkStatus: LinkStatus = postUrl ? 'known'
                 : row.pendingApproval || row.commentStatus === 'pending_approval' ? 'pending_approval' : 'missing';
             const tracking = {
-                resultId, runId: active.run.id, scheduleId: active.run.scheduleId, profileId: plan.profileId,
+                resultId, runId: active.run.id, scheduleId: active.run.scheduleId, campaignId: null as string | null, variant: '', profileId: plan.profileId,
                 groupUrl: row.url,
                 groupId: /\/groups\/(\d+)/.exec(row.url)?.[1] ?? '',
                 postId: postUrl ? /\/(?:posts|permalink)\/(\d+)|[?&]story_fbid=(\d+)/.exec(postUrl)?.slice(1).find(Boolean) ?? '' : '',

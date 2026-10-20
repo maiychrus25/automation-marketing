@@ -30,7 +30,7 @@ test('createRun rồi getRun trả lại params JSON và trạng thái running',
   const got = s.getRun('r1')!;
   assert.deepStrictEqual(got.run, {
     id: 'r1', kind: 'post', mode: 'group', params: { text: 'xin chào', n: 2 },
-    status: 'running', error: '', startedAt: 100, finishedAt: null, scheduleId: null, scheduleName: null,
+    status: 'running', error: '', startedAt: 100, finishedAt: null, scheduleId: null, scheduleName: null, campaignId: null,
   });
   assert.deepStrictEqual(got.results, []);
   assert.strictEqual(s.getRun('nope'), null);
@@ -558,5 +558,125 @@ describe('post tracking store', () => {
     expect(s.pruneTrackingOlderThan(100)).toBe(1);
     expect(s.listTracking({}).map((r) => r.resultId)).toEqual([2]);
     expect(s.latestStats([1, 2]).map((x) => x.resultId)).toEqual([2]);
+  });
+});
+
+// ─── Chiến dịch và biến thể ──────────────────────────────────────────────────
+
+describe('campaigns', () => {
+  function camp(id: string, over: Record<string, unknown> = {}) {
+    return { id, name: `CD ${id}`, goal: '', status: 'active' as const, startAt: null, endAt: null, createdAt: 1, updatedAt: 1, ...over };
+  }
+  function sched(id: string, over: Record<string, unknown> = {}) {
+    return {
+      id, name: `L ${id}`, kind: 'once' as const, params: { kind: 'post' }, runAt: 10, days: [] as number[], time: '',
+      enabled: true, nextRunAt: 10, createdAt: 1, ...over,
+    } as any;
+  }
+
+  test('CRUD khứ hồi', () => {
+    const s = store();
+    s.createCampaign(camp('a', { goal: 'mục tiêu', startAt: 5, endAt: 9 }));
+    expect(s.getCampaign('a')).toEqual(camp('a', { goal: 'mục tiêu', startAt: 5, endAt: 9 }));
+    s.updateCampaign('a', { name: 'Mới', status: 'paused', endAt: null }, 77);
+    expect(s.getCampaign('a')).toMatchObject({ name: 'Mới', status: 'paused', startAt: 5, endAt: null, updatedAt: 77, createdAt: 1 });
+    s.deleteCampaign('a');
+    expect(s.getCampaign('a')).toBeNull();
+  });
+
+  test('listCampaigns bỏ archived mặc định, includeArchived và lọc status', () => {
+    const s = store();
+    s.createCampaign(camp('a', { createdAt: 1 }));
+    s.createCampaign(camp('b', { status: 'paused', createdAt: 2 }));
+    s.createCampaign(camp('c', { status: 'archived', createdAt: 3 }));
+    expect(s.listCampaigns().map((c) => c.id)).toEqual(['b', 'a']);
+    expect(s.listCampaigns({ includeArchived: true }).map((c) => c.id)).toEqual(['c', 'b', 'a']);
+    expect(s.listCampaigns({ status: 'archived' }).map((c) => c.id)).toEqual(['c']);
+    expect(s.listCampaigns({ status: 'paused' }).map((c) => c.id)).toEqual(['b']);
+  });
+
+  test('findCampaignByName trim và không phân biệt hoa thường', () => {
+    const s = store();
+    s.createCampaign(camp('a', { name: 'Khuyến Mãi Tết' }));
+    expect(s.findCampaignByName('  khuyến mãi tết ')?.id).toBe('a');
+    expect(s.findCampaignByName('khác')).toBeNull();
+  });
+
+  test('countCampaignSchedules tách lịch và bản nháp', () => {
+    const s = store();
+    s.createSchedule(sched('1', { campaignId: 'a' }));
+    s.createSchedule(sched('2', { campaignId: 'a' }));
+    s.createSchedule(sched('3', { campaignId: 'a', draft: true, enabled: false, nextRunAt: null }));
+    s.createSchedule(sched('4', { campaignId: 'b' }));
+    expect(s.countCampaignSchedules('a')).toEqual({ schedules: 2, drafts: 1 });
+    expect(s.countCampaignSchedules('zz')).toEqual({ schedules: 0, drafts: 0 });
+  });
+
+  test('countStartedRuns chỉ tính running/done/cancelled', () => {
+    const s = store();
+    s.createSchedule(sched('1'));
+    for (const [id, st] of [['r1', 'running'], ['r2', 'done'], ['r3', 'cancelled'], ['r4', 'failed'], ['r5', 'missed']] as const) {
+      s.createRun({ ...newRun(id, 1), scheduleId: '1' });
+      if (st !== 'running') s.finishRun(id, st, '', 2);
+    }
+    s.createRun({ ...newRun('other', 1), scheduleId: '2' });
+    expect(s.countStartedRuns('1')).toBe(3);
+  });
+
+  test('campaign_id/variant đọc ghi đúng ở schedules, runs, results, tracking', () => {
+    const s = store();
+    s.createSchedule(sched('1', { campaignId: 'a' }));
+    s.createSchedule(sched('2'));
+    expect(s.getSchedule('1')!.campaignId).toBe('a');
+    expect(s.getSchedule('2')!.campaignId).toBeNull();
+    s.updateSchedule('2', { campaignId: 'b' }, 5);
+    expect(s.getSchedule('2')!.campaignId).toBe('b');
+    s.updateSchedule('2', { campaignId: null }, 6);
+    expect(s.getSchedule('2')!.campaignId).toBeNull();
+
+    s.createRun({ ...newRun('r1', 1), campaignId: 'a' });
+    s.createRun(newRun('r2', 2));
+    expect(s.getRun('r1')!.run.campaignId).toBe('a');
+    expect(s.getRun('r2')!.run.campaignId).toBeNull();
+
+    const rid = s.addResult(newResult('r1', { variant: 'B' }));
+    s.addResult(newResult('r2'));
+    expect(s.getRun('r1')!.results[0].variant).toBe('B');
+    expect(s.getRun('r2')!.results[0].variant).toBe('');
+
+    s.createTracking({ resultId: rid, runId: 'r1', scheduleId: null, campaignId: 'a', variant: 'B', profileId: 'p1', groupUrl: 'u', groupId: '', postId: '', postUrl: null, postedAt: 1, textHead: 'x', linkStatus: 'missing', removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null, statsDone: [] });
+    s.createTracking({ resultId: 99, runId: 'r2', scheduleId: null, profileId: 'p1', groupUrl: 'u', groupId: '', postId: '', postUrl: null, postedAt: 1, textHead: 'x', linkStatus: 'missing', removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null, statsDone: [] });
+    const rows = s.listTracking({});
+    expect(rows.find((r) => r.resultId === rid)).toMatchObject({ campaignId: 'a', variant: 'B' });
+    expect(rows.find((r) => r.resultId === 99)).toMatchObject({ campaignId: null, variant: '' });
+  });
+
+  test('listSchedules lọc theo campaignId và campaignId rỗng', () => {
+    const s = store();
+    s.createSchedule(sched('1', { campaignId: 'a' }));
+    s.createSchedule(sched('2', { campaignId: 'b' }));
+    s.createSchedule(sched('3'));
+    expect(s.listSchedules().map((x) => x.id).sort()).toEqual(['1', '2', '3']);
+    expect(s.listSchedules({ campaignId: 'a' }).map((x) => x.id)).toEqual(['1']);
+    expect(s.listSchedules({ campaignId: '' }).map((x) => x.id)).toEqual(['3']);
+  });
+
+  test('DB cũ không có cột mới: migration thêm cột, chạy hai lần không lỗi', () => {
+    const db = memoryDb();
+    db.exec(`CREATE TABLE fb_poster_schedules (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, params_json TEXT NOT NULL,
+      run_at INTEGER DEFAULT NULL, days TEXT NOT NULL DEFAULT '', time TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
+      draft INTEGER NOT NULL DEFAULT 0, next_run_at INTEGER DEFAULT NULL, last_run_id TEXT DEFAULT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+    db.exec(`CREATE TABLE fb_poster_post_tracking (result_id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, schedule_id TEXT DEFAULT NULL,
+      profile_id TEXT NOT NULL, group_url TEXT NOT NULL, group_id TEXT NOT NULL DEFAULT '', post_id TEXT NOT NULL DEFAULT '', post_url TEXT DEFAULT NULL,
+      posted_at INTEGER NOT NULL, text_head TEXT NOT NULL DEFAULT '', link_status TEXT NOT NULL, removed_suspected INTEGER NOT NULL DEFAULT 0,
+      last_seen_at INTEGER DEFAULT NULL, last_checked_at INTEGER DEFAULT NULL, check_count INTEGER NOT NULL DEFAULT 0, next_check_at INTEGER DEFAULT NULL, stats_done TEXT NOT NULL DEFAULT '')`);
+    db.run(`INSERT INTO fb_poster_schedules (id, name, kind, params_json, created_at, updated_at) VALUES ('old', 'Cũ', 'once', '{}', 1, 1)`);
+    const s = new FacebookPosterStore(db);
+    s.ensureSchema();
+    s.ensureSchema();
+    expect(s.getSchedule('old')!.campaignId).toBeNull();
+    expect(s.listSchedules({ campaignId: '' }).map((x) => x.id)).toEqual(['old']);
+    s.createCampaign(camp('a'));
+    expect(s.listCampaigns()).toHaveLength(1);
   });
 });

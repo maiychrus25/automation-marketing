@@ -2,6 +2,19 @@ export type FbPosterKind = 'post' | 'join' | 'scan_groups' | 'collect_comments';
 export type FbPosterMode = 'group' | 'page';
 export type FbPosterRunStatus = 'running' | 'done' | 'cancelled' | 'failed' | 'missed';
 
+export type CampaignStatus = 'active' | 'paused' | 'archived';
+
+export interface FbPosterCampaign {
+    id: string;
+    name: string;
+    goal: string;
+    status: CampaignStatus;
+    startAt: number | null;
+    endAt: number | null;
+    createdAt: number;
+    updatedAt: number;
+}
+
 export interface FbPosterRun {
     id: string;
     kind: FbPosterKind;
@@ -13,6 +26,7 @@ export interface FbPosterRun {
     finishedAt: number | null;
     scheduleId: string | null;
     scheduleName: string | null; // null khi lịch đã bị xóa
+    campaignId: string | null;
 }
 
 export interface FbPosterSchedule {
@@ -26,6 +40,7 @@ export interface FbPosterSchedule {
     enabled: boolean;
     /** Bản nháp: luôn enabled = false, nextRunAt = null; chỉ thành lịch thật khi được duyệt. */
     draft: boolean;
+    campaignId: string | null;
     nextRunAt: number | null;
     lastRunId: string | null;
     createdAt: number;
@@ -49,6 +64,8 @@ export interface FbPosterResult {
     errorCode: string;
     /** Số lần thử đăng (1 khi không thử lại). */
     attempts: number;
+    /** Nhãn biến thể đã đăng ('A'..'E'), '' khi lịch không có biến thể. */
+    variant: string;
     postUrl: string | null;
     commentStatus: string;
     identity: string;
@@ -95,6 +112,8 @@ export interface PostTrackingRow {
     resultId: number;
     runId: string;
     scheduleId: string | null;
+    campaignId: string | null;
+    variant: string;
     profileId: string;
     groupUrl: string;
     groupId: string;

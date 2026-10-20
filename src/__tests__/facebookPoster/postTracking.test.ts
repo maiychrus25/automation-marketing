@@ -10,7 +10,7 @@ const cfg = DEFAULT_POST_TRACKING_CONFIG;
 
 function row(over: Partial<PostTrackingRow> = {}): PostTrackingRow {
     return {
-        resultId: 1, runId: 'r', scheduleId: null, profileId: 'p1', groupUrl: 'https://www.facebook.com/groups/1/', groupId: '',
+        resultId: 1, runId: 'r', scheduleId: null, campaignId: null, variant: '', profileId: 'p1', groupUrl: 'https://www.facebook.com/groups/1/', groupId: '',
         postId: '', postUrl: null, postedAt: 1_000_000, textHead: normalizeHead('Bán  Hàng  Giá Rẻ hôm nay'),
         linkStatus: 'missing', removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null,
         statsDone: [], ...over,
