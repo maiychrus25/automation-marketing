@@ -82,6 +82,37 @@ export class InboxMediaStore {
         }
     }
 
+    /** Chép một tệp có sẵn trên máy (vd. video vừa render) vào hộp thư; cùng giới hạn như `save`, đuôi giữ nguyên. */
+    async adopt(filePath: string): Promise<SavedMedia> {
+        const name = path.basename(filePath);
+        const ext = extensionOf(name);
+        const size = fs.statSync(filePath).size;
+        if (size === 0) throw new ControlError('INVALID_PARAMS', 'Tệp rỗng', { field: 'body' });
+        const mediaId = randomUUID();
+        const finalPath = path.join(this.dir, `${mediaId}.${ext}`);
+        const partPath = `${finalPath}${PART_SUFFIX}`;
+        fs.mkdirSync(this.dir, { recursive: true });
+        const used = this.usage();
+        if (used.files + this.pendingFiles >= this.limits.maxFiles) {
+            throw new ControlError('LIMIT_REACHED', `Hộp thư tải lên đã đủ ${this.limits.maxFiles} tệp, hãy đợi tệp cũ được dọn (24 giờ) rồi thử lại`);
+        }
+        if (used.bytes + this.pendingBytes + size > this.limits.maxBytes) throw this.bytesError();
+        this.pendingFiles++;
+        this.pendingBytes += size;
+        try {
+            await fs.promises.copyFile(filePath, partPath, fs.constants.COPYFILE_EXCL);
+            fs.renameSync(partPath, finalPath);
+            this.committedBytes += size;
+            return { mediaId, name, size, kind: IMAGE_EXTENSIONS.includes(ext) ? 'image' : 'video' };
+        } catch (err) {
+            fs.rmSync(partPath, { force: true });
+            throw err;
+        } finally {
+            this.pendingFiles--;
+            this.pendingBytes -= size;
+        }
+    }
+
     private bytesError(): ControlError {
         return new ControlError('PAYLOAD_TOO_LARGE', `Hộp thư tải lên đã gần đầy (tối đa ${Math.round(this.limits.maxBytes / 1024 / 1024)} MB), hãy đợi tệp cũ được dọn (24 giờ) rồi thử lại`);
     }

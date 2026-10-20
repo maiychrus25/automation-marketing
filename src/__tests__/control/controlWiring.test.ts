@@ -27,6 +27,28 @@ describe('InboxMediaStore', () => {
     expect(() => store.resolve(['../etc/passwd'])).toThrow(/mediaId/);
   });
 
+  test('adopt copies an existing file into the inbox with a new id and keeps the extension', async () => {
+    const store = new InboxMediaStore(path.join(dir, 'inbox'));
+    const src = path.join(dir, 'clip.mp4');
+    fs.writeFileSync(src, 'video-bytes');
+    const saved = await store.adopt(src);
+    expect(saved).toMatchObject({ name: 'clip.mp4', size: 11, kind: 'video' });
+    const [file] = store.resolve([saved.mediaId]);
+    expect(file.endsWith('.mp4')).toBe(true);
+    expect(fs.readFileSync(file, 'utf8')).toBe('video-bytes');
+    expect(fs.existsSync(src)).toBe(true);
+  });
+
+  test('adopt respects the file and byte limits and leaves no partial file', async () => {
+    const src = path.join(dir, 'clip.mp4');
+    fs.writeFileSync(src, '123456');
+    const full = new InboxMediaStore(path.join(dir, 'inbox1'), { maxBytes: 1000, maxFiles: 0 });
+    await expect(full.adopt(src)).rejects.toMatchObject({ code: 'LIMIT_REACHED' });
+    const small = new InboxMediaStore(path.join(dir, 'inbox2'), { maxBytes: 5, maxFiles: 10 });
+    await expect(small.adopt(src)).rejects.toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
+    expect(fs.readdirSync(path.join(dir, 'inbox2'))).toEqual([]);
+  });
+
   test('deletes the partial file when the stream fails', async () => {
     const store = new InboxMediaStore(path.join(dir, 'inbox'));
     const bad = new Readable({ read() { this.push(Buffer.from('x')); this.destroy(new Error('boom')); } });
