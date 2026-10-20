@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { FacebookPosterService, type StartParams, type FacebookPosterServiceDeps } from '../../services/facebookPoster/FacebookPosterService';
 import { FacebookPosterStore, type SqlDatabase } from '../../services/facebookPoster/FacebookPosterStore';
+import { DEFAULT_LEAD_CONFIG } from '../../services/facebookPoster/leadRules';
 
 const NOT_LOGGED_IN = 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập';
 const JOINS_URL = 'https://www.facebook.com/groups/joins/';
@@ -1318,6 +1319,22 @@ describe('FacebookPosterService post tracking rows', () => {
       textHead: 'xin chào', scheduleId: 'sch-1', profileId: 'p1', postedAt: 1_000_000, nextCheckAt: 1_000_000 + 60 * 60_000,
     });
     expect(rows[0].resultId).toBe((h.results(rows[0].runId) as any[])[0].id);
+  });
+
+  test('known link sets next_comment_at from the lead config; pending/missing rows leave it NULL', async () => {
+    const h = harness({ postToTargets: one({ postUrl: 'https://www.facebook.com/groups/123/posts/456/' }) });
+    h.service.start(params());
+    await h.service.whenIdle();
+    expect(h.store.listTracking({})[0]).toMatchObject({ nextCommentAt: 1_000_000 + 120 * 60_000, commentsDone: [] });
+    const c = harness({ postToTargets: one({ postUrl: 'https://www.facebook.com/groups/123/posts/456/' }) },
+      { readLeadConfig: () => ({ ...DEFAULT_LEAD_CONFIG, collectAtMinutes: [45] }) });
+    c.service.start(params());
+    await c.service.whenIdle();
+    expect(c.store.listTracking({})[0].nextCommentAt).toBe(1_000_000 + 45 * 60_000);
+    const p = harness({ postToTargets: one({ pendingApproval: true }) });
+    p.service.start(params());
+    await p.service.whenIdle();
+    expect(p.store.listTracking({})[0].nextCommentAt).toBeNull();
   });
 
   test('pending approval (flag or comment status) creates pending_approval row', async () => {

@@ -5,6 +5,7 @@ import { ResearchError, type GraphqlSession } from '../research/graphqlSession';
 import { fetchGraphqlPage, groupKey, isUnresolved, prepareGroupFeed } from '../research/groupFeed';
 import { describeShape, parseGraphqlChunks, parseGroupFeed } from '../research/parsers';
 import { BUSY_ERROR } from './FacebookPosterService';
+import { DEFAULT_LEAD_CONFIG, computeNextCommentAt, type LeadConfig } from './leadRules';
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import {
     DEFAULT_POST_TRACKING_CONFIG, computeNextCheckAt, linkRetryExhausted, markOverdueStatsDone, pickBestMatch,
@@ -65,13 +66,15 @@ export type TrackSession = Pick<GraphqlSession, 'open' | 'ensureQuery' | 'call' 
 
 export interface PostTrackerDeps {
     store: Pick<FacebookPosterStore,
-        'listTracking' | 'listTrackingForPair' | 'updateTracking' | 'addPostStats'>;
+        'listTracking' | 'listTrackingForPair' | 'updateTracking' | 'addPostStats' | 'updateCommentSchedule'>;
     openSession(profileId: string): Promise<{ session: TrackSession; close(): Promise<void> }>;
     slot: { acquire(): void; release(): void };
     observeLogin(profileId: string, state: 'logged_out' | 'checkpoint'): void;
     emit(type: string, payload: unknown): void;
     /** Cấu hình mốc kiểm tra; thiếu thì dùng mặc định. */
     getConfig?: () => PostTrackingConfig;
+    /** Cấu hình khách tiềm năng (mốc thu bình luận); thiếu thì dùng mặc định. */
+    getLeadConfig?: () => LeadConfig;
     now?: () => number;
     sleep?: (ms: number) => Promise<void>;
     random?: () => number;
@@ -356,6 +359,13 @@ export class PostTracker {
             this.deps.store.updateTracking(row.resultId, {
                 ...patch, lastCheckedAt: now, nextCheckAt: computeNextCheckAt(merged, config, now),
             });
+            // Vừa gắn được link cho bài chờ duyệt / thiếu link: bắt đầu lịch thu bình luận nếu chưa có.
+            if (hit && row.linkStatus !== 'known' && row.nextCommentAt === null && row.commentsDone.length === 0) {
+                this.deps.store.updateCommentSchedule(row.resultId, {
+                    commentsDone: [],
+                    nextCommentAt: computeNextCommentAt(row.postedAt, [], this.deps.getLeadConfig?.() ?? DEFAULT_LEAD_CONFIG, now),
+                });
+            }
         }
     }
 

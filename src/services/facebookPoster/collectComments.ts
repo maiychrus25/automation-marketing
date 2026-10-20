@@ -2,6 +2,7 @@
 // In-page functions below run in the browser; electron tsconfig has no DOM lib, so pull it in for this file.
 import type { TaskDeps } from './types';
 import { pickDelaySeconds } from './targets';
+import { CHECKPOINT_PATHS } from './loginCheck';
 
 export interface CollectedComment {
     authorId: string;
@@ -202,7 +203,18 @@ type PageLike = {
 
 type CollectedFromPost =
     | { outcome: 'done'; comments: Omit<CollectedComment, 'postUrl'>[]; error: null }
-    | { outcome: 'failed'; comments: []; error: string };
+    | { outcome: 'failed'; comments: []; error: string; loginProblem?: LoginProblem };
+
+/** Facebook chuyển hướng sang đăng nhập / xác minh: cùng cách phân loại với `classifyLogin` (đường dẫn trang). */
+export type LoginProblem = 'logged_out' | 'checkpoint';
+
+export function loginProblemOfUrl(url: string): LoginProblem | null {
+    let path: string;
+    try { path = new URL(url).pathname; } catch { return null; }
+    if (CHECKPOINT_PATHS.some((prefix) => path.startsWith(prefix))) return 'checkpoint';
+    if (path.startsWith('/login')) return 'logged_out';
+    return null;
+}
 
 async function collectFromPost(page: PageLike, postUrl: string, {
     maxPerPost, selfId, sleep, settleMs, getIsStopping, sendLog,
@@ -222,6 +234,10 @@ async function collectFromPost(page: PageLike, postUrl: string, {
     // sẽ báo nhầm là có vùng bình luận — chốt URL này chặn TRƯỚC khi quét nhầm
     // bình luận của bảng tin (của người lạ) rồi ghi vào dữ liệu của khách.
     const currentUrl = page.url();
+    const loginProblem = loginProblemOfUrl(currentUrl);
+    if (loginProblem) {
+        return { outcome: 'failed', comments: [], error: 'Phiên Facebook đã hết hoặc cần xác minh', loginProblem };
+    }
     if (!/\/posts\/|story_fbid=|\/permalink/.test(currentUrl)) {
         return { outcome: 'failed', comments: [], error: 'Bị chuyển hướng khỏi bài — bài có thể đã bị xoá hoặc link hỏng' };
     }
@@ -295,6 +311,8 @@ export interface CollectCommentsInput {
     maxDelay?: number;
     maxPerPost?: number;
     settleMs?: number;
+    /** Gặp trang đăng nhập / xác minh thì dừng cả đợt (thu tự động); mặc định vẫn thử các bài còn lại như thu tay. */
+    stopOnLoginProblem?: boolean;
 }
 
 export interface CollectCommentsResult {
@@ -302,6 +320,8 @@ export interface CollectCommentsResult {
     failed: number;
     added: number;
     results: { url: string; outcome: 'done' | 'failed'; error: string | null; added: number }[];
+    /** Có khi một bài bị chuyển sang trang đăng nhập / xác minh. */
+    loginProblem?: LoginProblem;
 }
 
 export async function collectComments(
@@ -314,7 +334,7 @@ export async function collectComments(
 ): Promise<CollectCommentsResult> {
     const { getIsStopping, sendLog, updateProgress } = deps;
     const {
-        posts, minDelay = 10, maxDelay = 20, maxPerPost = 100, settleMs = 3000,
+        posts, minDelay = 10, maxDelay = 20, maxPerPost = 100, settleMs = 3000, stopOnLoginProblem = false,
     } = input || ({} as CollectCommentsInput);
     if (!Array.isArray(posts) || posts.length === 0) {
         throw new Error('Danh sách bài để quét trống!');
@@ -326,6 +346,7 @@ export async function collectComments(
     const { ctx, page } = await deps.launch();
     const results: CollectCommentsResult['results'] = [];
     let added = 0;
+    let loginProblem: LoginProblem | undefined;
 
     try {
         const selfId = await readOwnUserId(ctx);
@@ -397,6 +418,11 @@ export async function collectComments(
                 added: written,
             });
 
+            if (collected.outcome === 'failed' && collected.loginProblem) {
+                loginProblem = collected.loginProblem;
+                if (stopOnLoginProblem) break;
+            }
+
             if (current < posts.length && !getIsStopping()) {
                 const seconds = pickDelaySeconds(minDelay, maxDelay);
                 if (seconds > 0) sendLog(`Nghỉ ${seconds} giây trước bài tiếp theo...`, 'info');
@@ -411,5 +437,5 @@ export async function collectComments(
     }
 
     const scanned = results.filter(r => r.outcome === 'done').length;
-    return { scanned, failed: results.length - scanned, added, results };
+    return { scanned, failed: results.length - scanned, added, results, ...(loginProblem ? { loginProblem } : {}) };
 }

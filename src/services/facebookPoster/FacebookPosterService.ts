@@ -4,6 +4,7 @@ import type { FbPosterComment, FbPosterMode, FbPosterRun, LinkStatus } from '../
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import type { LaunchedPage, LogLevel, TaskDeps } from './types';
 import { collectComments } from './collectComments';
+import { DEFAULT_LEAD_CONFIG, computeNextCommentAt, type LeadConfig } from './leadRules';
 import { searchAndJoinGroups } from './joinGroups';
 import { isLoggedIn, FB_HOME } from './loginState';
 import { postToTargets } from './postToTargets';
@@ -34,6 +35,8 @@ export interface FacebookPosterServiceDeps {
     newId?: () => string;
     /** Cấu hình theo dõi bài (mốc thử lấy link/đo); mặc định DEFAULT_POST_TRACKING_CONFIG. */
     readTrackingConfig?: () => PostTrackingConfig;
+    /** Cấu hình khách tiềm năng (mốc thu bình luận); mặc định DEFAULT_LEAD_CONFIG. */
+    readLeadConfig?: () => LeadConfig;
     /** Báo trạng thái đăng nhập quan sát được trong lượt đăng (lỗi của hàm này bị bỏ qua). */
     onLoginObserved?: (profileId: string, state: 'ok' | 'logged_out') => void;
     /** Gọi sau khi lưu bình luận mới (chỉ các dòng thật sự mới); lỗi của hàm này chỉ được ghi log. */
@@ -534,6 +537,9 @@ export class FacebookPosterService {
             };
             const config = this.deps.readTrackingConfig?.() ?? DEFAULT_POST_TRACKING_CONFIG;
             tracking.nextCheckAt = computeNextCheckAt(tracking, config, postedAt);
+            if (linkStatus === 'known') {
+                tracking.nextCommentAt = computeNextCommentAt(postedAt, [], this.deps.readLeadConfig?.() ?? DEFAULT_LEAD_CONFIG, postedAt);
+            }
             this.store.createTracking(tracking);
         } catch (err) {
             this.emit('facebookPoster:log', { runId: active.run.id, profileId: plan.profileId, level: 'warning', message: `Không tạo được dòng theo dõi bài: ${errorMessage(err)}`, at: this.now() });

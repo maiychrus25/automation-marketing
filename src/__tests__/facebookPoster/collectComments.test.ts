@@ -426,6 +426,36 @@ test('bị chuyển hướng khỏi bài (link hỏng) thì FAILED, không cào 
   assert.strictEqual(store.rows.length, 0);
 });
 
+test('chuyển sang trang đăng nhập / xác minh: báo loginProblem, thu tay vẫn thử bài sau, thu tự động dừng', async () => {
+  const a = 'https://www.facebook.com/groups/1/posts/1/';
+  const b = 'https://www.facebook.com/groups/1/posts/2/';
+  const pages = () => ({
+    [a]: { ...postPage({ commentCount: 2 }), urlAfterRedirect: 'https://www.facebook.com/login/?next=x' },
+    [b]: postPage({ commentCount: 2 }),
+  });
+  const manual = await collectComments({ posts: [{ postUrl: a }, { postUrl: b }], ...NO_WAIT }, makeDeps(fakeBrowser(pages()), fakeStore()));
+  assert.strictEqual(manual.loginProblem, 'logged_out');
+  assert.deepStrictEqual(manual.results.map(r => r.outcome), ['failed', 'done']);
+
+  const store = fakeStore();
+  const auto = await collectComments({ posts: [{ postUrl: a }, { postUrl: b }], stopOnLoginProblem: true, ...NO_WAIT }, makeDeps(fakeBrowser(pages()), store));
+  assert.strictEqual(auto.loginProblem, 'logged_out');
+  assert.strictEqual(auto.results.length, 1);
+  assert.strictEqual(auto.results[0].outcome, 'failed');
+  assert.strictEqual(store.rows.length, 0);
+
+  const cp = fakeBrowser({ [a]: { ...postPage({ commentCount: 2 }), urlAfterRedirect: 'https://www.facebook.com/checkpoint/1/' } });
+  const out = await collectComments({ posts: [{ postUrl: a }], ...NO_WAIT }, makeDeps(cp, fakeStore()));
+  assert.strictEqual(out.loginProblem, 'checkpoint');
+});
+
+test('chuyển hướng thường (không phải đăng nhập) không có loginProblem', async () => {
+  const url = 'https://www.facebook.com/permalink.php';
+  const fake = fakeBrowser({ [url]: { ...postPage({ commentCount: 1 }), urlAfterRedirect: 'https://www.facebook.com/' } });
+  const out = await collectComments({ posts: [{ postUrl: url }], ...NO_WAIT }, makeDeps(fake, fakeStore()));
+  assert.strictEqual(out.loginProblem, undefined);
+});
+
 test('thấy vùng bình luận nhưng rỗng thì done với added 0', async () => {
   const url = 'https://www.facebook.com/groups/1/posts/8/';
   const fake = fakeBrowser({ [url]: postPage({ commentCount: 0, hasCommentArea: true }) });

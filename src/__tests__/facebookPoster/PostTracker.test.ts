@@ -108,6 +108,20 @@ describe('matching and linking', () => {
         expect(finished(h.events)[0].payload).toMatchObject({ checked: 1, found: 1, linked: 1, removedSuspected: 0, notFound: 0, errors: 0 });
     });
 
+    test('linking a pending post starts the comment schedule; an existing schedule is kept', async () => {
+        const h = setup();
+        const a = addRow(h.store, { linkStatus: 'pending_approval' });
+        feeds['111|null'] = page([item('f9', NOW - 3 * HOUR + 5 * MIN)]);
+        await run(h);
+        // đăng lúc NOW-3h: mốc 120m đã qua (bỏ), mốc 1440m là mốc kế tiếp
+        expect(rowOf(h.store, a)).toMatchObject({ linkStatus: 'known', nextCommentAt: NOW - 3 * HOUR + 1440 * MIN, commentsDone: [] });
+        const h2 = setup();
+        const b = addRow(h2.store, { linkStatus: 'pending_approval' });
+        h2.store.updateCommentSchedule(b, { commentsDone: [], nextCommentAt: 12345 });
+        await run(h2);
+        expect(rowOf(h2.store, b).nextCommentAt).toBe(12345);
+    });
+
     test('does not link another author, a 3 h time gap, or a different text', async () => {
         const h = setup();
         const id = addRow(h.store);
