@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 20/10/2026 |
-| Trạng thái | Đã duyệt (20/10/2026) |
+| Trạng thái | Đã phát hành 26.25.0 (20/10/2026); maihub-render 1.0.0 chưa triển khai lên VPS |
 | Kế hoạch | `docs/plans/2026-10-20-video-studio.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-20-video-studio.md` (đã duyệt) |
 | Spike | `docs/reports/2026-10-20-hyperframes-spike.md` |
@@ -236,3 +236,20 @@ Video giữ cho đến khi người dùng xoá. Tệp nằm ở `userData/videos
 - **`api` đóng cả thư mục `music/`** (nghe thử qua `GET /v1/music/:id`).
 - Sự kiện renderer đặt tên `video:changed` (không phải `videos:changed` như mục 6.3), cho đồng nhất với các kênh IPC `video:*`.
 - `videos.status` trả `{ video }` và `videos.list` trả `{ total, videos }`; cả hai bỏ `filePath`, `thumbPath`, `specJson` cho bot.
+
+## Ghi chú sau phát hành
+
+- Bàn giao theo từng việc: `out/<jobId>.mp4`, `.jpg`, `.result.json`, `.progress.json`. Worker tự huỷ khi `current/job.json` đổi sang việc khác.
+- `api` đọc tệp của worker với `O_NOFOLLOW|O_NONBLOCK`, kiểm `fstat` là tệp thường và giới hạn dung lượng.
+- Mẫu dùng token của `buildWorkdir`: `{{width}}`, `{{height}}`, `{{durationSec}}`, `{{audio}}` và tuỳ chọn `secondsPerImage`.
+- Biến mẫu hỗ trợ `required: false` (`product-slideshow.oldPrice`).
+- Thêm endpoint `GET /v1/music/:id` để nghe thử nhạc (không có trong bảng mục 4 gốc).
+- Tệp đầu vào bị xoá ở mọi đường kết thúc việc.
+- Còn trống dưới 2 GB thì trả 507 (MaiHub báo `LIMIT_REACHED`, "Máy chủ render sắp hết dung lượng").
+- Huỷ video phát `videos.finished` với `cancelled:true` (Telegram không báo).
+- `/v1/media` nhận thêm mp3/m4a/wav; đăng bài vẫn từ chối tệp âm thanh.
+- URL máy chủ render chỉ được dùng http với localhost, 127.0.0.1 hoặc [::1]; còn lại bắt buộc https.
+- Nhạc nền: FreePD.com đã đóng; 5 bài lấy từ bản chụp Wayback Machine của chính các trang FreePD (khai báo public domain). Chủ sản phẩm cần xác nhận cách lấy này chấp nhận được.
+- Đã kiểm tích hợp cục bộ bằng docker compose (không có Caddy): dựng video mẫu 1:1 dài 18 giây mất khoảng 52 giây; HTML độc hại bị chặn.
+- Chưa kiểm Caddy/TLS và triển khai thật lên VPS.
+- Cài đặt máy chủ render là một tab riêng trong Cài đặt.

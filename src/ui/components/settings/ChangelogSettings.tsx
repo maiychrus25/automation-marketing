@@ -15,6 +15,35 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.25.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🎬 Sản xuất video bán hàng: chọn mẫu, điền ảnh/giá/lời kêu gọi, MaiHub nhờ máy chủ render riêng dựng video MP4 (9:16, 1:1, 16:9)',
+      '🤖 Bot AI tự tạo video (mẫu hoặc HTML) rồi đăng luôn',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Mục Đăng Facebook → Video: 3 mẫu (Trình chiếu sản phẩm, Flash sale, Nổi bật 1 sản phẩm); nhạc nền có sẵn có nghe thử hoặc tải nhạc lên',
+          'Thư viện video: Xem, Dùng trong Soạn bài, Tải về, Huỷ, Xoá',
+          'Cài đặt → Máy chủ render video: khoá API mã hoá, Thử kết nối',
+          'Bot AI có videos.templates, videos.render, videos.status, videos.list, videos.cancel và sự kiện videos.finished kèm mediaId để đăng',
+          'Tin Telegram 🎬 khi video xong',
+          '/v1/media nhận cả tệp nhạc',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Video xong được giữ trong máy cho tới khi xoá',
+          'Mất kết nối máy chủ render không ảnh hưởng các mục khác',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.24.0',
     date: '10/2026',
     type: 'minor',

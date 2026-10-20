@@ -331,3 +331,13 @@
   - plan thêm "Điều chỉnh khi triển khai";
   - merge `main`, tag `v26.25.0`; anh push; kiểm tra CI.
 - [ ] **Step 5:** Triển khai `maihub-render` lên VPS: **chỉ khi anh duyệt và cấp SSH**, theo README.
+
+## Điều chỉnh khi triển khai
+
+- Task 2+3+4 sửa gộp 64e441a: bàn giao theo từng việc, worker tự huỷ, API được gia cố.
+- Task 5: hợp đồng token của worker.
+- Task 6 sửa smoke 283de87: dùng `--form-string`.
+- Task 7 sửa 7b0fb63.
+- Task 9 sửa 0cc80f2: xoá prefill và thêm endpoint nghe thử nhạc.
+- Các vòng sửa cuối 1d7ec97 và 13d9d4c.
+- acbfb77: cho phép http loopback trong giao diện cài đặt.
