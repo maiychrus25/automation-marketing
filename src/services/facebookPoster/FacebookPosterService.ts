@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { AutomationSession } from '../browser/BrowserProfileService';
-import type { FbPosterMode, FbPosterRun, LinkStatus } from '../../models/facebookPoster';
+import type { FbPosterComment, FbPosterMode, FbPosterRun, LinkStatus } from '../../models/facebookPoster';
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import type { LaunchedPage, LogLevel, TaskDeps } from './types';
 import { collectComments } from './collectComments';
@@ -36,6 +36,8 @@ export interface FacebookPosterServiceDeps {
     readTrackingConfig?: () => PostTrackingConfig;
     /** Báo trạng thái đăng nhập quan sát được trong lượt đăng (lỗi của hàm này bị bỏ qua). */
     onLoginObserved?: (profileId: string, state: 'ok' | 'logged_out') => void;
+    /** Gọi sau khi lưu bình luận mới (chỉ các dòng thật sự mới); lỗi của hàm này chỉ được ghi log. */
+    onCommentsSaved?: (rows: FbPosterComment[]) => void | Promise<void>;
     tasks?: Partial<{ postToTargets: typeof postToTargets; scanGroups: typeof scanGroups; searchAndJoinGroups: typeof searchAndJoinGroups; collectComments: typeof collectComments }>;
 }
 
@@ -458,12 +460,15 @@ export class FacebookPosterService {
                         ...deps,
                         loadKeys: async () => this.store.loadCommentKeys(),
                         saveComments: async (rows) => {
+                            let created: FbPosterComment[];
                             try {
-                                return this.store.saveComments(profileId, rows, this.now());
+                                created = this.store.insertCommentsReturningNew(profileId, rows, this.now());
                             } catch (err) {
                                 this.rememberStoreError(err);
                                 throw err;
                             }
+                            if (created.length > 0) await this.notifyCommentsSaved(active, profileId, created);
+                            return created.length;
                         },
                     },
                 );
@@ -553,6 +558,16 @@ export class FacebookPosterService {
     private skipRemaining(active: ActiveRun, plan: ProfilePlan): void {
         for (const target of plan.targets.slice(plan.progress.done)) {
             this.record(active, plan, { url: target.url, name: target.name, outcome: 'skipped', error: STOPPED_REASON, errorCode: 'stopped' });
+        }
+    }
+
+    /** Báo bình luận mới cho bộ lọc khách; lỗi chỉ ghi log, lượt thu không đổi kết quả. */
+    private async notifyCommentsSaved(active: ActiveRun, profileId: string, rows: FbPosterComment[]): Promise<void> {
+        if (!this.deps.onCommentsSaved) return;
+        try {
+            await this.deps.onCommentsSaved(rows);
+        } catch (err) {
+            this.emit('facebookPoster:log', { runId: active.run.id, profileId, level: 'warning', message: `Không lọc được khách tiềm năng: ${errorMessage(err)}`, at: this.now() });
         }
     }
 

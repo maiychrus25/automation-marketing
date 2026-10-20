@@ -753,7 +753,7 @@ describe('FacebookPosterService', () => {
         return { scanned: 1, failed: 0, added: written, results: [{ url: input.posts[0].postUrl, outcome: 'done', error: null, added: written }] };
       }),
     });
-    jest.spyOn(h.store, 'saveComments').mockImplementation(() => { throw new Error('read-only database'); });
+    jest.spyOn(h.store, 'insertCommentsReturningNew').mockImplementation(() => { throw new Error('read-only database'); });
     const { runId } = h.service.start({ kind: 'collect_comments', profileId: 'p1', postUrls: ['https://www.facebook.com/groups/1/posts/1/'] });
     await h.service.whenIdle();
     expect(h.run(runId)).toMatchObject({ status: 'failed', error: 'read-only database' });
@@ -1461,5 +1461,45 @@ describe('FacebookPosterService campaigns and variants', () => {
     expect(task.mock.calls[0][0].text).toBe('xin chào');
     expect(h.results(runId).every((r: any) => r.variant === '')).toBe(true);
     expect(h.run(runId).campaignId).toBeNull();
+  });
+  describe('onCommentsSaved', () => {
+    const URL1 = 'https://www.facebook.com/groups/1/posts/1/';
+    const rowsOf = (texts: string[]) => texts.map((t) => ({ authorId: 'a', authorName: 'An', authorUrl: 'u', text: t, commentedAt: '2 giờ', postUrl: URL1 }));
+    const taskSaving = (texts: string[]) => jest.fn(async (input: any, deps: any) => {
+      await deps.launch();
+      const written = await deps.saveComments(rowsOf(texts));
+      return { scanned: 1, failed: 0, added: written, results: [{ url: input.posts[0].postUrl, outcome: 'done', error: null, added: written }] };
+    });
+
+    test('lượt thu tay gọi callback với đúng các dòng mới', async () => {
+      const seen: any[][] = [];
+      const h = harness({ collectComments: taskSaving(['ib giá', 'ib giá', 'đẹp']) }, { onCommentsSaved: (rows) => { seen.push(rows); } });
+      h.store.saveComments('p1', rowsOf(['đẹp']), 1);
+      const { runId } = h.service.start({ kind: 'collect_comments', profileId: 'p1', postUrls: [URL1] });
+      await h.service.whenIdle();
+      expect(h.run(runId).status).toBe('done');
+      expect(seen).toHaveLength(1);
+      expect(seen[0].map((c) => c.text)).toEqual(['ib giá']);
+      expect(seen[0][0]).toMatchObject({ key: expect.any(String), profileId: 'p1', postUrl: URL1 });
+    });
+
+    test('callback ném lỗi: lượt vẫn xong, ghi log cảnh báo', async () => {
+      const h = harness({ collectComments: taskSaving(['ib']) }, { onCommentsSaved: () => { throw new Error('boom'); } });
+      const { runId } = h.service.start({ kind: 'collect_comments', profileId: 'p1', postUrls: [URL1] });
+      await h.service.whenIdle();
+      expect(h.run(runId).status).toBe('done');
+      expect(h.results(runId).map((r) => r.outcome)).toEqual(['done']);
+      expect(h.store.listComments({ limit: 10, offset: 0 }).total).toBe(1);
+      expect(h.emitted.some((e) => e.channel === 'facebookPoster:log' && e.data.level === 'warning' && /boom/.test(e.data.message))).toBe(true);
+    });
+
+    test('không có dòng mới thì không gọi callback', async () => {
+      const cb = jest.fn();
+      const h = harness({ collectComments: taskSaving(['ib']) }, { onCommentsSaved: cb });
+      h.store.saveComments('p1', rowsOf(['ib']), 1);
+      h.service.start({ kind: 'collect_comments', profileId: 'p1', postUrls: [URL1] });
+      await h.service.whenIdle();
+      expect(cb).not.toHaveBeenCalled();
+    });
   });
 });
