@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 20/10/2026 |
-| Trạng thái | Chờ duyệt |
+| Trạng thái | Đã duyệt (20/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-20-group-scores-best-times.md` (26.23: D + F); kế hoạch E viết sau khi 26.23 phát hành |
 | Intent | `docs/intent/2026-10-20-group-scores-times-leads.md` (đã duyệt) |
 | Nhánh | `feat/26.23-group-scores-best-times` (D + F); E làm trên nhánh riêng |
