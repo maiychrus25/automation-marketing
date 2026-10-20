@@ -15,6 +15,35 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.24.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🎯 Khách tiềm năng từ bình luận: tự thu bình luận bài nhóm theo mốc và lọc người hỏi giá, xin inbox, để lại số điện thoại',
+      '🤖 Tuỳ chọn AI chấm ý định mua (dùng trợ lý AI mặc định)',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Mục Đăng Facebook → Khách tiềm năng: lọc theo trạng thái / chiến dịch / khoảng ngày / tìm chữ, đổi trạng thái Mới / Đã liên hệ / Chốt đơn / Bỏ qua, ghi chú, Thu ngay, Xuất Excel',
+          'Nút ⚙ cài từ khoá, số điện thoại, AI và mốc thu',
+          'Tự thu bình luận ở mốc 2 giờ, 1 ngày, 3 ngày sau khi bài có link',
+          'Thu bình luận có cột "Khách"',
+          'Tin Telegram 🎯 khi có khách mới (một tin mỗi lượt thu)',
+          'Bot AI có comments.collect, comments.list, leads.list, leads.update, leads.config',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Profile hết phiên hoặc đang mở thì không mở lại Facebook liên tục',
+          'Link người bình luận mở qua đường kiểm tra an toàn',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.23.0',
     date: '10/2026',
     type: 'minor',

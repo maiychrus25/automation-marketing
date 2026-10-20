@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 20/10/2026 |
-| Trạng thái | Đã phát hành 26.23.0 (D + F, 20/10/2026); E chờ 26.24 |
+| Trạng thái | Đã phát hành 26.23.0 (D + F) và 26.24.0 (E, 20/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-20-group-scores-best-times.md` (26.23: D + F); E: `docs/plans/2026-10-20-comment-leads.md` |
 | Intent | `docs/intent/2026-10-20-group-scores-times-leads.md` (đã duyệt) |
 | Nhánh | `feat/26.23-group-scores-best-times` (D + F); E làm trên nhánh riêng |
@@ -212,3 +212,20 @@ Dữ liệu giữ 180 ngày, cùng nhịp dọn với dữ liệu theo dõi.
 - Nhóm có ~70% bài bị giữ vẫn rơi quanh "Trung bình" (≈55) vì trọng số thành công / sống sót giữ đầy đủ; có thể cần chỉnh trọng số sau khi có dữ liệu thật.
 - Gợi ý trong ScheduleDialog không xét chiến dịch.
 - Chip điểm trong Soạn bài chỉ hiện cho nhóm khớp đúng `group_url`.
+
+## Ghi chú sau phát hành (26.24)
+
+- `leads.found` là một sự kiện cho mỗi lượt thu (cả thu tay lẫn tự thu), không phải một sự kiện cho mỗi khách.
+- AI chấm ý định đi qua lời gọi thô mới `AIAssistantService.completeRaw`, không dùng persona và quy tắc tự trả lời. Mỗi lô giới hạn 60 giây; sau một lần AI lỗi thì bỏ AI cho phần còn lại của lượt. Chưa kiểm với model thật.
+- Lỗi ghi vào store làm lượt thu dừng và tạm dừng tự thu 60 phút.
+- Profile đang bận (đang mở): các bài được hoãn 15 phút và không tiêu hao mốc.
+- Profile đã biết là `logged_out` / `checkpoint` bị bỏ qua, không mở trình duyệt, mốc của bài chuyển sang mốc kế.
+- Dòng theo dõi tạo trước 26.24 không có mốc bình luận (không bù ngược).
+- `comments.collect` bỏ qua URL bài không có dòng theo dõi.
+- Bot không có phương thức `comments.collectStatus`.
+- Từ khoá không được chứa dấu phẩy.
+- Thu tay gặp chuyển hướng `/login` báo "Phiên Facebook đã hết hoặc cần xác minh".
+- Huỷ có thể vượt thời gian chờ 45 giây khi đang tải trang và chấm một lô AI cùng lúc (lỗi nhỏ số 6, chưa sửa).
+- Log của bộ thu chỉ ghi vào log ứng dụng.
+- Độ rộng popover cấu hình khách đã cố định cho panel hẹp.
+- Việc đọc bình luận (cào DOM) không đổi so với thu tay và vẫn phụ thuộc giao diện Facebook.

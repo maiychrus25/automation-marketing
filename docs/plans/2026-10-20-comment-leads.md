@@ -299,3 +299,13 @@
   - Spec: Trạng thái "Đã phát hành 26.23.0 (D + F) và 26.24.0 (E)", ghi chú sau phát hành cho E.
   - Plan thêm "Điều chỉnh khi triển khai".
   - Merge `main`, tag; anh push; kiểm tra CI.
+
+## Điều chỉnh khi triển khai
+
+- Task 4: thêm `loginProblemOfUrl` và `stopOnLoginProblem` vào `collectComments`.
+- Task 5: thêm bộ chuyển `leadWiring.ts` có timeout.
+- Task 7: `listComments` trả thêm `leadKeys`.
+- Vòng sửa 7f2297d: I1–I4 và các lỗi nhỏ.
+- Sửa của controller 35a79e9: hoãn bài của profile đang bận.
+- Sửa của controller b4d54a6: độ rộng popover.
+- Sửa Task 7 375741a: link an toàn và giữ cài đặt chưa lưu.
