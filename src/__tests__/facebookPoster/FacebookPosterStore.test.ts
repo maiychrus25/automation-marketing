@@ -578,6 +578,7 @@ describe('post tracking store', () => {
       s.addResult(newResult('r1', { outcome: 'failed', errorCode: 'launch_failed' }));
       s.addResult(newResult('r1', { outcome: 'failed', errorCode: 'stopped' }));
       s.addResult(newResult('r1', { outcome: 'failed', errorCode: 'post_failed' }));
+      s.addResult(newResult('r1', { outcome: 'skipped' }));
       s.addResult(newResult('rj', { outcome: 'posted' }));
       s.addResult(newResult('rold', { outcome: 'posted' }));
       s.addResult(newResult('r1', { targetUrl: G3, targetName: 'Nhóm 3', outcome: 'failed', errorCode: 'post_failed' }));
@@ -590,7 +591,7 @@ describe('post tracking store', () => {
       const by = (u: string) => rows.find((r) => r.groupUrl === u)!;
       expect(rows).toHaveLength(3);
       expect(by(G1)).toMatchObject({ attempted: 3, posted: 2, failed: 1, held: 1, removed: 0, withLink: 1, measured: 1, avgEngagement: 4 });
-      expect(by(G2)).toMatchObject({ attempted: 1, posted: 0, failed: 0, held: 1, removed: 1, withLink: 0, measured: 0 });
+      expect(by(G2)).toMatchObject({ attempted: 1, posted: 1, failed: 0, held: 1, removed: 1, withLink: 0, measured: 0 });
       expect(by(G3)).toMatchObject({ label: 'Nhóm 3', attempted: 1, posted: 0, failed: 1, held: 0, measured: 0, avgEngagement: null });
     });
 

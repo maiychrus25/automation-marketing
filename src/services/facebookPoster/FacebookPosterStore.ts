@@ -670,7 +670,7 @@ export class FacebookPosterStore {
      */
     groupScoreInputs(opts: { from: number; to: number; campaignId?: string }): GroupScoreInput[] {
         const where = [
-            "r.kind = 'post'", "r.mode = 'group'", 'r.started_at >= ?', 'r.started_at <= ?',
+            "r.kind = 'post'", "r.mode = 'group'", 'r.started_at >= ?', 'r.started_at <= ?', "x.outcome IN ('posted', 'failed')",
             "NOT (x.outcome = 'failed' AND x.error_code IN ('not_logged_in', 'launch_failed', 'stopped'))",
         ];
         const params: any[] = [opts.from, opts.to];
@@ -696,7 +696,7 @@ export class FacebookPosterStore {
         });
         for (const t of tracked.values()) {
             out.push({
-                groupUrl: t.key, label: t.label, attempted: t.posts, posted: 0, failed: 0, held: t.pending + t.notFound, removed: t.removedSuspected,
+                groupUrl: t.key, label: t.label, attempted: t.posts, posted: t.posts, failed: 0, held: t.pending + t.notFound, removed: t.removedSuspected,
                 withLink: t.withLink, measured: t.measured, engagementRate: t.engagementRate, avgEngagement: t.avgEngagement,
             });
         }
