@@ -7,9 +7,11 @@ import MediaPicker from './MediaPicker';
 import PostPreview from './PostPreview';
 import { matchesKeywords } from './matchKeywords';
 import CampaignSelect from './CampaignSelect';
+import { gradeChip } from './trackingFormat';
 import { hydrateTargets, targetsToSave, hydrateVariants, validateVariantTabs, buildVariantParams } from './draftForm';
 import { VARIANT_LABELS, MAX_VARIANTS } from '../../../services/facebookPoster/variants';
 import { validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
+import type { GroupScore } from '../../../services/facebookPoster/groupScores';
 import type { FbPosterGroup, FbPosterMode, FbPosterSchedule } from '../../../models/facebookPoster';
 
 const MAX_TEXT = 63206;
@@ -58,12 +60,23 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
   const [starting, setStarting] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [operationError, setOperationError] = useState('');
+  const [scoreByGroup, setScoreByGroup] = useState<Record<string, GroupScore>>({});
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (open && !dialog?.open) dialog?.showModal();
     if (!open && dialog?.open) dialog.close();
+  }, [open]);
+  // Điểm nhóm (30 ngày): tải một lần mỗi lần mở; lỗi thì im lặng bỏ qua chip.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    ipc.facebookPoster?.groupScores({}).then((res) => {
+      if (cancelled || !res?.success) return;
+      setScoreByGroup(Object.fromEntries((res.groups || []).map((s) => [s.groupUrl, s])));
+    }).catch(() => { /* bỏ qua */ });
+    return () => { cancelled = true; };
   }, [open]);
   const reportError = (message: string) => { setOperationError(message); showNotification(message, 'error'); };
 
@@ -299,6 +312,11 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
                               <label className="flex items-center gap-2 py-1.5 cursor-pointer min-w-0">
                                 <input type="checkbox" checked={isChecked(id, g)} disabled={busy} onChange={(e) => setChecked(id, [g.url], e.target.checked)} />
                                 <span className="text-sm text-gray-200 truncate" title={g.name}>{g.name}</span>
+                                {scoreByGroup[g.url]?.score != null && (() => {
+                                  const sc = scoreByGroup[g.url];
+                                  const chip = gradeChip(sc.grade, sc.score);
+                                  return <span aria-label={chip.aria} title={sc.reasons.join('\n')} className={`shrink-0 px-1.5 rounded border text-[11px] ${chip.cls}`}>{chip.label}</span>;
+                                })()}
                               </label>
                             </li>
                           ))}

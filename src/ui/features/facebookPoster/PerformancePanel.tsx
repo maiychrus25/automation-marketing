@@ -4,7 +4,8 @@ import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import TrackConfigPopover from './TrackConfigPopover';
 import { formatCount, formatRate } from './researchFormat';
-import { GROUP_BY_OPTIONS, RANGE_OPTIONS } from './trackingFormat';
+import { GROUP_BY_OPTIONS, RANGE_OPTIONS, gradeChip, formatBestTimes } from './trackingFormat';
+import type { GroupScore } from '../../../services/facebookPoster/groupScores';
 import type { PostStatsGroupBy, PostStatsReportRow } from '../../../models/facebookPoster';
 
 // Giới hạn của thao tác theo dõi (trackingOperations.track): đọc tối đa 14 ngày bài gần nhất.
@@ -32,6 +33,9 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
   const [running, setRunning] = useState(false);
   const [starting, setStarting] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [scores, setScores] = useState<Record<string, GroupScore>>({});
+  const [openReasons, setOpenReasons] = useState<string | null>(null);
+  const [bestLine, setBestLine] = useState('');
   const aliveRef = useRef(true);
 
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
@@ -47,6 +51,30 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [days, groupBy, campaignId, scheduleId, reloadTick]);
+
+  // Điểm nhóm: cùng khoảng ngày và chiến dịch với bảng; lỗi thì ẩn cột giá trị (ô hiện —).
+  useEffect(() => {
+    if (groupBy !== 'group') return;
+    let cancelled = false;
+    setScores({});
+    setOpenReasons(null);
+    ipc.facebookPoster?.groupScores({ from: Date.now() - days * DAY_MS, campaignId }).then((res) => {
+      if (cancelled || !res?.success) return;
+      setScores(Object.fromEntries((res.groups || []).map((s) => [s.groupUrl, s])));
+    }).catch(() => { /* ô điểm hiện — */ });
+    return () => { cancelled = true; };
+  }, [groupBy, days, campaignId, reloadTick]);
+
+  // Gợi ý giờ đăng: khoảng mặc định 60 ngày của dịch vụ, chỉ lọc theo chiến dịch.
+  useEffect(() => {
+    let cancelled = false;
+    setBestLine('');
+    ipc.facebookPoster?.bestTimes({ campaignId }).then((res) => {
+      if (cancelled || !res?.success) return;
+      setBestLine(formatBestTimes({ hours: res.hours || [], weekdays: res.weekdays || [], insufficient: res.insufficient ?? true }));
+    }).catch(() => { /* không hiện dòng gợi ý */ });
+    return () => { cancelled = true; };
+  }, [campaignId, reloadTick]);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,6 +174,7 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
                     <th className={`${TH} text-right`}>Nghi xoá</th>
                     <th className={`${TH} text-right`}>👍</th><th className={`${TH} text-right`}>💬</th><th className={`${TH} text-right`}>↗</th>
                     <th className={`${TH} text-right`}>TB/bài</th><th className={`${TH} text-right`}>Tỉ lệ</th>
+                    {groupBy === 'group' && <th className={`${TH} text-right`}>Điểm</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800">
@@ -158,12 +187,33 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
                       <td className={`${TD} text-right`}>{formatCount(r.reactions)}</td><td className={`${TD} text-right`}>{formatCount(r.comments)}</td><td className={`${TD} text-right`}>{formatCount(r.shares)}</td>
                       <td className={`${TD} text-right`}>{r.insufficient ? <span className="text-gray-400">chưa đủ dữ liệu</span> : r.avgEngagement === null ? '—' : r.avgEngagement.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</td>
                       <td className={`${TD} text-right`}>{formatRate(r.engagementRate)}</td>
+                      {groupBy === 'group' && (
+                        <td className={`${TD} text-right`}>
+                          {(() => {
+                            const sc = scores[r.key];
+                            if (!sc) return '—';
+                            const chip = gradeChip(sc.grade, sc.score);
+                            const text = sc.reasons.join('\n');
+                            return (
+                              <button type="button" aria-label={chip.aria} title={text} aria-expanded={openReasons === r.key}
+                                onClick={() => setOpenReasons(openReasons === r.key ? null : r.key)}
+                                className={`px-1.5 rounded border text-[11px] ${chip.cls} ${FOCUS}`}>{chip.label}</button>
+                            );
+                          })()}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
+      {groupBy === 'group' && openReasons && scores[openReasons] && (
+        <ul role="status" className="text-xs text-gray-400 list-disc pl-4">
+          {scores[openReasons].reasons.map((reason) => <li key={reason}>{reason}</li>)}
+        </ul>
+      )}
+      {bestLine && <p className="text-xs text-gray-400">{bestLine}</p>}
     </section>
   );
 }

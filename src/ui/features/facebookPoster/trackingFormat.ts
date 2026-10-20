@@ -1,3 +1,5 @@
+import type { GroupGrade } from '../../../services/facebookPoster/groupScores';
+import type { BestTimes } from '../../../services/facebookPoster/bestTimes';
 import type { LinkStatus, PostStatsSnapshot, PostStatsGroupBy } from '../../../models/facebookPoster';
 
 export interface LinkChip { label: string; cls: string; title: string }
@@ -20,12 +22,14 @@ export function formatStatsLine(s: Pick<PostStatsSnapshot, 'reactions' | 'commen
   return `👍 ${num(s.reactions)} · 💬 ${num(s.comments)} · ↗ ${num(s.shares)}`;
 }
 
-export const GROUP_BY_OPTIONS: { value: Extract<PostStatsGroupBy, 'group' | 'profile' | 'schedule' | 'campaign' | 'variant'>; label: string }[] = [
+export const GROUP_BY_OPTIONS: { value: Extract<PostStatsGroupBy, 'group' | 'profile' | 'schedule' | 'campaign' | 'variant' | 'hour' | 'weekday'>; label: string }[] = [
   { value: 'group', label: 'Nhóm' },
   { value: 'profile', label: 'Profile' },
   { value: 'schedule', label: 'Lịch' },
   { value: 'campaign', label: 'Chiến dịch' },
   { value: 'variant', label: 'Biến thể' },
+  { value: 'hour', label: 'Giờ' },
+  { value: 'weekday', label: 'Thứ' },
 ];
 
 export const RANGE_OPTIONS = [{ days: 7, label: '7 ngày' }, { days: 30, label: '30 ngày' }];
@@ -49,4 +53,28 @@ export function minutesLabel(min: number): string {
   if (min % 1440 === 0) return `${min / 1440} ngày`;
   if (min % 60 === 0) return `${min / 60} giờ`;
   return `${min} phút`;
+}
+
+const GRADE_LABEL: Record<GroupGrade, string> = { good: 'Tốt', fair: 'Trung bình', poor: 'Kém', insufficient: 'Chưa đủ dữ liệu' };
+const GRADE_CLS: Record<GroupGrade, string> = {
+  good: 'text-green-400 border-green-500/30',
+  fair: 'text-amber-400 border-amber-500/30',
+  poor: 'text-red-400 border-red-500/30',
+  insufficient: 'text-gray-400 border-gray-600',
+};
+
+export interface GradeChip { label: string; tone: GroupGrade; cls: string; aria: string }
+
+/** Chip điểm nhóm: số điểm (hoặc "chưa đủ dữ liệu"), tông màu theo hạng và nhãn đọc cho trình đọc màn hình. */
+export function gradeChip(grade: GroupGrade, score: number | null): GradeChip {
+  if (grade === 'insufficient' || score === null) return { label: 'chưa đủ dữ liệu', tone: 'insufficient', cls: GRADE_CLS.insufficient, aria: GRADE_LABEL.insufficient };
+  return { label: String(score), tone: grade, cls: GRADE_CLS[grade], aria: `Điểm ${score}, ${GRADE_LABEL[grade]}` };
+}
+
+/** Dòng gợi ý giờ đăng; chuỗi "Chưa đủ dữ liệu" khi không có giờ nào đủ số bài đo. */
+export function formatBestTimes(result: Pick<BestTimes, 'hours' | 'weekdays' | 'insufficient'>): string {
+  if (result.insufficient || result.hours.length === 0) return 'Chưa đủ dữ liệu để gợi ý giờ đăng';
+  const parts = [`Giờ nên đăng: ${result.hours.map((h) => h.label.replace(/^0/, '')).join(', ')}`];
+  if (result.weekdays.length) parts.push(`Thứ nên đăng: ${result.weekdays.map((w) => w.label).join(', ')}`);
+  return `${parts.join(' · ')} (theo giờ máy)`;
 }

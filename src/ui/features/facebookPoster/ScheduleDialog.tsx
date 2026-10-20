@@ -3,6 +3,7 @@ import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { computeNextRun } from '../../../services/facebookPoster/scheduleTime';
 import CampaignSelect from './CampaignSelect';
+import { formatBestTimes } from './trackingFormat';
 import type { FbPosterScheduleView } from '../../../models/facebookPoster';
 
 // Monday-first display; values follow getDay().
@@ -49,6 +50,7 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
   const [campaignId, setCampaignId] = useState<string | null>(schedule?.campaignId ?? initialCampaignId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [bestHours, setBestHours] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
@@ -57,6 +59,16 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
     dialog?.showModal();
     nameRef.current?.focus();
     return () => dialog?.close();
+  }, []);
+
+  // Gợi ý giờ hiệu quả: tải một lần, lỗi thì im lặng bỏ qua.
+  useEffect(() => {
+    let cancelled = false;
+    ipc.facebookPoster?.bestTimes({}).then((res) => {
+      if (cancelled || !res?.success || !res.hours?.length) return;
+      setBestHours(formatBestTimes({ hours: res.hours, weekdays: [], insufficient: false }).replace('Giờ nên đăng', 'Giờ hiệu quả'));
+    }).catch(() => { /* bỏ qua */ });
+    return () => { cancelled = true; };
   }, []);
 
   const runAt = runAtInput ? new Date(runAtInput).getTime() : null;
@@ -155,6 +167,8 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
             </label>
           </div>
         )}
+
+        {bestHours && <p className="text-xs text-gray-400">{bestHours}</p>}
 
         {edit
           ? <p className="text-xs text-gray-400">Muốn đổi nội dung thì xoá và lên lịch lại.</p>
