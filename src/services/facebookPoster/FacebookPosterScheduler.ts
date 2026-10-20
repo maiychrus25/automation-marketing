@@ -73,6 +73,11 @@ export class FacebookPosterScheduler {
         this.gateBypass.add(scheduleId);
     }
 
+    /** Bỏ cờ bỏ-qua-chiến-dịch của lịch (khi lịch bị sửa, tránh cờ cũ áp vào lượt tự động sau). */
+    clearCampaignGateBypass(scheduleId: string): void {
+        this.gateBypass.delete(scheduleId);
+    }
+
     queuedIds(): string[] {
         return this.queue.map((q) => q.scheduleId);
     }
@@ -85,6 +90,7 @@ export class FacebookPosterScheduler {
             const t = now();
             for (const s of store.listDueSchedules(t)) {
                 if (s.nextRunAt !== null && s.nextRunAt < t - GRACE_MS) {
+                    this.gateBypass.delete(s.id);
                     this.recordMissed(s.id, MISSED_APP_CLOSED, s.nextRunAt, s);
                 } else {
                     const reason = this.blockReason(s, t);

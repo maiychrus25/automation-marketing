@@ -71,13 +71,15 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => { offChanged?.(); offFinished?.(); window.clearInterval(timer); };
   }, [load]);
+  // Chỉ tải lại tên chiến dịch khi tập chiến dịch được lịch tham chiếu đổi (vd. vừa gắn lịch vào chiến dịch mới tạo).
+  const campaignIdsKey = useMemo(() => [...new Set(schedules.map(s => s.campaignId).filter((id): id is string => !!id))].sort().join(','), [schedules]);
   useEffect(() => {
     let cancelled = false;
     Promise.all([ipc.facebookPoster?.campaignList(), ipc.facebookPoster?.campaignList({ status: 'archived' })]).then(([active, archived]) => {
       if (!cancelled) setCampaigns([...(active?.campaigns ?? []), ...(archived?.campaigns ?? [])]);
     }).catch(() => { /* bộ lọc chiến dịch chỉ thiếu tên, lịch vẫn hiện */ });
     return () => { cancelled = true; };
-  }, [schedules]); // tải lại khi danh sách lịch đổi (vd. vừa gắn lịch vào chiến dịch mới tạo)
+  }, [campaignIdsKey]);
   const campaignName = (id: string | null) => (id ? campaigns.find(c => c.id === id)?.name ?? '(chiến dịch đã xoá)' : '');
   const matchesCampaign = (schedule: FbPosterScheduleView) => campaignFilter === 'all' || (campaignFilter === 'none' ? schedule.campaignId === null : schedule.campaignId === campaignFilter);
   // Mở chi tiết lịch được chọn từ trang Chiến dịch, rồi xoá yêu cầu.
@@ -87,12 +89,12 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
     if (!focusId || loading) return;
     const schedule = schedules.find(item => item.id === focusId);
     setFocusId(null);
-    if (!schedule) { showNotification('Không tìm thấy lịch (có thể đã bị xoá)', 'error'); return; }
+    if (!schedule) { showNotification(error || 'Không tìm thấy lịch (có thể đã bị xoá)', 'error'); return; }
     setOperationError('');
     const isQueued = queued.has(schedule.id);
     setDetail({ schedule, at: schedule.nextRunAt ?? schedule.runAt ?? schedule.lastRun?.startedAt ?? Date.now(), queued: isQueued,
       historical: !schedule.draft && schedule.kind === 'once' && !!schedule.lastRun && schedule.nextRunAt === null && !isQueued });
-  }, [focusId, loading, schedules, queued, setFocusId, showNotification]);
+  }, [focusId, loading, schedules, queued, error, setFocusId, showNotification]);
   useEffect(() => {
     const dialog = detailRef.current;
     if (detail && dialog && !dialog.open) dialog.showModal();

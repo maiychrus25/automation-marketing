@@ -72,8 +72,10 @@ export default function CampaignsTab() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    const offChanged = ipc.on?.('facebookPoster:schedulesChanged', () => { load(); if (detailId) loadDetail(detailId); });
-    return () => { offChanged?.(); };
+    const reload = () => { load(); if (detailId) loadDetail(detailId); };
+    // Số bài và TB/bài đổi khi lượt đăng hoặc lượt theo dõi kết thúc, không chỉ khi lịch đổi.
+    const offs = ['facebookPoster:schedulesChanged', 'facebookPoster:runFinished', 'facebookPoster:trackFinished'].map((channel) => ipc.on?.(channel, reload));
+    return () => { offs.forEach((off) => off?.()); };
   }, [load, loadDetail, detailId]);
   useEffect(() => { if (detailId) { setDetail(null); loadDetail(detailId); } }, [detailId, loadDetail]);
 

@@ -349,6 +349,31 @@ describe('FacebookPosterScheduler', () => {
       assert.deepStrictEqual(env.missed.map((m) => m.reason), [MISSED_APP_CLOSED]);
     });
 
+    test('overdue branch clears the "Đăng ngay" bypass, so a later automatic run is gated again', () => {
+      const { store, env, sched, add } = setup();
+      add('a', { runAt: T0 - 5 * MIN, nextRunAt: T0 - 5 * MIN });
+      env.block = () => PAUSED;
+      sched.bypassCampaignGateOnce('a');
+      sched.start();
+      assert.deepStrictEqual(env.missed.map((m) => m.reason), [MISSED_APP_CLOSED]);
+      store.updateSchedule('a', { nextRunAt: T0 }, T0);
+      sched.reschedule();
+      env.timers.filter((x) => !x.cleared)[0].fn();
+      assert.deepStrictEqual(env.started, []);
+      assert.deepStrictEqual(env.missed.map((m) => m.reason), [MISSED_APP_CLOSED, PAUSED]);
+    });
+
+    test('clearCampaignGateBypass drops the bypass for that schedule', () => {
+      const { env, sched, add } = setup();
+      add('a');
+      env.block = () => PAUSED;
+      sched.bypassCampaignGateOnce('a');
+      sched.clearCampaignGateBypass('a');
+      sched.start();
+      assert.deepStrictEqual(env.started, []);
+      assert.deepStrictEqual(env.missed.map((m) => m.reason), [PAUSED]);
+    });
+
     test('paused while waiting in the queue: recorded missed, never started', () => {
       const { store, env, sched, add } = setup();
       add('a');

@@ -1261,6 +1261,7 @@ html[data-theme="dark"] :is(.poster-workspace, .poster-dialog) {
 .poster-date-navigation { display: flex; align-items: center; border: 1px solid var(--poster-border); border-radius: 8px; min-height: 42px; }
 .poster-date-navigation span { padding: 0 8px; font-size: 13px; text-align: center; }
 .poster-state-filter { margin-left: auto; max-width: 100%; }
+.poster-state-filter + .poster-state-filter { margin-left: 0; }
 .poster-view-switch { display: flex; padding: 4px; border: 1px solid var(--poster-border); border-radius: 8px; }
 .poster-view-switch button { min-height: 32px; min-width: 58px; padding: 4px 8px; border-radius: 6px; font-size: 13px; }
 .poster-view-switch button[aria-pressed="true"] { background: var(--poster-focus-bg); color: var(--poster-focus-text); }

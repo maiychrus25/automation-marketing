@@ -160,5 +160,24 @@ describe('drafts', () => {
       const d2 = saveDraft(deps, { params: full(), campaignId: 'c1' });
       assert.strictEqual(approveDraft(deps, { id: d2.id, when: 'schedule', kind: 'recurring', days: [1], time: '09:30', campaignId: 'c2' }).campaignId, 'c2');
     });
+
+    test('approveDraft "now" với chiến dịch đã gắn nhưng sau đó lưu trữ: từ chối trước khi ghi; hẹn giờ thì vẫn duyệt được', () => {
+      const { deps, store } = setup();
+      camp(store, 'c1');
+      const d = saveDraft(deps, { params: full(), campaignId: 'c1' });
+      store.updateCampaign('c1', { status: 'archived' }, NOW);
+      assert.throws(() => approveDraft(deps, { id: d.id, when: 'now' }), /^Error: Chiến dịch đã lưu trữ$/);
+      assert.strictEqual(store.getSchedule(d.id)!.draft, true);
+      assert.strictEqual(approveDraft(deps, { id: d.id, when: 'schedule', kind: 'once', runAt: NOW + HOUR }).campaignId, 'c1');
+    });
+  });
+
+  test('variants: [] bỏ biến thể đã lưu; vắng khoá thì bản nháp mới không có; sai thì ném', () => {
+    const { deps } = setup();
+    const d = saveDraft(deps, { params: content({ variants: ['Bản B'] }) });
+    assert.deepStrictEqual(d.params.variants, ['Bản B']);
+    const cleared = saveDraft(deps, { id: d.id, params: content({ variants: [] }) });
+    assert.ok(!('variants' in cleared.params));
+    assert.throws(() => saveDraft(deps, { params: content({ variants: ['Tuyển Sale'] }) }));
   });
 });

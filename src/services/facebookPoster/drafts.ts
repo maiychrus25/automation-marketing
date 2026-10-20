@@ -102,6 +102,9 @@ export function approveDraft(deps: DraftDeps, input: ApproveDraftInput): FbPoste
     const campaignId = readCampaignChange(deps, input.campaignId, draft.campaignId);
 
     if (input.when === 'now') {
+        // Đăng ngay vào chiến dịch đã lưu trữ sẽ chỉ thất bại muộn ở service.start: từ chối sớm, trước khi ghi.
+        const effectiveId = campaignId === undefined ? draft.campaignId : campaignId;
+        if (effectiveId && deps.store.getCampaign(effectiveId)?.status === 'archived') throw new Error('Chiến dịch đã lưu trữ');
         store.updateSchedule(draft.id, {
             kind: 'once', runAt: now, days: [], time: '', params, campaignId, draft: false, enabled: true, nextRunAt: now,
         }, now);

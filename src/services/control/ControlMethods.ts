@@ -155,7 +155,7 @@ const draftFields: Record<string, object> = {
     concurrency: int('Số profile chạy song song (1–10)', { minimum: 1, maximum: 10 }),
     staggerMinSec: int('Giãn cách khởi động tối thiểu giữa các profile (giây, 0–3600)', { minimum: 0, maximum: 3600 }),
     staggerMaxSec: int('Giãn cách khởi động tối đa giữa các profile (giây, 0–3600)', { minimum: 0, maximum: 3600 }),
-    variants: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 4, description: 'Biến thể nội dung B…E (1–4 chuỗi, khác text và khác nhau); các đích lần lượt nhận A, B, …' },
+    variants: { type: 'array', items: { type: 'string' }, minItems: 0, maxItems: 4, description: 'Biến thể nội dung B…E (1–4 chuỗi, khác text và khác nhau); các đích lần lượt nhận A, B, …; [] = bỏ biến thể (drafts.update); bỏ trống = giữ nguyên' },
     campaignId: { type: ['string', 'null'], description: 'Mã chiến dịch; null để bỏ gắn; bỏ trống = giữ nguyên' },
 };
 // Các trường nằm trong params của bản nháp (phần còn lại — name/plannedAt/campaignId/mediaIds — xử lý riêng).

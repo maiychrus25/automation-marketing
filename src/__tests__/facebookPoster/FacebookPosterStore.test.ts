@@ -670,10 +670,21 @@ describe('campaigns', () => {
       profile_id TEXT NOT NULL, group_url TEXT NOT NULL, group_id TEXT NOT NULL DEFAULT '', post_id TEXT NOT NULL DEFAULT '', post_url TEXT DEFAULT NULL,
       posted_at INTEGER NOT NULL, text_head TEXT NOT NULL DEFAULT '', link_status TEXT NOT NULL, removed_suspected INTEGER NOT NULL DEFAULT 0,
       last_seen_at INTEGER DEFAULT NULL, last_checked_at INTEGER DEFAULT NULL, check_count INTEGER NOT NULL DEFAULT 0, next_check_at INTEGER DEFAULT NULL, stats_done TEXT NOT NULL DEFAULT '')`);
+    db.exec(`CREATE TABLE fb_poster_runs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, mode TEXT NOT NULL DEFAULT '', params_json TEXT NOT NULL,
+      status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', started_at INTEGER NOT NULL, finished_at INTEGER DEFAULT NULL)`);
+    db.exec(`CREATE TABLE fb_poster_results (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, profile_id TEXT NOT NULL, profile_name TEXT NOT NULL,
+      target_url TEXT NOT NULL, target_name TEXT NOT NULL DEFAULT '', outcome TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', post_url TEXT DEFAULT NULL,
+      comment_status TEXT NOT NULL DEFAULT 'not_requested', identity TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)`);
     db.run(`INSERT INTO fb_poster_schedules (id, name, kind, params_json, created_at, updated_at) VALUES ('old', 'Cũ', 'once', '{}', 1, 1)`);
     const s = new FacebookPosterStore(db);
     s.ensureSchema();
     s.ensureSchema();
+    const columns = (table: string) => db.query<{ name: string }>(`PRAGMA table_info(${table})`).map((c) => c.name);
+    expect(columns('fb_poster_runs')).toContain('campaign_id');
+    expect(columns('fb_poster_results')).toEqual(expect.arrayContaining(['variant', 'error_code', 'attempts']));
+    expect(columns('fb_poster_post_tracking')).toEqual(expect.arrayContaining(['campaign_id', 'variant']));
+    const indexes = db.query<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'index'`).map((i) => i.name);
+    expect(indexes).toEqual(expect.arrayContaining(['idx_fb_poster_schedules_campaign', 'idx_fb_poster_post_tracking_campaign']));
     expect(s.getSchedule('old')!.campaignId).toBeNull();
     expect(s.listSchedules({ campaignId: '' }).map((x) => x.id)).toEqual(['old']);
     s.createCampaign(camp('a'));

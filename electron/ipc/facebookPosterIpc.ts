@@ -477,6 +477,7 @@ export const posterOperations = {
         // Giữ nguyên khi không đổi (kể cả chiến dịch đã lưu trữ); chỉ kiểm khi gắn sang chiến dịch khác.
         const campaignId = params.campaignId === current.campaignId ? undefined : readCampaignRef(params.campaignId, (cid) => theStore.getCampaign(cid));
         theStore.updateSchedule(current.id, { ...fields, campaignId }, now);
+        scheduler?.clearCampaignGateBypass(current.id);
         scheduler?.reschedule();
         emitSchedulesChanged();
         return { schedule: theStore.getSchedule(current.id) };

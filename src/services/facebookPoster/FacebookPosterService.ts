@@ -513,8 +513,9 @@ export class FacebookPosterService {
         if (params.kind !== 'post' || params.mode !== 'group' || row.outcome !== 'posted') return;
         try {
             const postedAt = this.now();
-            const index = active.variantIndex?.(plan.profileId, row.url) ?? 0;
-            const variantLabel = VARIANT_LABELS[active.variantIndex?.(plan.profileId, row.url) ?? -1] ?? '';
+            const found = active.variantIndex?.(plan.profileId, row.url);
+            const index = found ?? 0;
+            const variantLabel = VARIANT_LABELS[found ?? -1] ?? '';
             const postUrl = row.postUrl ?? null;
             const linkStatus: LinkStatus = postUrl ? 'known'
                 : row.pendingApproval || row.commentStatus === 'pending_approval' ? 'pending_approval' : 'missing';

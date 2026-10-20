@@ -178,7 +178,11 @@ export function validateDraftParams(raw: unknown, env: StartParamsEnv): Record<s
             targets: asArray(entry.targets).filter((t): t is string => typeof t === 'string' && t.trim() !== ''),
         }));
     const extra: Record<string, unknown> = {};
-    if (p.variants !== undefined) extra.variants = readVariants({ text, variants: p.variants });
+    const variants = readVariants({ text, variants: p.variants });
     if (p.campaignId !== undefined) extra.campaignId = readCampaignId(p.campaignId);
-    return { ...p, mode: p.mode, text, comment, mediaPaths: readMediaPaths(p, env), profiles, ...extra };
+    const out: Record<string, unknown> = { ...p, mode: p.mode, text, comment, mediaPaths: readMediaPaths(p, env), profiles, ...extra };
+    // `variants: []` = bỏ biến thể: không lưu khoá rỗng vào bản nháp.
+    if (variants.length) out.variants = variants;
+    else delete out.variants;
+    return out;
 }

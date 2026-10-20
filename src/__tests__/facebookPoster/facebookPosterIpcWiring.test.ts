@@ -10,6 +10,7 @@ const mockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbp-wiring-'));
 let capturedDeps: any = null;
 const mockReschedule = jest.fn();
 const mockBypass = jest.fn();
+const mockClearBypass = jest.fn();
 
 jest.mock('electron', () => ({ dialog: {}, ipcMain: { handle: jest.fn() } }));
 jest.mock('../../services/database/DatabaseService', () => ({
@@ -31,6 +32,7 @@ jest.mock('../../services/facebookPoster/FacebookPosterScheduler', () => ({
         stop() {}
         reschedule() { mockReschedule(); }
         bypassCampaignGateOnce(id: string) { mockBypass(id); }
+        clearCampaignGateBypass(id: string) { mockClearBypass(id); }
         queuedIds() { return []; }
     },
 }));
@@ -99,6 +101,7 @@ describe('facebookPosterIpc wiring', () => {
         expect(posterOperations.scheduleList({ campaignId: active.id }).schedules.map((s) => s.id)).toEqual([created.id]);
         expect(posterOperations.scheduleList({ campaignId: '' }).schedules).toEqual([]);
         expect(posterOperations.scheduleUpdate({ id: created.id, campaignId: null }).schedule!.campaignId).toBeNull();
+        expect(mockClearBypass).toHaveBeenCalledWith(created.id);
         expect(() => posterOperations.scheduleList({ campaignId: 5 })).toThrow('campaignId không hợp lệ');
     });
 

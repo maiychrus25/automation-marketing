@@ -532,6 +532,22 @@ describe('campaign and variant fields', () => {
         expect(stats.paramsSchema.properties.groupBy.enum).toEqual(expect.arrayContaining(['campaign', 'variant']));
     });
 
+    it('drafts.update forwards variants: [] so the draft can drop its variants; schema allows an empty list', async () => {
+        const { deps, call, methods } = setupCampaigns();
+        await call('drafts.update', { id: 'd1', variants: [] });
+        expect((deps.poster.draftSave.mock.calls[0][0] as any).params.variants).toEqual([]);
+        await call('drafts.update', { id: 'd1', text: 'x' });
+        expect((deps.poster.draftSave.mock.calls[1][0] as any).params).not.toHaveProperty('variants');
+        const update = describeMethods(methods).methods.find((m) => m.name === 'drafts.update') as any;
+        expect(update.paramsSchema.properties.variants.minItems).toBe(0);
+    });
+
+    it('drafts.create with invalid variants maps to INVALID_PARAMS', async () => {
+        const { deps, call } = setupCampaigns();
+        deps.poster.draftSave.mockImplementationOnce(() => { throw new Error('Biến thể B trùng với nội dung khác'); });
+        expect(await call('drafts.create', { mode: 'group', text: 'A', variants: ['A'] }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+    });
+
     it('old bots: drafts.create without new fields sends no campaign or variants', async () => {
         const { deps, call } = setupCampaigns();
         await call('drafts.create', { mode: 'group', text: 'A' });
