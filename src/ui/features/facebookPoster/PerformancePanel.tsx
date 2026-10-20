@@ -169,26 +169,20 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
                 <thead className="text-gray-400 border-b border-gray-700">
                   <tr>
                     <th className={TH}>{labelHead}</th>
+                    {groupBy === 'group' && <th className={TH}>Điểm</th>}
                     <th className={`${TH} text-right`}>Bài</th><th className={`${TH} text-right`}>Có link</th>
                     <th className={`${TH} text-right`}>Chờ duyệt</th><th className={`${TH} text-right`}>Không thấy</th>
                     <th className={`${TH} text-right`}>Nghi xoá</th>
                     <th className={`${TH} text-right`}>👍</th><th className={`${TH} text-right`}>💬</th><th className={`${TH} text-right`}>↗</th>
                     <th className={`${TH} text-right`}>TB/bài</th><th className={`${TH} text-right`}>Tỉ lệ</th>
-                    {groupBy === 'group' && <th className={`${TH} text-right`}>Điểm</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800">
                   {rows.map((r) => (
                     <tr key={r.key}>
                       <td className={`${TD} max-w-[16rem] truncate`} title={r.label}>{r.label}</td>
-                      <td className={`${TD} text-right`}>{formatCount(r.posts)}</td><td className={`${TD} text-right`}>{formatCount(r.withLink)}</td>
-                      <td className={`${TD} text-right`}>{formatCount(r.pending)}</td><td className={`${TD} text-right`}>{formatCount(r.notFound)}</td>
-                      <td className={`${TD} text-right ${r.removedSuspected ? 'text-red-400' : ''}`}>{formatCount(r.removedSuspected)}</td>
-                      <td className={`${TD} text-right`}>{formatCount(r.reactions)}</td><td className={`${TD} text-right`}>{formatCount(r.comments)}</td><td className={`${TD} text-right`}>{formatCount(r.shares)}</td>
-                      <td className={`${TD} text-right`}>{r.insufficient ? <span className="text-gray-400">chưa đủ dữ liệu</span> : r.avgEngagement === null ? '—' : r.avgEngagement.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</td>
-                      <td className={`${TD} text-right`}>{formatRate(r.engagementRate)}</td>
                       {groupBy === 'group' && (
-                        <td className={`${TD} text-right`}>
+                        <td className={TD}>
                           {(() => {
                             const sc = scores[r.key];
                             if (!sc) return '—';
@@ -202,6 +196,12 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
                           })()}
                         </td>
                       )}
+                      <td className={`${TD} text-right`}>{formatCount(r.posts)}</td><td className={`${TD} text-right`}>{formatCount(r.withLink)}</td>
+                      <td className={`${TD} text-right`}>{formatCount(r.pending)}</td><td className={`${TD} text-right`}>{formatCount(r.notFound)}</td>
+                      <td className={`${TD} text-right ${r.removedSuspected ? 'text-red-400' : ''}`}>{formatCount(r.removedSuspected)}</td>
+                      <td className={`${TD} text-right`}>{formatCount(r.reactions)}</td><td className={`${TD} text-right`}>{formatCount(r.comments)}</td><td className={`${TD} text-right`}>{formatCount(r.shares)}</td>
+                      <td className={`${TD} text-right`}>{r.insufficient ? <span className="text-gray-400">chưa đủ dữ liệu</span> : r.avgEngagement === null ? '—' : r.avgEngagement.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</td>
+                      <td className={`${TD} text-right`}>{formatRate(r.engagementRate)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -209,9 +209,12 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
             </div>
           )}
       {groupBy === 'group' && openReasons && scores[openReasons] && (
-        <ul role="status" className="text-xs text-gray-400 list-disc pl-4">
-          {scores[openReasons].reasons.map((reason) => <li key={reason}>{reason}</li>)}
-        </ul>
+        <div role="status" className="text-xs text-gray-400">
+          <p className="truncate">Điểm {scores[openReasons].score ?? '—'} · {scores[openReasons].label}</p>
+          <ul className="list-disc pl-4">
+            {scores[openReasons].reasons.map((reason) => <li key={reason}>{reason}</li>)}
+          </ul>
+        </div>
       )}
       {bestLine && <p className="text-xs text-gray-400">{bestLine}</p>}
     </section>
