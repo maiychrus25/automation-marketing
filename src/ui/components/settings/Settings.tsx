@@ -17,11 +17,12 @@ import LockScreenSettings from './LockScreenSettings';
 import AccountSettings from './AccountSettings';
 import TunnelSettings from './TunnelSettings';
 import ControlApiSettings from './ControlApiSettings';
+import RenderServerSettings from './RenderServerSettings';
 import LogViewer from './LogViewer';
 import { loadSeenTabs, markTabSeen, SETTINGS_WATCHLIST, hasUnseenChangelog, markChangelogSeen } from '@/utils/settingsSeenTabs';
 import { isZalo, isFacebook, isTelegram } from '@/lib/channelHelper';
 
-type SettingsTab = 'notifications' | 'accounts' | 'storage' | 'conversation' | 'employees' | 'workspace' | 'introduction' | 'changelog' | 'appearance' | 'proxy' | 'security' | 'webhooks' | 'controlApi' | 'logs';
+type SettingsTab = 'notifications' | 'accounts' | 'storage' | 'conversation' | 'employees' | 'workspace' | 'introduction' | 'changelog' | 'appearance' | 'proxy' | 'security' | 'webhooks' | 'controlApi' | 'renderServer' | 'logs';
 
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('conversation');
@@ -167,6 +168,7 @@ export default function Settings() {
     { id: 'security',      icon: <ShieldIcon className="w-4 h-4" />, label: 'Bảo mật' },
     { id: 'webhooks',      icon: <LinkIcon className="w-4 h-4" />, label: 'Webhooks' },
     { id: 'controlApi',    icon: <BotIcon className="w-4 h-4" />, label: 'Điều khiển từ bot' },
+    { id: 'renderServer',   icon: <GlobeIcon className="w-4 h-4" />, label: 'Máy chủ render video' },
     { id: 'employees',     icon: <UsersIcon className="w-4 h-4" />, label: 'Nhân viên', requiredPerm: 'settings_employees' },
     { id: 'workspace',     icon: <FolderIcon className="w-4 h-4" />, label: 'Workspace' },
     { id: 'storage',       icon: <FolderIcon className="w-4 h-4" />, label: 'Lưu trữ' },
@@ -556,6 +558,7 @@ export default function Settings() {
         {activeTab === 'proxy' && <ProxySettings />}
         {activeTab === 'webhooks' && <TunnelSettings />}
         {activeTab === 'controlApi' && empMode !== 'employee' && <ControlApiSettings />}
+        {activeTab === 'renderServer' && <RenderServerSettings />}
         {activeTab === 'employees' && <EmployeeSettings />}
         {activeTab === 'workspace' && <WorkspaceSettings />}
 

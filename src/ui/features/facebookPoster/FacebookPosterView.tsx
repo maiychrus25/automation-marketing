@@ -7,6 +7,7 @@ import CommentsTab from './CommentsTab';
 import ScheduleTab from './ScheduleTab';
 import HistoryTab from './HistoryTab';
 import CampaignsTab from './CampaignsTab';
+import VideoTab from './VideoTab';
 import LeadsTab from './LeadsTab';
 import ResearchTab from './ResearchTab';
 import RunPanel, { PosterLog, PosterProgress } from './RunPanel';
@@ -17,6 +18,7 @@ const MAX_LOGS = 500;
 const SECTIONS: Record<FacebookPosterSection, { label: string; description?: string }> = {
   schedule: { label: 'Lịch đăng' },
   campaigns: { label: 'Chiến dịch', description: 'Gom lịch đăng theo chiến dịch, đặt khoảng ngày và so sánh hiệu quả.' },
+  video: { label: 'Video', description: 'Tạo video quảng cáo từ ảnh và mẫu có sẵn, render trên máy chủ riêng.' },
   join: { label: 'Tham gia nhóm', description: 'Tìm nhóm theo từ khóa và tham gia bằng profile đã chọn.' },
   comments: { label: 'Thu bình luận', description: 'Thu bình luận từ các bài đã đăng và tìm kiếm kết quả.' },
   leads: { label: 'Khách tiềm năng', description: 'Bình luận có ý định mua được lọc tự động từ các bài đã đăng.' },
@@ -40,6 +42,10 @@ export default function FacebookPosterView() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerMounted, setComposerMounted] = useState(false);
   const [composeAt, setComposeAt] = useState<number | undefined>();
+  const [composeMedia, setComposeMedia] = useState<string[]>([]);
+  const composeMediaPaths = useAppStore(s => s.posterComposeMediaPaths);
+  const setComposeMediaPaths = useAppStore(s => s.setPosterComposeMediaPaths);
+  const [composeSeq, setComposeSeq] = useState(0);
   const [editingDraft, setEditingDraft] = useState<{ schedule: FbPosterSchedule; media: { path: string; size: number }[] } | null>(null);
   // Mỗi lần mở nháp là một composer mới (nạp lại từ DB), kể cả mở lại cùng nháp.
   const [draftOpenSeq, setDraftOpenSeq] = useState(0);
@@ -62,8 +68,10 @@ export default function FacebookPosterView() {
     } finally { setChannelsLoading(false); }
   }, []);
 
-  const compose = (at?: number) => {
+  const compose = (at?: number, mediaPaths: string[] = []) => {
     setEditingDraft(null);
+    // Chỉ khi có tệp gắn sẵn mới dựng lại composer; mở thường vẫn giữ nội dung đang soạn dở.
+    if (mediaPaths.length) { setComposeMedia(mediaPaths); setComposeSeq((n) => n + 1); }
     setChannelsOpen(false);
     setComposeAt(at);
     setComposerMounted(true);
@@ -79,6 +87,13 @@ export default function FacebookPosterView() {
     setComposerMounted(true);
     setComposerOpen(true);
   };
+
+  // Mục Video yêu cầu mở Soạn bài với video đã gắn: mở rồi xoá yêu cầu để không mở lại.
+  useEffect(() => {
+    if (!composeMediaPaths) return;
+    compose(undefined, composeMediaPaths);
+    setComposeMediaPaths(null);
+  }, [composeMediaPaths]);
 
   // Reads the run record for a runId the panel has not seen; a run that already finished is no longer "current".
   const syncRun = (runId: string) => {
@@ -148,6 +163,7 @@ export default function FacebookPosterView() {
             {section !== 'schedule' && <div className="poster-task-page">
               <p className="poster-muted mb-6">{SECTIONS[section].description}</p>
               {section === 'campaigns' && <CampaignsTab />}
+              {section === 'video' && <VideoTab />}
               {section === 'join' && <JoinTab busy={busy} onStarted={onStarted} />}
               {section === 'comments' && <CommentsTab busy={busy} onStarted={onStarted} />}
               {section === 'leads' && <LeadsTab />}
@@ -158,7 +174,7 @@ export default function FacebookPosterView() {
         </div>
         {showProgress && <aside aria-label="Tiến độ" className="poster-run-panel"><RunPanel run={run} progress={progress} logs={logs} profileNames={profileNames} /></aside>}
       </div>
-      {composerMounted && <PostTab key={editingDraft ? `${editingDraft.schedule.id}:${draftOpenSeq}` : 'new'} draft={editingDraft ?? undefined} open={composerOpen} onClose={() => setComposerOpen(false)} initialProfileIds={selectedChannels ?? []} initialRunAt={composeAt}
+      {composerMounted && <PostTab key={editingDraft ? `${editingDraft.schedule.id}:${draftOpenSeq}` : composeSeq ? `new:${composeSeq}` : 'new'} draft={editingDraft ?? undefined} initialMediaPaths={composeMedia} open={composerOpen} onClose={() => setComposerOpen(false)} initialProfileIds={selectedChannels ?? []} initialRunAt={composeAt}
         busy={busy} profileNames={profileNames} onStarted={onStarted} />}
     </div>
   );

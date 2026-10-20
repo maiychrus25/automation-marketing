@@ -25,13 +25,15 @@ interface Props {
   onClose: () => void;
   initialProfileIds: string[];
   initialRunAt?: number;
+  /** Gắn sẵn các tệp (video từ mục Video) khi mở bài mới; bỏ qua khi sửa nháp. */
+  initialMediaPaths?: string[];
   /** Mở lại một bản nháp để sửa: nội dung, ảnh (đường dẫn tuyệt đối), profile, nhóm. */
   draft?: { schedule: FbPosterSchedule; media: { path: string; size: number }[] };
 }
 
 const splitLines = (value: string): string[] => value.split('\n').map((l) => l.trim()).filter(Boolean);
 
-export default function PostTab({ busy, profileNames, onStarted, open, onClose, initialProfileIds, initialRunAt, draft }: Props) {
+export default function PostTab({ busy, profileNames, onStarted, open, onClose, initialProfileIds, initialRunAt, initialMediaPaths, draft }: Props) {
   const dp = draft?.schedule.params as Record<string, any> | undefined;
   const showNotification = useAppStore((s) => s.showNotification);
   const [mode, setMode] = useState<FbPosterMode>(dp?.mode === 'page' ? 'page' : 'group');
@@ -39,7 +41,7 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
   const [variantTabs, setVariantTabs] = useState<string[]>(hydrateVariants(dp));
   const [activeTab, setActiveTab] = useState(0);
   const [campaignId, setCampaignId] = useState<string | null>(draft?.schedule.campaignId ?? null);
-  const [media, setMedia] = useState<MediaItem[]>(draft?.media ?? []);
+  const [media, setMedia] = useState<MediaItem[]>(draft?.media ?? (initialMediaPaths ?? []).map((path) => ({ path, size: 0 })));
   const [comment, setComment] = useState<string>(typeof dp?.comment === 'string' ? dp.comment : '');
   const [commentDelayMin, setCommentDelayMin] = useState<number>(Number.isInteger(dp?.commentDelayMin) ? dp!.commentDelayMin : 0);
   const [profileIds, setProfileIds] = useState<string[]>(

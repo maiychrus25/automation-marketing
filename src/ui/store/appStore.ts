@@ -7,7 +7,7 @@ import { type AppTheme, type ThemePreference, THEME_STORAGE_KEY, parseThemePrefe
 type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser' | 'facebookPoster';
 export type { AppTheme, ThemePreference };
 /** Màn con của Đăng Facebook, chọn từ sub-nav ở sidebar chính. */
-export type FacebookPosterSection = 'schedule' | 'campaigns' | 'join' | 'comments' | 'leads' | 'research' | 'history';
+export type FacebookPosterSection = 'schedule' | 'campaigns' | 'join' | 'comments' | 'leads' | 'research' | 'history' | 'video';
 
 export interface GroupMember {
   userId: string;
@@ -145,6 +145,9 @@ interface AppStore {
   /** Lịch cần mở chi tiết khi vào Lịch đăng (đặt từ chi tiết chiến dịch); ScheduleTab xoá sau khi mở. */
   posterFocusScheduleId: string | null;
   setPosterFocusScheduleId: (id: string | null) => void;
+  /** Đường dẫn video cần gắn sẵn khi mở Soạn bài từ mục Video; FacebookPosterView đọc rồi xoá. */
+  posterComposeMediaPaths: string[] | null;
+  setPosterComposeMediaPaths: (paths: string[] | null) => void;
   setLoading: (loading: boolean) => void;
   showNotification: (message: string, type?: 'success' | 'error' | 'info' | 'warning') => void;
   hideNotification: () => void;
@@ -372,6 +375,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   view: 'dashboard',
   facebookPosterSection: 'schedule',
   posterFocusScheduleId: null,
+  posterComposeMediaPaths: null,
   isLoading: false,
   notification: null,
   erpPermissionDialog: null,
@@ -438,6 +442,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setView: (view) => set({ view }),
   openFacebookPoster: (facebookPosterSection) => set({ view: 'facebookPoster', facebookPosterSection }),
   setPosterFocusScheduleId: (posterFocusScheduleId) => set({ posterFocusScheduleId }),
+  setPosterComposeMediaPaths: (posterComposeMediaPaths) => set({ posterComposeMediaPaths }),
   setLoading: (isLoading) => set({ isLoading }),
   showNotification: (message, type = 'info') => {
     set({ notification: { message, type } });
