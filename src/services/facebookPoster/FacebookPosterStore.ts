@@ -478,9 +478,13 @@ export class FacebookPosterStore {
         });
     }
 
-    listComments(opts: { postUrl?: string; limit: number; offset: number }): { comments: FbPosterComment[]; total: number } {
-        const where = opts.postUrl !== undefined ? 'WHERE post_url = ?' : '';
-        const filter = opts.postUrl !== undefined ? [opts.postUrl] : [];
+    /** `since` (ms): chỉ bình luận thu từ mốc đó (collected_at >= since). */
+    listComments(opts: { postUrl?: string; since?: number; limit: number; offset: number }): { comments: FbPosterComment[]; total: number } {
+        const conditions: string[] = [];
+        const filter: any[] = [];
+        if (opts.postUrl !== undefined) { conditions.push('post_url = ?'); filter.push(opts.postUrl); }
+        if (opts.since !== undefined) { conditions.push('collected_at >= ?'); filter.push(opts.since); }
+        const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
         const rows = this.db.query<any>(
             `SELECT * FROM fb_poster_comments ${where} ORDER BY collected_at DESC, rowid DESC LIMIT ? OFFSET ?`,
             [...filter, opts.limit, opts.offset],

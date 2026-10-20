@@ -851,6 +851,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'facebookPoster:loginCheckProgress',
       'facebookPoster:trackProgress',
       'facebookPoster:trackFinished',
+      'facebookPoster:leadsFound',
+      'facebookPoster:commentCollectProgress',
+      'facebookPoster:commentCollectFinished',
       // ─── Research events ─────────────────────────────────────────
       'research:progress',
       'research:finished',
@@ -960,5 +963,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     bestTimes:      (params?: any)                => ipcRenderer.invoke('facebookPoster:bestTimes', params || {}),
     getTrackConfig: ()                            => ipcRenderer.invoke('facebookPoster:getTrackConfig'),
     setTrackConfig: (config: any)                 => ipcRenderer.invoke('facebookPoster:setTrackConfig', config),
+    leadList:       (params?: any)                => ipcRenderer.invoke('facebookPoster:leadList', params || {}),
+    leadUpdate:     (params: any)                 => ipcRenderer.invoke('facebookPoster:leadUpdate', params),
+    leadConfigGet:  ()                            => ipcRenderer.invoke('facebookPoster:leadConfigGet'),
+    leadConfigSet:  (config: any)                 => ipcRenderer.invoke('facebookPoster:leadConfigSet', config),
+    leadExport:     (params?: any)                => ipcRenderer.invoke('facebookPoster:leadExport', params || {}),
+    commentCollect: (params?: any)                => ipcRenderer.invoke('facebookPoster:commentCollect', params || {}),
+    commentCollectStatus: ()                      => ipcRenderer.invoke('facebookPoster:commentCollectStatus'),
+    commentCollectCancel: ()                      => ipcRenderer.invoke('facebookPoster:commentCollectCancel'),
   },
 });

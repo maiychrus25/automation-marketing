@@ -1,4 +1,5 @@
 import { dialog, ipcMain } from 'electron';
+import * as XLSX from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -21,6 +22,14 @@ import { PostTrackScheduler } from '../../src/services/facebookPoster/PostTrackS
 import {
     POST_TRACKING_SETTING_KEY, parsePostTrackingConfig, validatePostTrackingConfig,
 } from '../../src/services/facebookPoster/postTracking';
+import { CommentCollector } from '../../src/services/facebookPoster/CommentCollector';
+import { CommentCollectScheduler } from '../../src/services/facebookPoster/CommentCollectScheduler';
+import { LeadDetector } from '../../src/services/facebookPoster/LeadDetector';
+import { LEAD_CONFIG_SETTING_KEY, parseLeadConfig, validateLeadConfig } from '../../src/services/facebookPoster/leadRules';
+import { createLeadClassifier, openLoggedInSession, buildLeadSheetRows } from '../../src/services/facebookPoster/leadWiring';
+import { isLoggedIn } from '../../src/services/facebookPoster/loginState';
+import AIAssistantService from '../../src/services/ai/AIAssistantService';
+import { collectComments } from '../../src/services/facebookPoster/collectComments';
 import { GraphqlSession } from '../../src/services/research/graphqlSession';
 import { checkProfileIds } from '../../src/services/research/researchOperationsLogic';
 import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
@@ -30,7 +39,7 @@ import { getBrowserProfileService, isBrowserEngineInstalled } from './browserPro
 import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished } from '../../src/services/control/controlEvents';
 import { getResearchStore } from './researchIpc';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
-import type { FbPosterRun, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
+import type { FbPosterRun, LeadStatus, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 import { campaignBlockReason, readCampaignRef } from '../../src/services/facebookPoster/campaigns';
 import { scoreGroups } from '../../src/services/facebookPoster/groupScores';
@@ -48,6 +57,10 @@ let tracker: PostTracker | null = null;
 let trackerDbPath: string | null = null;
 let trackerService: FacebookPosterService | null = null;
 let trackScheduler: PostTrackScheduler | null = null;
+let collector: CommentCollector | null = null;
+let collectorDbPath: string | null = null;
+let collectorService: FacebookPosterService | null = null;
+let commentScheduler: CommentCollectScheduler | null = null;
 let scheduler: FacebookPosterScheduler | null = null;
 let schedulerDbPath: string | null = null;
 // Missed-run notices not yet handed to the UI. Only the first takeMissed drains them; after that the UI is live
@@ -61,6 +74,11 @@ const CHECK_STOP_GRACE_MS = 45000; // same grace as FacebookPosterService.stopAn
 const TRACKING_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_TRACK_LIST_LIMIT = 500;
+const MAX_LEAD_LIST_LIMIT = 500;
+const MAX_LEAD_NOTE_LENGTH = 1000;
+const MAX_LEAD_SEARCH_LENGTH = 100;
+const MAX_COLLECT_POST_URLS = 50;
+const LEAD_STATUSES: LeadStatus[] = ['new', 'contacted', 'won', 'ignored'];
 const MAX_TRACK_LIST_SCAN = 5000;
 const DEFAULT_REPORT_DAYS = 30;
 const BEST_TIMES_DAYS = 60;
@@ -87,6 +105,7 @@ function store(): FacebookPosterStore {
     if (dbPath !== lastDbPath) {
         s.failInterruptedRuns(Date.now());
         safely('pruneTracking', () => { s.pruneTrackingOlderThan(Date.now() - TRACKING_RETENTION_MS); });
+        safely('pruneLeads', () => { s.pruneLeadsOlderThan(Date.now() - TRACKING_RETENTION_MS); });
         lastDbPath = dbPath;
         // The service binds to a store, so a new database needs a new service (never while a run is active).
         // isBusy (run or login check): the checker holds the service's work slot, so never swap the service under it.
@@ -114,6 +133,9 @@ function getService(): FacebookPosterService {
             },
             onLoginObserved: (profileId, state) => safely('onLoginObserved', () => getChecker().observe(profileId, state, 'run')),
             readTrackingConfig: readTrackingConfig,
+            readLeadConfig,
+            // Lượt thu bình luận thủ công (collect_comments) cũng lọc khách; lỗi lọc không làm hỏng lượt thu.
+            onCommentsSaved: async (rows) => { await getDetector().process(rows, { auto: false }); },
         });
     }
     return service;
@@ -201,6 +223,57 @@ function getTracker(): PostTracker {
     return tracker;
 }
 
+function readLeadConfig() {
+    return parseLeadConfig(db().getSetting(LEAD_CONFIG_SETTING_KEY));
+}
+
+/** Hook phát khi có khách mới: hiện chỉ gửi cho giao diện; Task 6 thêm control event `leads.found` tại đây. */
+function emitLeadsFound(payload: { count: number; samples: { authorName: string; text: string; postUrl: string }[]; auto: boolean }): void {
+    EventBroadcaster.emit('facebookPoster:leadsFound', payload);
+}
+
+/** Bộ lọc khách của DB đang dùng (không giữ trạng thái nên dựng mỗi lần). AI = trợ lý mặc định của app. */
+function getDetector(): LeadDetector {
+    return new LeadDetector({
+        store: store(),
+        readConfig: readLeadConfig,
+        classify: createLeadClassifier({
+            getAssistantId: () => AIAssistantService.getInstance().getDefaultAssistant()?.id ?? null,
+            chat: (assistantId, messages) => AIAssistantService.getInstance().chat(assistantId, messages, true),
+        }),
+        emit: (_type, payload) => emitLeadsFound(payload),
+        log: (message) => Logger.warn(`[facebookPosterIpc] ${message}`),
+    });
+}
+
+/** Bộ thu bình luận gắn với DB đang dùng và khe việc chung của service; dựng lại khi DB / service đổi và không có lượt thu. */
+function getCollector(): CommentCollector {
+    const svc = getService();
+    const dbPath = db().getDbPath();
+    if (collector && (collectorDbPath !== dbPath || collectorService !== svc) && !collector.isRunning()) collector = null;
+    if (!collector) {
+        collectorDbPath = dbPath;
+        collectorService = svc;
+        collector = new CommentCollector({
+            store: store(),
+            launchFor: (profileId) => openLoggedInSession(() => getBrowserProfileService().openForAutomation(profileId), isLoggedIn),
+            collect: collectComments,
+            slot: { acquire: () => svc.acquireExclusive(), release: () => svc.releaseExclusive() },
+            observeLogin: (profileId, state) => safely('commentObserveLogin', () => getChecker().observe(profileId, state, 'run')),
+            detector: { process: (rows, opts) => getDetector().process(rows, opts) },
+            readConfig: readLeadConfig,
+            emit: (type, payload) => {
+                if (type === 'comments.collectProgress') EventBroadcaster.emit('facebookPoster:commentCollectProgress', payload);
+                else if (type === 'comments.collectFinished') {
+                    EventBroadcaster.emit('facebookPoster:commentCollectFinished', payload);
+                    safely('onRunFinished', () => scheduler?.onRunFinished()); // lịch đăng đã xếp hàng chạy khi khe rảnh
+                }
+            },
+        });
+    }
+    return collector;
+}
+
 function emitLoginStatesChanged(): void {
     EventBroadcaster.emit('facebookPoster:loginStateChanged', listFacebookLoginStates());
 }
@@ -252,7 +325,7 @@ export function isFacebookPosterSchedulerRunning(): boolean {
 
 /** True while a run or a login check is active; the updater refuses to restart then. */
 export function isFacebookPosterBusy(): boolean {
-    return (service?.isBusy() ?? false) || (tracker?.isRunning() ?? false);
+    return (service?.isBusy() ?? false) || (tracker?.isRunning() ?? false) || (collector?.isRunning() ?? false);
 }
 
 /** Stops a running job (if any). Called on app quit and before the workspace database is switched. */
@@ -260,6 +333,7 @@ export function cancelFacebookPosterJobs(): void {
     service?.cancelAll();
     checker?.stop();
     tracker?.stop();
+    collector?.stop();
 }
 
 /** Cancels the running job and waits (bounded) for it to end, so it cannot write into the next workspace DB. True = no job runs anymore. Never throws. */
@@ -268,6 +342,8 @@ export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
     theChecker?.stop(); // dừng sau profile đang dở
     const theTracker = tracker;
     theTracker?.stop();
+    const theCollector = collector;
+    theCollector?.stop();
     let ok = true;
     try {
         if (service) ok = await service.stopAndWait();
@@ -287,6 +363,13 @@ export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
         await Promise.race([theTracker.whenIdle().catch(() => undefined), timedOut]);
         clearTimeout(timer);
         if (theTracker.isRunning()) ok = false;
+    }
+    if (theCollector?.isRunning()) {
+        let timer: NodeJS.Timeout | undefined;
+        const timedOut = new Promise<void>((resolve) => { timer = setTimeout(resolve, CHECK_STOP_GRACE_MS); timer.unref?.(); });
+        await Promise.race([theCollector.whenIdle().catch(() => undefined), timedOut]);
+        clearTimeout(timer);
+        if (theCollector.isRunning()) ok = false;
     }
     return ok;
 }
@@ -375,19 +458,37 @@ export function startFacebookPosterScheduler(): void {
         log: (msg) => Logger.warn(msg),
     });
     trackScheduler.start();
+    commentScheduler = new CommentCollectScheduler({
+        now: Date.now,
+        setTimer: (fn, ms) => {
+            const handle = setTimeout(fn, ms);
+            handle.unref?.();
+            return handle;
+        },
+        clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+        readConfig: readLeadConfig,
+        isBusy: () => isWorkspaceSwitchInProgress() || isFacebookPosterBusy(),
+        duePosts: (now, limit) => store().listDueCommentPosts(now, limit),
+        runCollect: () => { getCollector().collect({ auto: true }); },
+        log: (msg) => Logger.warn(msg),
+    });
+    commentScheduler.start();
 }
 
 export function stopFacebookPosterScheduler(): void {
     const current = scheduler;
     const currentLogin = loginScheduler;
     const currentTrack = trackScheduler;
+    const currentComment = commentScheduler;
     scheduler = null;
     loginScheduler = null;
     trackScheduler = null;
+    commentScheduler = null;
     schedulerDbPath = null;
     current?.stop();
     currentLogin?.stop();
     currentTrack?.stop();
+    currentComment?.stop();
 }
 
 function clampLimit(value: any, fallback: number, max: number): number {
@@ -674,6 +775,100 @@ export const trackingOperations = {
     },
 };
 
+function readLeadStatus(value: unknown): LeadStatus {
+    if (!LEAD_STATUSES.includes(value as LeadStatus)) throw new Error(`status phải là một trong: ${LEAD_STATUSES.join(', ')}`);
+    return value as LeadStatus;
+}
+
+/** Bộ lọc danh sách khách (dùng chung cho danh sách và xuất Excel). */
+function readLeadFilter(p: any) {
+    if (p.status !== undefined) readLeadStatus(p.status);
+    readCampaignFilter(p);
+    for (const key of ['from', 'to']) {
+        if (p[key] !== undefined && !Number.isFinite(p[key])) throw new Error(`${key} không hợp lệ`);
+    }
+    if (p.search !== undefined && (typeof p.search !== 'string' || p.search.length > MAX_LEAD_SEARCH_LENGTH)) {
+        throw new Error(`search phải là chuỗi tối đa ${MAX_LEAD_SEARCH_LENGTH} ký tự`);
+    }
+    return { status: p.status as LeadStatus | undefined, campaignId: p.campaignId as string | undefined, from: p.from as number | undefined, to: p.to as number | undefined, search: p.search as string | undefined };
+}
+
+/** Khách tiềm năng và thu bình luận: thân xử lý dùng chung cho IPC và control API (kiểm tham số nằm ở đây). */
+export const leadOperations = {
+    list: (params?: any) => {
+        const p = params ?? {};
+        const filter = readLeadFilter(p);
+        return store().listLeads({ ...filter, limit: clampLimit(p.limit, 100, MAX_LEAD_LIST_LIMIT), offset: offsetOf(p.offset) });
+    },
+
+    update: (params: any) => {
+        const p = params ?? {};
+        if (!Number.isInteger(p.id) || p.id < 1) throw new Error('id khách không hợp lệ');
+        if (p.status === undefined && p.note === undefined) throw new Error('Cần status hoặc note để cập nhật');
+        const patch: { status?: LeadStatus; note?: string } = {};
+        if (p.status !== undefined) patch.status = readLeadStatus(p.status);
+        if (p.note !== undefined) {
+            if (typeof p.note !== 'string' || p.note.length > MAX_LEAD_NOTE_LENGTH) throw new Error(`note phải là chuỗi tối đa ${MAX_LEAD_NOTE_LENGTH} ký tự`);
+            patch.note = p.note;
+        }
+        const lead = store().updateLead(p.id, patch, Date.now());
+        if (!lead) throw new Error('Không tìm thấy khách');
+        return { lead };
+    },
+
+    getConfig: () => ({ config: readLeadConfig() }),
+
+    setConfig: (params: any) => {
+        const config = validateLeadConfig(params);
+        db().setSetting(LEAD_CONFIG_SETTING_KEY, JSON.stringify(config));
+        return { config };
+    },
+
+    exportXlsx: async (params?: any) => {
+        const filter = readLeadFilter(params ?? {});
+        const s = store();
+        const result = await dialog.showSaveDialog({
+            defaultPath: `khach-tiem-nang-${new Date().toISOString().slice(0, 10)}.xlsx`,
+            filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+        });
+        if (result.canceled || !result.filePath) return { saved: false };
+        const leads = [];
+        for (;;) {
+            const page = s.listLeads({ ...filter, limit: MAX_LEAD_LIST_LIMIT, offset: leads.length });
+            leads.push(...page.leads);
+            if (page.leads.length === 0 || leads.length >= page.total) break;
+        }
+        const book = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(buildLeadSheetRows(leads)), 'Khách tiềm năng');
+        await fs.promises.writeFile(result.filePath, XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }));
+        return { saved: true, path: result.filePath, count: leads.length };
+    },
+
+    collect: (params?: any) => {
+        if (isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        const p = params ?? {};
+        if (p.postUrls !== undefined) {
+            if (!Array.isArray(p.postUrls) || p.postUrls.length === 0 || p.postUrls.length > MAX_COLLECT_POST_URLS
+                || p.postUrls.some((u: unknown) => typeof u !== 'string' || !u)) {
+                throw new Error(`postUrls phải là 1–${MAX_COLLECT_POST_URLS} link bài`);
+            }
+        }
+        return getCollector().collect({ postUrls: p.postUrls, auto: false });
+    },
+
+    collectStatus: () => ({ ...getCollector().status() }),
+
+    collectCancel: () => ({ cancelled: collector?.cancel() ?? false }),
+
+    /** Danh sách bình luận đã thu; `since` (ms) chỉ lấy bình luận thu từ mốc đó. */
+    comments: (params?: any) => {
+        const p = params ?? {};
+        if (p.postUrl !== undefined && (typeof p.postUrl !== 'string' || !p.postUrl)) throw new Error('postUrl không hợp lệ');
+        if (p.since !== undefined && !Number.isFinite(p.since)) throw new Error('since không hợp lệ');
+        return store().listComments({ postUrl: p.postUrl, since: p.since, limit: clampLimit(p.limit, 100, MAX_TRACK_LIST_LIMIT), offset: offsetOf(p.offset) });
+    },
+};
+
 export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:start', posterOperations.start);
     handle('facebookPoster:scheduleCreate', posterOperations.scheduleCreate);
@@ -715,6 +910,14 @@ export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:bestTimes', trackingOperations.bestTimes);
     handle('facebookPoster:getTrackConfig', trackingOperations.getConfig);
     handle('facebookPoster:setTrackConfig', trackingOperations.setConfig);
+    handle('facebookPoster:leadList', leadOperations.list);
+    handle('facebookPoster:leadUpdate', leadOperations.update);
+    handle('facebookPoster:leadConfigGet', leadOperations.getConfig);
+    handle('facebookPoster:leadConfigSet', leadOperations.setConfig);
+    handle('facebookPoster:leadExport', leadOperations.exportXlsx);
+    handle('facebookPoster:commentCollect', leadOperations.collect);
+    handle('facebookPoster:commentCollectStatus', leadOperations.collectStatus);
+    handle('facebookPoster:commentCollectCancel', leadOperations.collectCancel);
     handle('facebookPoster:getLoginStates', () => ({ states: listFacebookLoginStates() }));
     handle('facebookPoster:getLoginCheckConfig', () => ({ config: parseLoginCheckConfig(db().getSetting(LOGIN_CHECK_SETTING_KEY)) }));
     handle('facebookPoster:setLoginCheckConfig', (params) => {

@@ -7,12 +7,14 @@ import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserPr
 import type { UpdateState, ActionResult as UpdateActionResult } from '../../services/update/UpdateService';
 import type { ResearchConfig } from '../../services/research/researchConfig';
 import type { ResearchItem, ResearchScan, ResearchSort, ResearchSource } from '../../models/research';
-import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, CampaignStatus } from '../../models/facebookPoster';
+import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterLead, LeadStatus, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, CampaignStatus } from '../../models/facebookPoster';
 import type { GroupScore } from '../../services/facebookPoster/groupScores';
 import type { BestTimes } from '../../services/facebookPoster/bestTimes';
 import type { CampaignView } from '../../services/facebookPoster/campaignOperations';
 import type { PostTrackingConfig } from '../../services/facebookPoster/postTracking';
 import type { TrackStatus } from '../../services/facebookPoster/PostTracker';
+import type { LeadConfig } from '../../services/facebookPoster/leadRules';
+import type { CommentCollectStatus } from '../../services/facebookPoster/CommentCollector';
 
 
 declare global {
@@ -711,7 +713,7 @@ declare global {
         listGroups:     (profileIds: string[]) => Promise<{ success: boolean; groups?: Record<string, FbPosterGroup[]>; error?: string }>;
         listRuns:       (params?: { limit?: number; offset?: number; kind?: FbPosterKind }) => Promise<{ success: boolean; runs?: FbPosterRun[]; total?: number; error?: string }>;
         getRun:         (runId: string) => Promise<{ success: boolean; run?: FbPosterRun; results?: FbPosterResult[]; error?: string }>;
-        listComments:   (params?: { postUrl?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; comments?: FbPosterComment[]; total?: number; error?: string }>;
+        listComments:   (params?: { postUrl?: string; since?: number; limit?: number; offset?: number }) => Promise<{ success: boolean; comments?: FbPosterComment[]; total?: number; error?: string }>;
         listPostedUrls: () => Promise<{ success: boolean; posts?: { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number }[]; error?: string }>;
         pickMedia:      () => Promise<{ success: boolean; items?: { path: string; size: number }[]; error?: string }>;
         exportRunCsv:   (runId: string) => Promise<{ success: boolean; path?: string | null; error?: string }>;
@@ -741,6 +743,14 @@ declare global {
         bestTimes:      (params?: { from?: number; to?: number; groupUrl?: string; campaignId?: string }) => Promise<({ success: boolean; error?: string } & Partial<BestTimes>)>;
         getTrackConfig: () => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
         setTrackConfig: (config: PostTrackingConfig) => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
+        leadList:       (params?: { status?: LeadStatus; campaignId?: string; from?: number; to?: number; search?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; leads?: FbPosterLead[]; total?: number; error?: string }>;
+        leadUpdate:     (params: { id: number; status?: LeadStatus; note?: string }) => Promise<{ success: boolean; lead?: FbPosterLead; error?: string }>;
+        leadConfigGet:  () => Promise<{ success: boolean; config?: LeadConfig; error?: string }>;
+        leadConfigSet:  (config: LeadConfig) => Promise<{ success: boolean; config?: LeadConfig; error?: string }>;
+        leadExport:     (params?: { status?: LeadStatus; campaignId?: string; from?: number; to?: number; search?: string }) => Promise<{ success: boolean; saved?: boolean; path?: string; count?: number; error?: string }>;
+        commentCollect: (params?: { postUrls?: string[] }) => Promise<{ success: boolean; jobId?: string; posts?: number; error?: string }>;
+        commentCollectStatus: () => Promise<({ success: boolean; error?: string }) & Partial<CommentCollectStatus>>;
+        commentCollectCancel: () => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
       };
       erp: {
       projectList:         (params?: { archived?: boolean }) => Promise<{ success: boolean; projects: any[]; error?: string }>;

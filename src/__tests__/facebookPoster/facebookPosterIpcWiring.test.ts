@@ -8,6 +8,9 @@ import { memoryDb } from './helpers';
 const mockDb = memoryDb();
 const mockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbp-wiring-'));
 let capturedDeps: any = null;
+let mockCommentSchedulerDeps: any = null;
+let mockServiceDeps: any = null;
+let mockServiceInstance: any = null;
 const mockReschedule = jest.fn();
 const mockBypass = jest.fn();
 const mockClearBypass = jest.fn();
@@ -41,6 +44,23 @@ jest.mock('../../services/facebookPoster/LoginCheckScheduler', () => ({
     LOGIN_CHECK_SETTING_KEY: 'k', parseLoginCheckConfig: () => ({}), validateLoginCheckConfig: (c: any) => c,
 }));
 jest.mock('../../services/facebookPoster/PostTrackScheduler', () => ({ PostTrackScheduler: class { start() {} stop() {} } }));
+jest.mock('../../services/facebookPoster/CommentCollectScheduler', () => ({
+    CommentCollectScheduler: class {
+        constructor(deps: any) { mockCommentSchedulerDeps = deps; }
+        start() {}
+        stop() {}
+    },
+}));
+jest.mock('../../services/ai/AIAssistantService', () => ({ __esModule: true, default: { getInstance: () => ({ getDefaultAssistant: () => null, chat: jest.fn() }) } }));
+jest.mock('../../services/facebookPoster/FacebookPosterService', () => {
+    const actual = jest.requireActual('../../services/facebookPoster/FacebookPosterService');
+    return {
+        ...actual,
+        FacebookPosterService: class extends actual.FacebookPosterService {
+            constructor(deps: any) { super(deps); mockServiceDeps = deps; mockServiceInstance = this; }
+        },
+    };
+});
 jest.mock('../../services/research/graphqlSession', () => ({ GraphqlSession: class {} }));
 jest.mock('../../../electron/ipc/browserProfileIpc', () => ({ getBrowserProfileService: () => ({}), isBrowserEngineInstalled: () => true }));
 jest.mock('../../../electron/ipc/researchIpc', () => ({ getResearchStore: () => ({}) }));
@@ -50,7 +70,7 @@ jest.mock('../../services/control/controlEvents', () => ({
     buildDraftApproved: jest.fn(), buildLoginProblem: jest.fn(), buildCheckFinished: jest.fn(), buildTrackFinished: jest.fn(),
 }));
 
-import { startFacebookPosterScheduler, stopFacebookPosterScheduler, posterOperations, campaignOperations, trackingOperations } from '../../../electron/ipc/facebookPosterIpc';
+import { startFacebookPosterScheduler, stopFacebookPosterScheduler, posterOperations, campaignOperations, trackingOperations, leadOperations, isFacebookPosterBusy } from '../../../electron/ipc/facebookPosterIpc';
 
 const NOW = Date.now();
 const schedule = (campaignId: string | null, params: Record<string, unknown> = {}) => ({
@@ -143,5 +163,91 @@ describe('facebookPosterIpc wiring', () => {
         expect(() => trackingOperations.bestTimes({ groupUrl: '' })).toThrow('groupUrl không hợp lệ');
         expect(() => trackingOperations.bestTimes({ campaignId: 3 })).toThrow('campaignId không hợp lệ');
         expect(() => trackingOperations.stats({ groupBy: 'minute' })).toThrow('groupBy phải là');
+    });
+
+    test('leadOperations.list / update kiểm status, note, id và cập nhật khách', () => {
+        const now = Date.now();
+        const created = new FacebookPosterStore(mockDb).createLeads([{
+            commentKey: 'k-ops', postUrl: 'https://www.facebook.com/groups/1/posts/9/', resultId: null, groupUrl: '', campaignId: null, variant: '',
+            profileId: 'p1', authorId: 'a', authorName: 'An', authorUrl: '', text: 'giá bao nhiêu', commentedAtMs: null, matched: ['giá'],
+            aiIntent: null, aiScore: null, aiReason: null, status: 'new', note: '', detectedAt: now, updatedAt: now,
+        }]);
+        const id = created[0].id;
+        expect(leadOperations.list({ status: 'new' }).leads.map((l) => l.id)).toContain(id);
+        expect(() => leadOperations.list({ status: 'done' })).toThrow('status phải là');
+        expect(() => leadOperations.list({ from: 'x' })).toThrow('from không hợp lệ');
+        expect(() => leadOperations.list({ search: 5 })).toThrow('search phải là');
+        expect(() => leadOperations.update({ id: 0, status: 'won' })).toThrow('id khách không hợp lệ');
+        expect(() => leadOperations.update({ id })).toThrow('Cần status hoặc note');
+        expect(() => leadOperations.update({ id, status: 'lost' })).toThrow('status phải là');
+        expect(() => leadOperations.update({ id, note: 'x'.repeat(1001) })).toThrow('note phải là');
+        expect(() => leadOperations.update({ id, note: 5 })).toThrow('note phải là');
+        expect(() => leadOperations.update({ id: 99999, status: 'won' })).toThrow('Không tìm thấy khách');
+        expect(leadOperations.update({ id, status: 'contacted', note: 'x'.repeat(1000) }).lead.status).toBe('contacted');
+        expect(leadOperations.list({ status: 'new' }).leads.map((l) => l.id)).not.toContain(id);
+    });
+
+    test('leadOperations.setConfig kiểm cấu hình; getConfig trả mặc định khi chưa lưu', () => {
+        expect(leadOperations.getConfig().config.collectAtMinutes).toEqual([120, 1440, 4320]);
+        expect(() => leadOperations.setConfig({ ...leadOperations.getConfig().config, aiMinScore: 101 })).toThrow();
+        expect(() => leadOperations.setConfig({ ...leadOperations.getConfig().config, collectAtMinutes: [60, 30] })).toThrow('tăng dần');
+        expect(leadOperations.setConfig(leadOperations.getConfig().config).config.aiMinScore).toBe(60);
+    });
+
+    test('leadOperations.collect kiểm postUrls; comments kiểm và lọc since', () => {
+        expect(() => leadOperations.collect({ postUrls: [] })).toThrow('postUrls phải là');
+        expect(() => leadOperations.collect({ postUrls: [5] })).toThrow('postUrls phải là');
+        expect(() => leadOperations.collect({ postUrls: Array.from({ length: 51 }, (_, i) => `https://x/${i}`) })).toThrow('postUrls phải là');
+        expect(() => leadOperations.comments({ since: 'x' })).toThrow('since không hợp lệ');
+        expect(() => leadOperations.comments({ postUrl: '' })).toThrow('postUrl không hợp lệ');
+        const s = new FacebookPosterStore(mockDb);
+        s.saveComments('p1', [{ postUrl: 'https://x/since', authorId: 'a', authorName: 'A', authorUrl: '', text: 'cũ', commentedAt: '' }], 100);
+        s.saveComments('p1', [{ postUrl: 'https://x/since', authorId: 'b', authorName: 'B', authorUrl: '', text: 'mới', commentedAt: '' }], 900);
+        expect(leadOperations.comments({ postUrl: 'https://x/since', since: 500 }).comments.map((c) => c.text)).toEqual(['mới']);
+    });
+
+    test('lượt thu bình luận thủ công (collect_comments) chuyển bình luận mới cho bộ lọc khách (auto = false)', async () => {
+        posterOperations.current(); // dựng service
+        const text = 'cho mình hỏi giá sản phẩm này';
+        await mockServiceDeps.onCommentsSaved([{
+            key: 'manual-k1', profileId: 'p1', postUrl: 'https://x/manual', authorId: 'a1', authorName: 'Lan', authorUrl: '', text,
+            commentedAt: '', commentedAtMs: null, collectedAt: Date.now(),
+        }]);
+        expect(leadOperations.list({ search: 'hỏi giá' }).leads.map((l) => l.commentKey)).toEqual(['manual-k1']);
+        // Thu lại cùng bình luận không tạo khách trùng
+        await mockServiceDeps.onCommentsSaved([{
+            key: 'manual-k1', profileId: 'p1', postUrl: 'https://x/manual', authorId: 'a1', authorName: 'Lan', authorUrl: '', text,
+            commentedAt: '', commentedAtMs: null, collectedAt: Date.now(),
+        }]);
+        expect(leadOperations.list({ search: 'hỏi giá' }).total).toBe(1);
+    });
+
+    test('bộ hẹn giờ thu bình luận nhận isBusy gồm khe việc chung; runCollect thu với auto = true', async () => {
+        expect(mockCommentSchedulerDeps.isBusy()).toBe(false);
+        mockServiceInstance.acquireExclusive();
+        expect(mockCommentSchedulerDeps.isBusy()).toBe(true);
+        expect(isFacebookPosterBusy()).toBe(true);
+        mockServiceInstance.releaseExclusive();
+        expect(mockCommentSchedulerDeps.isBusy()).toBe(false);
+        mockCommentSchedulerDeps.runCollect([]);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const status = leadOperations.collectStatus();
+        expect(status.running).toBe(false);
+        expect(status.last).toMatchObject({ auto: true, posts: 0, cancelled: false });
+        expect(leadOperations.collectCancel()).toEqual({ cancelled: false });
+        expect(leadOperations.collect({}).posts).toBe(0); // thu tay không có bài đến hạn
+    });
+
+    test('store() xoá khách quá 180 ngày cùng chỗ xoá theo dõi khi gặp DB lần đầu', () => {
+        jest.isolateModules(() => {
+            const { FacebookPosterStore: IsolatedStore } = require('../../services/facebookPoster/FacebookPosterStore');
+            const spy = jest.spyOn(IsolatedStore.prototype, 'pruneLeadsOlderThan');
+            const isolated = require('../../../electron/ipc/facebookPosterIpc');
+            isolated.leadOperations.list();
+            isolated.leadOperations.list();
+            expect(spy).toHaveBeenCalledTimes(1);
+            const cutoff = spy.mock.calls[0][0] as number;
+            expect(Math.abs(Date.now() - cutoff - 180 * 24 * 60 * 60 * 1000)).toBeLessThan(60_000);
+        });
     });
 });

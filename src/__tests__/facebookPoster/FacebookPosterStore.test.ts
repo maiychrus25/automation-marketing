@@ -977,6 +977,16 @@ describe('comment leads store', () => {
     expect(s.leadCommentKeys([]).size).toBe(0);
   });
 
+  test('listComments lọc theo since (collected_at >= since), kết hợp postUrl', () => {
+    const s = store();
+    s.saveComments('p1', [comment({ postUrl: 'https://x/a', text: 'cũ' })], 100);
+    s.saveComments('p1', [comment({ postUrl: 'https://x/a', text: 'mới' }), comment({ postUrl: 'https://x/b', text: 'khác bài' })], 500);
+    expect(s.listComments({ since: 500, limit: 10, offset: 0 }).total).toBe(2);
+    const both = s.listComments({ since: 500, postUrl: 'https://x/a', limit: 10, offset: 0 });
+    expect(both.comments.map((c) => c.text)).toEqual(['mới']);
+    expect(both.total).toBe(1);
+  });
+
   test('trackingByPostUrls maps by post_url across more than 500 urls', () => {
     const s = store();
     for (let i = 1; i <= 3; i++) track(s, i);
