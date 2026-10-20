@@ -314,5 +314,7 @@ describe('control events: video', () => {
             .toEqual({ videoId: 'v1', name: 'N', ok: true, durationSec: 20, sizeBytes: 5, mediaId: 'm' });
         expect(buildVideoFinished({ videoId: 'v2', name: 'M', ok: false, error: 'lỗi' } as any))
             .toEqual({ videoId: 'v2', name: 'M', ok: false, error: 'lỗi' });
+        expect(buildVideoFinished({ videoId: 'v3', name: 'C', ok: false, error: 'Đã huỷ', cancelled: true }))
+            .toEqual({ videoId: 'v3', name: 'C', ok: false, error: 'Đã huỷ', cancelled: true });
     });
 });

@@ -52,6 +52,8 @@ export function validateTemplateInput(tpl: RenderTemplate, input: NonNullable<Vi
             if (typeof value !== 'number' || !Number.isFinite(value)) bad(`"${def.label}" phải là số`);
         } else if (typeof value !== 'string') {
             bad(`"${def.label}" phải là chữ`);
+        } else if (def.type === 'string' && def.required !== false && !value.trim()) {
+            bad(`Nhập ${def.label.toLowerCase()}`);
         } else if (def.type === 'color' && !COLOR_PATTERN.test(value)) {
             bad(`"${def.label}" phải là mã màu dạng #rrggbb`);
         } else if (def.maxLength !== undefined && value.length > def.maxLength) {
@@ -80,6 +82,7 @@ export class VideoService {
 
     /** Nhạc có sẵn để nghe thử: tải một lần về videosDir/music-cache/<id>.mp3, các lần sau dùng lại. Mã phải có trong danh sách của máy chủ. */
     async musicPreview(id: string): Promise<string> {
+        if (!/^[a-z0-9-]+$/i.test(id)) throw new RenderError('not_found', 'Không tìm thấy bản nhạc'); // M6: id đi vào đường dẫn tệp
         if (!(await this.templates()).music.some((m) => m.id === id)) throw new RenderError('not_found', 'Không tìm thấy bản nhạc');
         const dest = path.join(this.deps.videosDir, 'music-cache', `${id}.mp3`);
         if (fs.existsSync(dest)) return dest;
@@ -227,7 +230,7 @@ export class VideoService {
                 this.finish(job, { status: 'failed', error: 'Máy chủ render không còn việc này' }, true);
                 return;
             }
-            Logger.warn(`[VideoService] ${job.id}: ${e instanceof Error ? e.message : 'lỗi không rõ'}`);
+            Logger.warn(`[VideoService] ${job.id}: ${e instanceof Error && e.name === 'ControlError' ? e.message : 'lỗi không rõ'}`);
             if (this.deps.now() - (this.lastContact.get(job.id) ?? now) > LOST_CONTACT_MS) {
                 this.finish(job, { status: 'failed', error: LOST_CONTACT_MESSAGE }, true);
             }
@@ -278,12 +281,13 @@ export class VideoService {
         const ok = patch.status === 'done';
         const event: Record<string, unknown> = { videoId: job.id, name: job.name, ok };
         if (!ok) event.error = patch.error;
+        if (patch.status === 'cancelled') event.cancelled = true; // người dùng huỷ: bridge không báo như lỗi
         if (ok && patch.durationSec != null) event.durationSec = patch.durationSec;
         if (ok && patch.sizeBytes != null) event.sizeBytes = patch.sizeBytes;
         if (ok && job.source === 'bot' && patch.filePath) {
             void this.deps.mediaInbox.adopt(patch.filePath)
                 .then((saved) => { event.mediaId = saved.mediaId; })
-                .catch((e) => { event.error = `Không chép được video vào hộp thư: ${e instanceof Error ? e.message : 'lỗi không rõ'}`; })
+                .catch((e) => { event.error = `Không chép được video vào hộp thư: ${e instanceof Error && e.name === 'ControlError' ? e.message : 'lỗi không rõ'}`; })
                 .then(() => this.deps.emit('videos.finished', event));
         } else {
             this.deps.emit('videos.finished', event);

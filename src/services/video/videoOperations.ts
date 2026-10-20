@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildVideoFinished } from '../control/controlEvents';
+import { AUDIO_EXTENSIONS } from '../facebookPoster/mediaRules';
 import type { VideoJob, VideoStatus } from '../../models/video';
 import { RenderError, type RenderClient } from './RenderClient';
 import { maskKey, type VideoSettings } from './videoSettings';
@@ -119,6 +120,7 @@ export function createVideoOperations(deps: VideoOperationsDeps) {
                 if (hasMusicFile) {
                     const one = origin === 'app' ? { musicPath: [p.musicPath] } : { musicMediaId: [p.musicMediaId] };
                     const [file] = resolveFiles(origin, one, 'musicPath', 'musicMediaId', 1);
+                    if (!AUDIO_EXTENSIONS.includes(extOf(file).slice(1))) bad('Tệp nhạc phải là MP3, M4A hoặc WAV');
                     musicFile = { path: file, name: `music${extOf(file)}` };
                 }
                 input.template = {

@@ -52,6 +52,9 @@ describe('loadTemplates', () => {
     ['imageSlots vượt 20', { ...valid, imageSlots: { min: 1, max: 21 } }],
     ['biến thiếu label', { ...valid, variables: { a: { type: 'string', default: 'x' } } }],
     ['biến kiểu lạ', { ...valid, variables: { a: { type: 'bool', label: 'a', default: 'x' } } }],
+    ['required sai kiểu', { ...valid, variables: { a: { type: 'string', label: 'a', default: 'x', required: 'no' } } }],
+    ['required=false cho màu', { ...valid, variables: { a: { type: 'color', label: 'a', default: '#112233', required: false } } }],
+    ['bắt buộc nhưng default rỗng', { ...valid, variables: { a: { type: 'string', label: 'a', default: '' } } }],
     ['biến thiếu default', { ...valid, variables: { a: { type: 'string', label: 'a' } } }],
     ['default sai kiểu', { ...valid, variables: { a: { type: 'number', label: 'a', default: 'x' } } }],
     ['màu mặc định sai', { ...valid, variables: { a: { type: 'color', label: 'a', default: 'red' } } }],
@@ -109,6 +112,13 @@ describe('mẫu và nhạc đi kèm', () => {
     expect(vendor.toString('utf8', 0, 200)).toContain('3.14.2');
   });
 
+  it('chỉ giá gốc của product-slideshow là tuỳ chọn', () => {
+    const by = Object.fromEntries(templates.map((t) => [t.id, t]));
+    expect(by['product-slideshow'].variables.oldPrice.required).toBe(false);
+    const optional = templates.flatMap((t) => Object.entries(t.variables).filter(([, v]) => v.required === false).map(([k]) => `${t.id}.${k}`));
+    expect(optional).toEqual(['product-slideshow.oldPrice']);
+  });
+
   it('thời lượng và số ảnh theo spec', () => {
     const by = Object.fromEntries(templates.map((t) => [t.id, t]));
     expect(by['product-slideshow']).toMatchObject({ secondsPerImage: 6, imageSlots: { min: 3, max: 8 }, durationSec: { min: 15, max: 48 } });
@@ -117,6 +127,13 @@ describe('mẫu và nhạc đi kèm', () => {
     expect(Object.keys(by['product-slideshow'].variables).sort()).toEqual(['accent', 'cta', 'oldPrice', 'price', 'title']);
     expect(Object.keys(by['flash-sale'].variables).sort()).toEqual(['accent', 'cta', 'discountLabel', 'durationSec', 'endsText', 'oldPrice', 'price', 'title']);
     expect(Object.keys(by['product-spotlight'].variables).sort()).toEqual(['accent', 'benefit1', 'benefit2', 'benefit3', 'cta', 'durationSec', 'price', 'title']);
+  });
+
+  it('Dockerfile.api đóng cả các tệp MP3 (nghe thử qua api)', () => {
+    const docker = fs.readFileSync(path.join(base, 'Dockerfile.api'), 'utf8');
+    expect(docker).toMatch(/^COPY music \.\/music$/m);
+    expect(docker).not.toMatch(/music\/manifest\.json/);
+    expect(fs.readdirSync(path.join(base, 'music')).filter((f) => f.endsWith('.mp3')).length).toBe(5);
   });
 
   it('manifest nhạc đủ trường, tệp tồn tại, CC0, ≤ 5 MB', () => {

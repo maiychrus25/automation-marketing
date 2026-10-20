@@ -6,6 +6,8 @@ export interface VariableDef {
   type: 'string' | 'color' | 'number';
   label: string;
   maxLength?: number;
+  /** Mặc định true: biến chuỗi không được để trống. `false` = cho phép bỏ trống (mẫu tự ẩn phần tử). */
+  required?: boolean;
   default: string | number;
 }
 
@@ -47,6 +49,11 @@ function parseTemplate(id: string, data: unknown): TemplateDef {
   if (!isObj(data.variables)) fail('variables phải là đối tượng');
   for (const [key, v] of Object.entries<any>(data.variables)) {
     if (!isObj(v) || typeof v.label !== 'string' || !v.label) fail(`biến "${key}" thiếu label`);
+    if (v.required !== undefined && typeof v.required !== 'boolean') fail(`biến "${key}" có required sai (cần true/false)`);
+    if (v.required === false && v.type !== 'string') fail(`biến "${key}": required=false chỉ dùng cho kiểu string`);
+    if (v.type === 'string' && v.required !== false && typeof v.default === 'string' && v.default.trim() === '') {
+      fail(`biến "${key}" bắt buộc nhưng default rỗng (đặt required=false hoặc cho default)`);
+    }
     if (v.type === 'string') {
       if (typeof v.default !== 'string') fail(`biến "${key}" cần default dạng chuỗi`);
       if (v.maxLength !== undefined && (!isInt(v.maxLength) || v.maxLength < 1)) fail(`biến "${key}" có maxLength sai`);

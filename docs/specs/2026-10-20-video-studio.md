@@ -229,5 +229,10 @@ Video giữ cho đến khi người dùng xoá. Tệp nằm ở `userData/videos
 
 ## Ghi chú sau phát hành
 
+- **Huỷ và `videos.finished`:** huỷ vẫn phát `videos.finished` nhưng kèm `cancelled: true` (`ok = false`, `error = "Đã huỷ"`); bridge không báo Telegram khi huỷ.
+- **Nhạc của bot (`musicMediaId`):** `/v1/media` nhận thêm `mp3` / `m4a` / `wav` (≤ 15 MB); luồng đăng/bản nháp vẫn không nhận nhạc.
+- **Biến tuỳ chọn:** `template.json` có `variables.<tên>.required` (mặc định `true`); `false` cho phép chuỗi trống (mẫu tự ẩn phần tử). Chỉ `product-slideshow.oldPrice` là tuỳ chọn.
+- **Giới hạn lưu trữ:** tệp đầu vào bị xoá ngay khi việc kết thúc (đầu ra giữ 7 ngày); còn trống dưới 2 GB ở `data/` thì `POST /v1/jobs` trả 507 (`LIMIT_REACHED`, "Máy chủ render sắp hết dung lượng"). `api` không theo liên kết tượng trưng hay tệp đặc biệt trong `shared/out` (do worker ghi).
+- **`api` đóng cả thư mục `music/`** (nghe thử qua `GET /v1/music/:id`).
 - Sự kiện renderer đặt tên `video:changed` (không phải `videos:changed` như mục 6.3), cho đồng nhất với các kênh IPC `video:*`.
 - `videos.status` trả `{ video }` và `videos.list` trả `{ total, videos }`; cả hai bỏ `filePath`, `thumbPath`, `specJson` cho bot.

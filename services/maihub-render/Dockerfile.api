@@ -15,7 +15,8 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY templates ./templates
-COPY music/manifest.json ./music/manifest.json
+# cả manifest và các tệp MP3: api phục vụ nghe thử qua /v1/music/:id
+COPY music ./music
 # user node (uid 1000) trùng với worker để cùng ghi/đọc thư mục shared
 USER node
 ENV DATA_DIR=/data SHARED_DIR=/shared TEMPLATES_DIR=/app/templates MUSIC_DIR=/app/music PORT=8080

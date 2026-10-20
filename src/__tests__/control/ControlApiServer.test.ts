@@ -318,6 +318,32 @@ describe('ControlApiServer /v1/media', () => {
     expect(ctx.saved).toEqual([{ name: 'ảnh 1.PNG', contentType: 'image/png', size: 1234 }]);
   });
 
+  it('accepts audio (mp3/m4a/wav) up to 15 MB as kind audio, rejects other types', async () => {
+    ctx = await setup();
+    const ok = await upload('song.MP3', 'audio/mpeg', Buffer.alloc(100, 1));
+    expect(ok.status).toBe(200);
+    expect(ctx.saved).toEqual([{ name: 'song.MP3', contentType: 'audio/mpeg', size: 100 }]);
+    expect((await upload('a.wav', 'audio/wav', Buffer.alloc(10, 1))).status).toBe(200);
+    expect((await upload('a.m4a', 'audio/mp4', Buffer.alloc(10, 1))).status).toBe(200);
+    const wrongType = await upload('a.mp3', 'image/png', Buffer.alloc(10, 1));
+    expect(wrongType.status).toBe(400);
+    const flac = await upload('a.flac', 'audio/flac', Buffer.alloc(10, 1));
+    expect(flac.status).toBe(400);
+    expect(JSON.stringify(flac.body)).toContain('ảnh/video/nhạc');
+    const big = await upload('big.mp3', 'audio/mpeg', Buffer.alloc(15 * 1024 * 1024 + 1, 1));
+    expect(big.status).toBe(413);
+  });
+
+  it('InboxMediaStore labels audio files as kind audio and keeps the extension', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-media-'));
+    try {
+      const inbox = new InboxMediaStore(dir);
+      const saved = await inbox.save('song.mp3', 'audio/mpeg', Readable.from([Buffer.alloc(10, 1)]));
+      expect(saved.kind).toBe('audio');
+      expect(inbox.resolve([saved.mediaId])[0].endsWith('.mp3')).toBe(true);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('full inbox: 422 LIMIT_REACHED promptly while the multi-MB body is still drained', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-media-'));
     try {

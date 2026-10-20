@@ -84,7 +84,7 @@ export default function RenderServerSettings() {
             {urlInvalid && <p role="alert" className="text-xs text-red-400">Địa chỉ phải bắt đầu bằng https://</p>}
             <label className="block text-xs text-gray-400">Khoá API
               <input className="input-field text-sm w-full mt-1" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="off"
-                placeholder={configured && hint ? `Đang dùng khoá …${hint} (để trống để giữ nguyên)` : 'Dán khoá API'} />
+                placeholder={configured && hint ? `Đang dùng khoá ${hint} (để trống để giữ nguyên)` : 'Dán khoá API'} />
             </label>
             {error && <p role="alert" className="text-sm text-red-400 break-words">{error}</p>}
             <div className="flex flex-wrap items-center gap-2">

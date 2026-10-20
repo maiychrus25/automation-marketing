@@ -2,7 +2,7 @@ import type { VideoStatus } from '../../../models/video';
 
 export type VideoTone = 'success' | 'warning' | 'info' | 'danger' | 'muted';
 
-export interface TemplateVariable { type: 'string' | 'color' | 'number'; label: string; maxLength?: number; min?: number; max?: number; default: unknown }
+export interface TemplateVariable { type: 'string' | 'color' | 'number'; label: string; maxLength?: number; required?: boolean; min?: number; max?: number; default: unknown }
 export interface VideoTemplate {
   id: string; name: string; description: string; aspects: string[];
   durationSec: { min: number; max: number; default: number };
@@ -70,7 +70,7 @@ export function validateVideoForm(template: VideoTemplate, form: VideoFormValues
     let message = '';
     if (def.type === 'string') {
       const text = typeof value === 'string' ? value.trim() : '';
-      if (!text) message = `Nhập ${def.label.toLowerCase()}.`;
+      if (!text) { if (def.required !== false) message = `Nhập ${def.label.toLowerCase()}.`; }
       else if (def.maxLength !== undefined && text.length > def.maxLength) message = `${def.label} tối đa ${def.maxLength} ký tự.`;
     } else if (def.type === 'color') {
       if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value)) message = `${def.label} phải có dạng #rrggbb.`;

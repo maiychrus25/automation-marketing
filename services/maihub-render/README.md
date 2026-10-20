@@ -114,7 +114,7 @@ Việc đang render lúc khởi động lại sẽ thành `failed`; MaiHub thấ
 tar czf render-data-$(date +%F).tgz data
 ```
 
-Việc và tệp tự xoá sau 7 ngày.
+Việc và tệp đầu ra tự xoá sau 7 ngày. Tệp đầu vào (ảnh, nhạc tải lên) bị xoá ngay khi việc kết thúc (xong, lỗi hoặc huỷ), chỉ `video.mp4` và `thumb.jpg` được giữ. Khi ổ `data/` còn trống dưới 2 GB, `POST /v1/jobs` trả 507 (`LIMIT_REACHED`, "Máy chủ render sắp hết dung lượng") cho tới khi dọn bớt.
 
 **Xoay khoá**
 
@@ -133,6 +133,8 @@ Nghi lộ khoá: xoá cặp đó ngay rồi khởi động lại.
 - `read_only: true`, tmpfs `/tmp` (2 GB), `cap_drop: ALL`, `no-new-privileges`, user `node` không phải root;
 - chỉ gắn `shared/current` (chỉ đọc, chỉ có việc hiện tại) và `shared/out` (ghi kết quả). **Không** có `data/`, `.env`, khoá API hay việc của khoá khác;
 - `api` không gắn Docker socket, và `worker` không nói chuyện với `api` qua mạng: hai bên trao đổi bằng tệp trong `shared/`;
+- `api` coi `shared/out` là dữ liệu không tin cậy: chỉ đọc đúng tên `<jobId>.mp4|jpg|progress.json|result.json`, không theo liên kết tượng trưng (`O_NOFOLLOW`), chỉ nhận tệp thường trong giới hạn kích thước, sai thì việc `failed`;
+- worker chạy lâu dài giữa các việc nên một worker bị chiếm quyền vẫn thấy các việc về sau (rủi ro còn lại đã biết; khởi động lại `worker` định kỳ nếu cần);
 - Chrome chạy trong container worker; trang chỉ nạp được tệp trong thư mục việc đó (máy chủ nội bộ của HyperFrames gốc tại thư mục việc).
 
 **Giới hạn** (vượt thì 400 kèm lỗi tiếng Việt):
@@ -150,7 +152,8 @@ Nghi lộ khoá: xoá cặp đó ngay rồi khởi động lại.
 | Thời gian render | ≤ 15 phút (quá thì `failed: timeout`) |
 | Hàng đợi | ≤ 20 việc chung, ≤ 5 việc chờ mỗi khoá |
 | Tạo việc | ≤ 30 lần mỗi giờ mỗi khoá |
-| Lưu trữ | 7 ngày |
+| Lưu trữ | đầu ra 7 ngày; đầu vào xoá ngay khi việc kết thúc |
+| Dung lượng ổ | còn trống < 2 GB thì từ chối việc mới (507) |
 
 Loại tệp kiểm theo chữ ký nội dung (JPEG, PNG, WebP, MP3, M4A, WAV, MP4), không tin đuôi tệp; `api` đặt lại tên tệp. Worker bị giới hạn 4 CPU, 3 GB RAM, 512 tiến trình. Khoá so sánh bằng `crypto.timingSafeEqual`; việc của khoá khác trả 404.
 
@@ -175,13 +178,13 @@ Biến người dùng (`variables`) và danh sách ảnh (`images`) được ghi
 **Thêm mẫu mới**
 
 1. Tạo `templates/<id>/` với `index.html`, `template.json`, và chép `vendor/gsap.min.js` vào (`cp vendor/gsap.min.js templates/<id>/`). Có test kiểm bản chép khớp.
-2. `template.json`: `id`, `name`, `description`, `aspects`, `durationSec`, `imageSlots {min,max}`, `variables` (kiểu `string` có `maxLength`, `color` dạng `#rrggbb`, `number`), tuỳ chọn `secondsPerImage`.
+2. `template.json`: `id`, `name`, `description`, `aspects`, `durationSec`, `imageSlots {min,max}`, `variables` (kiểu `string` có `maxLength` và tuỳ chọn `required: false` để cho phép bỏ trống — mặc định bắt buộc không trống, mẫu phải tự ẩn phần tử khi rỗng; `color` dạng `#rrggbb`; `number`), tuỳ chọn `secondsPerImage`.
 3. Trong `index.html` dùng các dấu ở trên; không dùng `http(s)://`; phông "Noto Sans" rồi phông hệ thống; chừa vùng an toàn trên/dưới cho khổ 9:16.
 4. `npm test`, rồi render thử và xem khung hình ở cả ba khổ trước khi build image.
 
 ## 7. Nhạc
 
-Nhạc đóng sẵn trong `music/` (kèm `manifest.json` có giấy phép, tác giả, nguồn). Năm bản lấy từ FreePD.com (bản lưu Wayback Machine ngày 2025-01-06, trang ghi miền công cộng, dùng thương mại được): Advertime, Happy Whistling Ukulele, Inspiration (Rafael Krux); City Sunshine, Fresh Focus (Kevin MacLeod). Đã mã hoá lại 128 kbps. Thêm nhạc: chỉ dùng nhạc CC0/miền công cộng, đặt tệp `<id>.mp3` vào `music/` và thêm một mục vào `manifest.json` (cả `api` lẫn `worker` đọc manifest và tệp từ image, nên cần build lại).
+Nhạc đóng sẵn trong `music/` (kèm `manifest.json` có giấy phép, tác giả, nguồn). Năm bản lấy từ FreePD.com (bản lưu Wayback Machine ngày 2025-01-06, trang ghi miền công cộng, dùng thương mại được): Advertime, Happy Whistling Ukulele, Inspiration (Rafael Krux); City Sunshine, Fresh Focus (Kevin MacLeod). Đã mã hoá lại 128 kbps. Thêm nhạc: chỉ dùng nhạc CC0/miền công cộng, đặt tệp `<id>.mp3` vào `music/` và thêm một mục vào `manifest.json` (cả `api` lẫn `worker` đóng nguyên thư mục `music/` vào image — `api` để phục vụ nghe thử, `worker` để trộn nhạc — nên cần build lại cả hai).
 
 Nghe thử: `GET /v1/music/<id>` (cần khoá API) phát tệp MP3 của bản nhạc có trong `manifest.json` (hỗ trợ Range); mã lạ trả 404.
 

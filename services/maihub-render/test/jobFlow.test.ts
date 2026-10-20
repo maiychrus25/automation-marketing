@@ -269,6 +269,43 @@ describe('Handoff', () => {
     h.cancel();
     expect(fs.existsSync(path.join(shared, 'current', 'cancel'))).toBe(true);
   });
+  it('collect không theo liên kết tượng trưng do worker đặt trong out/', () => {
+    const h = prep(); const { shared, input } = dirs();
+    h.start({ id: 'j1', spec }, input, {});
+    const secret = path.join(root, 'secret.mp4');
+    fs.writeFileSync(secret, 'other-key-video');
+    fs.symlinkSync(secret, path.join(shared, 'out', 'j1.mp4'));
+    fs.writeFileSync(path.join(shared, 'out', 'j1.result.json'), '{"jobId":"j1","ok":true}');
+    const dest = path.join(root, 'dest');
+    expect(() => h.collect(dest)).toThrow('không hợp lệ');
+    expect(fs.existsSync(path.join(dest, 'video.mp4'))).toBe(false);
+    expect(fs.readdirSync(path.join(shared, 'out'))).toEqual([]);
+    expect(fs.readFileSync(secret, 'utf8')).toBe('other-key-video'); // đích của liên kết còn nguyên
+  });
+  it('collect từ chối thư mục/tệp đặc biệt thay cho video', () => {
+    const h = prep(); const { shared, input } = dirs();
+    h.start({ id: 'j1', spec }, input, {});
+    fs.mkdirSync(path.join(shared, 'out', 'j1.mp4'));
+    fs.writeFileSync(path.join(shared, 'out', 'j1.result.json'), '{"jobId":"j1","ok":true}');
+    expect(() => h.collect(path.join(root, 'dest'))).toThrow('không hợp lệ');
+  });
+  it('result.json là liên kết tượng trưng -> việc failed ngay, dọn sạch', () => {
+    const h = prep(); const { shared, input } = dirs();
+    h.start({ id: 'j1', spec }, input, {});
+    const other = path.join(root, 'other.json');
+    fs.writeFileSync(other, '{"jobId":"j1","ok":true}');
+    fs.symlinkSync(other, path.join(shared, 'out', 'j1.result.json'));
+    const p = h.poll();
+    expect(p.state).toBe('done');
+    expect(p.result).toMatchObject({ ok: false, error: 'Máy render trả về tệp không hợp lệ' });
+    expect(fs.readdirSync(path.join(shared, 'current'))).toEqual([]);
+  });
+  it('progress.json quá lớn -> failed', () => {
+    const h = prep(); const { shared, input } = dirs();
+    h.start({ id: 'j1', spec }, input, {});
+    fs.writeFileSync(path.join(shared, 'out', 'j1.progress.json'), JSON.stringify({ jobId: 'j1', percent: 1, pad: 'x'.repeat(100_000) }));
+    expect(h.poll().result).toMatchObject({ ok: false });
+  });
   it('collect chuyển video/thumb và dọn sạch', () => {
     const h = prep(); const { shared, input } = dirs();
     h.start({ id: 'j1', spec }, input, {});

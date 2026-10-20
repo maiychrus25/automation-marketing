@@ -1,6 +1,8 @@
 // Luật chọn ảnh/video cho bài đăng. Thuần chuỗi: dùng chung cho main và renderer, không import Node/electron.
 export const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
 export const VIDEO_EXTENSIONS = ['mp4', 'mov', 'webm'];
+/** Nhạc nền cho video (chỉ nhận qua /v1/media để dùng với videos.render; bài đăng không nhận). */
+export const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'wav'];
 export const MAX_IMAGES = 10;
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_TOTAL_BYTES = 100 * 1024 * 1024;

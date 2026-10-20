@@ -57,6 +57,11 @@ describe('videoFormat', () => {
     expect(validateVideoForm(template, { ...good, variables: { ...good.variables, title: ' ' } })['var:title']).toBeTruthy();
     expect(validateVideoForm(template, { ...good, variables: { ...good.variables, title: 'x'.repeat(11) } })['var:title']).toBeTruthy();
   });
+  test('required=false string variable may be left empty, still capped by maxLength', () => {
+    const optional = { ...template, variables: { ...template.variables, title: { ...template.variables.title, required: false } } };
+    expect(validateVideoForm(optional, { ...good, variables: { ...good.variables, title: '' } })['var:title']).toBeUndefined();
+    expect(validateVideoForm(optional, { ...good, variables: { ...good.variables, title: 'x'.repeat(11) } })['var:title']).toBeTruthy();
+  });
   test('color must be #rrggbb', () => {
     expect(validateVideoForm(template, { ...good, variables: { ...good.variables, color: 'red' } })['var:color']).toBeTruthy();
     expect(validateVideoForm(template, { ...good, variables: { ...good.variables, color: '#fff' } })['var:color']).toBeTruthy();

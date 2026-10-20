@@ -71,6 +71,7 @@ test('kiểm đầu vào với template.json trước khi tải lên', async () 
     expect(await bad({ variables: { title: 'x'.repeat(11) } })).toMatch(/dài quá 10/);
     expect(await bad({ variables: { accent: 'red' } })).toMatch(/#rrggbb/);
     expect(await bad({ variables: { nope: 'x' } })).toMatch(/không có biến/);
+    expect(await bad({ variables: { title: '  ' } })).toMatch(/Nhập tiêu đề/); // biến chuỗi mặc định bắt buộc
     expect(await bad({ id: 'ghost' })).toMatch(/Không có mẫu/);
     expect(server.uploads).toHaveLength(0);
 });
@@ -104,6 +105,19 @@ test('việc của bot: chép vào hộp thư và gửi mediaId', async () => {
     const payload = finished()[0].payload;
     expect(payload.ok).toBe(true);
     expect(inbox.resolve([payload.mediaId])).toHaveLength(1);
+});
+
+test('chép vào hộp thư lỗi fs thô: bot không thấy đường dẫn máy', async () => {
+    jest.spyOn(inbox, 'adopt').mockRejectedValueOnce(new Error("ENOSPC: no space left, copyfile '/home/maiy/secret/video.mp4'"));
+    const svc = makeService();
+    await svc.render({ ...tplInput(), source: 'bot' });
+    svc.startPolling();
+    server.jobs.set('remote-1', { status: 'done', progress: 1, durationSec: 5, sizeBytes: 14 });
+    await svc.tick();
+    for (let i = 0; i < 100 && finished().length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    const payload = finished()[0].payload;
+    expect(payload.error).toBe('Không chép được video vào hộp thư: lỗi không rõ');
+    expect(JSON.stringify(payload)).not.toContain('/home/maiy');
 });
 
 test('failed và cancelled từ máy chủ được ghi lại kèm sự kiện', async () => {
@@ -164,7 +178,7 @@ test('huỷ việc đang chờ; việc đang chạy chờ máy chủ báo cancel
     await expect(svc.cancel(queued.id)).resolves.toEqual({ cancelled: true });
     expect(svc.get(queued.id)?.status).toBe('cancelled');
     expect(finished()).toHaveLength(1); // huỷ cục bộ phát đúng một videos.finished
-    expect(finished()[0].payload).toEqual({ videoId: queued.id, name: 'Video 1', ok: false, error: 'Đã huỷ' });
+    expect(finished()[0].payload).toEqual({ videoId: queued.id, name: 'Video 1', ok: false, error: 'Đã huỷ', cancelled: true });
     expect(events.map((e) => e.type)).toContain('video:changed');
 
     const running = await svc.render(tplInput());
@@ -267,5 +281,6 @@ test('musicPreview tải một lần vào music-cache rồi dùng lại; mã l�
     await svc.musicPreview('m1');
     expect(server.downloads.filter((d) => d === '/v1/music/m1')).toHaveLength(1);
     await expect(svc.musicPreview('../x')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(svc.musicPreview('..%2f..')).rejects.toMatchObject({ code: 'not_found' }); // id không an toàn bị chặn trước khi ghép đường dẫn
     expect(fs.readdirSync(path.join(dir, 'videos', 'music-cache'))).toEqual(['m1.mp3']);
 });

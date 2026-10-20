@@ -3,13 +3,14 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { pipeline } from 'stream/promises';
 import { Transform, type Readable } from 'stream';
-import { IMAGE_EXTENSIONS, extensionOf } from '../facebookPoster/mediaRules';
+import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, extensionOf } from '../facebookPoster/mediaRules';
 import { ControlError } from './ControlMethods';
 import type { SavedMedia } from './ControlApiServer';
 
 export const INBOX_MAX_AGE_MS = 24 * 3_600_000;
 export const INBOX_MAX_BYTES = 2_147_483_648; // 2 GiB
 export const INBOX_MAX_FILES = 200;
+const kindOf = (ext: string): SavedMedia['kind'] => (IMAGE_EXTENSIONS.includes(ext) ? 'image' : AUDIO_EXTENSIONS.includes(ext) ? 'audio' : 'video');
 const PART_SUFFIX = '.part';
 const MEDIA_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -72,7 +73,7 @@ export class InboxMediaStore {
             if (size === 0) throw new ControlError('INVALID_PARAMS', 'Tệp rỗng', { field: 'body' });
             fs.renameSync(partPath, finalPath);
             this.committedBytes += size;
-            return { mediaId, name, size, kind: IMAGE_EXTENSIONS.includes(ext) ? 'image' : 'video' };
+            return { mediaId, name, size, kind: kindOf(ext) };
         } catch (err) {
             fs.rmSync(partPath, { force: true }); // stream lỗi / vượt giới hạn / client ngắt: không để tệp dở
             throw err;
@@ -103,7 +104,7 @@ export class InboxMediaStore {
             await fs.promises.copyFile(filePath, partPath, fs.constants.COPYFILE_EXCL);
             fs.renameSync(partPath, finalPath);
             this.committedBytes += size;
-            return { mediaId, name, size, kind: IMAGE_EXTENSIONS.includes(ext) ? 'image' : 'video' };
+            return { mediaId, name, size, kind: kindOf(ext) };
         } catch (err) {
             fs.rmSync(partPath, { force: true });
             throw err;

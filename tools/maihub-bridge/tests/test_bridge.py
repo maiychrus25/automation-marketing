@@ -1873,6 +1873,9 @@ class FormatVideoFinishedTests(unittest.TestCase):
     def test_failure_without_error_text(self):
         self.assertEqual(self.fmt(ok=False, error=None), "⚠️ Video lỗi: Flash sale — lỗi không rõ")
 
+    def test_cancelled_is_silent(self):
+        self.assertIsNone(self.fmt(ok=False, cancelled=True, error="Đã huỷ"))
+
 
 if __name__ == "__main__":
     unittest.main()

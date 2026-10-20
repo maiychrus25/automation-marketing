@@ -72,6 +72,13 @@ describe('validateJobSpec - mẫu', () => {
   it('musicId và musicFile cùng lúc', () => {
     bad(tweak((s) => { s.template.musicId = 'calm'; s.template.musicFile = 'song.mp3'; }), /nhạc/);
   });
+  it('biến chuỗi bắt buộc (mặc định) không được trống; required=false thì được', () => {
+    bad(tweak((s) => { s.template.variables.title = '  '; }), /title.*trống/);
+    const optional: TemplateDef = { ...tpl, variables: { ...tpl.variables, note: { type: 'string', label: 'Ghi chú', required: false, default: '' } } };
+    const n = validateJobSpec(tweak((s) => { s.template.variables.note = ''; }), [optional], files, music) as any;
+    expect(n.variables.note).toBe('');
+    expect((validateJobSpec(base(), [optional], files, music) as any).variables.note).toBe('');
+  });
   it('biến lạ', () => bad(tweak((s) => { s.template.variables.zzz = 'x'; }), /zzz/));
   it('biến sai kiểu', () => {
     bad(tweak((s) => { s.template.variables.title = 5; }), /title/);

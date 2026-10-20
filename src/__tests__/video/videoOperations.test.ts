@@ -112,6 +112,13 @@ describe('render', () => {
         await expect(ops.render({ ...base, imageIds: ['m1'], musicId: 'calm', musicMediaId: 'song' }, 'bot')).rejects.toThrow('Chỉ chọn một');
     });
 
+    test('musicMediaId phải là nhạc (mp3/m4a/wav), ảnh hoặc video bị từ chối', async () => {
+        const { ops, service } = setup();
+        await expect(ops.render({ ...base, imageIds: ['m1'], musicMediaId: 'm2' }, 'bot')).rejects.toThrow('Tệp nhạc phải là');
+        await expect(ops.render({ ...base, imagePaths: [img1], musicPath: path.join(dir, 'out.mp4') }, 'app')).rejects.toThrow('Tệp nhạc phải là');
+        expect(service.render).not.toHaveBeenCalled();
+    });
+
     test('chế độ HTML: assetIds thành asset<n>.<đuôi>, width/height thành số nguyên', async () => {
         const { ops, service } = setup();
         await ops.render({ name: 'H', html: '<div/>', width: 1080, height: 1920, assetIds: ['m1', 'm2'] }, 'bot');

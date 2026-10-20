@@ -39,6 +39,7 @@ describe('API maihub-render', () => {
   let handoff: Handoff;
   let orch: Orchestrator;
   let shared: string;
+  let freeBytes = Number.MAX_SAFE_INTEGER;
 
   const templateSpec = (images: string[]) => JSON.stringify({
     template: { id: 't1', aspect: '9:16', variables: { title: 'Xin chào' }, images },
@@ -91,6 +92,7 @@ describe('API maihub-render', () => {
     queue = new Queue(store);
     handoff = new Handoff(shared);
     orch = new Orchestrator({ store, queue, handoff, retention: new Retention(store) });
+    freeBytes = Number.MAX_SAFE_INTEGER;
     server = createServer({
       keys: new Map([['alpha', hashKey(KEY_A)], ['beta', hashKey(KEY_B)]]),
       store, queue, orchestrator: orch,
@@ -99,7 +101,9 @@ describe('API maihub-render', () => {
       musicDir: path.join(root, 'music'),
       version: '1.0.0', hyperframes: '0.8.181',
       limits: { maxTotalBytes: 3 * 1024 * 1024 },
+      freeBytes: () => freeBytes,
     });
+
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     port = (server.address() as AddressInfo).port;
   });
@@ -116,6 +120,16 @@ describe('API maihub-render', () => {
     expect(r.json).toMatchObject({ ok: true, version: '1.0.0', hyperframes: '0.8.181' });
     expect(JSON.stringify(r.json)).not.toMatch(/alpha|beta/);
     expect(r.json.queue).toEqual({ length: 1 });
+  });
+
+  it('507 LIMIT_REACHED khi ổ còn trống dưới 2 GB, không tạo việc', async () => {
+    freeBytes = 2 * 1024 * 1024 * 1024 - 1;
+    const r = await create(KEY_A, [{ name: 'spec', data: templateSpec([]) }]);
+    expect(r.status).toBe(507);
+    expect(r.json.error).toMatchObject({ code: 'LIMIT_REACHED', message: 'Máy chủ render sắp hết dung lượng' });
+    expect(jobsDirEntries()).toEqual([]);
+    freeBytes = 2 * 1024 * 1024 * 1024;
+    expect((await create(KEY_A, [{ name: 'spec', data: templateSpec([]) }])).status).toBe(201);
   });
 
   it('401 khi thiếu hoặc sai khoá', async () => {
@@ -297,6 +311,31 @@ describe('API maihub-render', () => {
       expect(t.headers['content-type']).toBe('image/jpeg');
       expect(t.body.equals(JPEG)).toBe(true);
       expect(fs.readdirSync(path.join(shared, 'current'))).toEqual([]);
+    });
+
+    it('xoá tệp đầu vào ngay khi việc kết thúc, giữ đầu ra', async () => {
+      const id = (await create(KEY_A, [{ name: 'spec', data: templateSpec(['a.jpg']) }, { name: 'files', data: JPEG, filename: 'a.jpg' }])).json.jobId;
+      expect(fs.existsSync(path.join(store.jobDir(id), 'input', 'img1.jpg'))).toBe(true);
+      orch.tick();
+      fs.writeFileSync(out(`${id}.mp4`), 'vid');
+      fs.writeFileSync(out(`${id}.result.json`), `{"jobId":"${id}","ok":true}`);
+      orch.tick();
+      expect(store.get(id)!.status).toBe('done');
+      expect(fs.existsSync(path.join(store.jobDir(id), 'input'))).toBe(false);
+      expect(fs.existsSync(path.join(store.jobDir(id), 'output', 'video.mp4'))).toBe(true);
+    });
+
+    it('liên kết tượng trưng trong out/ không làm rò video của khoá khác: việc failed', async () => {
+      const victim = path.join(root, 'victim.mp4');
+      fs.writeFileSync(victim, 'secret');
+      const id = (await create(KEY_A, [{ name: 'spec', data: templateSpec([]) }])).json.jobId;
+      orch.tick();
+      fs.symlinkSync(victim, out(`${id}.mp4`));
+      fs.writeFileSync(out(`${id}.result.json`), `{"jobId":"${id}","ok":true}`);
+      orch.tick();
+      expect(store.get(id)).toMatchObject({ status: 'failed', error: 'Máy render trả về tệp không hợp lệ' });
+      expect(fs.existsSync(path.join(store.jobDir(id), 'output', 'video.mp4'))).toBe(false);
+      orch.tick(); // hàng đợi không bị treo
     });
 
     it('việc kế tiếp chỉ chạy sau khi việc trước xong; position cập nhật', async () => {

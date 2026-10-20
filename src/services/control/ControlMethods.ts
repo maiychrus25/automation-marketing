@@ -756,7 +756,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
         },
         {
             name: 'videos.render',
-            description: 'Tạo video bằng máy chủ render. Cần name và đúng MỘT trong hai kiểu. Kiểu mẫu: templateId, aspect (9:16 / 1:1 / 16:9), variables, imageIds (mã tệp /v1/media, ≤ 20 ảnh theo thứ tự), nhạc tuỳ chọn bằng musicId (nhạc có sẵn) hoặc musicMediaId (mã tệp /v1/media), không dùng cả hai. Kiểu HTML: html, width, height, assetIds (mã tệp /v1/media, trong HTML gọi theo tên asset1.<đuôi>, asset2.<đuôi>… theo thứ tự). Chạy nền, trả videoId ngay; xong có sự kiện videos.finished kèm mediaId để dùng ngay trong drafts.create.mediaIds (hết hạn sau 24 giờ). LIMIT_REACHED nếu hàng đợi máy chủ đầy hoặc quá hạn mức; INVALID_PARAMS nếu chưa cấu hình máy chủ render hoặc sai tham số.',
+            description: 'Tạo video bằng máy chủ render. Cần name và đúng MỘT trong hai kiểu. Kiểu mẫu: templateId, aspect (9:16 / 1:1 / 16:9), variables, imageIds (mã tệp /v1/media, ≤ 20 ảnh theo thứ tự), nhạc tuỳ chọn bằng musicId (nhạc có sẵn) hoặc musicMediaId (mã tệp nhạc mp3/m4a/wav đã tải lên /v1/media), không dùng cả hai. Kiểu HTML: html, width, height, assetIds (mã tệp /v1/media, trong HTML gọi theo tên asset1.<đuôi>, asset2.<đuôi>… theo thứ tự). Chạy nền, trả videoId ngay; xong có sự kiện videos.finished kèm mediaId (huỷ cũng phát sự kiện với cancelled: true) để dùng ngay trong drafts.create.mediaIds (hết hạn sau 24 giờ). LIMIT_REACHED nếu hàng đợi máy chủ đầy hoặc quá hạn mức; INVALID_PARAMS nếu chưa cấu hình máy chủ render hoặc sai tham số.',
             destructive: false,
             paramsSchema: obj({
                 name: { type: 'string', minLength: 1, maxLength: 100, description: 'Tên video (1–100 ký tự)' },
@@ -765,7 +765,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                 variables: { type: 'object', description: 'Giá trị các biến của mẫu (kiểu mẫu)' },
                 imageIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20, description: 'Mã tệp ảnh đã tải lên qua /v1/media, đúng thứ tự (kiểu mẫu)' },
                 musicId: { type: ['string', 'null'], description: 'Mã nhạc có sẵn; null = không nhạc' },
-                musicMediaId: str('Mã tệp nhạc đã tải lên qua /v1/media (thay cho musicId)'),
+                musicMediaId: str('Mã tệp nhạc (mp3/m4a/wav) đã tải lên qua /v1/media (thay cho musicId)'),
                 html: str('HTML tự viết (kiểu HTML, ≤ 512 KB)'),
                 width: int('Rộng (kiểu HTML)', { minimum: 1 }),
                 height: int('Cao (kiểu HTML)', { minimum: 1 }),

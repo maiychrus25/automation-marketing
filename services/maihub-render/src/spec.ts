@@ -92,6 +92,8 @@ function parseTemplateSpec(
       fail(`Biến "${key}" phải là chuỗi.`);
     } else if (vd.type === 'color') {
       if (!COLOR_RE.test(v)) fail(`Biến "${key}" phải là màu dạng #rrggbb.`);
+    } else if (vd.required !== false && v.trim() === '') {
+      fail(`Biến "${key}" không được để trống.`);
     } else if (vd.maxLength !== undefined && v.length > vd.maxLength) {
       fail(`Biến "${key}" dài quá ${vd.maxLength} ký tự.`);
     }

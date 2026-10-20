@@ -60,7 +60,9 @@ export function saveVideoSettings(db: SettingsStore, crypto: KeyCrypto, input: {
     if (url) {
         let parsed: URL;
         try { parsed = new URL(url); } catch { throw new Error('Địa chỉ máy chủ render không hợp lệ'); }
-        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error('Địa chỉ máy chủ render phải bắt đầu bằng https://');
+        // http chỉ cho máy nội bộ (thử nghiệm): khoá API không được đi qua mạng dưới dạng chữ thường
+        const local = parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+        if (parsed.protocol !== 'https:' && !local) throw new Error('Địa chỉ máy chủ render phải bắt đầu bằng https://');
     }
     const apiKey = input.apiKey ? input.apiKey.trim() : loadVideoSettings(db, crypto).apiKey;
     db.setSetting(VIDEO_SETTINGS_KEY, JSON.stringify({ url, apiKey: crypto.encrypt(apiKey) }));

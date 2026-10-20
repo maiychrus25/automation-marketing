@@ -9,6 +9,10 @@ describe('validateMediaSelection', () => {
     assert.strictEqual(validateMediaSelection([]), null);
     assert.strictEqual(validateMediaSelection(images(10)), null);
   });
+  test('audio (accepted by /v1/media for video music) is still not accepted for posts', () => {
+    assert.ok(validateMediaSelection([{ path: '/a/song.mp3', size: 1 }])?.startsWith('Chỉ hỗ trợ ảnh/video'));
+    assert.ok(validateMediaSelection([{ path: '/a/song.wav', size: 1 }]));
+  });
   test('11 images', () => assert.strictEqual(validateMediaSelection(images(11)), 'Tối đa 10 ảnh mỗi bài'));
   test('video rules', () => {
     const msg = 'Một bài chỉ có 1 video, không kèm ảnh khác';

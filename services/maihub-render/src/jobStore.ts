@@ -32,6 +32,11 @@ export class JobStore {
     fs.mkdirSync(this.jobsDir, { recursive: true });
   }
 
+  /** Thư mục chứa mọi việc (để đo dung lượng trống). */
+  rootDir(): string {
+    return this.jobsDir;
+  }
+
   /** Ném lỗi nếu id có thể thoát khỏi thư mục kho (ví dụ `../x`). */
   jobDir(id: string): string {
     if (!ID_RE.test(id)) throw new Error('Mã việc không hợp lệ');

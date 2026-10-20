@@ -65,11 +65,12 @@ export function buildLeadsFound(e: { count: number; auto: boolean; samples: { au
     };
 }
 
-/** Video render xong hoặc lỗi; `error` chỉ khi lỗi, `mediaId` chỉ với video do bot tạo. */
-export function buildVideoFinished(e: { videoId: string; name: string; ok: boolean; error?: string; durationSec?: number; sizeBytes?: number; mediaId?: string }) {
+/** Video render xong, lỗi hoặc bị huỷ (`cancelled: true`, kèm `ok: false`); `error` chỉ khi lỗi/huỷ, `mediaId` chỉ với video do bot tạo. */
+export function buildVideoFinished(e: { videoId: string; name: string; ok: boolean; cancelled?: boolean; error?: string; durationSec?: number; sizeBytes?: number; mediaId?: string }) {
     return {
         videoId: e.videoId, name: e.name, ok: e.ok,
         ...(e.error !== undefined ? { error: e.error } : {}),
+        ...(e.cancelled === true ? { cancelled: true } : {}),
         ...(e.durationSec !== undefined ? { durationSec: e.durationSec } : {}),
         ...(e.sizeBytes !== undefined ? { sizeBytes: e.sizeBytes } : {}),
         ...(e.mediaId !== undefined ? { mediaId: e.mediaId } : {}),

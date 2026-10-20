@@ -23,6 +23,49 @@ export interface HandoffPoll {
 }
 
 const SILENT_MS = 60 * 1000;
+const MAX_JSON_BYTES = 64 * 1024;
+const MAX_THUMB_BYTES = 20 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
+
+/** `out/` do worker ghi nên không đáng tin: liên kết tượng trưng, tệp đặc biệt hoặc tệp quá lớn đều bị từ chối. */
+class UnsafeOutputError extends Error {}
+
+/** Mở tệp thường bằng O_NOFOLLOW (không theo liên kết) và kiểm kích thước trên chính fd đã mở. */
+function openRegular(file: string, maxBytes: number): { fd: number; size: number } {
+  const lst = fs.lstatSync(file);
+  if (!lst.isFile()) throw new UnsafeOutputError(`${path.basename(file)} không phải tệp thường`);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > maxBytes) throw new UnsafeOutputError(`${path.basename(file)} không hợp lệ`);
+    return { fd, size: st.size };
+  } catch (e) {
+    fs.closeSync(fd);
+    throw e;
+  }
+}
+
+/** Chép từ `src` (không theo liên kết) sang `dest` qua fd, tối đa `maxBytes`. */
+function copyRegular(src: string, dest: string, maxBytes: number): void {
+  const { fd, size } = openRegular(src, maxBytes);
+  try {
+    const out = fs.openSync(dest, 'w');
+    try {
+      const buf = Buffer.allocUnsafe(1024 * 1024);
+      let left = size;
+      while (left > 0) {
+        const n = fs.readSync(fd, buf, 0, Math.min(buf.length, left), null);
+        if (n === 0) break;
+        fs.writeSync(out, buf, 0, n);
+        left -= n;
+      }
+    } finally {
+      fs.closeSync(out);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 /** Giao việc cho worker qua thư mục dùng chung: `current/` (api ghi) và `out/` (worker ghi). */
 export class Handoff {
@@ -57,11 +100,18 @@ export class Handoff {
     const jobId = this.currentJobId();
     if (!jobId) return { state: 'idle' };
     this.sweepStale(jobId);
-    const result = this.readScoped<HandoffResult>('result.json', jobId);
-    if (result) return { state: 'done', result };
+    let result: HandoffResult | undefined;
+    let progress: { jobId?: string; percent: number } | undefined;
+    try {
+      result = this.readScoped<HandoffResult>('result.json', jobId);
+      if (result) return { state: 'done', result };
+      progress = this.readScoped<{ jobId?: string; percent: number }>('progress.json', jobId);
+    } catch (e) {
+      if (e instanceof UnsafeOutputError) return this.abandon('Máy render trả về tệp không hợp lệ');
+      throw e;
+    }
     this.startedAt ??= this.now(); // api vừa khởi động lại: tính từ lần poll đầu
     const elapsed = this.now() - this.startedAt;
-    const progress = this.readScoped<{ jobId?: string; percent: number }>('progress.json', jobId);
     if (elapsed > LIMITS.renderTimeoutMs) return this.abandon('timeout');
     if (!progress && elapsed > SILENT_MS) return this.abandon('Máy render không phản hồi');
     return { state: 'running', progress: progress ? Math.min(1, Math.max(0, progress.percent / 100)) : 0 };
@@ -76,14 +126,25 @@ export class Handoff {
     fs.mkdirSync(destDir, { recursive: true });
     const moved: string[] = [];
     const jobId = this.currentJobId();
-    const result = jobId ? this.readScoped<HandoffResult>('result.json', jobId) : undefined;
-    if (jobId && result) {
-      for (const [ext, name] of [['mp4', 'video.mp4'], ['jpg', 'thumb.jpg']]) {
-        const src = path.join(this.out, `${jobId}.${ext}`);
-        if (!fs.existsSync(src)) continue;
-        fs.copyFileSync(src, path.join(destDir, name)); // volume khác nhau: không dùng rename
-        moved.push(name);
+    try {
+      const result = jobId ? this.readScoped<HandoffResult>('result.json', jobId) : undefined;
+      if (jobId && result) {
+        for (const [ext, name, cap] of [['mp4', 'video.mp4', MAX_VIDEO_BYTES], ['jpg', 'thumb.jpg', MAX_THUMB_BYTES]] as const) {
+          const src = path.join(this.out, `${jobId}.${ext}`);
+          try {
+            copyRegular(src, path.join(destDir, name), cap); // volume khác nhau: không dùng rename
+          } catch (e) {
+            if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue;
+            throw e instanceof UnsafeOutputError ? e : new UnsafeOutputError(`${name}: ${(e as Error).message}`);
+          }
+          moved.push(name);
+        }
       }
+    } catch (e) {
+      for (const name of moved) fs.rmSync(path.join(destDir, name), { force: true });
+      this.clean();
+      if (e instanceof UnsafeOutputError) throw new Error('Máy render trả về tệp không hợp lệ');
+      throw e;
     }
     this.clean();
     return moved;
@@ -115,11 +176,21 @@ export class Handoff {
   /** Đọc `out/<jobId>.<name>`; chỉ nhận khi jobId bên trong cũng khớp. */
   private readScoped<T extends { jobId?: string }>(name: string, jobId: string): T | undefined {
     const file = path.join(this.out, `${jobId}.${name}`);
+    let text: string;
+    try {
+      const { fd } = openRegular(file, MAX_JSON_BYTES);
+      try { text = fs.readFileSync(fd, 'utf8'); } finally { fs.closeSync(fd); }
+    } catch (e) {
+      if (e instanceof UnsafeOutputError) throw e;
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined; // chưa có
+      if ((e as NodeJS.ErrnoException).code === 'ELOOP') throw new UnsafeOutputError(`${name} là liên kết`);
+      return undefined;
+    }
     let parsed: T;
     try {
-      parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as T;
+      parsed = JSON.parse(text) as T;
     } catch {
-      return undefined; // chưa có hoặc đang ghi dở
+      return undefined; // đang ghi dở
     }
     if (parsed?.jobId === jobId) return parsed;
     fs.rmSync(file, { force: true });

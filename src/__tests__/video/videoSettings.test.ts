@@ -25,6 +25,8 @@ test('địa chỉ sai bị từ chối; chưa cấu hình trả rỗng', () => 
     expect(loadVideoSettings(db, rot)).toEqual({ url: '', apiKey: '' });
     expect(() => saveVideoSettings(db, rot, { url: 'not a url' })).toThrow();
     expect(() => saveVideoSettings(db, rot, { url: 'ftp://x.example' })).toThrow();
+    expect(() => saveVideoSettings(db, rot, { url: 'http://render.example.com' })).toThrow('https://'); // khoá không đi qua mạng dạng chữ thường
+    expect(saveVideoSettings(db, rot, { url: 'http://localhost:8080', apiKey: 'k-local-1' }).url).toBe('http://localhost:8080');
 });
 
 test('maskKey chỉ hiện 4 ký tự cuối', () => {

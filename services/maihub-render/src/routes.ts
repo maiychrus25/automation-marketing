@@ -13,6 +13,8 @@ import { TemplateDef, loadTemplates } from './templates';
 
 const MAX_UPLOADS_PER_KEY = 2;
 const MAX_UPLOADS_GLOBAL = 4;
+/** Dưới mức trống này thì từ chối nhận việc mới (tránh đầy ổ làm hỏng mọi việc khác). */
+const MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024;
 
 export interface MusicInfo { id: string; name: string; durationSec: number; license: string; source: string; file?: string }
 
@@ -31,10 +33,12 @@ export interface ApiDeps {
   version: string;
   hyperframes: string;
   limits?: Partial<UploadLimits>;
+  /** Số byte trống của ổ dữ liệu (thay được khi test). Mặc định đọc `fs.statfsSync` trên thư mục việc. */
+  freeBytes?: () => number;
 }
 
-type ErrorStatus = 400 | 401 | 404 | 413 | 415 | 429 | 500;
-const CODES = { 400: 'INVALID_SPEC', 401: 'UNAUTHORIZED', 404: 'NOT_FOUND', 413: 'TOO_LARGE', 415: 'UNSUPPORTED_FILE', 429: 'LIMIT_REACHED', 500: 'INTERNAL' } as const;
+type ErrorStatus = 400 | 401 | 404 | 413 | 415 | 429 | 500 | 507;
+const CODES = { 400: 'INVALID_SPEC', 401: 'UNAUTHORIZED', 404: 'NOT_FOUND', 413: 'TOO_LARGE', 415: 'UNSUPPORTED_FILE', 429: 'LIMIT_REACHED', 500: 'INTERNAL', 507: 'LIMIT_REACHED' } as const;
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const data = JSON.stringify(body);
@@ -112,6 +116,14 @@ export function createRouter(deps: ApiDeps): (req: IncomingMessage, res: ServerR
   const limits: UploadLimits = { ...LIMITS, ...deps.limits };
   const templates: TemplateDef[] = fs.existsSync(deps.templatesDir) ? loadTemplates(deps.templatesDir) : [];
   const musicIds = deps.music.map((m) => m.id);
+  const freeBytes = deps.freeBytes ?? ((): number => {
+    try {
+      const st = fs.statfsSync(store.rootDir());
+      return st.bavail * st.bsize;
+    } catch {
+      return Infinity; // không đọc được thì không chặn
+    }
+  });
 
   // Số lần tải lên đang diễn ra: tối đa MAX_UPLOADS_PER_KEY mỗi khoá và MAX_UPLOADS_GLOBAL toàn máy.
   const uploads = new Map<string, number>();
@@ -123,6 +135,7 @@ export function createRouter(deps: ApiDeps): (req: IncomingMessage, res: ServerR
     if (Number(req.headers['content-length'] ?? 0) > limits.maxTotalBytes + 1024 * 1024) {
       return rejectEarly(req, res, 'Yêu cầu quá lớn.');
     }
+    if (freeBytes() < MIN_FREE_BYTES) return rejectEarly(req, res, 'Máy chủ render sắp hết dung lượng', 507);
     // kiểm giới hạn TRƯỚC khi đọc thân yêu cầu
     try {
       queue.checkLimits(owner);
@@ -175,7 +188,7 @@ export function createRouter(deps: ApiDeps): (req: IncomingMessage, res: ServerR
   }
 
   /** Báo lỗi khi phần thân chưa nhận hết: đóng kết nối sau khi trả lời để ngừng nhận. */
-  function rejectEarly(req: IncomingMessage, res: ServerResponse, message: string, status: 400 | 413 | 415 | 429 | 500 = 413, code?: string): void {
+  function rejectEarly(req: IncomingMessage, res: ServerResponse, message: string, status: 400 | 413 | 415 | 429 | 500 | 507 = 413, code?: string): void {
     res.setHeader('Connection', 'close');
     sendError(res, status, message, code);
     req.resume();

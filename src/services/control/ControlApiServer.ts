@@ -3,7 +3,7 @@ import https from 'https';
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { AddressInfo, Socket } from 'net';
 import { Transform, type Readable } from 'stream';
-import { IMAGE_EXTENSIONS, MAX_IMAGE_BYTES, VIDEO_EXTENSIONS, extensionOf } from '../facebookPoster/mediaRules';
+import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MAX_IMAGE_BYTES, VIDEO_EXTENSIONS, extensionOf } from '../facebookPoster/mediaRules';
 import type { ControlStore } from './ControlStore';
 import type { IdempotencyCache } from './IdempotencyCache';
 import { ControlError, describe, toControlError, type ControlErrorCode, type ControlMethod } from './ControlMethods';
@@ -12,6 +12,7 @@ import { errorText, hashKey, ipAllowed, normalizeIp, type AuthLockout, type Rate
 export const DEFAULT_CONTROL_PORT = 47321;
 export const MAX_CALL_BODY_BYTES = 1_048_576;
 export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+export const MAX_AUDIO_BYTES = 15 * 1024 * 1024; // bằng giới hạn nhạc của máy chủ render
 export const MAX_PAIR_BODY_BYTES = 1024;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 64;
 const MAX_FILENAME_LENGTH = 200;
@@ -37,7 +38,7 @@ const STATUS_BY_CODE: Record<ControlErrorCode, number> = {
     PAYLOAD_TOO_LARGE: 413, UNKNOWN_METHOD: 404, INTERNAL: 500,
 };
 
-export interface SavedMedia { mediaId: string; name: string; size: number; kind: 'image' | 'video' }
+export interface SavedMedia { mediaId: string; name: string; size: number; kind: 'image' | 'video' | 'audio' }
 
 export interface ControlApiServerOptions {
     tls: { key: string; cert: string };
@@ -386,11 +387,11 @@ export class ControlApiServer {
             const name = sanitizeFilename(req.headers['x-filename'] as string | undefined);
             if (!name) throw new ControlError('INVALID_PARAMS', 'Thiếu hoặc sai header X-Filename', { field: 'X-Filename' });
             const ext = extensionOf(name);
-            const kind = IMAGE_EXTENSIONS.includes(ext) ? 'image' : VIDEO_EXTENSIONS.includes(ext) ? 'video' : null;
-            if (!kind) throw new ControlError('INVALID_PARAMS', `Chỉ nhận ảnh/video: ${[...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS].join(', ')}`, { field: 'X-Filename' });
+            const kind = IMAGE_EXTENSIONS.includes(ext) ? 'image' : VIDEO_EXTENSIONS.includes(ext) ? 'video' : AUDIO_EXTENSIONS.includes(ext) ? 'audio' : null;
+            if (!kind) throw new ControlError('INVALID_PARAMS', `Chỉ nhận ảnh/video/nhạc: ${[...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS].join(', ')}`, { field: 'X-Filename' });
             const contentType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
             if (!contentType.startsWith(`${kind}/`)) throw new ControlError('INVALID_PARAMS', `Content-Type phải là ${kind}/* khớp với đuôi tệp`, { field: 'Content-Type' });
-            const limit = kind === 'video' ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+            const limit = kind === 'video' ? MAX_VIDEO_BYTES : kind === 'audio' ? MAX_AUDIO_BYTES : MAX_IMAGE_BYTES;
             const tooLarge = new ControlError('PAYLOAD_TOO_LARGE', `Tệp vượt quá ${limit / (1024 * 1024)} MB`);
             const declared = Number(req.headers['content-length']);
             if (Number.isFinite(declared) && declared > limit) { req.resume(); throw tooLarge; }

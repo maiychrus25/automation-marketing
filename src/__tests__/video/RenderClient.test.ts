@@ -57,7 +57,7 @@ test('lỗi được phân loại', async () => {
     expect(await code(new RenderClient(server.url, '').templates())).toBe('unconfigured');
     expect(await code(new RenderClient('http://127.0.0.1:1', TEST_KEY).templates())).toBe('unreachable');
     expect(await code(client().job('nope'))).toBe('not_found');
-    for (const [status, expected] of [[429, 'limit'], [400, 'invalid'], [413, 'invalid'], [500, 'server'], [503, 'server']] as const) {
+    for (const [status, expected] of [[429, 'limit'], [507, 'limit'], [400, 'invalid'], [413, 'invalid'], [500, 'server'], [503, 'server']] as const) {
         server.failWith = status;
         expect(await code(client().job('x'))).toBe(expected);
     }

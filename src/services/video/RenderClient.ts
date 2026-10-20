@@ -15,7 +15,7 @@ export interface RenderTemplate {
     id: string; name: string; description: string; aspects: string[];
     durationSec: { min: number; max: number; default: number };
     imageSlots: { min: number; max: number };
-    variables: Record<string, { type: 'string' | 'color' | 'number'; label: string; maxLength?: number; default: unknown }>;
+    variables: Record<string, { type: 'string' | 'color' | 'number'; label: string; maxLength?: number; required?: boolean; default: unknown }>;
 }
 export interface RenderMusic { id: string; name: string; durationSec: number; license: string; source: string }
 export interface RenderCatalog { templates: RenderTemplate[]; music: RenderMusic[] }
@@ -109,7 +109,7 @@ export class RenderClient {
     }
 
     private classify(status: number): RenderErrorCode {
-        if (status === 429) return 'limit';
+        if (status === 429 || status === 507) return 'limit'; // 507: ổ đĩa máy chủ render sắp đầy
         if (status === 404) return 'not_found';
         if (status === 400 || status === 401 || status === 413 || status === 415) return 'invalid';
         return 'server';

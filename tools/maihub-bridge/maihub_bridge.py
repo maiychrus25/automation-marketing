@@ -1109,7 +1109,9 @@ def format_event(event, fetch_run):
                     lines.append("%s: %s" % (clip(_one_line(sample.get("authorName")), MAX_FIELD_CHARS), clip(_one_line(sample.get("text")), LEAD_TEXT_CHARS)))
     elif etype == "videos.finished":
         name = clip(_one_line(payload.get("name")), MAX_FIELD_CHARS)
-        if payload.get("ok") is True:
+        if payload.get("cancelled") is True:
+            lines = []  # người dùng tự huỷ: không báo như lỗi
+        elif payload.get("ok") is True:
             seconds = payload.get("durationSec")
             ok_seconds = isinstance(seconds, (int, float)) and not isinstance(seconds, bool)
             lines = ["🎬 Video xong: %s (%ds)" % (name, int(round(seconds)))] if ok_seconds else ["🎬 Video xong: %s" % name]

@@ -9,7 +9,7 @@
   "variables": {
     "title": { "type": "string", "label": "Tiêu đề", "maxLength": 80, "default": "Combo chăm sóc da hot nhất tuần" },
     "price": { "type": "string", "label": "Giá bán", "maxLength": 20, "default": "199.000đ" },
-    "oldPrice": { "type": "string", "label": "Giá gốc (bỏ trống nếu không có)", "maxLength": 20, "default": "" },
+    "oldPrice": { "type": "string", "label": "Giá gốc (bỏ trống nếu không có)", "maxLength": 20, "required": false, "default": "" },
     "cta": { "type": "string", "label": "Lời kêu gọi", "maxLength": 40, "default": "Nhắn tin đặt ngay" },
     "accent": { "type": "color", "label": "Màu nhấn", "default": "#ff3d5a" }
   }
