@@ -313,3 +313,12 @@
   - Tăng version 26.22.0, thêm changelog, dòng phiên bản trong tài liệu.
   - Spec sang "Đã phát hành", thêm "Ghi chú sau phát hành"; plan thêm "Điều chỉnh khi triển khai".
   - Merge `main`, gắn tag; anh push; kiểm tra CI.
+
+## Điều chỉnh khi triển khai
+
+- Task 4: `campaignBlock` là tuỳ chọn trong `SchedulerDeps`, được nối ở Task 6.
+- Task 6: tách phần thuần vào `src/services/facebookPoster/campaignOperations.ts`.
+- Sửa của controller: nhãn biến thể (85b8d83), bỏ qua kiểm tra khi đăng ngay (85eaf01), tải lại chiến dịch (b1555ac), R1 (4555cb4).
+- Vòng sửa cuối 2f7a5b8: I1 cột CSV variant, I2 biến thể có thể xoá, các sửa nhỏ.
+- Thêm component dùng chung `CampaignSelect.tsx`.
+- Thêm trường store `posterFocusScheduleId` để mở lịch từ chiến dịch.

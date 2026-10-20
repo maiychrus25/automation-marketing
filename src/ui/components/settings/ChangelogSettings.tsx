@@ -15,6 +15,36 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.22.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '📣 Chiến dịch: gom lịch đăng và bài nháp, tạm dừng cả chiến dịch, giới hạn khoảng ngày, xem hiệu quả theo chiến dịch',
+      '🅰️🅱️ Biến thể A/B: một bài có tới 5 cách viết, MaiHub xoay vòng đều cho các nhóm và so sánh tương tác từng biến thể',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Mục Đăng Facebook → Chiến dịch: tạo, sửa, tạm dừng, tiếp tục, lưu trữ, xoá; chi tiết chiến dịch có lịch và báo cáo',
+          'Soạn bài có tab biến thể A–E và ô chọn chiến dịch',
+          'Lịch đăng lọc theo chiến dịch; chi tiết lịch hiện chiến dịch và biến thể',
+          'Lịch sử có chip "Biến thể B"; CSV thêm cột variant',
+          'Báo cáo Hiệu quả gom theo Chiến dịch / Biến thể, ghi "chưa đủ dữ liệu" khi dưới 5 bài đã đo',
+          'Bot AI có 5 thao tác campaigns.* và các trường mới (variants, campaignId)',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Lịch của chiến dịch tạm dừng hoặc ngoài khoảng ngày không tự chạy (lịch một lần ghi "bỏ lỡ" kèm lý do)',
+          '"Đăng ngay" vẫn chạy khi chiến dịch tạm dừng',
+          'Lần thử lại và việc theo dõi bài dùng đúng chữ của biến thể đã đăng',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.21.0',
     date: '10/2026',
     type: 'minor',

@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 20/10/2026 |
-| Trạng thái | Đã duyệt (20/10/2026) |
+| Trạng thái | Đã phát hành 26.22.0 (20/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-20-campaigns-variants.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-20-campaigns-variants.md` (đã duyệt) |
 | Nhánh | `feat/26.22-campaigns-variants` |
@@ -226,3 +226,16 @@ Không có sự kiện mới.
 - **Hai biến thể giống nhau ở 60 ký tự đầu:** không ảnh hưởng đối chiếu, vì đối chiếu cần đúng tác giả. Trong một nhóm, một profile chỉ đăng một biến thể mỗi lượt, và các lượt của cùng lịch thường cách nhau xa hơn ±2 giờ.
 - **Chiến dịch tạm dừng làm lỡ lịch một lần.** Đây là cố ý và có ghi `missed`. Anh có thể "Đăng ngay" thủ công.
 - **Đổi luồng đăng** (chọn chữ theo đích) chạm vào `runTask` / `postToTargets`. Giữ nguyên ranh giới gửi bài và luật thử lại của 26.21; test hồi quy toàn bộ bộ test Đăng Facebook.
+
+## Ghi chú sau phát hành
+
+- "Đăng ngay" từ bản nháp được làm bằng một lần bỏ qua kiểm tra chiến dịch trong bộ nhớ của scheduler; nếu app khởi động lại trước lượt chạy thì mất, và lượt đó được ghi `missed` với lý do app đóng.
+- Duyệt-và-đăng-ngay vào chiến dịch đã lưu trữ bị từ chối ngay từ đầu.
+- Lượt lịch `missed` / `failed` không mang `campaignId`.
+- `drafts.update` với `variants: []` xoá các biến thể; bỏ trống trường này thì giữ nguyên.
+- CSV có 12 cột, cột `variant` đứng cuối.
+- Lịch đã xoá hiện nhãn "(lịch đã xoá)"; bài đăng ngay hiện "Đăng ngay · B".
+- Chưa làm phím mũi tên của tablist và ngữ nghĩa tabpanel (M6).
+- PostPreview hiện chữ của tab đang chọn.
+- Hộp thoại duyệt bản nháp không có ô chọn chiến dịch (chiến dịch đặt trên bản nháp).
+- Dòng lịch trong chi tiết chiến dịch mở lịch đó trong Lịch đăng.
