@@ -137,6 +137,8 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             cancel: trackingOperations.cancel,
             list: trackingOperations.list,
             stats: trackingOperations.stats,
+            groupScores: trackingOperations.groupScores,
+            bestTimes: trackingOperations.bestTimes,
             getConfig: trackingOperations.getConfig,
             setConfig: trackingOperations.setConfig,
         },

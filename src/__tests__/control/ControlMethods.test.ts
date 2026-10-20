@@ -248,7 +248,7 @@ describe('describe', () => {
             'schedules.list', 'schedules.update', 'schedules.delete',
             'runs.current', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
             'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.cancel',
-            'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.trackConfig',
+            'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
         ]);
         for (const m of d.methods) {
@@ -376,6 +376,8 @@ describe('posts tracking methods', () => {
             cancel: jest.fn((): any => ({ cancelled: true })),
             list: jest.fn((_p?: any): any => ({ total: 0, rows: [] })),
             stats: jest.fn((_p: any): any => ({ rows: [] })),
+            groupScores: jest.fn((_p?: any): any => ({ groups: [] })),
+            bestTimes: jest.fn((_p?: any): any => ({ hours: [], weekdays: [], insufficient: true })),
             getConfig: jest.fn((): any => ({ config: { autoEnabled: true } })),
             setConfig: jest.fn((_p: any): any => ({ config: { autoEnabled: false } })),
         };
@@ -395,6 +397,32 @@ describe('posts tracking methods', () => {
         expect(tracking.list).toHaveBeenCalledWith({ limit: 5, linkStatus: 'missing' });
         await call('posts.stats', { groupBy: 'group', from: 1, to: 2 });
         expect(tracking.stats).toHaveBeenCalledWith({ groupBy: 'group', from: 1, to: 2 });
+    });
+
+    it('posts.groupScores / posts.bestTimes pass only documented params; posts.stats accepts hour and weekday; old stats call unchanged', async () => {
+        const { tracking, call, methods } = setupTracking();
+        expect(await call('posts.groupScores', { from: 1, to: 2, campaignId: '', junk: 1 })).toEqual({ groups: [] });
+        expect(tracking.groupScores).toHaveBeenLastCalledWith({ from: 1, to: 2, campaignId: '' });
+        await call('posts.groupScores');
+        expect(tracking.groupScores).toHaveBeenLastCalledWith({});
+        expect(await call('posts.bestTimes', { groupUrl: 'g', campaignId: 'c1', from: 1, junk: 1 })).toEqual({ hours: [], weekdays: [], insufficient: true });
+        expect(tracking.bestTimes).toHaveBeenLastCalledWith({ groupUrl: 'g', campaignId: 'c1', from: 1 });
+        await call('posts.stats', { groupBy: 'hour' });
+        expect(tracking.stats).toHaveBeenLastCalledWith({ groupBy: 'hour' });
+        await call('posts.stats', { groupBy: 'group', from: 1, to: 2 });
+        expect(tracking.stats).toHaveBeenLastCalledWith({ groupBy: 'group', from: 1, to: 2 });
+        const byName = Object.fromEntries(describeMethods(methods).methods.map((m: any) => [m.name, m]));
+        expect(byName['posts.stats'].paramsSchema.properties.groupBy.enum).toEqual(expect.arrayContaining(['hour', 'weekday', 'group']));
+        expect(byName['posts.groupScores'].destructive).toBe(false);
+        expect(byName['posts.bestTimes'].destructive).toBe(false);
+    });
+
+    it('posts.groupScores / posts.bestTimes map validation errors to INVALID_PARAMS', async () => {
+        const { tracking, call } = setupTracking();
+        tracking.groupScores.mockImplementationOnce(() => { throw new Error('campaignId không hợp lệ'); });
+        expect(await call('posts.groupScores', { campaignId: 3 }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+        tracking.bestTimes.mockImplementationOnce(() => { throw new Error('groupUrl không hợp lệ'); });
+        expect(await call('posts.bestTimes', { groupUrl: '' }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
     });
 
     it('posts.trackConfig reads without config and saves with config', async () => {
@@ -418,10 +446,10 @@ describe('posts tracking methods', () => {
         expect(await call('posts.trackConfig', { config: {} }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
     });
 
-    it('describes the six methods as non-destructive', () => {
+    it('describes the eight posts methods as non-destructive', () => {
         const { methods } = setupTracking();
         const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('posts.')) as any[];
-        expect(found).toHaveLength(6);
+        expect(found).toHaveLength(8);
         for (const m of found) expect(m.destructive).toBe(false);
         expect(found[0].description).toMatch(/posts\.trackFinished/);
     });

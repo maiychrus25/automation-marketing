@@ -87,6 +87,8 @@ export interface TrackingPort {
     cancel(): any;
     list(params?: any): any;
     stats(params: any): any;
+    groupScores(params?: any): any;
+    bestTimes(params?: any): any;
     getConfig(): any;
     setConfig(params: any): any;
 }
@@ -537,7 +539,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             description: 'Báo cáo hiệu quả bài đăng nhóm theo nhóm / profile / lịch / ngày / từng bài / chiến dịch / biến thể: số bài, số có link, chờ duyệt, nghi bị xoá, reactions/comments/shares (lần đo mới nhất), tương tác trung bình và tỉ lệ so với số thành viên nhóm (null nếu chưa biết).',
             destructive: false,
             paramsSchema: obj({
-                groupBy: { type: 'string', enum: ['group', 'profile', 'schedule', 'day', 'post', 'campaign', 'variant'], description: 'Gom theo (variant: so sánh biến thể trong cùng một lịch; dòng có insufficient = chưa đủ 5 bài đo)' },
+                groupBy: { type: 'string', enum: ['group', 'profile', 'schedule', 'day', 'post', 'campaign', 'variant', 'hour', 'weekday'], description: 'Gom theo (hour: giờ máy "00"–"23"; weekday: "1"–"7" = Thứ 2 … Chủ nhật; variant: so sánh biến thể trong cùng một lịch; dòng có insufficient = chưa đủ 5 bài đo)' },
                 campaignId: str("Lọc theo chiến dịch; '' = bài không thuộc chiến dịch"),
                 scheduleId: str('Lọc theo lịch'),
                 from: int('Từ thời điểm (epoch ms; mặc định 30 ngày trước)', { minimum: 0 }),
@@ -546,6 +548,35 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             }, ['groupBy']),
             resultSchema: obj({ rows: { type: 'array', items: { type: 'object' }, description: 'Các dòng báo cáo' } }, ['rows']),
             run: async (p) => deps.tracking.stats(pick(p, ['groupBy', 'from', 'to', 'limit', 'campaignId', 'scheduleId'])),
+        },
+        {
+            name: 'posts.groupScores',
+            description: 'Điểm từng nhóm (0–100) từ kết quả đăng và số đo tương tác, kèm nhãn good/fair/poor và lý do tiếng Việt. Nhóm dưới 3 lượt đăng có score null, grade insufficient và xếp cuối. Mặc định 30 ngày gần nhất.',
+            destructive: false,
+            paramsSchema: obj({
+                from: int('Từ thời điểm (epoch ms; mặc định 30 ngày trước)', { minimum: 0 }),
+                to: int('Đến thời điểm (epoch ms)', { minimum: 0 }),
+                campaignId: str("Lọc theo chiến dịch; '' = bài không thuộc chiến dịch"),
+            }),
+            resultSchema: obj({ groups: { type: 'array', items: { type: 'object' }, description: '{ groupUrl, label, score, grade, attempted, posted, failed, held, removed, withLink, measured, engagement, reasons }, sắp score giảm dần' } }, ['groups']),
+            run: async (p) => deps.tracking.groupScores(pick(p, ['from', 'to', 'campaignId'])),
+        },
+        {
+            name: 'posts.bestTimes',
+            description: 'Gợi ý giờ và thứ đăng hiệu quả nhất (tối đa 3 giờ, 2 thứ; theo giờ máy) từ các khung có ít nhất 5 bài đã đo. insufficient = true khi chưa đủ dữ liệu. Mặc định 60 ngày gần nhất.',
+            destructive: false,
+            paramsSchema: obj({
+                from: int('Từ thời điểm (epoch ms; mặc định 60 ngày trước)', { minimum: 0 }),
+                to: int('Đến thời điểm (epoch ms)', { minimum: 0 }),
+                groupUrl: str('Chỉ tính một nhóm'),
+                campaignId: str("Lọc theo chiến dịch; '' = bài không thuộc chiến dịch"),
+            }),
+            resultSchema: obj({
+                hours: { type: 'array', items: { type: 'object' }, description: '{ key, label, avgEngagement, measured }' },
+                weekdays: { type: 'array', items: { type: 'object' }, description: '{ key, label, avgEngagement, measured }' },
+                insufficient: { type: 'boolean' },
+            }, ['hours', 'weekdays', 'insufficient']),
+            run: async (p) => deps.tracking.bestTimes(pick(p, ['from', 'to', 'groupUrl', 'campaignId'])),
         },
         {
             name: 'posts.trackConfig',
