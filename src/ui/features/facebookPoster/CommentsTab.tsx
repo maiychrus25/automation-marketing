@@ -22,6 +22,7 @@ export default function CommentsTab({ busy, onStarted }: Props) {
   const [starting, setStarting] = useState(false);
 
   const [comments, setComments] = useState<FbPosterComment[]>([]);
+  const [leadKeys, setLeadKeys] = useState<Set<string>>(new Set());
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [postFilter, setPostFilter] = useState('');
@@ -52,7 +53,7 @@ export default function CommentsTab({ busy, onStarted }: Props) {
     setCommentsLoading(true);
     ipc.facebookPoster?.listComments({ postUrl: postFilter || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE }).then((res) => {
       if (cancelled) return;
-      if (res?.success) { setComments(res.comments || []); setTotal(res.total ?? 0); }
+      if (res?.success) { setComments(res.comments || []); setLeadKeys(new Set(res.leadKeys || [])); setTotal(res.total ?? 0); }
       else showNotification(res?.error || 'Không tải được bình luận', 'error');
     }).catch(() => { if (!cancelled) showNotification('Không tải được bình luận', 'error'); })
       .finally(() => { if (!cancelled) setCommentsLoading(false); });
@@ -135,7 +136,7 @@ export default function CommentsTab({ busy, onStarted }: Props) {
             <div className="overflow-x-auto rounded-lg border border-gray-700">
               <table className="w-full text-sm">
                 <thead className="text-xs text-gray-400 text-left">
-                  <tr><th className="px-3 py-2">Người bình luận</th><th className="px-3 py-2">Nội dung</th><th className="px-3 py-2">Bài</th><th className="px-3 py-2 whitespace-nowrap">Thu lúc</th></tr>
+                  <tr><th className="px-3 py-2">Người bình luận</th><th className="px-3 py-2">Nội dung</th><th className="px-3 py-2">Bài</th><th className="px-3 py-2 whitespace-nowrap">Thu lúc</th><th className="px-3 py-2">Khách</th></tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800 align-top">
                   {shown.map((c) => (
@@ -146,6 +147,7 @@ export default function CommentsTab({ busy, onStarted }: Props) {
                       <td className="px-3 py-2 text-gray-200 whitespace-pre-wrap break-words min-w-[12rem]">{c.text}</td>
                       <td className="px-3 py-2"><button type="button" onClick={() => openLink(c.postUrl)} className="text-blue-400 hover:underline whitespace-nowrap">Mở bài</button></td>
                       <td className="px-3 py-2 text-xs text-gray-400 whitespace-nowrap">{formatTime(c.collectedAt)}</td>
+                      <td className="px-3 py-2 text-center">{leadKeys.has(c.key) ? <span className="text-green-400" role="img" aria-label="Đã thành khách tiềm năng" title="Đã thành khách tiềm năng">✓</span> : null}</td>
                     </tr>
                   ))}
                 </tbody>

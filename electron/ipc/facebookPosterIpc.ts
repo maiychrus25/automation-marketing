@@ -652,7 +652,10 @@ export const posterOperations = {
 
     listComments: (params: any) => {
         const postUrl = typeof params.postUrl === 'string' && params.postUrl ? params.postUrl : undefined;
-        return store().listComments({ postUrl, limit: clampLimit(params.limit, 100, 500), offset: offsetOf(params.offset) });
+        const s = store();
+        const page = s.listComments({ postUrl, limit: clampLimit(params.limit, 100, 500), offset: offsetOf(params.offset) });
+        // Giao diện đánh dấu cột "Khách" cho bình luận đã thành khách.
+        return { ...page, leadKeys: [...s.leadCommentKeys(page.comments.map((c) => c.key))] };
     },
 
     listPostedUrls: (_params?: any) => ({ posts: store().listPostedUrls(200) }),
