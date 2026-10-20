@@ -706,6 +706,8 @@ describe('statsReport by campaign and variant', () => {
     track('s2', null, 'A', 102);
     track('s2', 'gone', '', 103);
     track(null, null, '', 104);
+    track(null, null, 'B', 105);
+    track('s-gone', null, 'A', 106);
     return { s, track };
   }
   const range = { from: 0, to: 1000, limit: 100 };
@@ -714,7 +716,7 @@ describe('statsReport by campaign and variant', () => {
     const { s } = seed();
     const rows = s.statsReport({ ...range, groupBy: 'campaign' });
     const by = Object.fromEntries(rows.map((r) => [r.key, [r.label, r.posts]]));
-    expect(by).toEqual({ c1: ['Tết', 2], '': ['Không thuộc chiến dịch', 2], gone: ['(chiến dịch đã xoá)', 1] });
+    expect(by).toEqual({ c1: ['Tết', 2], '': ['Không thuộc chiến dịch', 4], gone: ['(chiến dịch đã xoá)', 1] });
   });
 
   test('groupBy variant: A của lịch 1 khác A của lịch 2', () => {
@@ -722,6 +724,7 @@ describe('statsReport by campaign and variant', () => {
     const by = Object.fromEntries(s.statsReport({ ...range, groupBy: 'variant' }).map((r) => [r.key, [r.label, r.posts]]));
     expect(by).toEqual({
       's1:A': ['Lịch 1 · A', 1], 's1:B': ['Lịch 1 · B', 1], 's2:A': ['Lịch 2 · A', 1], 's2:': ['Lịch 2', 1], ':': ['Đăng ngay', 1],
+      ':B': ['Đăng ngay · B', 1], 's-gone:A': ['(lịch đã xoá) · A', 1],
     });
   });
 
@@ -729,7 +732,7 @@ describe('statsReport by campaign and variant', () => {
     const { s } = seed();
     for (const groupBy of ['group', 'profile', 'schedule', 'day', 'campaign', 'variant'] as const) {
       expect(s.statsReport({ ...range, groupBy, campaignId: 'c1' }).reduce((n, r) => n + r.posts, 0)).toBe(2);
-      expect(s.statsReport({ ...range, groupBy, campaignId: '' }).reduce((n, r) => n + r.posts, 0)).toBe(2);
+      expect(s.statsReport({ ...range, groupBy, campaignId: '' }).reduce((n, r) => n + r.posts, 0)).toBe(4);
       expect(s.statsReport({ ...range, groupBy, scheduleId: 's2' }).reduce((n, r) => n + r.posts, 0)).toBe(2);
       expect(s.statsReport({ ...range, groupBy, campaignId: 'c1', scheduleId: 's2' })).toEqual([]);
     }
@@ -749,7 +752,7 @@ describe('statsReport by campaign and variant', () => {
   test('listTracking lọc campaignId và scheduleId', () => {
     const { s } = seed();
     expect(s.listTracking({ campaignId: 'c1' }).map((r) => r.resultId).sort()).toEqual([1, 2]);
-    expect(s.listTracking({ campaignId: '' }).map((r) => r.resultId).sort()).toEqual([3, 5]);
+    expect(s.listTracking({ campaignId: '' }).map((r) => r.resultId).sort()).toEqual([3, 5, 6, 7]);
     expect(s.listTracking({ scheduleId: 's2' }).map((r) => r.resultId).sort()).toEqual([3, 4]);
   });
 });

@@ -594,8 +594,10 @@ export class FacebookPosterStore {
                     case 'profile': return [r.profile_id, r.profile_name ?? ''];
                     case 'schedule': return [r.schedule_id ?? '', r.schedule_name ?? ''];
                     case 'campaign': return [r.campaign_id ?? '', r.campaign_id === null ? 'Không thuộc chiến dịch' : (r.campaign_name ?? '(chiến dịch đã xoá)')];
-                    case 'variant': return [`${r.schedule_id ?? ''}:${r.variant}`, r.schedule_id === null
-                        ? 'Đăng ngay' : r.variant === '' ? (r.schedule_name ?? '') : `${r.schedule_name ?? ''} · ${r.variant}`];
+                    case 'variant': {
+                        const base = r.schedule_id === null ? 'Đăng ngay' : (r.schedule_name ?? '(lịch đã xoá)');
+                        return [`${r.schedule_id ?? ''}:${r.variant}`, r.variant === '' ? base : `${base} · ${r.variant}`];
+                    }
                     case 'day': return [localDay(r.posted_at), localDay(r.posted_at)];
                     default: return [String(r.result_id), r.group_name || r.group_url];
                 }
