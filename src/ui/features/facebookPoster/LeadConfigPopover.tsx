@@ -78,7 +78,7 @@ export default function LeadConfigPopover() {
       <button ref={gearRef} type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="dialog" aria-label="Cài đặt lọc khách tiềm năng" title="Cài đặt lọc khách"
         className={`px-2 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 ${FOCUS}`}>⚙</button>
       {open && (
-        <div ref={popoverRef} tabIndex={-1} role="dialog" aria-label="Cài đặt lọc khách" className="absolute right-0 top-full mt-1 z-20 w-[min(22rem,calc(100vw-3rem))] max-h-[70vh] overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 p-3 focus:outline-none space-y-2 shadow-lg">
+        <div ref={popoverRef} tabIndex={-1} role="dialog" aria-label="Cài đặt lọc khách" className="absolute right-0 top-full mt-1 z-20 w-[min(22rem,calc(100vw-8rem))] max-h-[70vh] overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 p-3 focus:outline-none space-y-2 shadow-lg">
           <p className="text-sm text-gray-200">Lọc khách tiềm năng</p>
           {config ? (
             <form onSubmit={submit} className="space-y-2">
