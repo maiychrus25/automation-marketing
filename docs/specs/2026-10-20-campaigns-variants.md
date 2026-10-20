@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 20/10/2026 |
-| Trạng thái | Chờ duyệt |
+| Trạng thái | Đã duyệt (20/10/2026) |
 | Kế hoạch | `docs/plans/2026-10-20-campaigns-variants.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-20-campaigns-variants.md` (đã duyệt) |
 | Nhánh | `feat/26.22-campaigns-variants` |
