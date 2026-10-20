@@ -4,7 +4,7 @@
 |---|---|
 | Ngày | 20/10/2026 |
 | Trạng thái | Đã phát hành 26.23.0 (D + F, 20/10/2026); E chờ 26.24 |
-| Kế hoạch | `docs/plans/2026-10-20-group-scores-best-times.md` (26.23: D + F); kế hoạch E viết sau khi 26.23 phát hành |
+| Kế hoạch | `docs/plans/2026-10-20-group-scores-best-times.md` (26.23: D + F); E: `docs/plans/2026-10-20-comment-leads.md` |
 | Intent | `docs/intent/2026-10-20-group-scores-times-leads.md` (đã duyệt) |
 | Nhánh | `feat/26.23-group-scores-best-times` (D + F); E làm trên nhánh riêng |
 | Phiên bản | 26.23.0 (D + F), 26.24.0 (E) |
