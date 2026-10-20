@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width={{width}}, height={{height}}" />
+<script src="gsap.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:{{width}}px;height:{{height}}px;overflow:hidden;background:#0b0d14}
+:root{--accent:#ff3d5a;--on-accent:#fff;--u:1px;--safe-t:0px;--safe-b:0px;--pad:64px}
+#root{position:relative;width:{{width}}px;height:{{height}}px;overflow:hidden;color:#fff;
+  font-family:"Noto Sans","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  background:radial-gradient(120% 80% at 20% 0%,color-mix(in srgb,var(--accent) 38%,#0b0d14) 0%,#0b0d14 62%)}
+#layout{position:absolute;inset:0;display:flex;flex-direction:column;gap:calc(28*var(--u));
+  padding:calc(var(--safe-t) + var(--pad)) var(--pad) calc(var(--safe-b) + var(--pad))}
+#head{flex:none}
+#title{font-weight:900;line-height:1.16;letter-spacing:-.01em;font-size:calc(92*var(--u));max-height:calc(330*var(--u));overflow:hidden;
+  overflow-wrap:anywhere;text-wrap:balance;text-shadow:0 4px 24px rgba(0,0,0,.45)}
+#title b{color:var(--accent);font-weight:900}
+#stage{flex:1;min-height:0;position:relative;border-radius:calc(44*var(--u));overflow:hidden;
+  box-shadow:0 calc(30*var(--u)) calc(90*var(--u)) rgba(0,0,0,.55);background:#151826}
+#bar{position:absolute;left:0;right:0;top:0;height:calc(10*var(--u));background:var(--accent);transform-origin:0 50%;z-index:5}
+.slide{position:absolute;inset:0;visibility:hidden}
+.slide .bg,.slide .fg{position:absolute;inset:0;width:100%;height:100%}
+.slide .bg{object-fit:cover;filter:blur(calc(36*var(--u))) brightness(.6);transform:scale(1.25)}
+.slide .kb{position:absolute;inset:0}
+.slide .fg{object-fit:contain;padding:calc(18*var(--u))}
+#foot{flex:none;display:flex;flex-direction:column;gap:calc(26*var(--u));align-items:flex-start}
+#prices{display:flex;align-items:baseline;gap:calc(28*var(--u));flex-wrap:wrap}
+#price{font-weight:900;font-size:calc(132*var(--u));line-height:1.05;color:var(--accent);white-space:nowrap;text-shadow:0 4px 30px color-mix(in srgb,var(--accent) 45%,transparent)}
+#old{font-weight:700;font-size:calc(58*var(--u));color:rgba(255,255,255,.62);text-decoration:line-through;text-decoration-thickness:calc(5*var(--u));text-decoration-color:var(--accent);white-space:nowrap}
+#cta{align-self:stretch;text-align:center;font-weight:900;font-size:calc(62*var(--u));line-height:1.15;padding:calc(34*var(--u)) calc(48*var(--u));
+  border-radius:999px;background:var(--accent);color:var(--on-accent);box-shadow:0 calc(14*var(--u)) calc(44*var(--u)) color-mix(in srgb,var(--accent) 55%,transparent);
+  max-height:calc(190*var(--u));overflow:hidden;overflow-wrap:anywhere}
+#root.port{--safe-t:170px;--safe-b:340px}
+#root.land #layout{flex-direction:row;gap:calc(56*var(--u));align-items:stretch}
+#root.land #side{flex:0 0 40%;display:flex;flex-direction:column;justify-content:center;gap:calc(40*var(--u));min-width:0}
+#root.land #stage{flex:1}
+#root.land #title{font-size:calc(86*var(--u));max-height:calc(380*var(--u))}
+#root.land #price{font-size:calc(120*var(--u))}
+#root.land #cta{align-self:flex-start;font-size:calc(54*var(--u))}
+#root.sq #title{font-size:calc(70*var(--u));max-height:calc(190*var(--u))}
+#root.sq #price{font-size:calc(100*var(--u))}
+#root.sq #old{font-size:calc(46*var(--u))}
+#root.sq #cta{font-size:calc(46*var(--u));padding:calc(22*var(--u)) calc(40*var(--u))}
+#side{display:contents}
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="main" data-start="0" data-duration="{{durationSec}}" data-width="{{width}}" data-height="{{height}}"
+  data-composition-variables='{"title":{"type":"string","default":"Combo chăm sóc da hot nhất tuần"},"price":{"type":"string","default":"199.000đ"},"oldPrice":{"type":"string","default":""},"cta":{"type":"string","default":"Nhắn tin đặt ngay"},"accent":{"type":"color","default":"#ff3d5a"},"width":{"type":"number","default":1080},"height":{"type":"number","default":1920},"durationSec":{"type":"number","default":30}}'>
+{{audio}}
+<div id="layout" class="clip" data-start="0" data-duration="{{durationSec}}" data-track-index="0">
+  <div id="side">
+    <div id="head"><h1 id="title"></h1></div>
+  </div>
+  <div id="stage"><div id="bar"></div></div>
+  <div id="foot">
+    <div id="prices"><div id="price"></div><div id="old"></div></div>
+    <div id="cta"></div>
+  </div>
+</div>
+</div>
+<script>
+const v = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+const W = v.width || 1080, H = v.height || 1920, D = v.durationSec || 30, PER = 6;
+const root = document.getElementById('root');
+const images = Array.isArray(v.images) && v.images.length ? v.images : [];
+root.classList.add(W > H ? 'land' : H > W ? 'port' : 'sq');
+const u = Math.min(W, H) / 1080;
+document.documentElement.style.setProperty('--u', u + 'px');
+const accent = /^#[0-9a-f]{6}$/i.test(v.accent) ? v.accent : '#ff3d5a';
+document.documentElement.style.setProperty('--accent', accent);
+const lum = (parseInt(accent.slice(1, 3), 16) * 299 + parseInt(accent.slice(3, 5), 16) * 587 + parseInt(accent.slice(5, 7), 16) * 114) / 1000;
+document.documentElement.style.setProperty('--on-accent', lum > 150 ? '#14161f' : '#ffffff');
+// Landscape: tiêu đề + giá + CTA nằm cột trái. Chuyển các khối vào #side.
+if (W > H) { const side = document.getElementById('side'); side.style.display = 'flex'; side.append(document.getElementById('foot')); document.getElementById('foot').style.display = 'flex'; }
+
+const $ = (id) => document.getElementById(id);
+$('title').textContent = v.title || '';
+$('price').textContent = v.price || '';
+$('old').textContent = v.oldPrice || '';
+$('cta').textContent = v.cta || '';
+if (!v.oldPrice) $('old').style.display = 'none';
+if (!v.price) $('price').style.display = 'none';
+if (!v.cta) $('cta').style.display = 'none';
+
+// Chữ tự thu nhỏ đến khi vừa khung (max-height) và không tràn ngang.
+function fit(el, minPx) {
+  let size = parseFloat(getComputedStyle(el).fontSize);
+  for (let i = 0; i < 40 && (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1) && size > minPx; i++) {
+    size *= 0.94; el.style.fontSize = size + 'px';
+  }
+}
+function fitNowrap(el, maxW, minPx) {
+  let size = parseFloat(getComputedStyle(el).fontSize);
+  for (let i = 0; i < 40 && el.scrollWidth > maxW && size > minPx; i++) { size *= 0.94; el.style.fontSize = size + 'px'; }
+}
+const stage = $('stage');
+images.forEach((src, i) => {
+  const s = document.createElement('div');
+  s.className = 'slide'; s.id = 's' + i;
+  s.innerHTML = '<img class="bg" alt=""><div class="kb"><img class="fg" alt=""></div>';
+  s.querySelector('.bg').src = src; s.querySelector('.fg').src = src;
+  stage.appendChild(s);
+});
+fit($('title'), 28 * u); fit($('cta'), 24 * u);
+fitNowrap($('price'), $('foot').clientWidth, 40 * u);
+fitNowrap($('old'), $('foot').clientWidth, 24 * u);
+
+const tl = gsap.timeline({ paused: true });
+tl.fromTo('#bar', { scaleX: 0 }, { scaleX: 1, duration: D, ease: 'none' }, 0);
+images.forEach((_, i) => {
+  const t = i * PER, dir = i % 2 ? -1 : 1, sel = '#s' + i;
+  const enter = i === 0 ? 0 : t - 0.4;
+  tl.set(sel, { autoAlpha: 0 }, 0);
+  tl.fromTo(sel, { autoAlpha: 0, x: 70 * u * dir }, { autoAlpha: 1, x: 0, duration: i === 0 ? 0.8 : 0.8, ease: 'power3.out' }, enter);
+  tl.fromTo(sel + ' .kb', { scale: 1.0 }, { scale: 1.07, duration: PER + 0.6, ease: 'none' }, enter);
+  if (i < images.length - 1) tl.to(sel, { autoAlpha: 0, x: -70 * u * dir, duration: 0.8, ease: 'power2.in' }, t + PER - 0.4);
+});
+tl.fromTo('#title', { y: -50 * u, opacity: 0 }, { y: 0, opacity: 1, duration: 0.8, ease: 'power3.out' }, 0.2);
+tl.fromTo('#price', { scale: 0.5, opacity: 0, transformOrigin: '0 50%' }, { scale: 1, opacity: 1, duration: 0.7, ease: 'back.out(2.2)' }, 0.9);
+tl.fromTo('#old', { opacity: 0, x: -30 * u }, { opacity: 1, x: 0, duration: 0.6, ease: 'power2.out' }, 1.3);
+tl.fromTo('#cta', { y: 80 * u, opacity: 0 }, { y: 0, opacity: 1, duration: 0.7, ease: 'power3.out' }, 1.6);
+const cycles = Math.max(1, Math.floor((D - 3) / 1.4));
+tl.to('#cta', { scale: 1.045, duration: 0.7, ease: 'sine.inOut', yoyo: true, repeat: 2 * cycles - 1 }, 2.6);
+window.__timelines = window.__timelines || {};
+window.__timelines['main'] = tl;
+tl.seek(0);
+</script>
+</body>
+</html>

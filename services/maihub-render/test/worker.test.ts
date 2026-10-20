@@ -332,3 +332,57 @@ describe('RenderWorker', () => {
     expect(fs.existsSync(path.join(out, 'job-k.result.json'))).toBe(false); // chưa xử lý, chờ vòng sau
   });
 });
+
+describe('buildWorkdir: dấu {{...}} trong index.html của mẫu', () => {
+  const baseSpec = { fps: 30, quality: 'standard' as const };
+  function tplDir(id: string, def: Record<string, unknown>) {
+    const dir = path.join(root, `tok-${id}`);
+    fs.mkdirSync(path.join(dir, id), { recursive: true });
+    fs.writeFileSync(path.join(dir, id, 'template.json'), JSON.stringify({ id, ...def }));
+    fs.writeFileSync(path.join(dir, id, 'index.html'),
+      '<div data-duration="{{durationSec}}" data-width="{{width}}" data-height="{{height}}">{{audio}}</div>');
+    return dir;
+  }
+  const baseDef = { name: 'T', description: 'd', aspects: ['16:9'], imageSlots: { min: 1, max: 8 }, variables: {} };
+
+  it('điền khổ, thời lượng; không có nhạc thì bỏ thẻ audio', async () => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.input, 'img1.jpg'), 'a');
+    const templatesDir = tplDir('t1', { ...baseDef, durationSec: { min: 5, max: 30, default: 12 } });
+    const spec = { ...baseSpec, kind: 'template' as const, templateId: 't1', aspect: '16:9' as const, width: 1920, height: 1080, variables: {}, images: ['img1.jpg'], musicId: null, musicFile: null };
+    const r = await buildWorkdir({ id: 'k1', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    expect(fs.readFileSync(path.join(r.dir, 'index.html'), 'utf8')).toBe('<div data-duration="12" data-width="1920" data-height="1080"></div>');
+  });
+
+  it('secondsPerImage: thời lượng = số ảnh × giây, kẹp trong khoảng của mẫu', async () => {
+    const d = dirs();
+    for (const n of ['img1.jpg', 'img2.jpg', 'img3.jpg']) fs.writeFileSync(path.join(d.input, n), 'a');
+    const templatesDir = tplDir('t2', { ...baseDef, durationSec: { min: 15, max: 48, default: 30 }, secondsPerImage: 6 });
+    const mk = (images: string[]) => ({ ...baseSpec, kind: 'template' as const, templateId: 't2', aspect: '16:9' as const, width: 1920, height: 1080, variables: {}, images, musicId: null, musicFile: null });
+    const r = await buildWorkdir({ id: 'k2', spec: mk(['img1.jpg', 'img2.jpg', 'img3.jpg']) }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    expect(JSON.parse(fs.readFileSync(path.join(r.dir, 'variables.json'), 'utf8')).durationSec).toBe(18);
+    const r2 = await buildWorkdir({ id: 'k3', spec: mk(['img1.jpg']) }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    expect(JSON.parse(fs.readFileSync(path.join(r2.dir, 'variables.json'), 'utf8')).durationSec).toBe(15); // kẹp ở min
+  });
+
+  it('biến durationSec của người dùng bị kẹp trong khoảng của mẫu', async () => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.input, 'img1.jpg'), 'a');
+    const templatesDir = tplDir('t3', { ...baseDef, durationSec: { min: 15, max: 30, default: 20 } });
+    const spec = { ...baseSpec, kind: 'template' as const, templateId: 't3', aspect: '16:9' as const, width: 1920, height: 1080, variables: { durationSec: 9999 }, images: ['img1.jpg'], musicId: null, musicFile: null };
+    const r = await buildWorkdir({ id: 'k4', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    expect(fs.readFileSync(path.join(r.dir, 'index.html'), 'utf8')).toContain('data-duration="30"');
+  });
+
+  maybe('có nhạc thì chèn thẻ audio trỏ assets/music.m4a theo thời lượng', async () => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.input, 'img1.jpg'), 'a');
+    fs.copyFileSync(audio, path.join(d.input, 'audio1.wav'));
+    const templatesDir = tplDir('t4', { ...baseDef, durationSec: { min: 5, max: 30, default: 12 } });
+    const spec = { ...baseSpec, kind: 'template' as const, templateId: 't4', aspect: '16:9' as const, width: 1920, height: 1080, variables: {}, images: ['img1.jpg'], musicId: null, musicFile: 'audio1.wav' };
+    const r = await buildWorkdir({ id: 'k5', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    const html = fs.readFileSync(path.join(r.dir, 'index.html'), 'utf8');
+    expect(html).toContain('<audio id="bgm" src="assets/music.m4a" data-start="0" data-duration="12" data-track-index="9"></audio>');
+    expect(fs.existsSync(path.join(r.dir, 'assets', 'music.m4a'))).toBe(true);
+  });
+});

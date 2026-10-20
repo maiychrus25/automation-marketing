@@ -1,0 +1,16 @@
+{
+  "id": "product-slideshow",
+  "name": "Trình chiếu sản phẩm",
+  "description": "Các ảnh sản phẩm chuyển cảnh mượt, kèm tiêu đề, giá và nút kêu gọi. Mỗi ảnh 6 giây.",
+  "aspects": ["9:16", "1:1", "16:9"],
+  "durationSec": { "min": 15, "max": 48, "default": 30 },
+  "secondsPerImage": 6,
+  "imageSlots": { "min": 3, "max": 8 },
+  "variables": {
+    "title": { "type": "string", "label": "Tiêu đề", "maxLength": 80, "default": "Combo chăm sóc da hot nhất tuần" },
+    "price": { "type": "string", "label": "Giá bán", "maxLength": 20, "default": "199.000đ" },
+    "oldPrice": { "type": "string", "label": "Giá gốc (bỏ trống nếu không có)", "maxLength": 20, "default": "" },
+    "cta": { "type": "string", "label": "Lời kêu gọi", "maxLength": 40, "default": "Nhắn tin đặt ngay" },
+    "accent": { "type": "color", "label": "Màu nhấn", "default": "#ff3d5a" }
+  }
+}

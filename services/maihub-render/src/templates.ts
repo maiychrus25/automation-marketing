@@ -16,6 +16,8 @@ export interface TemplateDef {
   aspects: Aspect[];
   durationSec: { min: number; max: number; default: number };
   imageSlots: { min: number; max: number };
+  /** Có thì thời lượng = số ảnh × giá trị này (kẹp trong `durationSec`). */
+  secondsPerImage?: number;
   variables: Record<string, VariableDef>;
 }
 
@@ -41,6 +43,7 @@ function parseTemplate(id: string, data: unknown): TemplateDef {
   if (!isObj(s) || !isInt(s.min) || !isInt(s.max) || s.min < 0 || s.min > s.max || s.max > LIMITS.maxImages) {
     fail(`imageSlots không hợp lệ (0 ≤ min ≤ max ≤ ${LIMITS.maxImages})`);
   }
+  if (data.secondsPerImage !== undefined && !(typeof data.secondsPerImage === 'number' && data.secondsPerImage > 0)) fail('secondsPerImage phải là số dương');
   if (!isObj(data.variables)) fail('variables phải là đối tượng');
   for (const [key, v] of Object.entries<any>(data.variables)) {
     if (!isObj(v) || typeof v.label !== 'string' || !v.label) fail(`biến "${key}" thiếu label`);

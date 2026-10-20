@@ -66,3 +66,77 @@ describe('loadTemplates', () => {
     expect(() => loadTemplates(root)).toThrow(/index\.html/);
   });
 });
+
+describe('mẫu và nhạc đi kèm', () => {
+  const base = path.join(__dirname, '..');
+  const templatesDir = path.join(base, 'templates');
+  const templates = loadTemplates(templatesDir);
+  const SYSTEM_VARS = ['durationSec', 'height', 'width']; // worker luôn thêm vào variables.json
+  const declared = (id: string): Record<string, { type: string; default: unknown }> => {
+    const html = fs.readFileSync(path.join(templatesDir, id, 'index.html'), 'utf8');
+    const m = html.match(/data-composition-variables='([^']*)'/);
+    if (!m) throw new Error(`${id}: thiếu data-composition-variables`);
+    return JSON.parse(m[1]);
+  };
+
+  it('có đủ ba mẫu theo spec', () => {
+    expect(templates.map((t) => t.id)).toEqual(['flash-sale', 'product-slideshow', 'product-spotlight']);
+  });
+
+  it.each(['flash-sale', 'product-slideshow', 'product-spotlight'])('%s: biến khớp data-composition-variables', (id) => {
+    const def = templates.find((t) => t.id === id)!;
+    const decl = declared(id);
+    for (const [key, v] of Object.entries(def.variables)) {
+      expect(decl[key]).toEqual({ type: v.type, default: v.default });
+    }
+    const extra = Object.keys(decl).filter((k) => !(k in def.variables)).sort();
+    expect(extra.every((k) => SYSTEM_VARS.includes(k))).toBe(true);
+  });
+
+  it.each(['flash-sale', 'product-slideshow', 'product-spotlight'])('%s: hỗ trợ đủ ba khổ và dùng dấu khổ/thời lượng của worker', (id) => {
+    const def = templates.find((t) => t.id === id)!;
+    expect([...def.aspects].sort()).toEqual(['16:9', '1:1', '9:16']);
+    const html = fs.readFileSync(path.join(templatesDir, id, 'index.html'), 'utf8');
+    for (const token of ['{{width}}', '{{height}}', '{{durationSec}}', '{{audio}}']) expect(html).toContain(token);
+    expect(html).not.toMatch(/https?:\/\//); // không gọi mạng
+    expect(html).toContain('window.__hyperframes.getVariables');
+    expect(html).toContain('window.__timelines');
+  });
+
+  it.each(['flash-sale', 'product-slideshow', 'product-spotlight'])('%s: có bản GSAP cục bộ giống vendor/', (id) => {
+    const vendor = fs.readFileSync(path.join(base, 'vendor', 'gsap.min.js'));
+    expect(fs.readFileSync(path.join(templatesDir, id, 'gsap.min.js')).equals(vendor)).toBe(true);
+    expect(vendor.toString('utf8', 0, 200)).toContain('3.14.2');
+  });
+
+  it('thời lượng và số ảnh theo spec', () => {
+    const by = Object.fromEntries(templates.map((t) => [t.id, t]));
+    expect(by['product-slideshow']).toMatchObject({ secondsPerImage: 6, imageSlots: { min: 3, max: 8 }, durationSec: { min: 15, max: 48 } });
+    expect(by['flash-sale']).toMatchObject({ imageSlots: { min: 1, max: 4 }, durationSec: { min: 15, max: 30 } });
+    expect(by['product-spotlight']).toMatchObject({ imageSlots: { min: 1, max: 3 }, durationSec: { min: 15, max: 30 } });
+    expect(Object.keys(by['product-slideshow'].variables).sort()).toEqual(['accent', 'cta', 'oldPrice', 'price', 'title']);
+    expect(Object.keys(by['flash-sale'].variables).sort()).toEqual(['accent', 'cta', 'discountLabel', 'durationSec', 'endsText', 'oldPrice', 'price', 'title']);
+    expect(Object.keys(by['product-spotlight'].variables).sort()).toEqual(['accent', 'benefit1', 'benefit2', 'benefit3', 'cta', 'durationSec', 'price', 'title']);
+  });
+
+  it('manifest nhạc đủ trường, tệp tồn tại, CC0, ≤ 5 MB', () => {
+    const musicDir = path.join(base, 'music');
+    const manifest = JSON.parse(fs.readFileSync(path.join(musicDir, 'manifest.json'), 'utf8'));
+    expect(manifest).toHaveLength(5);
+    const ids = new Set<string>();
+    for (const m of manifest) {
+      expect(typeof m.id).toBe('string');
+      expect(path.parse(m.file).name).toBe(m.id); // buildWorkdir tìm tệp theo id
+      ids.add(m.id);
+      expect(typeof m.name).toBe('string');
+      expect(typeof m.author).toBe('string');
+      expect(m.durationSec).toBeGreaterThan(0);
+      expect(m.license).toBe('CC0');
+      expect(m.source).toMatch(/^https:\/\/.*freepd\.com\//);
+      const size = fs.statSync(path.join(musicDir, m.file)).size;
+      expect(size).toBeGreaterThan(0);
+      expect(size).toBeLessThanOrEqual(5 * 1024 * 1024);
+    }
+    expect(ids.size).toBe(5);
+  });
+});

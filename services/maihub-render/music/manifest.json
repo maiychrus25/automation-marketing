@@ -1,0 +1,7 @@
+[
+  { "id": "advertime", "name": "Advertime", "file": "advertime.mp3", "durationSec": 134, "license": "CC0", "source": "https://web.archive.org/web/20250106221458/https://freepd.com/upbeat.php", "author": "Rafael Krux" },
+  { "id": "happy-ukulele", "name": "Happy Whistling Ukulele", "file": "happy-ukulele.mp3", "durationSec": 123, "license": "CC0", "source": "https://web.archive.org/web/20250106221458/https://freepd.com/upbeat.php", "author": "Rafael Krux" },
+  { "id": "inspiration", "name": "Inspiration", "file": "inspiration.mp3", "durationSec": 138, "license": "CC0", "source": "https://web.archive.org/web/20250106221458/https://freepd.com/upbeat.php", "author": "Rafael Krux" },
+  { "id": "city-sunshine", "name": "City Sunshine", "file": "city-sunshine.mp3", "durationSec": 185, "license": "CC0", "source": "https://web.archive.org/web/20250106221458/https://freepd.com/upbeat.php", "author": "Kevin MacLeod" },
+  { "id": "fresh-focus", "name": "Fresh Focus", "file": "fresh-focus.mp3", "durationSec": 124, "license": "CC0", "source": "https://web.archive.org/web/20250106221458/https://freepd.com/upbeat.php", "author": "Kevin MacLeod" }
+]

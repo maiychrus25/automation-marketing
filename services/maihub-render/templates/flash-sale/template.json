@@ -1,0 +1,18 @@
+{
+  "id": "flash-sale",
+  "name": "Flash sale",
+  "description": "Video khuyến mãi giật gân: nhãn giảm giá lớn, giá chốt thật to, dòng giờ kết thúc và nút kêu gọi.",
+  "aspects": ["9:16", "1:1", "16:9"],
+  "durationSec": { "min": 15, "max": 30, "default": 20 },
+  "imageSlots": { "min": 1, "max": 4 },
+  "variables": {
+    "title": { "type": "string", "label": "Tiêu đề", "maxLength": 60, "default": "Săn deal giá sốc hôm nay" },
+    "oldPrice": { "type": "string", "label": "Giá gốc", "maxLength": 20, "default": "599.000đ" },
+    "price": { "type": "string", "label": "Giá flash sale", "maxLength": 20, "default": "299.000đ" },
+    "discountLabel": { "type": "string", "label": "Nhãn giảm giá", "maxLength": 12, "default": "-50%" },
+    "endsText": { "type": "string", "label": "Dòng thời hạn", "maxLength": 40, "default": "Kết thúc 23:59 hôm nay" },
+    "cta": { "type": "string", "label": "Lời kêu gọi", "maxLength": 40, "default": "Chốt đơn ngay" },
+    "accent": { "type": "color", "label": "Màu nhấn", "default": "#ff2e4d" },
+    "durationSec": { "type": "number", "label": "Thời lượng (giây)", "default": 20 }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "product-spotlight",
+  "name": "Nổi bật 1 sản phẩm",
+  "description": "Tôn vinh một sản phẩm: ảnh lớn, tiêu đề, ba lợi ích chính, giá và nút kêu gọi.",
+  "aspects": ["9:16", "1:1", "16:9"],
+  "durationSec": { "min": 15, "max": 30, "default": 20 },
+  "imageSlots": { "min": 1, "max": 3 },
+  "variables": {
+    "title": { "type": "string", "label": "Tên sản phẩm", "maxLength": 60, "default": "Serum vitamin C sáng da" },
+    "benefit1": { "type": "string", "label": "Lợi ích 1", "maxLength": 50, "default": "Sáng da sau 7 ngày" },
+    "benefit2": { "type": "string", "label": "Lợi ích 2", "maxLength": 50, "default": "Thấm nhanh, không bết dính" },
+    "benefit3": { "type": "string", "label": "Lợi ích 3", "maxLength": 50, "default": "Lành tính, hợp mọi loại da" },
+    "price": { "type": "string", "label": "Giá bán", "maxLength": 20, "default": "259.000đ" },
+    "cta": { "type": "string", "label": "Lời kêu gọi", "maxLength": 40, "default": "Đặt hàng ngay" },
+    "accent": { "type": "color", "label": "Màu nhấn", "default": "#19c37d" },
+    "durationSec": { "type": "number", "label": "Thời lượng (giây)", "default": 20 }
+  }
+}

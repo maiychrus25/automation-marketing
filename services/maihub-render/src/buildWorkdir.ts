@@ -30,6 +30,25 @@ function findMusic(opts: WorkdirOptions, spec: Extract<NormalizedSpec, { kind: '
   return path.join(opts.musicDir, found);
 }
 
+/** Thời lượng cuối: mẫu có `secondsPerImage` thì theo số ảnh, ngược lại lấy biến `durationSec` hoặc mặc định; luôn kẹp trong khoảng của mẫu. */
+function resolveDuration(def: TemplateDef, spec: Extract<NormalizedSpec, { kind: 'template' }>): number {
+  const { min, max, default: dflt } = def.durationSec;
+  const raw = def.secondsPerImage ? spec.images.length * def.secondsPerImage
+    : typeof spec.variables.durationSec === 'number' ? spec.variables.durationSec : dflt;
+  return Math.min(max, Math.max(min, raw));
+}
+
+/**
+ * HyperFrames đọc khổ và thời lượng từ HTML tĩnh (không chạy script), nên điền sẵn các dấu `{{...}}`
+ * trong index.html: `{{width}}`, `{{height}}`, `{{durationSec}}` và `{{audio}}` (thẻ nhạc hoặc rỗng nếu không có nhạc,
+ * vì thẻ audio thiếu tệp làm hỏng cả lần render). Chỉ số liệu của hệ thống được điền, không có chữ do người dùng nhập.
+ */
+function fillHtmlTokens(file: string, tokens: Record<string, string>): void {
+  let html = fs.readFileSync(file, 'utf8');
+  for (const [key, value] of Object.entries(tokens)) html = html.split(`{{${key}}}`).join(value);
+  fs.writeFileSync(file, html);
+}
+
 async function buildFromTemplate(job: WorkdirJob, spec: Extract<NormalizedSpec, { kind: 'template' }>, dir: string, opts: WorkdirOptions): Promise<void> {
   const tplDir = path.join(opts.templatesDir, safeName(spec.templateId, 'Mã mẫu'));
   if (!fs.existsSync(path.join(tplDir, 'index.html'))) throw new Error(`Không có mẫu "${spec.templateId}"`);
@@ -43,10 +62,16 @@ async function buildFromTemplate(job: WorkdirJob, spec: Extract<NormalizedSpec, 
     fs.copyFileSync(path.join(opts.inputDir, name), path.join(assets, name));
     return `assets/${name}`;
   });
-  const durationSec = typeof spec.variables.durationSec === 'number' ? spec.variables.durationSec : def.durationSec.default;
+  const durationSec = resolveDuration(def, spec);
   const music = findMusic(opts, spec);
   if (music) await prepareMusic(music, durationSec, path.join(assets, 'music.m4a'), opts.ffmpegPath);
-  const variables = { durationSec, ...spec.variables, images, width: spec.width, height: spec.height };
+  fillHtmlTokens(path.join(dir, 'index.html'), {
+    width: String(spec.width),
+    height: String(spec.height),
+    durationSec: String(durationSec),
+    audio: music ? `<audio id="bgm" src="assets/music.m4a" data-start="0" data-duration="${durationSec}" data-track-index="9"></audio>` : '',
+  });
+  const variables = { ...spec.variables, durationSec, images, width: spec.width, height: spec.height };
   fs.writeFileSync(path.join(dir, 'variables.json'), JSON.stringify(variables));
 }
 
