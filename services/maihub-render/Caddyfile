@@ -1,0 +1,4 @@
+{$RENDER_DOMAIN} {
+	# Caddy tự xin và gia hạn chứng chỉ Let's Encrypt cho tên miền này
+	reverse_proxy api:8080
+}

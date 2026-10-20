@@ -1,0 +1,64 @@
+# Máy chủ render MaiHub. Xem README.md. Biến môi trường lấy từ .env (RENDER_DOMAIN, RENDER_API_KEYS).
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      RENDER_DOMAIN: ${RENDER_DOMAIN:?Thiếu RENDER_DOMAIN trong .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    user: node
+    # chỉ Caddy trong mạng compose thấy được; không công bố cổng ra ngoài
+    expose:
+      - "8080"
+    environment:
+      RENDER_API_KEYS: ${RENDER_API_KEYS:?Thiếu RENDER_API_KEYS trong .env}
+    volumes:
+      - ./data:/data
+      - ./shared:/shared
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # không gắn /var/run/docker.sock
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    user: node
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    cpus: 4
+    mem_limit: 3g
+    pids_limit: 512
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # không có .env, không có /data; chỉ thấy việc hiện tại và thư mục kết quả
+    volumes:
+      - ./shared/current:/shared/current:ro
+      - ./shared/out:/shared/out
+
+volumes:
+  caddy_data:
+  caddy_config:

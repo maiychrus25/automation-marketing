@@ -157,7 +157,7 @@ export function main(): void {
   const sharedDir = env.SHARED_DIR ?? path.resolve('shared');
   const port = Number(env.PORT ?? 8080);
   const templatesDir = env.TEMPLATES_DIR ?? path.resolve('templates');
-  const musicFile = path.join(env.MUSIC_DIR ?? path.resolve('music'), 'music.json');
+  const musicFile = path.join(env.MUSIC_DIR ?? path.resolve('music'), 'manifest.json');
   const music: MusicInfo[] = fs.existsSync(musicFile) ? JSON.parse(fs.readFileSync(musicFile, 'utf8')) : [];
   const version = (JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8')) as { version: string }).version;
 
