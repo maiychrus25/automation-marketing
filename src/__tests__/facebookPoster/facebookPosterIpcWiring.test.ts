@@ -100,7 +100,11 @@ describe('facebookPosterIpc wiring', () => {
         expect(() => posterOperations.scheduleUpdate({ id: created.id, campaignId: archived.id })).toThrow('Chiến dịch đã lưu trữ');
         expect(posterOperations.scheduleList({ campaignId: active.id }).schedules.map((s) => s.id)).toEqual([created.id]);
         expect(posterOperations.scheduleList({ campaignId: '' }).schedules).toEqual([]);
+        mockClearBypass.mockClear();
         expect(posterOperations.scheduleUpdate({ id: created.id, campaignId: null }).schedule!.campaignId).toBeNull();
+        posterOperations.scheduleUpdate({ id: created.id, name: 'Đổi tên' });
+        expect(mockClearBypass).not.toHaveBeenCalled(); // đổi tên / chiến dịch giữ "Đăng ngay" đang chờ
+        posterOperations.scheduleUpdate({ id: created.id, time: '10:45' });
         expect(mockClearBypass).toHaveBeenCalledWith(created.id);
         expect(() => posterOperations.scheduleList({ campaignId: 5 })).toThrow('campaignId không hợp lệ');
     });
