@@ -39,7 +39,8 @@ export default function RenderServerSettings() {
   };
   useEffect(() => { load(); }, []);
 
-  const urlInvalid = !!url.trim() && !/^https:\/\/\S+$/i.test(url.trim());
+  // Như main process: https, hoặc http chỉ cho máy nội bộ (thử nghiệm).
+  const urlInvalid = !!url.trim() && !/^(https:\/\/\S+|http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/\S*)?)$/i.test(url.trim());
   const keyMissing = !configured && !apiKey.trim();
 
   const save = async () => {
