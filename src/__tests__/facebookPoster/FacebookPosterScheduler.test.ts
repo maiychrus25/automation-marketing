@@ -18,6 +18,7 @@ function setup(over: { resolveParams?: (s: FbPosterSchedule) => StartParams; sta
     t: T0, busy: false, seq: 0,
     timers: [] as { fn: () => void; ms: number; cleared: boolean }[],
     started: [] as string[], missed: [] as MissedNotice[], changed: 0,
+    block: (() => null) as (s: FbPosterSchedule, t: number) => string | null,
   };
   const sched = new FacebookPosterScheduler({
     store,
@@ -30,6 +31,7 @@ function setup(over: { resolveParams?: (s: FbPosterSchedule) => StartParams; sta
     newId: () => `gen-${++env.seq}`,
     onMissed: (n) => env.missed.push(n),
     onChanged: () => { env.changed++; },
+    campaignBlock: (s, t) => env.block(s, t),
   });
   const add = (id: string, over: Record<string, unknown> = {}) => store.createSchedule({
     id, name: `Lịch ${id}`, kind: 'once', params: { kind: 'post', mode: 'group' }, runAt: T0, days: [], time: '',
@@ -278,5 +280,83 @@ describe('FacebookPosterScheduler', () => {
     env.busy = false;
     sched.onRunFinished();
     assert.deepStrictEqual(env.started, ['n']);
+  });
+  describe('campaign gate', () => {
+    const PAUSED = 'Chiến dịch đang tạm dừng';
+    test('recurring schedule of a blocked campaign: not run, not recorded, nextRunAt advances', () => {
+      const { store, env, sched, add, live } = setup();
+      const due = new Date(2026, 9, 7, 13, 0, 0).getTime();
+      add('r', { kind: 'recurring', runAt: null, days: [1, 3, 5], time: '13:00', nextRunAt: due });
+      env.block = () => PAUSED;
+      sched.start();
+      env.t = due;
+      live()[0].fn();
+      assert.deepStrictEqual(env.started, []);
+      assert.deepStrictEqual(env.missed, []);
+      assert.strictEqual(store.getSchedule('r')!.lastRunId, null);
+      assert.strictEqual(store.getSchedule('r')!.nextRunAt, new Date(2026, 9, 9, 13, 0, 0).getTime());
+    });
+
+    test('resume: the next due time runs again', () => {
+      const { env, sched, add, live } = setup();
+      const due = new Date(2026, 9, 7, 13, 0, 0).getTime();
+      const next = new Date(2026, 9, 9, 13, 0, 0).getTime();
+      add('r', { kind: 'recurring', runAt: null, days: [1, 3, 5], time: '13:00', nextRunAt: due });
+      env.block = () => PAUSED;
+      sched.start();
+      env.t = due;
+      live()[0].fn();
+      env.block = () => null;
+      env.t = next;
+      live()[0].fn();
+      assert.deepStrictEqual(env.started, ['r']);
+    });
+
+    test.each(['Chiến dịch đang tạm dừng', 'Chiến dịch đã lưu trữ', 'Ngoài thời gian chiến dịch'])('once schedule records missed with reason %s', (reason) => {
+      const { store, env, sched, add } = setup();
+      add('a');
+      env.block = () => reason;
+      sched.start();
+      const run = store.getRun(store.getSchedule('a')!.lastRunId!)!.run;
+      assert.strictEqual(run.status, 'missed');
+      assert.strictEqual(run.error, reason);
+      assert.deepStrictEqual(env.missed, [{ scheduleId: 'a', name: 'Lịch a', reason, at: T0 }]);
+      assert.deepStrictEqual(env.started, []);
+      assert.deepStrictEqual(sched.queuedIds(), []);
+    });
+
+    test('an overdue schedule stays app-closed even when the campaign is blocked', () => {
+      const { env, sched, add } = setup();
+      add('a', { runAt: T0 - 5 * MIN, nextRunAt: T0 - 5 * MIN });
+      env.block = () => PAUSED;
+      sched.start();
+      assert.deepStrictEqual(env.missed.map((m) => m.reason), [MISSED_APP_CLOSED]);
+    });
+
+    test('paused while waiting in the queue: recorded missed, never started', () => {
+      const { store, env, sched, add } = setup();
+      add('a');
+      env.busy = true;
+      sched.start();
+      assert.deepStrictEqual(sched.queuedIds(), ['a']);
+      env.block = () => PAUSED;
+      env.busy = false;
+      sched.onRunFinished();
+      assert.deepStrictEqual(env.started, []);
+      assert.deepStrictEqual(sched.queuedIds(), []);
+      const run = store.getRun(store.getSchedule('a')!.lastRunId!)!.run;
+      assert.strictEqual(run.status, 'missed');
+      assert.strictEqual(run.error, PAUSED);
+      assert.strictEqual(env.missed[0].reason, PAUSED);
+    });
+
+    test('campaignBlock throwing does not block the schedule', () => {
+      const { env, sched, add } = setup();
+      add('a');
+      env.block = () => { throw new Error('db down'); };
+      sched.start();
+      assert.deepStrictEqual(env.started, ['a']);
+      assert.deepStrictEqual(env.missed, []);
+    });
   });
 });

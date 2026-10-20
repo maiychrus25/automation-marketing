@@ -27,6 +27,8 @@ export interface SchedulerDeps {
     newId: () => string;
     onMissed: (notice: MissedNotice) => void;
     onChanged: () => void;
+    /** Lý do chặn theo chiến dịch của lịch (tạm dừng / lưu trữ / ngoài thời gian), null khi không có chiến dịch hoặc chạy được; bỏ trống = không chặn (nối thật ở Electron). */
+    campaignBlock?: (schedule: FbPosterSchedule, t: number) => string | null;
 }
 
 interface QueueItem { scheduleId: string; enqueuedAt: number; }
@@ -76,8 +78,14 @@ export class FacebookPosterScheduler {
             for (const s of store.listDueSchedules(t)) {
                 if (s.nextRunAt !== null && s.nextRunAt < t - GRACE_MS) {
                     this.recordMissed(s.id, MISSED_APP_CLOSED, s.nextRunAt, s);
-                } else if (!this.queue.some((q) => q.scheduleId === s.id)) {
-                    this.queue.push({ scheduleId: s.id, enqueuedAt: t });
+                } else {
+                    const reason = this.blockReason(s, t);
+                    if (reason !== null) {
+                        // Lịch lặp bỏ qua lặng lẽ (vẫn sang lần sau); lịch một lần không còn lần sau nên ghi bỏ lỡ.
+                        if (s.kind === 'once') this.recordMissed(s.id, reason, s.nextRunAt ?? t, s);
+                    } else if (!this.queue.some((q) => q.scheduleId === s.id)) {
+                        this.queue.push({ scheduleId: s.id, enqueuedAt: t });
+                    }
                 }
                 store.updateSchedule(s.id, { nextRunAt: computeNextRun(s, t) }, t);
             }
@@ -115,6 +123,8 @@ export class FacebookPosterScheduler {
             const item = this.queue.shift()!;
             const s = store.getSchedule(item.scheduleId);
             if (!s || !s.enabled || s.draft) continue;
+            const blocked = this.blockReason(s, now());
+            if (blocked !== null) { this.recordMissed(s.id, blocked, now(), s); continue; }
             let runId: string;
             try {
                 runId = this.deps.startRun(this.deps.resolveParams(s), s.id).runId;
@@ -132,6 +142,16 @@ export class FacebookPosterScheduler {
             } catch (err) {
                 Logger.error(`[FacebookPosterScheduler] could not save lastRunId: ${err instanceof Error ? err.message : String(err)}`);
             }
+        }
+    }
+
+    /** Lỗi đọc chiến dịch không được làm lịch ngừng chạy: coi như không bị chặn. */
+    private blockReason(s: FbPosterSchedule, t: number): string | null {
+        try {
+            return this.deps.campaignBlock?.(s, t) ?? null;
+        } catch (err) {
+            Logger.error(`[FacebookPosterScheduler] campaignBlock failed: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
         }
     }
 
