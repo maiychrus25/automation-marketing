@@ -67,7 +67,7 @@ jest.mock('../../../electron/ipc/researchIpc', () => ({ getResearchStore: () => 
 jest.mock('../../../electron/ipc/workspaceIpc', () => ({ isWorkspaceSwitchInProgress: () => false }));
 jest.mock('../../services/control/controlEvents', () => ({
     emitControlEvent: jest.fn(), hasControlEventSink: () => false, buildRunStarted: jest.fn(), buildRunFinished: jest.fn(), buildScheduleMissed: jest.fn(),
-    buildDraftApproved: jest.fn(), buildLoginProblem: jest.fn(), buildCheckFinished: jest.fn(), buildTrackFinished: jest.fn(),
+    buildDraftApproved: jest.fn(), buildLoginProblem: jest.fn(), buildCheckFinished: jest.fn(), buildTrackFinished: jest.fn(), buildLeadsFound: jest.fn((p: unknown) => p),
 }));
 
 import { startFacebookPosterScheduler, stopFacebookPosterScheduler, posterOperations, campaignOperations, trackingOperations, leadOperations, isFacebookPosterBusy } from '../../../electron/ipc/facebookPosterIpc';
@@ -220,6 +220,22 @@ describe('facebookPosterIpc wiring', () => {
             commentedAt: '', commentedAtMs: null, collectedAt: Date.now(),
         }]);
         expect(leadOperations.list({ search: 'hỏi giá' }).total).toBe(1);
+    });
+
+    test('khách mới phát sự kiện control leads.found một lần mỗi lượt, không phát lại cho bình luận cũ', async () => {
+        posterOperations.current();
+        const emit = require('../../services/control/controlEvents').emitControlEvent as jest.Mock;
+        emit.mockClear();
+        const row = {
+            key: 'ctl-k1', profileId: 'p1', postUrl: 'https://x/ctl', authorId: 'a9', authorName: 'Hoa', authorUrl: '', text: 'ib mình báo giá nhé',
+            commentedAt: '', commentedAtMs: null, collectedAt: Date.now(),
+        };
+        await mockServiceDeps.onCommentsSaved([row]);
+        const leadCalls = () => emit.mock.calls.filter((c) => c[0] === 'leads.found');
+        expect(leadCalls()).toHaveLength(1);
+        expect(leadCalls()[0][1]).toMatchObject({ count: 1, auto: false });
+        await mockServiceDeps.onCommentsSaved([row]);
+        expect(leadCalls()).toHaveLength(1);
     });
 
     test('bộ hẹn giờ thu bình luận nhận isBusy gồm khe việc chung; runCollect thu với auto = true', async () => {

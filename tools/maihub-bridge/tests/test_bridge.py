@@ -997,6 +997,34 @@ class FormatTrackFinishedTests(unittest.TestCase):
         self.assertIsNone(self.fmt(auto=True, linked=0, removedSuspected=0, found=4))
 
 
+class FormatLeadsFoundTests(unittest.TestCase):
+    def fmt(self, **over):
+        payload = {"count": 2, "auto": True, "samples": [
+            {"authorName": "Lan", "text": "giá bao nhiêu vậy shop", "postUrl": "u1"},
+            {"authorName": "Hoa", "text": "ib mình nhé", "postUrl": "u2"}]}
+        payload.update(over)
+        return bridge.format_event({"seq": 1, "type": "leads.found", "payload": payload, "createdAt": 1}, lambda r: None)
+
+    def test_lists_samples(self):
+        self.assertEqual(self.fmt(), "🎯 2 khách tiềm năng mới\nLan: giá bao nhiêu vậy shop\nHoa: ib mình nhé")
+
+    def test_silent_without_leads(self):
+        self.assertIsNone(self.fmt(count=0, samples=[]))
+        self.assertIsNone(self.fmt(count=None))
+
+    def test_long_text_clipped_to_80_and_only_three_lines(self):
+        samples = [{"authorName": "N%d" % i, "text": "x" * 200, "postUrl": "u"} for i in range(5)]
+        lines = self.fmt(count=5, samples=samples).split("\n")
+        self.assertEqual(lines[0], "🎯 5 khách tiềm năng mới")
+        self.assertEqual(len(lines), 4)
+        self.assertEqual(lines[1], "N0: " + "x" * 79 + "…")
+
+    def test_tolerates_missing_fields(self):
+        self.assertEqual(self.fmt(count=1, samples=[{}, "bad"]), "🎯 1 khách tiềm năng mới")
+        self.assertEqual(self.fmt(count=1, samples=None), "🎯 1 khách tiềm năng mới")
+        self.assertEqual(self.fmt(count=1, samples=[{"authorName": "Lan"}]), "🎯 1 khách tiềm năng mới\nLan: ")
+
+
 class NotifyTargetTests(unittest.TestCase):
     def test_notify_target_priority(self):
         bot = {"TG_TOKEN": TG_TOKEN, "ALLOWED_CHAT_ID": "-100,-200", "ALLOWED_TOPIC_ID": "7", "ADMIN_USER_ID": "9"}

@@ -70,6 +70,8 @@ WATCH_AUTH_RETRY_SEC = 300
 MAX_RETRY_AFTER_SEC = 300
 WATCH_MIN_POLL_SEC = 1
 MAX_FIELD_CHARS = 200
+MAX_LEAD_SAMPLES = 3
+LEAD_TEXT_CHARS = 80
 MAX_MESSAGE_CHARS = 3500
 MAX_ERROR_LINES = 3
 KIND_LABELS = {"join": "Tham gia nhóm", "scan_groups": "Quét nhóm", "collect_comments": "Thu bình luận"}
@@ -1091,6 +1093,14 @@ def format_event(event, fetch_run):
         linked, removed = (int(payload.get(k) or 0) for k in ("linked", "removedSuspected"))
         if linked > 0 or removed > 0:  # không có link mới và không có bài bị xoá thì không báo
             lines = ["📈 Theo dõi bài: kiểm tra %d nhóm, lấy được %d link, %d bài có thể đã bị xoá" % (int(payload.get("groups") or 0), linked, removed)]
+    elif etype == "leads.found":
+        count = payload.get("count")
+        if isinstance(count, int) and count > 0:  # không có khách mới thì không báo
+            lines = ["🎯 %d khách tiềm năng mới" % count]
+            samples = payload.get("samples")
+            for sample in (samples if isinstance(samples, list) else [])[:MAX_LEAD_SAMPLES]:
+                if isinstance(sample, dict) and (sample.get("authorName") or sample.get("text")):
+                    lines.append("%s: %s" % (clip(sample.get("authorName") or "", MAX_FIELD_CHARS), clip(sample.get("text") or "", LEAD_TEXT_CHARS)))
     return clip("\n".join(lines), MAX_MESSAGE_CHARS) if lines else None
 
 

@@ -17,7 +17,7 @@ export class ControlError extends Error {
 }
 
 const INTERNAL_MESSAGE = 'Lỗi nội bộ của MaiHub, thử lại sau';
-const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy', 'Không tìm thấy chiến dịch', SCAN_NOT_FOUND_ERROR];
+const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy', 'Không tìm thấy chiến dịch', 'Không tìm thấy khách', SCAN_NOT_FOUND_ERROR];
 
 /** Trùng `WORKSPACE_SWITCHING_ERROR` của facebookPosterIpc/researchIpc (có test đối chiếu); không import để tránh kéo Electron vào đây. */
 const WORKSPACE_SWITCHING_MESSAGE = 'Đang đổi workspace, thử lại sau';
@@ -102,6 +102,16 @@ export interface CampaignPort {
     delete(params: any): any;
 }
 
+/** Khách tiềm năng và thu bình luận (`leadOperations`); kiểm tra tham số nằm ở đó. */
+export interface LeadPort {
+    list(params?: any): any;
+    update(params: any): any;
+    getConfig(): any;
+    setConfig(params: any): any;
+    collect(params?: any): any;
+    comments(params?: any): any;
+}
+
 export interface ControlEventRow { seq: number; type: string; payload: unknown; createdAt: number }
 
 export interface ControlMethodDeps {
@@ -109,6 +119,7 @@ export interface ControlMethodDeps {
     research: ResearchPort;
     tracking: TrackingPort;
     campaigns: CampaignPort;
+    leads: LeadPort;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
     checkLogins(profileIds: string[] | null): { checkId: string; profileIds: string[] };
@@ -641,6 +652,76 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             paramsSchema: obj({ id: str('Mã chiến dịch'), confirm: confirmProp }, ['id', 'confirm']),
             resultSchema: obj({ deleted: { type: 'boolean' } }, ['deleted']),
             run: async (p) => deps.campaigns.delete(pick(p, ['id'])),
+        },
+        {
+            name: 'comments.collect',
+            description: 'Thu bình luận của các bài đã đăng (chỉ đọc, không bình luận hay nhắn tin). Chạy nền, trả jobId ngay; bình luận mới khớp từ khoá thành khách và phát sự kiện leads.found. postUrls bỏ trống = các bài đến hạn thu. BUSY nếu đang đăng, kiểm tra đăng nhập hoặc đang thu.',
+            destructive: false,
+            paramsSchema: obj({ postUrls: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: 50, description: 'Chỉ các bài này (1–50 link; mỗi lượt xử lý tối đa 10 bài)' } }),
+            resultSchema: obj({ jobId: str('Mã lượt thu'), posts: int('Số bài sẽ thu') }, ['jobId', 'posts']),
+            run: async (p) => deps.leads.collect(pick(p, ['postUrls'])),
+        },
+        {
+            name: 'comments.list',
+            description: 'Các bình luận đã thu, mới nhất trước.',
+            destructive: false,
+            paramsSchema: obj({
+                postUrl: str('Chỉ một bài'),
+                since: int('Chỉ bình luận thu từ thời điểm này (epoch ms)', { minimum: 0 }),
+                limit: int('Tối đa bao nhiêu dòng (1–500)', { minimum: 1, maximum: 500 }),
+                offset: int('Bỏ qua bao nhiêu dòng đầu', { minimum: 0 }),
+            }),
+            resultSchema: obj({ total: int('Tổng số dòng khớp'), comments: { type: 'array', items: { type: 'object' }, description: 'Các bình luận trong trang' } }, ['total', 'comments']),
+            run: async (p) => deps.leads.comments(pick(p, ['postUrl', 'since', 'limit', 'offset'])),
+        },
+        {
+            name: 'leads.list',
+            description: 'Khách tiềm năng phát hiện từ bình luận (khớp từ khoá, số điện thoại hoặc AI), mới nhất trước.',
+            destructive: false,
+            paramsSchema: obj({
+                status: { type: 'string', enum: ['new', 'contacted', 'won', 'ignored'], description: 'Lọc theo trạng thái' },
+                campaignId: str("Lọc theo chiến dịch; '' = bài không thuộc chiến dịch"),
+                from: int('Từ thời điểm (epoch ms)', { minimum: 0 }),
+                to: int('Đến thời điểm (epoch ms)', { minimum: 0 }),
+                search: str('Tìm trong tên và nội dung bình luận'),
+                limit: int('Tối đa bao nhiêu dòng (1–500)', { minimum: 1, maximum: 500 }),
+                offset: int('Bỏ qua bao nhiêu dòng đầu', { minimum: 0 }),
+            }),
+            resultSchema: obj({ total: int('Tổng số dòng khớp'), leads: { type: 'array', items: { type: 'object' }, description: 'Các khách trong trang' } }, ['total', 'leads']),
+            run: async (p) => deps.leads.list(pick(p, ['status', 'campaignId', 'from', 'to', 'search', 'limit', 'offset'])),
+        },
+        {
+            name: 'leads.update',
+            description: 'Đổi trạng thái và/hoặc ghi chú của một khách (cần ít nhất một trong hai). NOT_FOUND nếu id lạ.',
+            destructive: false,
+            paramsSchema: obj({
+                id: int('Mã khách', { minimum: 1 }),
+                status: { type: 'string', enum: ['new', 'contacted', 'won', 'ignored'] },
+                note: { type: 'string', maxLength: 1000, description: 'Ghi chú (≤ 1000 ký tự)' },
+            }, ['id']),
+            resultSchema: obj({ lead: { type: 'object', description: 'Khách sau khi cập nhật' } }, ['lead']),
+            run: async (p) => deps.leads.update(pick(p, ['id', 'status', 'note'])),
+        },
+        {
+            name: 'leads.config',
+            description: 'Đọc hoặc lưu cấu hình phát hiện khách và tự thu bình luận. Không truyền config = chỉ đọc; có config = lưu rồi trả cấu hình mới. Cấu hình: autoCollect (boolean), collectAtMinutes (1–10 số tăng dần, 30–20160 phút), keywords (1–100 mục, mỗi mục 1–40 ký tự), detectPhone (boolean), aiEnabled (boolean), aiMinScore (0–100).',
+            destructive: false,
+            paramsSchema: obj({
+                config: {
+                    type: 'object',
+                    properties: {
+                        autoCollect: { type: 'boolean' },
+                        collectAtMinutes: { type: 'array', items: { type: 'integer', minimum: 30, maximum: 20160 }, minItems: 1, maxItems: 10 },
+                        keywords: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 40 }, minItems: 1, maxItems: 100 },
+                        detectPhone: { type: 'boolean' },
+                        aiEnabled: { type: 'boolean' },
+                        aiMinScore: { type: 'integer', minimum: 0, maximum: 100 },
+                    },
+                    description: 'Cấu hình cần lưu; bỏ trống để chỉ đọc',
+                },
+            }),
+            resultSchema: obj({ config: { type: 'object', description: 'Cấu hình hiện hành' } }, ['config']),
+            run: async (p) => (p.config === undefined ? deps.leads.getConfig() : deps.leads.setConfig(p.config)),
         },
     ];
 

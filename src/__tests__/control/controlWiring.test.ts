@@ -7,7 +7,7 @@ import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
 import { ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
-import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
+import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, buildLeadsFound, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 import { createCertificate } from '../../services/control/certificate';
 import { parseBotIp, withStoredPublicHost } from '../../services/control/controlConfig';
 
@@ -272,5 +272,16 @@ describe('control events: post tracking', () => {
         const input = { jobId: 'j1', auto: true, cancelled: false, groups: 2, checked: 5, found: 4, linked: 3, removedSuspected: 1, notFound: 0, errors: 0, extra: 9 };
         const { extra, ...expected } = input;
         expect(buildTrackFinished(input as any)).toEqual(expected);
+    });
+});
+
+describe('control events: leads', () => {
+    it('buildLeadsFound keeps only documented fields and at most 3 samples', () => {
+        const sample = (i: number) => ({ authorName: `A${i}`, text: `t${i}`, postUrl: `u${i}`, authorUrl: 'x' });
+        const out = buildLeadsFound({ count: 5, samples: [1, 2, 3, 4].map(sample), auto: true, extra: 1 } as any);
+        expect(out).toEqual({
+            count: 5, auto: true,
+            samples: [1, 2, 3].map((i) => ({ authorName: `A${i}`, text: `t${i}`, postUrl: `u${i}` })),
+        });
     });
 });

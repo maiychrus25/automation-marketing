@@ -250,6 +250,7 @@ describe('describe', () => {
             'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.cancel',
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
+            'comments.collect', 'comments.list', 'leads.list', 'leads.update', 'leads.config',
         ]);
         for (const m of d.methods) {
             expect(m.description).toMatch(/\S/);
@@ -582,5 +583,64 @@ describe('campaign and variant fields', () => {
         const input = deps.poster.draftSave.mock.calls[0][0] as any;
         expect(input).not.toHaveProperty('campaignId');
         expect(input.params).not.toHaveProperty('variants');
+    });
+});
+
+describe('lead and comment methods', () => {
+    function setupLeads() {
+        const leads = {
+            list: jest.fn((_p?: any): any => ({ total: 0, leads: [] })),
+            update: jest.fn((_p: any): any => ({ lead: { id: 4 } })),
+            getConfig: jest.fn((): any => ({ config: { autoCollect: true } })),
+            setConfig: jest.fn((_p: any): any => ({ config: { autoCollect: false } })),
+            collect: jest.fn((_p?: any): any => ({ jobId: 'j1', posts: 2 })),
+            comments: jest.fn((_p?: any): any => ({ total: 0, comments: [] })),
+        };
+        const methods = createControlMethods({ ...makeDeps(), leads } as unknown as ControlMethodDeps);
+        const call = (name: string, params: any = {}) => methods.find((m) => m.name === name)!.run(params, {});
+        return { leads, methods, call };
+    }
+
+    it('passes only documented params to the lead port', async () => {
+        const { leads, call } = setupLeads();
+        expect(await call('comments.collect', { postUrls: ['u'], junk: 1 })).toEqual({ jobId: 'j1', posts: 2 });
+        expect(leads.collect).toHaveBeenLastCalledWith({ postUrls: ['u'] });
+        await call('comments.list', { postUrl: 'u', since: 5, limit: 10, offset: 2, junk: 1 });
+        expect(leads.comments).toHaveBeenLastCalledWith({ postUrl: 'u', since: 5, limit: 10, offset: 2 });
+        await call('leads.list', { status: 'new', campaignId: 'c', from: 1, to: 2, search: 'giá', limit: 5, offset: 1, junk: 1 });
+        expect(leads.list).toHaveBeenLastCalledWith({ status: 'new', campaignId: 'c', from: 1, to: 2, search: 'giá', limit: 5, offset: 1 });
+        expect(await call('leads.update', { id: 4, status: 'won', note: 'n', junk: 1 })).toEqual({ lead: { id: 4 } });
+        expect(leads.update).toHaveBeenLastCalledWith({ id: 4, status: 'won', note: 'n' });
+    });
+
+    it('leads.config reads without config and saves with config', async () => {
+        const { leads, call } = setupLeads();
+        expect(await call('leads.config')).toEqual({ config: { autoCollect: true } });
+        expect(leads.setConfig).not.toHaveBeenCalled();
+        const config = { autoCollect: false };
+        expect(await call('leads.config', { config })).toEqual({ config: { autoCollect: false } });
+        expect(leads.setConfig).toHaveBeenCalledWith(config);
+    });
+
+    it('maps BUSY, NOT_FOUND and invalid params', async () => {
+        const { leads, call } = setupLeads();
+        leads.collect.mockImplementationOnce(() => { throw new Error(BUSY_ERROR); });
+        expect(await call('comments.collect').catch((e) => e)).toMatchObject({ code: 'BUSY' });
+        leads.update.mockImplementationOnce(() => { throw new Error('Không tìm thấy khách'); });
+        expect(await call('leads.update', { id: 99, status: 'won' }).catch((e) => e)).toMatchObject({ code: 'NOT_FOUND' });
+        leads.update.mockImplementationOnce(() => { throw new Error('Cần status hoặc note để cập nhật'); });
+        expect(await call('leads.update', { id: 4 }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+        leads.setConfig.mockImplementationOnce(() => { throw new Error('aiMinScore không hợp lệ'); });
+        expect(await call('leads.config', { config: {} }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+        leads.list.mockImplementationOnce(() => { throw new Error('status phải là new, contacted, won hoặc ignored'); });
+        expect(await call('leads.list', { status: 'x' }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+    });
+
+    it('describes the five methods as non-destructive', () => {
+        const { methods } = setupLeads();
+        const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('leads.') || m.name.startsWith('comments.')) as any[];
+        expect(found).toHaveLength(5);
+        for (const m of found) expect(m.destructive).toBe(false);
+        expect(found.find((m) => m.name === 'comments.collect').description).toMatch(/leads\.found/);
     });
 });

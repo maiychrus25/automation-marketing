@@ -40,6 +40,7 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
     research: {} as any,
     tracking: {} as any,
     campaigns: {} as any,
+    leads: {} as any,
     listProfiles: () => [],
     checkLogins: (ids) => ({ checkId: 'c1', profileIds: ids ?? [] }),
     systemStatus: () => ({}),

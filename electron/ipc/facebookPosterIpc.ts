@@ -36,7 +36,7 @@ import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
-import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished } from '../../src/services/control/controlEvents';
+import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound } from '../../src/services/control/controlEvents';
 import { getResearchStore } from './researchIpc';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
 import type { FbPosterRun, LeadStatus, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
@@ -227,9 +227,10 @@ function readLeadConfig() {
     return parseLeadConfig(db().getSetting(LEAD_CONFIG_SETTING_KEY));
 }
 
-/** Hook phát khi có khách mới: hiện chỉ gửi cho giao diện; Task 6 thêm control event `leads.found` tại đây. */
+/** Phát khi có khách mới: cho giao diện và cho Control API (`leads.found`, vào Telegram qua bridge). */
 function emitLeadsFound(payload: { count: number; samples: { authorName: string; text: string; postUrl: string }[]; auto: boolean }): void {
     EventBroadcaster.emit('facebookPoster:leadsFound', payload);
+    emitControlEvent('leads.found', buildLeadsFound(payload));
 }
 
 /** Bộ lọc khách của DB đang dùng (không giữ trạng thái nên dựng mỗi lần). AI = trợ lý mặc định của app. */

@@ -2,7 +2,7 @@ import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import type { FbPosterResult, FbPosterRun, FbPosterSchedule, LoginCheckOutcome, LoginCheckSource, LoginState } from '../../models/facebookPoster';
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found';
 
 export function buildRunStarted(run: { runId: string; kind: string; scheduleId: string | null }) {
     return { runId: run.runId, kind: run.kind, scheduleId: run.scheduleId };
@@ -54,6 +54,14 @@ export function buildTrackFinished(e: {
     return {
         jobId: e.jobId, auto: e.auto, cancelled: e.cancelled, groups: e.groups, checked: e.checked, found: e.found,
         linked: e.linked, removedSuspected: e.removedSuspected, notFound: e.notFound, errors: e.errors,
+    };
+}
+
+/** Có khách tiềm năng mới; chỉ giữ các trường đã công bố, tối đa 3 mẫu. */
+export function buildLeadsFound(e: { count: number; auto: boolean; samples: { authorName: string; text: string; postUrl: string }[] }) {
+    return {
+        count: e.count, auto: e.auto,
+        samples: e.samples.slice(0, 3).map((s) => ({ authorName: s.authorName, text: s.text, postUrl: s.postUrl })),
     };
 }
 
