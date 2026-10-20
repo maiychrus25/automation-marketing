@@ -680,3 +680,76 @@ describe('campaigns', () => {
     expect(s.listCampaigns()).toHaveLength(1);
   });
 });
+
+describe('statsReport by campaign and variant', () => {
+  const G = 'https://www.facebook.com/groups/1/';
+  function seed() {
+    const s = store();
+    const sched = (id: string, name: string, campaignId: string | null) => s.createSchedule({
+      id, name, kind: 'once', params: { kind: 'post' }, runAt: 10, days: [], time: '', enabled: true, nextRunAt: 10, createdAt: 1, campaignId,
+    } as any);
+    s.createCampaign({ id: 'c1', name: 'Tết', goal: '', status: 'active', startAt: null, endAt: null, createdAt: 1, updatedAt: 1 });
+    sched('s1', 'Lịch 1', 'c1');
+    sched('s2', 'Lịch 2', null);
+    let id = 0;
+    const track = (scheduleId: string | null, campaignId: string | null, variant: string, postedAt: number) => {
+      id++;
+      s.createTracking({
+        resultId: id, runId: 'r', scheduleId, campaignId, variant, profileId: 'p1', groupUrl: G, groupId: '', postId: '', postUrl: null,
+        postedAt, textHead: 'x', linkStatus: 'missing', removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0,
+        nextCheckAt: null, statsDone: [],
+      } as any);
+      return id;
+    };
+    track('s1', 'c1', 'A', 100);
+    track('s1', 'c1', 'B', 101);
+    track('s2', null, 'A', 102);
+    track('s2', 'gone', '', 103);
+    track(null, null, '', 104);
+    return { s, track };
+  }
+  const range = { from: 0, to: 1000, limit: 100 };
+
+  test('groupBy campaign: có chiến dịch, không chiến dịch, đã xoá', () => {
+    const { s } = seed();
+    const rows = s.statsReport({ ...range, groupBy: 'campaign' });
+    const by = Object.fromEntries(rows.map((r) => [r.key, [r.label, r.posts]]));
+    expect(by).toEqual({ c1: ['Tết', 2], '': ['Không thuộc chiến dịch', 2], gone: ['(chiến dịch đã xoá)', 1] });
+  });
+
+  test('groupBy variant: A của lịch 1 khác A của lịch 2', () => {
+    const { s } = seed();
+    const by = Object.fromEntries(s.statsReport({ ...range, groupBy: 'variant' }).map((r) => [r.key, [r.label, r.posts]]));
+    expect(by).toEqual({
+      's1:A': ['Lịch 1 · A', 1], 's1:B': ['Lịch 1 · B', 1], 's2:A': ['Lịch 2 · A', 1], 's2:': ['Lịch 2', 1], ':': ['Đăng ngay', 1],
+    });
+  });
+
+  test('lọc campaignId (kể cả rỗng) và scheduleId cho mọi groupBy', () => {
+    const { s } = seed();
+    for (const groupBy of ['group', 'profile', 'schedule', 'day', 'campaign', 'variant'] as const) {
+      expect(s.statsReport({ ...range, groupBy, campaignId: 'c1' }).reduce((n, r) => n + r.posts, 0)).toBe(2);
+      expect(s.statsReport({ ...range, groupBy, campaignId: '' }).reduce((n, r) => n + r.posts, 0)).toBe(2);
+      expect(s.statsReport({ ...range, groupBy, scheduleId: 's2' }).reduce((n, r) => n + r.posts, 0)).toBe(2);
+      expect(s.statsReport({ ...range, groupBy, campaignId: 'c1', scheduleId: 's2' })).toEqual([]);
+    }
+    expect(s.statsReport({ ...range, groupBy: 'post', campaignId: 'c1' })).toHaveLength(2);
+  });
+
+  test('insufficient: 4 bài đã đo là thiếu, 5 là đủ', () => {
+    const { s, track } = seed();
+    const ids = [1, 2, 3, 4, 5].map((n) => track('s1', 'c9', '', 200 + n));
+    for (const id of ids.slice(0, 4)) s.addPostStats(id, { capturedAt: 1, reactions: 1, comments: 0, shares: 0 });
+    const find = () => s.statsReport({ ...range, groupBy: 'campaign' }).find((r) => r.key === 'c9')!;
+    expect(find()).toMatchObject({ measured: 4, insufficient: true });
+    s.addPostStats(ids[4], { capturedAt: 1, reactions: 1, comments: 0, shares: 0 });
+    expect(find()).toMatchObject({ measured: 5, insufficient: false });
+  });
+
+  test('listTracking lọc campaignId và scheduleId', () => {
+    const { s } = seed();
+    expect(s.listTracking({ campaignId: 'c1' }).map((r) => r.resultId).sort()).toEqual([1, 2]);
+    expect(s.listTracking({ campaignId: '' }).map((r) => r.resultId).sort()).toEqual([3, 5]);
+    expect(s.listTracking({ scheduleId: 's2' }).map((r) => r.resultId).sort()).toEqual([3, 4]);
+  });
+});

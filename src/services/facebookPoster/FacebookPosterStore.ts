@@ -1,4 +1,5 @@
 import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from './schema';
+import { MIN_MEASURED_FOR_COMPARISON } from './postTracking';
 import { keyOf, type CollectedComment } from './collectComments';
 import type {
     FbPosterComment, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
@@ -482,12 +483,15 @@ export class FacebookPosterStore {
         );
     }
 
-    listTracking(filter: { linkStatus?: LinkStatus; profileId?: string; groupUrl?: string; sinceMs?: number; untilMs?: number; limit?: number }): PostTrackingRow[] {
+    listTracking(filter: { linkStatus?: LinkStatus; profileId?: string; groupUrl?: string; campaignId?: string; scheduleId?: string; sinceMs?: number; untilMs?: number; limit?: number }): PostTrackingRow[] {
         const where: string[] = [];
         const params: any[] = [];
         if (filter.linkStatus !== undefined) { where.push('link_status = ?'); params.push(filter.linkStatus); }
         if (filter.profileId !== undefined) { where.push('profile_id = ?'); params.push(filter.profileId); }
         if (filter.groupUrl !== undefined) { where.push('group_url = ?'); params.push(filter.groupUrl); }
+        if (filter.campaignId === '') where.push('campaign_id IS NULL');
+        else if (filter.campaignId !== undefined) { where.push('campaign_id = ?'); params.push(filter.campaignId); }
+        if (filter.scheduleId !== undefined) { where.push('schedule_id = ?'); params.push(filter.scheduleId); }
         if (filter.sinceMs !== undefined) { where.push('posted_at >= ?'); params.push(filter.sinceMs); }
         if (filter.untilMs !== undefined) { where.push('posted_at <= ?'); params.push(filter.untilMs); }
         params.push(filter.limit ?? 1000);
@@ -556,17 +560,23 @@ export class FacebookPosterStore {
     }
 
     /** Báo cáo hiệu quả bài đã đăng (spec mục 5). Bài tính theo `posted_at` trong [from, to]. */
-    statsReport(opts: { from: number; to: number; groupBy: PostStatsGroupBy; limit: number }): PostStatsReportRow[] {
+    statsReport(opts: { from: number; to: number; groupBy: PostStatsGroupBy; limit: number; campaignId?: string; scheduleId?: string }): PostStatsReportRow[] {
+        const where = ['t.posted_at >= ?', 't.posted_at <= ?'];
+        const params: any[] = [opts.from, opts.to];
+        if (opts.campaignId === '') where.push('t.campaign_id IS NULL');
+        else if (opts.campaignId !== undefined) { where.push('t.campaign_id = ?'); params.push(opts.campaignId); }
+        if (opts.scheduleId !== undefined) { where.push('t.schedule_id = ?'); params.push(opts.scheduleId); }
         const rows = this.db.query<any>(
-            `SELECT t.*, sc.name AS schedule_name,
+            `SELECT t.*, sc.name AS schedule_name, cp.name AS campaign_name,
                     (SELECT r.profile_name FROM fb_poster_results r WHERE r.profile_id = t.profile_id ORDER BY r.id DESC LIMIT 1) AS profile_name,
                     COALESCE(
                         (SELECT g.name FROM fb_poster_groups g WHERE g.profile_id = t.profile_id AND g.url = t.group_url),
                         (SELECT g.name FROM fb_poster_groups g WHERE g.url = t.group_url AND g.name <> '' LIMIT 1)
                     ) AS group_name
              FROM fb_poster_post_tracking t LEFT JOIN fb_poster_schedules sc ON sc.id = t.schedule_id
-             WHERE t.posted_at >= ? AND t.posted_at <= ? ORDER BY t.posted_at DESC, t.result_id DESC`,
-            [opts.from, opts.to],
+                                         LEFT JOIN fb_poster_campaigns cp ON cp.id = t.campaign_id
+             WHERE ${where.join(' AND ')} ORDER BY t.posted_at DESC, t.result_id DESC`,
+            params,
         );
         const latest = new Map(this.latestStats(rows.map((r) => r.result_id)).map((x) => [x.resultId, x]));
         const memberCache = new Map<string, number | null>();
@@ -583,6 +593,9 @@ export class FacebookPosterStore {
                     case 'group': return [r.group_url, r.group_name || r.group_url];
                     case 'profile': return [r.profile_id, r.profile_name ?? ''];
                     case 'schedule': return [r.schedule_id ?? '', r.schedule_name ?? ''];
+                    case 'campaign': return [r.campaign_id ?? '', r.campaign_id === null ? 'Không thuộc chiến dịch' : (r.campaign_name ?? '(chiến dịch đã xoá)')];
+                    case 'variant': return [`${r.schedule_id ?? ''}:${r.variant}`, r.schedule_id === null
+                        ? 'Đăng ngay' : r.variant === '' ? (r.schedule_name ?? '') : `${r.schedule_name ?? ''} · ${r.variant}`];
                     case 'day': return [localDay(r.posted_at), localDay(r.posted_at)];
                     default: return [String(r.result_id), r.group_name || r.group_url];
                 }
@@ -590,7 +603,7 @@ export class FacebookPosterStore {
             let bucket = buckets.get(key);
             if (!bucket) {
                 bucket = {
-                    row: { key, label, posts: 0, withLink: 0, pending: 0, notFound: 0, removedSuspected: 0, reactions: 0, comments: 0, shares: 0, measured: 0, avgEngagement: null, engagementRate: null },
+                    row: { key, label, posts: 0, withLink: 0, pending: 0, notFound: 0, removedSuspected: 0, reactions: 0, comments: 0, shares: 0, measured: 0, insufficient: true, avgEngagement: null, engagementRate: null },
                     rates: [], engagement: 0, latestAt: 0,
                 };
                 buckets.set(key, bucket);
@@ -622,7 +635,7 @@ export class FacebookPosterStore {
         // Thứ tự khi cắt `limit` (luôn giữ dữ liệu mới): post/day theo bài mới nhất trước; group/profile/schedule
         // theo số bài giảm dần rồi theo bài mới nhất.
         const ordered = [...buckets.values()];
-        if (opts.groupBy === 'group' || opts.groupBy === 'profile' || opts.groupBy === 'schedule') {
+        if (opts.groupBy === 'group' || opts.groupBy === 'profile' || opts.groupBy === 'schedule' || opts.groupBy === 'campaign' || opts.groupBy === 'variant') {
             ordered.sort((a, c) => c.row.posts - a.row.posts || c.latestAt - a.latestAt);
         }
         const kept = ordered.slice(0, opts.limit);
@@ -636,6 +649,7 @@ export class FacebookPosterStore {
             }
         }
         return kept.map(({ row, rates, engagement }) => {
+            row.insufficient = row.measured < MIN_MEASURED_FOR_COMPARISON;
             row.avgEngagement = row.measured > 0 ? engagement / row.measured : null;
             // groupBy 'group': trung bình tương tác / số thành viên của chính nhóm đó; khác: trung bình tỉ lệ theo bài.
             row.engagementRate = rates.length > 0 ? rates.reduce((a, c) => a + c, 0) / rates.length : null;

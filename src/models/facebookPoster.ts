@@ -140,7 +140,7 @@ export interface PostStatsSnapshot {
     shares: number | null;
 }
 
-export type PostStatsGroupBy = 'group' | 'profile' | 'schedule' | 'day' | 'post';
+export type PostStatsGroupBy = 'group' | 'profile' | 'schedule' | 'campaign' | 'variant' | 'day' | 'post';
 
 export interface PostStatsReportRow {
     key: string;
@@ -155,6 +155,8 @@ export interface PostStatsReportRow {
     shares: number;
     /** Số bài đã có ít nhất một lần đo. */
     measured: number;
+    /** `measured` < MIN_MEASURED_FOR_COMPARISON: chưa đủ dữ liệu để so sánh. */
+    insufficient: boolean;
     avgEngagement: number | null;
     engagementRate: number | null;
     /** Chỉ có với groupBy = 'post'. */

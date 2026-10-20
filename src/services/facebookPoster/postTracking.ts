@@ -19,6 +19,9 @@ export const DEFAULT_POST_TRACKING_CONFIG: PostTrackingConfig = {
     statsAtMinutes: [60, 1440, 4320],
 };
 
+/** Số bài đã đo tối thiểu để báo cáo được so sánh (spec chiến dịch mục 5). */
+export const MIN_MEASURED_FOR_COMPARISON = 5;
+
 const MIN_MILESTONE = 5;
 const MAX_MILESTONE = 20160;
 const MAX_MILESTONES = 10;
