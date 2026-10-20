@@ -956,6 +956,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     trackCancel:    ()                            => ipcRenderer.invoke('facebookPoster:trackCancel'),
     listTracking:   (params?: any)                => ipcRenderer.invoke('facebookPoster:listTracking', params || {}),
     postStats:      (params: any)                 => ipcRenderer.invoke('facebookPoster:postStats', params),
+    groupScores:    (params?: any)                => ipcRenderer.invoke('facebookPoster:groupScores', params || {}),
+    bestTimes:      (params?: any)                => ipcRenderer.invoke('facebookPoster:bestTimes', params || {}),
     getTrackConfig: ()                            => ipcRenderer.invoke('facebookPoster:getTrackConfig'),
     setTrackConfig: (config: any)                 => ipcRenderer.invoke('facebookPoster:setTrackConfig', config),
   },

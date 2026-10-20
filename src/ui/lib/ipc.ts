@@ -8,6 +8,8 @@ import type { UpdateState, ActionResult as UpdateActionResult } from '../../serv
 import type { ResearchConfig } from '../../services/research/researchConfig';
 import type { ResearchItem, ResearchScan, ResearchSort, ResearchSource } from '../../models/research';
 import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, CampaignStatus } from '../../models/facebookPoster';
+import type { GroupScore } from '../../services/facebookPoster/groupScores';
+import type { BestTimes } from '../../services/facebookPoster/bestTimes';
 import type { CampaignView } from '../../services/facebookPoster/campaignOperations';
 import type { PostTrackingConfig } from '../../services/facebookPoster/postTracking';
 import type { TrackStatus } from '../../services/facebookPoster/PostTracker';
@@ -735,6 +737,8 @@ declare global {
         trackCancel:    () => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
         listTracking:   (params?: { from?: number; to?: number; linkStatus?: LinkStatus; groupUrl?: string; profileId?: string; campaignId?: string; scheduleId?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; total?: number; rows?: (PostTrackingRow & { latestStats: PostStatsSnapshot | null })[]; error?: string }>;
         postStats:      (params: { from?: number; to?: number; groupBy: PostStatsGroupBy; campaignId?: string; scheduleId?: string; limit?: number }) => Promise<{ success: boolean; rows?: PostStatsReportRow[]; error?: string }>;
+        groupScores:    (params?: { from?: number; to?: number; campaignId?: string }) => Promise<{ success: boolean; groups?: GroupScore[]; error?: string }>;
+        bestTimes:      (params?: { from?: number; to?: number; groupUrl?: string; campaignId?: string }) => Promise<({ success: boolean; error?: string } & Partial<BestTimes>)>;
         getTrackConfig: () => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
         setTrackConfig: (config: PostTrackingConfig) => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
       };

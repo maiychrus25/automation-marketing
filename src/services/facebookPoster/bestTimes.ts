@@ -20,7 +20,9 @@ function top(rows: PostStatsReportRow[], limit: number): BestTimeSlot[] {
         .slice(0, limit);
 }
 
-export function pickBestTimes(hourRows: PostStatsReportRow[], weekdayRows: PostStatsReportRow[]): { hours: BestTimeSlot[]; weekdays: BestTimeSlot[]; insufficient: boolean } {
+export interface BestTimes { hours: BestTimeSlot[]; weekdays: BestTimeSlot[]; insufficient: boolean }
+
+export function pickBestTimes(hourRows: PostStatsReportRow[], weekdayRows: PostStatsReportRow[]): BestTimes {
     const hours = top(hourRows, MAX_HOURS);
     return { hours, weekdays: top(weekdayRows, MAX_WEEKDAYS), insufficient: hours.length === 0 };
 }

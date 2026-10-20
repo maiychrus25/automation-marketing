@@ -33,6 +33,8 @@ import { isWorkspaceSwitchInProgress } from './workspaceIpc';
 import type { FbPosterRun, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 import { campaignBlockReason, readCampaignRef } from '../../src/services/facebookPoster/campaigns';
+import { scoreGroups } from '../../src/services/facebookPoster/groupScores';
+import { pickBestTimes } from '../../src/services/facebookPoster/bestTimes';
 import { createCampaignOperations } from '../../src/services/facebookPoster/campaignOperations';
 
 
@@ -61,8 +63,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_TRACK_LIST_LIMIT = 500;
 const MAX_TRACK_LIST_SCAN = 5000;
 const DEFAULT_REPORT_DAYS = 30;
+const BEST_TIMES_DAYS = 60;
+const MAX_TIME_BUCKET_ROWS = 100000; // gom giờ / thứ chỉ có 24 / 7 dòng; nới giới hạn để không bị cắt
 const LINK_STATUSES: LinkStatus[] = ['known', 'missing', 'pending_approval', 'not_found'];
-const STATS_GROUP_BY: PostStatsGroupBy[] = ['group', 'profile', 'schedule', 'campaign', 'variant', 'day', 'post'];
+const STATS_GROUP_BY: PostStatsGroupBy[] = ['group', 'profile', 'schedule', 'campaign', 'variant', 'day', 'post', 'hour', 'weekday'];
 export const WORKSPACE_SWITCHING_ERROR = 'Đang đổi workspace, thử lại sau';
 export const POSTER_NOT_STOPPED_ERROR = 'Việc Đăng Facebook chưa dừng được. Thử lại sau.';
 
@@ -573,9 +577,9 @@ export const posterOperations = {
     },
 };
 
-function parseTimeRange(params: any): { from: number; to: number } {
+function parseTimeRange(params: any, defaultDays = DEFAULT_REPORT_DAYS): { from: number; to: number } {
     const to = params.to === undefined ? Date.now() : Number(params.to);
-    const from = params.from === undefined ? to - DEFAULT_REPORT_DAYS * DAY_MS : Number(params.from);
+    const from = params.from === undefined ? to - defaultDays * DAY_MS : Number(params.from);
     if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) throw new Error('Khoảng thời gian không hợp lệ');
     return { from, to };
 }
@@ -644,6 +648,23 @@ export const trackingOperations = {
         return { rows: store().statsReport({ from, to, groupBy: p.groupBy, limit, campaignId: p.campaignId, scheduleId: p.scheduleId }) };
     },
 
+    groupScores: (params: any) => {
+        const p = params ?? {};
+        const { from, to } = parseTimeRange(p);
+        readCampaignFilter(p);
+        return { groups: scoreGroups(store().groupScoreInputs({ from, to, campaignId: p.campaignId })) };
+    },
+
+    bestTimes: (params: any) => {
+        const p = params ?? {};
+        const { from, to } = parseTimeRange(p, BEST_TIMES_DAYS);
+        if (p.groupUrl !== undefined && (typeof p.groupUrl !== 'string' || !p.groupUrl)) throw new Error('groupUrl không hợp lệ');
+        readCampaignFilter(p);
+        const s = store();
+        const base = { from, to, limit: MAX_TIME_BUCKET_ROWS, campaignId: p.campaignId, groupUrl: p.groupUrl };
+        return pickBestTimes(s.statsReport({ ...base, groupBy: 'hour' }), s.statsReport({ ...base, groupBy: 'weekday' }));
+    },
+
     getConfig: () => ({ config: readTrackingConfig() }),
 
     setConfig: (params: any) => {
@@ -690,6 +711,8 @@ export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:trackCancel', trackingOperations.cancel);
     handle('facebookPoster:listTracking', trackingOperations.list);
     handle('facebookPoster:postStats', trackingOperations.stats);
+    handle('facebookPoster:groupScores', trackingOperations.groupScores);
+    handle('facebookPoster:bestTimes', trackingOperations.bestTimes);
     handle('facebookPoster:getTrackConfig', trackingOperations.getConfig);
     handle('facebookPoster:setTrackConfig', trackingOperations.setConfig);
     handle('facebookPoster:getLoginStates', () => ({ states: listFacebookLoginStates() }));

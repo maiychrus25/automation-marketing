@@ -130,4 +130,18 @@ describe('facebookPosterIpc wiring', () => {
         expect(() => trackingOperations.list({ scheduleId: '' })).toThrow('scheduleId không hợp lệ');
         expect(() => trackingOperations.list({ campaignId: 3 })).toThrow('campaignId không hợp lệ');
     });
+
+    test('trackingOperations.groupScores / bestTimes trả đúng hình dạng và kiểm tham số; stats nhận hour / weekday', () => {
+        expect(trackingOperations.groupScores({})).toEqual({ groups: [] });
+        expect(trackingOperations.groupScores({ campaignId: '' })).toEqual({ groups: [] });
+        expect(trackingOperations.bestTimes({})).toEqual({ hours: [], weekdays: [], insufficient: true });
+        expect(trackingOperations.bestTimes({ groupUrl: 'https://facebook.com/groups/1', campaignId: 'c1' }).insufficient).toBe(true);
+        expect(trackingOperations.stats({ groupBy: 'hour' }).rows).toEqual([]);
+        expect(trackingOperations.stats({ groupBy: 'weekday' }).rows).toEqual([]);
+        expect(() => trackingOperations.groupScores({ campaignId: 3 })).toThrow('campaignId không hợp lệ');
+        expect(() => trackingOperations.groupScores({ from: 10, to: 5 })).toThrow('Khoảng thời gian không hợp lệ');
+        expect(() => trackingOperations.bestTimes({ groupUrl: '' })).toThrow('groupUrl không hợp lệ');
+        expect(() => trackingOperations.bestTimes({ campaignId: 3 })).toThrow('campaignId không hợp lệ');
+        expect(() => trackingOperations.stats({ groupBy: 'minute' })).toThrow('groupBy phải là');
+    });
 });
