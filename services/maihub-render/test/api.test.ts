@@ -252,7 +252,7 @@ describe('API maihub-render', () => {
       orch.tick();
       expect(fs.existsSync(path.join(shared, 'current', 'job.json'))).toBe(true);
       expect(fs.existsSync(path.join(shared, 'current', 'img1.jpg'))).toBe(true);
-      fs.writeFileSync(out('progress.json'), '{"percent":40}');
+      fs.writeFileSync(out('progress.json'), `{"jobId":"${id}","percent":40}`);
       orch.tick();
       let s = await call('GET', `/v1/jobs/${id}`, { key: KEY_A });
       expect(s.json).toMatchObject({ status: 'rendering', progress: 0.4 });
@@ -261,7 +261,7 @@ describe('API maihub-render', () => {
 
       fs.writeFileSync(out('video.mp4'), Buffer.from('0123456789'));
       fs.writeFileSync(out('thumb.jpg'), JPEG);
-      fs.writeFileSync(out('result.json'), '{"ok":true,"durationMs":5000}');
+      fs.writeFileSync(out('result.json'), `{"jobId":"${id}","ok":true,"durationMs":5000}`);
       orch.tick();
       s = await call('GET', `/v1/jobs/${id}`, { key: KEY_A });
       expect(s.json).toMatchObject({ status: 'done', progress: 1, sizeBytes: 10, durationSec: 5 });
@@ -286,7 +286,7 @@ describe('API maihub-render', () => {
       const b = (await create(KEY_B, [{ name: 'spec', data: templateSpec([]) }])).json.jobId;
       orch.tick();
       expect((await call('GET', `/v1/jobs/${b}`, { key: KEY_B })).json).toMatchObject({ status: 'queued', position: 1 });
-      fs.writeFileSync(out('result.json'), '{"ok":false,"error":"hỏng"}');
+      fs.writeFileSync(out('result.json'), `{"jobId":"${a}","ok":false,"error":"hỏng"}`);
       orch.tick();
       expect((await call('GET', `/v1/jobs/${a}`, { key: KEY_A })).json).toMatchObject({ status: 'failed', error: 'hỏng' });
       orch.tick();
@@ -300,7 +300,7 @@ describe('API maihub-render', () => {
       expect(r.status).toBe(202);
       expect(fs.existsSync(path.join(shared, 'current', 'cancel'))).toBe(true);
       fs.writeFileSync(out('video.mp4'), 'x');
-      fs.writeFileSync(out('result.json'), '{"ok":true}');
+      fs.writeFileSync(out('result.json'), `{"jobId":"${id}","ok":true}`);
       orch.tick();
       expect(store.get(id)).toMatchObject({ status: 'cancelled' });
       expect(fs.existsSync(path.join(store.jobDir(id), 'output', 'video.mp4'))).toBe(false);
@@ -311,7 +311,7 @@ describe('API maihub-render', () => {
     it('xoá việc đã kết thúc', async () => {
       const id = (await create(KEY_A, [{ name: 'spec', data: templateSpec([]) }])).json.jobId;
       orch.tick();
-      fs.writeFileSync(out('result.json'), '{"ok":false,"error":"x"}');
+      fs.writeFileSync(out('result.json'), `{"jobId":"${id}","ok":false,"error":"x"}`);
       orch.tick();
       expect((await call('DELETE', `/v1/jobs/${id}`, { key: KEY_A })).status).toBe(200);
       expect((await call('GET', `/v1/jobs/${id}`, { key: KEY_A })).status).toBe(404);

@@ -11,7 +11,10 @@ const spec: any = { kind: 'html', html: '<div></div>', durationSec: 5, width: 10
 let root: string;
 let clock: number;
 const now = () => clock;
-const mk = (id: string, owner = 'a', createdAt = clock): Job => ({ id, owner, status: 'queued', progress: 0, spec, createdAt });
+const uid = (n: string | number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const uidCache = new Map<string, string>();
+const U = (n: string): string => { if (!uidCache.has(n)) uidCache.set(n, uid(uidCache.size + 1)); return uidCache.get(n)!; };
+const mk = (id: string, owner = 'a', createdAt = clock): Job => ({ id: U(id), owner, status: 'queued', progress: 0, spec, createdAt });
 
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'mhr-')); clock = 1_000_000_000_000; });
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
@@ -20,26 +23,28 @@ describe('JobStore', () => {
   it('ghi nguyên tử và đọc lại', () => {
     const s = new JobStore(path.join(root, 'data'));
     s.create(mk('j1'));
-    expect(s.get('j1')?.status).toBe('queued');
-    s.update('j1', { status: 'done', progress: 1 });
-    expect(new JobStore(path.join(root, 'data')).get('j1')?.status).toBe('done');
-    expect(fs.readdirSync(s.jobDir('j1')).some((f) => f.endsWith('.tmp'))).toBe(false);
-    expect(fs.existsSync(path.join(s.jobDir('j1'), 'input'))).toBe(true);
-    expect(fs.existsSync(path.join(s.jobDir('j1'), 'output'))).toBe(true);
+    expect(s.get(U('j1'))?.status).toBe('queued');
+    s.update(U('j1'), { status: 'done', progress: 1 });
+    expect(new JobStore(path.join(root, 'data')).get(U('j1'))?.status).toBe('done');
+    expect(fs.readdirSync(s.jobDir(U('j1'))).some((f) => f.endsWith('.tmp'))).toBe(false);
+    expect(fs.existsSync(path.join(s.jobDir(U('j1')), 'input'))).toBe(true);
+    expect(fs.existsSync(path.join(s.jobDir(U('j1')), 'output'))).toBe(true);
   });
   it('nạp lại: rendering -> failed, queued giữ nguyên', () => {
     const s = new JobStore(path.join(root, 'data'), now);
     s.create(mk('j1')); s.create(mk('j2'));
-    s.update('j1', { status: 'rendering' });
+    s.update(U('j1'), { status: 'rendering' });
     const s2 = new JobStore(path.join(root, 'data'), now);
     const jobs = s2.load();
     expect(jobs).toHaveLength(2);
-    expect(s2.get('j1')).toMatchObject({ status: 'failed', error: 'Máy chủ khởi động lại khi đang render', finishedAt: clock });
-    expect(s2.get('j2')?.status).toBe('queued');
+    expect(s2.get(U('j1'))).toMatchObject({ status: 'failed', error: 'Máy chủ khởi động lại khi đang render', finishedAt: clock });
+    expect(s2.get(U('j2'))?.status).toBe('queued');
   });
   it('id không hợp lệ bị từ chối (chống ../)', () => {
     const s = new JobStore(path.join(root, 'data'));
     expect(() => s.jobDir('../x')).toThrow();
+    expect(() => s.jobDir('not-a-uuid')).toThrow();
+    expect(() => s.jobDir(U('ok') + '/..')).toThrow();
     expect(s.get('../x')).toBeUndefined();
   });
 });
@@ -48,52 +53,52 @@ describe('Queue', () => {
   const setup = () => { const s = new JobStore(path.join(root, 'data'), now); return { s, q: new Queue(s, now) }; };
   it('FIFO, một việc mỗi lúc, vị trí', () => {
     const { s, q } = setup();
-    for (const id of ['a1', 'a2', 'a3']) { s.create(mk(id)); q.enqueue(s.get(id)!); }
-    expect(q.positionOf('a1')).toBe(1);
-    expect(q.positionOf('a3')).toBe(3);
-    expect(q.next()?.id).toBe('a1');
-    expect(s.get('a1')?.status).toBe('rendering');
+    for (const id of ['a1', 'a2', 'a3']) { s.create(mk(id)); q.enqueue(s.get(U(id))!); }
+    expect(q.positionOf(U('a1'))).toBe(1);
+    expect(q.positionOf(U('a3'))).toBe(3);
+    expect(q.next()?.id).toBe(U('a1'));
+    expect(s.get(U('a1'))?.status).toBe('rendering');
     expect(q.next()).toBeUndefined();
-    expect(q.positionOf('a2')).toBe(1);
-    q.finish('a1');
-    expect(q.next()?.id).toBe('a2');
+    expect(q.positionOf(U('a2'))).toBe(1);
+    q.finish(U('a1'));
+    expect(q.next()?.id).toBe(U('a2'));
   });
   it('tối đa 5 việc chờ mỗi khoá', () => {
     const { s, q } = setup();
-    for (let i = 0; i < 5; i++) { s.create(mk('k' + i)); q.enqueue(s.get('k' + i)!); }
+    for (let i = 0; i < 5; i++) { s.create(mk('k' + i)); q.enqueue(s.get(U('k' + i))!); }
     s.create(mk('k5'));
-    expect(() => q.enqueue(s.get('k5')!)).toThrow(LimitError);
+    expect(() => q.enqueue(s.get(U('k5'))!)).toThrow(LimitError);
     s.create(mk('other', 'b'));
-    expect(() => q.enqueue(s.get('other')!)).not.toThrow();
+    expect(() => q.enqueue(s.get(U('other'))!)).not.toThrow();
   });
   it('tối đa 20 việc chung', () => {
     const { s, q } = setup();
-    for (let i = 0; i < LIMITS.maxQueue; i++) { const id = 'x' + i; s.create(mk(id, 'o' + i)); q.enqueue(s.get(id)!); }
+    for (let i = 0; i < LIMITS.maxQueue; i++) { const id = 'x' + i; s.create(mk(id, 'o' + i)); q.enqueue(s.get(U(id))!); }
     s.create(mk('over', 'zz'));
-    expect(() => q.enqueue(s.get('over')!)).toThrow(LimitError);
+    expect(() => q.enqueue(s.get(U('over'))!)).toThrow(LimitError);
   });
   it('30 lần mỗi giờ mỗi khoá, cửa sổ trượt', () => {
     const { s, q } = setup();
     for (let i = 0; i < 30; i++) {
-      const id = 'r' + i; s.create(mk(id)); q.enqueue(s.get(id)!);
-      q.cancel(id);
+      const id = 'r' + i; s.create(mk(id)); q.enqueue(s.get(U(id))!);
+      q.cancel(U(id));
     }
     s.create(mk('r30'));
-    expect(() => q.enqueue(s.get('r30')!)).toThrow(LimitError);
+    expect(() => q.enqueue(s.get(U('r30'))!)).toThrow(LimitError);
     clock += 60 * 60 * 1000 + 1;
-    expect(() => q.enqueue(s.get('r30')!)).not.toThrow();
+    expect(() => q.enqueue(s.get(U('r30'))!)).not.toThrow();
   });
   it('huỷ khi chờ / khi chạy', () => {
     const { s, q } = setup();
     s.create(mk('c1')); s.create(mk('c2'));
-    q.enqueue(s.get('c1')!); q.enqueue(s.get('c2')!);
-    expect(q.cancel('c2')).toBe('removed');
-    expect(s.get('c2')).toMatchObject({ status: 'cancelled', finishedAt: clock });
-    expect(q.positionOf('c2')).toBeUndefined();
+    q.enqueue(s.get(U('c1'))!); q.enqueue(s.get(U('c2'))!);
+    expect(q.cancel(U('c2'))).toBe('removed');
+    expect(s.get(U('c2'))).toMatchObject({ status: 'cancelled', finishedAt: clock });
+    expect(q.positionOf(U('c2'))).toBeUndefined();
     q.next();
-    expect(q.cancel('c1')).toBe('running');
-    expect(s.get('c1')?.status).toBe('rendering');
-    expect(q.cancel('nope')).toBe('none');
+    expect(q.cancel(U('c1'))).toBe('running');
+    expect(s.get(U('c1'))?.status).toBe('rendering');
+    expect(q.cancel(U('nope'))).toBe('none');
   });
   it('dựng lại hàng đợi sau khởi động theo createdAt', () => {
     const { s } = setup();
@@ -102,9 +107,9 @@ describe('Queue', () => {
     const s2 = new JobStore(path.join(root, 'data'), now);
     const q2 = new Queue(s2, now);
     q2.restore(s2.load());
-    expect(q2.next()?.id).toBe('early');
-    q2.finish('early');
-    expect(q2.next()?.id).toBe('mid');
+    expect(q2.next()?.id).toBe(U('early'));
+    q2.finish(U('early'));
+    expect(q2.next()?.id).toBe(U('mid'));
   });
 });
 
@@ -144,16 +149,16 @@ describe('Handoff', () => {
     expect(h.poll()).toEqual({ state: 'idle' });
     h.start({ id: 'j1', spec }, input, {});
     expect(h.poll().state).toBe('running');
-    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"percent":42}');
+    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"jobId":"j1","percent":42}');
     clock += 100_000;
     expect(h.poll()).toMatchObject({ state: 'running', progress: 0.42 });
-    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"ok":true,"durationMs":1234}');
+    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"jobId":"j1","ok":true,"durationMs":1234}');
     expect(h.poll()).toMatchObject({ state: 'done', result: { ok: true, durationMs: 1234 } });
   });
   it('result.json ghi dở không làm hỏng poll', () => {
     const h = prep(); const { shared, input } = dirs();
     h.start({ id: 'j1', spec }, input, {});
-    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"percent":1}');
+    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"jobId":"j1","percent":1}');
     fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"ok":');
     expect(h.poll().state).toBe('running');
   });
@@ -166,16 +171,50 @@ describe('Handoff', () => {
     const p = h.poll();
     expect(p.state).toBe('done');
     expect(p.result).toMatchObject({ ok: false });
-    expect(fs.readdirSync(path.join(shared, 'current'))).toEqual([]);
+    expect(fs.readdirSync(path.join(shared, 'current'))).toEqual(['cancel']);
     expect(h.poll()).toEqual({ state: 'idle' });
   });
   it('quá 15 phút dù có progress -> failed timeout', () => {
     const h = prep(); const { shared, input } = dirs();
     h.start({ id: 'j1', spec }, input, {});
-    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"percent":50}');
+    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"jobId":"j1","percent":50}');
     clock += LIMITS.renderTimeoutMs + 1;
     expect(h.poll().result).toMatchObject({ ok: false, error: 'timeout' });
-    expect(fs.readdirSync(path.join(shared, 'current'))).toEqual([]);
+    expect(fs.readdirSync(path.join(shared, 'current'))).toEqual(['cancel']);
+  });
+  it('kết quả muộn của việc đã bỏ không bị tính cho việc kế tiếp', () => {
+    const h = prep(); const { shared, input } = dirs();
+    h.start({ id: 'j1', spec }, input, {});
+    clock += 61_000;
+    expect(h.poll().result?.ok).toBe(false); // j1 bị bỏ
+    h.start({ id: 'j2', spec }, input, {});
+    // worker cũ vẫn còn chạy và ghi muộn
+    fs.writeFileSync(path.join(shared, 'out', 'video.mp4'), 'old');
+    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"jobId":"j1","percent":99}');
+    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"jobId":"j1","ok":true}');
+    expect(h.poll()).toMatchObject({ state: 'running', progress: 0 });
+    expect(fs.existsSync(path.join(shared, 'out', 'result.json'))).toBe(false);
+    expect(h.collect(path.join(root, 'dest'))).toEqual([]);
+  });
+  it('out/ cũ còn sót lúc khởi động bị bỏ qua', () => {
+    const { shared, input } = dirs();
+    fs.mkdirSync(input, { recursive: true });
+    fs.mkdirSync(path.join(shared, 'out'), { recursive: true });
+    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"jobId":"old","ok":true}');
+    fs.writeFileSync(path.join(shared, 'out', 'video.mp4'), 'old');
+    const h = new Handoff(shared, now);
+    h.clean(); // api dọn khi khởi động
+    expect(h.poll()).toEqual({ state: 'idle' });
+    h.start({ id: 'j1', spec }, input, {});
+    expect(h.poll().state).toBe('running');
+  });
+  it('result.json của việc khác (không dọn khi khởi động) không được nhận', () => {
+    const { shared, input } = dirs();
+    fs.mkdirSync(input, { recursive: true });
+    const h = new Handoff(shared, now);
+    h.start({ id: 'j1', spec }, input, {});
+    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"ok":true}'); // thiếu jobId
+    expect(h.poll().state).toBe('running');
   });
   it('cancel ghi current/cancel', () => {
     const h = prep(); const { shared, input } = dirs();
@@ -188,7 +227,7 @@ describe('Handoff', () => {
     h.start({ id: 'j1', spec }, input, {});
     fs.writeFileSync(path.join(shared, 'out', 'video.mp4'), 'vid');
     fs.writeFileSync(path.join(shared, 'out', 'thumb.jpg'), 'th');
-    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"ok":true,"durationMs":1}');
+    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"jobId":"j1","ok":true,"durationMs":1}');
     const dest = path.join(root, 'dest');
     h.collect(dest);
     expect(fs.readFileSync(path.join(dest, 'video.mp4'), 'utf8')).toBe('vid');
@@ -207,9 +246,9 @@ describe('Retention', () => {
     s.create({ ...mk('new', 'a', clock - 1 * day), status: 'done', finishedAt: clock - 1 * day });
     s.create(mk('waiting', 'a', clock - 9 * day));
     expect(new Retention(s, now).purge()).toBe(1);
-    expect(s.get('old')).toBeUndefined();
-    expect(fs.existsSync(s.jobDir('old'))).toBe(false);
-    expect(s.get('new')).toBeDefined();
-    expect(s.get('waiting')).toBeDefined();
+    expect(s.get(U('old'))).toBeUndefined();
+    expect(fs.existsSync(s.jobDir(U('old')))).toBe(false);
+    expect(s.get(U('new'))).toBeDefined();
+    expect(s.get(U('waiting'))).toBeDefined();
   });
 });

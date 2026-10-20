@@ -19,7 +19,8 @@ export interface Job {
   sizeBytes?: number;
 }
 
-const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+// Mã việc luôn do máy chủ sinh bằng crypto.randomUUID(); kiểm chặt trước khi ghép đường dẫn.
+const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const RESTART_ERROR = 'Máy chủ khởi động lại khi đang render';
 
 /** Kho việc: mỗi việc là `<dataDir>/jobs/<id>/job.json` kèm `input/` và `output/`. */
