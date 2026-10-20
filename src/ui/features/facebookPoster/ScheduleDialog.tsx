@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { computeNextRun } from '../../../services/facebookPoster/scheduleTime';
+import CampaignSelect from './CampaignSelect';
 import type { FbPosterScheduleView } from '../../../models/facebookPoster';
 
 // Monday-first display; values follow getDay().
@@ -33,9 +34,11 @@ interface Props {
   initialRunAt?: number;
   /** Duyệt nháp: lưu bằng draftApprove thay vì tạo/sửa lịch. */
   approveDraftId?: string;
+  /** Chiến dịch chọn sẵn khi tạo lịch từ trình soạn bài. */
+  initialCampaignId?: string | null;
 }
 
-export default function ScheduleDialog({ onClose, buildParams, defaultName = '', schedule, onSaved, initialRunAt, approveDraftId }: Props) {
+export default function ScheduleDialog({ onClose, buildParams, defaultName = '', schedule, onSaved, initialRunAt, approveDraftId, initialCampaignId = null }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const edit = !!schedule;
   const [name, setName] = useState(schedule?.name ?? '');
@@ -43,6 +46,7 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
   const [runAtInput, setRunAtInput] = useState(schedule?.runAt ? toLocalInput(schedule.runAt) : initialRunAt ? toLocalInput(initialRunAt) : '');
   const [days, setDays] = useState<number[]>(schedule?.days ?? [1, 2, 3, 4, 5]);
   const [time, setTime] = useState(schedule?.time || '08:00');
+  const [campaignId, setCampaignId] = useState<string | null>(schedule?.campaignId ?? initialCampaignId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
@@ -72,7 +76,8 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
         });
       } else if (schedule) {
         // Send only what changed, so a rename never recomputes the next run.
-        const patch: { id: string; name?: string; runAt?: number; days?: number[]; time?: string } = { id: schedule.id };
+        const patch: { id: string; name?: string; runAt?: number; days?: number[]; time?: string; campaignId?: string | null } = { id: schedule.id };
+        if (campaignId !== schedule.campaignId) patch.campaignId = campaignId;
         if (name.trim() !== schedule.name) patch.name = name.trim();
         if (kind === 'once') { if (runAt !== schedule.runAt && runAt !== null) patch.runAt = runAt; }
         else {
@@ -85,6 +90,7 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
         res = await ipc.facebookPoster?.scheduleCreate({
           name: name.trim() || undefined, kind,
           ...(kind === 'once' ? { runAt: runAt as number } : { days, time }),
+          campaignId,
           params: buildParams ? buildParams() : {},
         });
       }
@@ -117,6 +123,8 @@ export default function ScheduleDialog({ onClose, buildParams, defaultName = '',
               placeholder={defaultName.slice(0, 40)} onChange={(e) => setName(e.target.value)} />
           </label>
         )}
+
+        {!approveDraftId && <CampaignSelect value={campaignId} onChange={setCampaignId} />}
 
         {!edit && (
           <div role="radiogroup" aria-label="Kiểu lịch" className="flex gap-4">

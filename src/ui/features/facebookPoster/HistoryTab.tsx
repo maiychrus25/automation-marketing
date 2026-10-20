@@ -168,6 +168,7 @@ export default function HistoryTab() {
                               <li key={r.id} className="py-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs min-w-0">
                                 <button type="button" onClick={() => openLink(r.targetUrl)} title={r.targetUrl} className="text-blue-400 hover:underline truncate max-w-full text-left">{r.targetName || r.targetUrl}</button>
                                 <Chip map={OUTCOME_LABEL} value={r.outcome} />
+                                {r.variant && <span aria-label={`Biến thể ${r.variant}`} className="shrink-0 whitespace-nowrap rounded border border-gray-600 px-1.5 text-xs text-gray-400">Biến thể {r.variant}</span>}
                                 {r.attempts > 1 && <span aria-label={`Đã thử ${r.attempts} lần`} className="shrink-0 whitespace-nowrap rounded border border-gray-600 px-1.5 text-xs text-gray-400">Thử {r.attempts} lần</span>}
                                 {r.errorCode === 'uncertain_after_submit' && <span aria-label="Chưa chắc bài đã đăng" title={r.error} className="shrink-0 whitespace-nowrap rounded border border-yellow-500/30 px-1.5 text-xs text-orange-400">Chưa chắc</span>}
                                 {r.error && <span className="text-red-400 break-words min-w-0">{r.error}</span>}

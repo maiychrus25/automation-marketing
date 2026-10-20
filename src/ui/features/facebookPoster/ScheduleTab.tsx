@@ -6,6 +6,8 @@ import { showConfirm } from '@/components/common/ConfirmDialog';
 import { describeRecurrence } from '../../../services/facebookPoster/scheduleTime';
 import ScheduleDialog, { formatShort } from './ScheduleDialog';
 import PostPreview from './PostPreview';
+import { hydrateVariants } from './draftForm';
+import { VARIANT_LABELS } from '../../../services/facebookPoster/variants';
 import { STATUS_LABEL } from './HistoryTab';
 import { buildMovePatch, canDragSchedule, getCalendarDays, getScheduleOccurrences, getNowLine, getUnscheduledDrafts, matchesChannels, type CalendarView, type ScheduleOccurrence } from './calendarModel';
 import type { FbPosterScheduleView } from '../../../models/facebookPoster';
@@ -35,6 +37,8 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
   const [anchor, setAnchor] = useState(new Date());
   const [listView, setListView] = useState(false);
   const [stateFilter, setStateFilter] = useState('all');
+  const [campaigns, setCampaigns] = useState<{ id: string; name: string; status: string }[]>([]);
+  const [campaignFilter, setCampaignFilter] = useState('all');
   const [now, setNow] = useState(Date.now());
   const [saving, setSaving] = useState(false);
   const [operationError, setOperationError] = useState('');
@@ -68,6 +72,15 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
     return () => { offChanged?.(); offFinished?.(); window.clearInterval(timer); };
   }, [load]);
   useEffect(() => {
+    let cancelled = false;
+    Promise.all([ipc.facebookPoster?.campaignList(), ipc.facebookPoster?.campaignList({ status: 'archived' })]).then(([active, archived]) => {
+      if (!cancelled) setCampaigns([...(active?.campaigns ?? []), ...(archived?.campaigns ?? [])]);
+    }).catch(() => { /* bộ lọc chiến dịch chỉ thiếu tên, lịch vẫn hiện */ });
+    return () => { cancelled = true; };
+  }, []);
+  const campaignName = (id: string | null) => (id ? campaigns.find(c => c.id === id)?.name ?? '(chiến dịch đã xoá)' : '');
+  const matchesCampaign = (schedule: FbPosterScheduleView) => campaignFilter === 'all' || (campaignFilter === 'none' ? schedule.campaignId === null : schedule.campaignId === campaignFilter);
+  useEffect(() => {
     const dialog = detailRef.current;
     if (detail && dialog && !dialog.open) dialog.showModal();
   }, [detail]);
@@ -77,7 +90,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
 
   const days = useMemo(() => getCalendarDays(anchor, view), [anchor, view]);
   const nowLine = view === 'month' ? null : getNowLine(days, now);
-  const entries = useMemo(() => getScheduleOccurrences(schedules, days, selectedChannels, now, queued), [schedules, days, selectedChannels, now, queued]);
+  const entries = useMemo(() => getScheduleOccurrences(schedules.filter(matchesCampaign), days, selectedChannels, now, queued), [schedules, campaignFilter, days, selectedChannels, now, queued]);
   const status = (entry: ScheduleOccurrence) => entry.schedule.draft ? 'draft' : entry.historical ? entry.schedule.lastRun?.status || 'done'
     : !entry.schedule.enabled ? 'paused' : entry.queued ? 'queued' : 'scheduled';
   const shownEntries = entries.filter(entry => stateFilter === 'all' || status(entry) === stateFilter);
@@ -185,11 +198,11 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
   };
 
   const visibleSchedules = schedules.filter(schedule => {
-    const channelMatches = matchesChannels(schedule, selectedChannels);
+    const channelMatches = matchesChannels(schedule, selectedChannels) && matchesCampaign(schedule);
     const state = status({ schedule, at: schedule.runAt ?? now, historical: schedule.kind === 'once' && !!schedule.lastRun && schedule.nextRunAt === null && !queued.has(schedule.id), queued: queued.has(schedule.id) });
     return channelMatches && (stateFilter === 'all' || stateFilter === state);
   });
-  const unscheduledDrafts = getUnscheduledDrafts(schedules, selectedChannels).filter(() => stateFilter === 'all' || stateFilter === 'draft');
+  const unscheduledDrafts = getUnscheduledDrafts(schedules.filter(matchesCampaign), selectedChannels).filter(() => stateFilter === 'all' || stateFilter === 'draft');
   return (
     <section className="poster-calendar" aria-label="Lịch đăng bài">
       <div className="poster-calendar-filters">
@@ -199,6 +212,10 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
         <button className="poster-button" onClick={() => setAnchor(new Date())}>Hôm nay</button>
         <select className="poster-input poster-state-filter" aria-label="Lọc trạng thái lịch" value={stateFilter} onChange={event => setStateFilter(event.target.value)}>
           <option value="all">Tất cả trạng thái</option>{['draft', 'scheduled', 'queued', 'paused', 'done', 'failed', 'missed', 'cancelled', 'running'].map(state => <option key={state} value={state}>{LABELS[state]}</option>)}
+        </select>
+        <select className="poster-input poster-state-filter" aria-label="Lọc theo chiến dịch" value={campaignFilter} onChange={event => setCampaignFilter(event.target.value)}>
+          <option value="all">Tất cả chiến dịch</option><option value="none">Không thuộc chiến dịch</option>
+          {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <div className="poster-view-switch" aria-label="Chế độ lịch">{(['day', 'week', 'month'] as const).map(value => <button key={value} aria-pressed={!listView && view === value} onClick={() => { setView(value); setListView(false); }}>{value === 'day' ? 'Ngày' : value === 'week' ? 'Tuần' : 'Tháng'}</button>)}</div>
         <button className="poster-button" aria-pressed={listView} onClick={() => setListView(value => !value)}>Danh sách</button>
@@ -245,7 +262,12 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
         <header className="poster-dialog-header"><h2 id="poster-detail-title" className="break-words min-w-0">{detail.schedule.name}</h2><button className="poster-icon-button shrink-0" aria-label="Đóng chi tiết bài" onClick={closeDetail}>✕</button></header>
         <div className="p-5 space-y-4"><p className="poster-muted">{detail.schedule.draft && detail.schedule.runAt === null ? 'Chưa xếp lịch' : formatShort(detail.at)} · {LABELS[status(detail)]}</p>
           {(operationError || error) && <p role="alert" className="text-red-400 text-sm break-words">{operationError || error}</p>}
+          {detail.schedule.campaignId && <p className="text-sm break-words">Chiến dịch: <strong>{campaignName(detail.schedule.campaignId)}</strong></p>}
           <PostPreview text={String(detail.schedule.params.text || '')} comment={String(detail.schedule.params.comment || '')} mediaPaths={[]} mode={detail.schedule.params.mode === 'page' ? 'page' : 'group'} names={((detail.schedule.params.profiles || []) as { profileId: string }[]).map(profile => profileNames.get(profile.profileId) || profile.profileId)} />
+          {hydrateVariants(detail.schedule.params).length > 0 && <div className="space-y-1">
+            <p className="poster-muted text-xs">Biến thể</p>
+            <ul className="space-y-1">{hydrateVariants(detail.schedule.params).map((text, i) => <li key={i} className="text-sm whitespace-pre-wrap break-words rounded border border-gray-700 px-2 py-1"><strong>{VARIANT_LABELS[i + 1]}</strong>: {text}</li>)}</ul>
+          </div>}
           {Array.isArray(detail.schedule.params.mediaPaths) && detail.schedule.params.mediaPaths.length > 0 && <p className="poster-muted text-xs break-words">Tệp đính kèm đã lưu: {detail.schedule.params.mediaPaths.join(', ')}</p>}
           {detail.schedule.draft ? <div className="flex flex-wrap gap-2">
             <button className="poster-button" onClick={() => { const id = detail.schedule.id; closeDetail(); onEditDraft(id); }}>Sửa</button>

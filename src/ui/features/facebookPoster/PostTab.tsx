@@ -6,7 +6,9 @@ import ScheduleDialog from './ScheduleDialog';
 import MediaPicker from './MediaPicker';
 import PostPreview from './PostPreview';
 import { matchesKeywords } from './matchKeywords';
-import { hydrateTargets, targetsToSave } from './draftForm';
+import CampaignSelect from './CampaignSelect';
+import { hydrateTargets, targetsToSave, hydrateVariants, validateVariantTabs, buildVariantParams } from './draftForm';
+import { VARIANT_LABELS, MAX_VARIANTS } from '../../../services/facebookPoster/variants';
 import { validateMediaSelection, type MediaItem } from '../../../services/facebookPoster/mediaRules';
 import type { FbPosterGroup, FbPosterMode, FbPosterSchedule } from '../../../models/facebookPoster';
 
@@ -32,6 +34,9 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
   const showNotification = useAppStore((s) => s.showNotification);
   const [mode, setMode] = useState<FbPosterMode>(dp?.mode === 'page' ? 'page' : 'group');
   const [text, setText] = useState<string>(typeof dp?.text === 'string' ? dp.text : '');
+  const [variantTabs, setVariantTabs] = useState<string[]>(hydrateVariants(dp));
+  const [activeTab, setActiveTab] = useState(0);
+  const [campaignId, setCampaignId] = useState<string | null>(draft?.schedule.campaignId ?? null);
   const [media, setMedia] = useState<MediaItem[]>(draft?.media ?? []);
   const [comment, setComment] = useState<string>(typeof dp?.comment === 'string' ? dp.comment : '');
   const [commentDelayMin, setCommentDelayMin] = useState<number>(Number.isInteger(dp?.commentDelayMin) ? dp!.commentDelayMin : 0);
@@ -133,14 +138,17 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
   };
 
   // Scheduling is allowed while a run is active, so the busy clause is only part of the Start reason.
+  const activeText = activeTab === 0 ? text : variantTabs[activeTab - 1] ?? '';
+  const variantError = validateVariantTabs(text, variantTabs);
   const scheduleDisabledReason = profileIds.length === 0 ? 'Chọn ít nhất một profile.'
     : !text.trim() ? 'Nhập nội dung bài.'
+    : variantError ? variantError
     : mode === 'group' && targetCounts.some((n) => n === 0) ? 'Mỗi profile cần ít nhất một nhóm.'
     : validateMediaSelection(media) ?? '';
   const disabledReason = busy ? 'Đang có việc chạy. Đợi xong hoặc hủy việc đó.' : scheduleDisabledReason;
 
   const postParams = () => ({
-    mode, text,
+    mode, text, ...buildVariantParams(variantTabs),
     mediaPaths: media.map((m) => m.path),
     comment,
     commentDelayMin,
@@ -153,7 +161,7 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
     setStarting(true);
     setOperationError('');
     try {
-      const res = await ipc.facebookPoster?.start('post', postParams());
+      const res = await ipc.facebookPoster?.start('post', { ...postParams(), ...(campaignId ? { campaignId } : {}) });
       if (!res?.success) reportError(res?.error || 'Không bắt đầu được');
       else { onStarted(); onClose(); }
     } catch (err: any) {
@@ -163,7 +171,7 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
     }
   };
 
-  const draftDisabledReason = !text.trim() ? 'Nhập nội dung bài.' : validateMediaSelection(media) ?? '';
+  const draftDisabledReason = !text.trim() ? 'Nhập nội dung bài.' : variantError ?? validateMediaSelection(media) ?? '';
   const handleSaveDraft = async () => {
     setSavingDraft(true);
     setOperationError('');
@@ -171,6 +179,7 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
       const res = await ipc.facebookPoster?.draftSave({
         id: draft?.schedule.id,
         plannedAt: draft ? draft.schedule.runAt : initialRunAt ?? null,
+        campaignId,
         params: postParams(),
       });
       if (!res?.success) reportError(res?.error || 'Không lưu được nháp');
@@ -206,10 +215,27 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
         ))}
       </div>
 
+      <CampaignSelect value={campaignId} onChange={setCampaignId} disabled={busy} />
+
+      <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Biến thể nội dung">
+        {[text, ...variantTabs].map((_, i) => (
+          <span key={i} className="inline-flex items-center rounded-lg border border-gray-600 overflow-hidden">
+            <button type="button" role="tab" aria-selected={activeTab === i} onClick={() => setActiveTab(i)}
+              className={`px-3 py-1 text-sm ${activeTab === i ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>{VARIANT_LABELS[i]}</button>
+            {i > 0 && <button type="button" aria-label={`Xoá biến thể ${VARIANT_LABELS[i]}`} disabled={busy} className="px-1.5 py-1 text-xs text-gray-400 hover:text-red-400 disabled:opacity-50"
+              onClick={() => { setVariantTabs((prev) => prev.filter((_, j) => j !== i - 1)); setActiveTab((cur) => (cur >= i ? cur - 1 : cur)); }}>✕</button>}
+          </span>
+        ))}
+        {variantTabs.length + 1 < MAX_VARIANTS && <button type="button" disabled={busy} className="px-3 py-1 rounded-lg text-sm border border-dashed border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-50"
+          onClick={() => { setVariantTabs((prev) => [...prev, '']); setActiveTab(variantTabs.length + 1); }}>+ Biến thể</button>}
+      </div>
+      {variantTabs.length > 0 && <p className="text-xs text-gray-400 -mt-2">Các nhóm sẽ lần lượt nhận {VARIANT_LABELS.slice(0, variantTabs.length + 1).join(', ')}.</p>}
+
       <label className="block text-xs text-gray-400">
-        Nội dung bài
-        <textarea className="input-field text-sm w-full mt-1 min-h-[220px] max-h-[60vh] resize-y leading-relaxed" maxLength={MAX_TEXT} value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
-        <span className="block text-right mt-0.5">{text.length}/{MAX_TEXT}</span>
+        {activeTab === 0 ? 'Nội dung bài' : `Nội dung biến thể ${VARIANT_LABELS[activeTab]}`}
+        <textarea className="input-field text-sm w-full mt-1 min-h-[220px] max-h-[60vh] resize-y leading-relaxed" maxLength={MAX_TEXT} value={activeText} disabled={busy}
+          onChange={(e) => (activeTab === 0 ? setText(e.target.value) : setVariantTabs((prev) => prev.map((v, j) => (j === activeTab - 1 ? e.target.value : v))))} />
+        <span className="block text-right mt-0.5">{activeText.length}/{MAX_TEXT}</span>
       </label>
 
       <MediaPicker items={media} onChange={setMedia} disabled={busy} />
@@ -327,11 +353,11 @@ export default function PostTab({ busy, profileNames, onStarted, open, onClose, 
       </div>
       </div>
       <aside className="poster-composer-preview"><div className="flex items-center justify-between mb-5"><h3 className="font-semibold">Xem trước</h3><span className="poster-muted text-xs">Facebook</span></div>
-        <PostPreview text={text} comment={comment} mediaPaths={media.map(item => item.path)} mode={mode} names={profileIds.map(id => profileNames.get(id) || id)}
+        <PostPreview text={activeText} comment={comment} mediaPaths={media.map(item => item.path)} mode={mode} names={profileIds.map(id => profileNames.get(id) || id)}
           targetName={filteredGroups(profileIds[0]).find(group => isChecked(profileIds[0], group))?.name} />
       </aside>
       </div>
-      {scheduling && <ScheduleDialog onClose={() => setScheduling(false)} buildParams={postParams} defaultName={text.trim()} initialRunAt={initialRunAt} onSaved={onClose} />}
+      {scheduling && <ScheduleDialog onClose={() => setScheduling(false)} buildParams={postParams} defaultName={text.trim()} initialCampaignId={campaignId} initialRunAt={initialRunAt} onSaved={onClose} />}
     </dialog>
   );
 }
