@@ -20,10 +20,12 @@ export function formatStatsLine(s: Pick<PostStatsSnapshot, 'reactions' | 'commen
   return `👍 ${num(s.reactions)} · 💬 ${num(s.comments)} · ↗ ${num(s.shares)}`;
 }
 
-export const GROUP_BY_OPTIONS: { value: Extract<PostStatsGroupBy, 'group' | 'profile' | 'schedule'>; label: string }[] = [
+export const GROUP_BY_OPTIONS: { value: Extract<PostStatsGroupBy, 'group' | 'profile' | 'schedule' | 'campaign' | 'variant'>; label: string }[] = [
   { value: 'group', label: 'Nhóm' },
   { value: 'profile', label: 'Profile' },
   { value: 'schedule', label: 'Lịch' },
+  { value: 'campaign', label: 'Chiến dịch' },
+  { value: 'variant', label: 'Biến thể' },
 ];
 
 export const RANGE_OPTIONS = [{ days: 7, label: '7 ngày' }, { days: 30, label: '30 ngày' }];

@@ -6,6 +6,7 @@ import JoinTab from './JoinTab';
 import CommentsTab from './CommentsTab';
 import ScheduleTab from './ScheduleTab';
 import HistoryTab from './HistoryTab';
+import CampaignsTab from './CampaignsTab';
 import ResearchTab from './ResearchTab';
 import RunPanel, { PosterLog, PosterProgress } from './RunPanel';
 import ChannelsPanel, { type PosterChannel } from './ChannelsPanel';
@@ -14,6 +15,7 @@ import type { FbPosterRun, FbPosterSchedule } from '../../../models/facebookPost
 const MAX_LOGS = 500;
 const SECTIONS: Record<FacebookPosterSection, { label: string; description?: string }> = {
   schedule: { label: 'Lịch đăng' },
+  campaigns: { label: 'Chiến dịch', description: 'Gom lịch đăng theo chiến dịch, đặt khoảng ngày và so sánh hiệu quả.' },
   join: { label: 'Tham gia nhóm', description: 'Tìm nhóm theo từ khóa và tham gia bằng profile đã chọn.' },
   comments: { label: 'Thu bình luận', description: 'Thu bình luận từ các bài đã đăng và tìm kiếm kết quả.' },
   research: { label: 'Nghiên cứu', description: 'Quét bài, nhóm, fanpage theo chủ đề để lên chiến dịch.' },
@@ -143,6 +145,7 @@ export default function FacebookPosterView() {
             {section === 'schedule' && <ScheduleTab selectedChannels={selectedChannels} profileNames={profileNames} onCompose={compose} onEditDraft={editDraft} onOpenHistory={() => openFacebookPoster('history')} />}
             {section !== 'schedule' && <div className="poster-task-page">
               <p className="poster-muted mb-6">{SECTIONS[section].description}</p>
+              {section === 'campaigns' && <CampaignsTab />}
               {section === 'join' && <JoinTab busy={busy} onStarted={onStarted} />}
               {section === 'comments' && <CommentsTab busy={busy} onStarted={onStarted} />}
               {section === 'research' && <ResearchTab />}

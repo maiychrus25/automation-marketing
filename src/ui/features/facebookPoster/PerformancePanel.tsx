@@ -15,7 +15,13 @@ const FOCUS = 'focus-visible:ring-2 focus-visible:ring-blue-500';
 const TH = 'px-2 py-1.5 text-left font-medium whitespace-nowrap';
 const TD = 'px-2 py-1.5 whitespace-nowrap';
 
-export default function PerformancePanel() {
+interface Props {
+  /** Lọc theo chiến dịch / lịch; khi đã lọc theo chiến dịch thì ẩn lựa chọn gom theo Chiến dịch. */
+  campaignId?: string;
+  scheduleId?: string;
+}
+
+export default function PerformancePanel({ campaignId, scheduleId }: Props = {}) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [days, setDays] = useState(30);
   const [groupBy, setGroupBy] = useState<PostStatsGroupBy>('group');
@@ -34,13 +40,13 @@ export default function PerformancePanel() {
     let cancelled = false;
     setLoading(true);
     setLoadError('');
-    ipc.facebookPoster?.postStats({ from: Date.now() - days * DAY_MS, groupBy, limit: 200 }).then((res) => {
+    ipc.facebookPoster?.postStats({ from: Date.now() - days * DAY_MS, groupBy, campaignId, scheduleId, limit: 200 }).then((res) => {
       if (cancelled) return;
       if (res?.success) setRows(res.rows || []); else { setRows([]); setLoadError(res?.error || 'Không tải được báo cáo'); }
     }).catch(() => { if (!cancelled) { setRows([]); setLoadError('Không tải được báo cáo'); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [days, groupBy, reloadTick]);
+  }, [days, groupBy, campaignId, scheduleId, reloadTick]);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,6 +97,7 @@ export default function PerformancePanel() {
   };
 
   const select = 'input-field text-xs py-1';
+  const groupOptions = campaignId ? GROUP_BY_OPTIONS.filter((o) => o.value !== 'campaign') : GROUP_BY_OPTIONS;
   const labelHead = GROUP_BY_OPTIONS.find((o) => o.value === groupBy)?.label || 'Nhóm';
 
   return (
@@ -104,7 +111,7 @@ export default function PerformancePanel() {
         </label>
         <label className="flex items-center gap-1 text-xs text-gray-400 whitespace-nowrap">Gom theo
           <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as PostStatsGroupBy)} className={`${select} ${FOCUS}`}>
-            {GROUP_BY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            {groupOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </label>
         <div className="flex flex-wrap items-center gap-2 ml-auto">
@@ -149,7 +156,7 @@ export default function PerformancePanel() {
                       <td className={`${TD} text-right`}>{formatCount(r.pending)}</td><td className={`${TD} text-right`}>{formatCount(r.notFound)}</td>
                       <td className={`${TD} text-right ${r.removedSuspected ? 'text-red-400' : ''}`}>{formatCount(r.removedSuspected)}</td>
                       <td className={`${TD} text-right`}>{formatCount(r.reactions)}</td><td className={`${TD} text-right`}>{formatCount(r.comments)}</td><td className={`${TD} text-right`}>{formatCount(r.shares)}</td>
-                      <td className={`${TD} text-right`}>{r.avgEngagement === null ? '—' : r.avgEngagement.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</td>
+                      <td className={`${TD} text-right`}>{r.insufficient ? <span className="text-gray-500">chưa đủ dữ liệu</span> : r.avgEngagement === null ? '—' : r.avgEngagement.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</td>
                       <td className={`${TD} text-right`}>{formatRate(r.engagementRate)}</td>
                     </tr>
                   ))}

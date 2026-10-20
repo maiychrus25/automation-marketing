@@ -261,6 +261,7 @@ function NavItem({ icon, label, active, onClick, dot, collapsed, expanded, sub }
 
 const FACEBOOK_POSTER_ITEMS: { section: FacebookPosterSection; label: string; icon: string }[] = [
   { section: 'schedule', label: 'Lịch đăng', icon: 'posterSchedule' },
+  { section: 'campaigns', label: 'Chiến dịch', icon: 'posterCampaign' },
   { section: 'join', label: 'Tham gia nhóm', icon: 'friends' },
   { section: 'comments', label: 'Thu bình luận', icon: 'chat' },
   { section: 'research', label: 'Nghiên cứu', icon: 'analytics' },
@@ -358,6 +359,12 @@ function NavIcon({ name }: { name: string }) {
       return (
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <path d="M8 2v4m8-4v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14H3V6a2 2 0 0 1 2-2Z"/>
+        </svg>
+      );
+    case 'posterCampaign':
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 22V4m0 0h13l-2 4 2 4H4"/>
         </svg>
       );
     case 'posterHistory':
