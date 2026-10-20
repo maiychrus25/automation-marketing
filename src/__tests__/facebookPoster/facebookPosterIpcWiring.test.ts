@@ -9,6 +9,7 @@ const mockDb = memoryDb();
 const mockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbp-wiring-'));
 let capturedDeps: any = null;
 const mockReschedule = jest.fn();
+const mockBypass = jest.fn();
 
 jest.mock('electron', () => ({ dialog: {}, ipcMain: { handle: jest.fn() } }));
 jest.mock('../../services/database/DatabaseService', () => ({
@@ -29,6 +30,7 @@ jest.mock('../../services/facebookPoster/FacebookPosterScheduler', () => ({
         start() {}
         stop() {}
         reschedule() { mockReschedule(); }
+        bypassCampaignGateOnce(id: string) { mockBypass(id); }
         queuedIds() { return []; }
     },
 }));
@@ -98,6 +100,18 @@ describe('facebookPosterIpc wiring', () => {
         expect(posterOperations.scheduleList({ campaignId: '' }).schedules).toEqual([]);
         expect(posterOperations.scheduleUpdate({ id: created.id, campaignId: null }).schedule!.campaignId).toBeNull();
         expect(() => posterOperations.scheduleList({ campaignId: 5 })).toThrow('campaignId không hợp lệ');
+    });
+
+    test('draftApprove "now" cho lượt đó bỏ qua kiểm chiến dịch; hẹn giờ thì không', () => {
+        const params = { mode: 'group', text: 'Bài nháp', profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123456789'] }] };
+        const now = posterOperations.draftSave({ params }).schedule;
+        mockBypass.mockClear();
+        posterOperations.draftApprove({ id: now.id, when: 'now' });
+        expect(mockBypass).toHaveBeenCalledWith(now.id);
+        const later = posterOperations.draftSave({ params }).schedule;
+        mockBypass.mockClear();
+        posterOperations.draftApprove({ id: later.id, when: 'scheduled', kind: 'once', runAt: NOW + 3_600_000 });
+        expect(mockBypass).not.toHaveBeenCalled();
     });
 
     test('trackingOperations.list / stats nhận và kiểm campaignId, scheduleId, groupBy mới', () => {

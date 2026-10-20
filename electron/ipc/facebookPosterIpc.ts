@@ -503,6 +503,7 @@ export const posterOperations = {
 
     draftApprove: (params: any) => {
         const schedule = approveDraft(draftDeps(), params);
+        if (params?.when === 'now') scheduler?.bypassCampaignGateOnce(schedule.id); // lệnh trực tiếp: chiến dịch tạm dừng không chặn
         emitControlEvent('draft.approved', buildDraftApproved(schedule, params?.when));
         scheduler?.reschedule(); // "Đăng ngay" đặt nextRunAt = now → scheduler chạy qua hàng đợi
         emitSchedulesChanged();

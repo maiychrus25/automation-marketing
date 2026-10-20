@@ -325,6 +325,22 @@ describe('FacebookPosterScheduler', () => {
       assert.deepStrictEqual(sched.queuedIds(), []);
     });
 
+    test('"Đăng ngay" (bypassCampaignGateOnce) runs despite a paused campaign, only once', () => {
+      const { env, sched, add, live } = setup();
+      add('a');
+      env.block = () => PAUSED;
+      sched.bypassCampaignGateOnce('a');
+      sched.start();
+      assert.deepStrictEqual(env.started, ['a']);
+      assert.deepStrictEqual(env.missed, []);
+      // bypass chỉ áp dụng cho 'a'; lịch khác của chiến dịch vẫn bị chặn
+      add('b');
+      sched.reschedule();
+      live()[0].fn();
+      assert.deepStrictEqual(env.started, ['a']);
+      assert.deepStrictEqual(env.missed.map((m: any) => [m.scheduleId, m.reason]), [['b', PAUSED]]);
+    });
+
     test('an overdue schedule stays app-closed even when the campaign is blocked', () => {
       const { env, sched, add } = setup();
       add('a', { runAt: T0 - 5 * MIN, nextRunAt: T0 - 5 * MIN });

@@ -36,6 +36,8 @@ interface QueueItem { scheduleId: string; enqueuedAt: number; }
 /** Fires due schedules, queues them while another job runs (one job at a time) and records missed/failed runs. */
 export class FacebookPosterScheduler {
     private queue: QueueItem[] = [];
+    /** Lịch vừa được duyệt "Đăng ngay": lệnh trực tiếp nên không bị chiến dịch chặn (spec 3.1). Chỉ giữ trong bộ nhớ. */
+    private readonly gateBypass = new Set<string>();
     private timer: unknown = null;
     private stopped = false;
     private lastRunFailed = false;
@@ -53,6 +55,7 @@ export class FacebookPosterScheduler {
         const at = this.deps.now();
         for (const item of this.queue) this.recordMissed(item.scheduleId, MISSED_APP_QUIT, at);
         this.queue = [];
+        this.gateBypass.clear();
     }
 
     reschedule(): void {
@@ -63,6 +66,11 @@ export class FacebookPosterScheduler {
         if (this.stopped) return;
         this.pump();
         this.deps.onChanged();
+    }
+
+    /** Lượt kế tiếp của lịch này bỏ qua kiểm tra chiến dịch (dùng cho "Đăng ngay"). */
+    bypassCampaignGateOnce(scheduleId: string): void {
+        this.gateBypass.add(scheduleId);
     }
 
     queuedIds(): string[] {
@@ -116,13 +124,14 @@ export class FacebookPosterScheduler {
         const t = now();
         this.queue = this.queue.filter((item) => {
             if (t - item.enqueuedAt <= QUEUE_MAX_WAIT_MS) return true;
+            this.gateBypass.delete(item.scheduleId);
             this.recordMissed(item.scheduleId, MISSED_QUEUE_TIMEOUT, t);
             return false;
         });
         while (this.queue.length > 0 && !this.deps.isBusy()) {
             const item = this.queue.shift()!;
             const s = store.getSchedule(item.scheduleId);
-            if (!s || !s.enabled || s.draft) continue;
+            if (!s || !s.enabled || s.draft) { this.gateBypass.delete(item.scheduleId); continue; }
             const blocked = this.blockReason(s, now());
             if (blocked !== null) { this.recordMissed(s.id, blocked, now(), s); continue; }
             let runId: string;
@@ -131,11 +140,13 @@ export class FacebookPosterScheduler {
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
                 if (message === BUSY_ERROR) { this.queue.unshift(item); break; }
+                this.gateBypass.delete(s.id);
                 const id = this.deps.newId();
                 store.recordScheduleRun({ id, scheduleId: s.id, params: s.params, at: now(), status: 'failed', reason: message });
                 store.updateSchedule(s.id, { lastRunId: id }, now());
                 continue;
             }
+            this.gateBypass.delete(s.id);
             // The job is already running: a failed bookkeeping write must not turn it into a failed run.
             try {
                 store.updateSchedule(s.id, { lastRunId: runId }, now());
@@ -147,6 +158,7 @@ export class FacebookPosterScheduler {
 
     /** Lỗi đọc chiến dịch không được làm lịch ngừng chạy: coi như không bị chặn. */
     private blockReason(s: FbPosterSchedule, t: number): string | null {
+        if (this.gateBypass.has(s.id)) return null;
         try {
             return this.deps.campaignBlock?.(s, t) ?? null;
         } catch (err) {
