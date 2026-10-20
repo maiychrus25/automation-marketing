@@ -77,7 +77,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
       if (!cancelled) setCampaigns([...(active?.campaigns ?? []), ...(archived?.campaigns ?? [])]);
     }).catch(() => { /* bộ lọc chiến dịch chỉ thiếu tên, lịch vẫn hiện */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [schedules]); // tải lại khi danh sách lịch đổi (vd. vừa gắn lịch vào chiến dịch mới tạo)
   const campaignName = (id: string | null) => (id ? campaigns.find(c => c.id === id)?.name ?? '(chiến dịch đã xoá)' : '');
   const matchesCampaign = (schedule: FbPosterScheduleView) => campaignFilter === 'all' || (campaignFilter === 'none' ? schedule.campaignId === null : schedule.campaignId === campaignFilter);
   // Mở chi tiết lịch được chọn từ trang Chiến dịch, rồi xoá yêu cầu.
