@@ -670,7 +670,7 @@ export class FacebookPosterStore {
      */
     groupScoreInputs(opts: { from: number; to: number; campaignId?: string }): GroupScoreInput[] {
         const where = [
-            "r.kind = 'post'", "r.mode = 'group'", 'r.started_at >= ?', 'r.started_at <= ?', "x.outcome IN ('posted', 'failed')",
+            "r.kind = 'post'", "r.mode = 'group'", 'x.created_at >= ?', 'x.created_at <= ?', "x.outcome IN ('posted', 'failed')",
             "NOT (x.outcome = 'failed' AND x.error_code IN ('not_logged_in', 'launch_failed', 'stopped'))",
         ];
         const params: any[] = [opts.from, opts.to];

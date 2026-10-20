@@ -41,7 +41,13 @@ test('posted = 0 → published 0; withLink = 0 → survival 1', () => {
     const r = one({ attempted: 3, posted: 0, failed: 3, held: 0, withLink: 0 });
     expect(r.score).toBe(Math.round(0 + 0 + 20 + 35 * 0.5)); // 38
     expect(r.grade).toBe('poor');
-    expect(r.reasons).toContain('0/0 bài phải chờ duyệt hoặc không tìm thấy');
+    expect(r.reasons.some((x) => x.includes('bài phải chờ duyệt'))).toBe(false); // posted = 0: lý do "0/0" vô nghĩa, chỉ báo lần đăng lỗi
+});
+
+test('held > posted (lệch mép khoảng thời gian) được kẹp, không ra điểm âm', () => {
+    const r = one({ attempted: 3, posted: 3, failed: 0, held: 5, withLink: 1, removed: 2 });
+    expect(r.score).toBe(Math.round(20 + 0 + 0 + 35 * 0.5)); // 38
+    expect(r.score!).toBeGreaterThanOrEqual(0);
 });
 
 test('không nhóm nào được đo → engagement 0.5 và lý do chưa đo', () => {

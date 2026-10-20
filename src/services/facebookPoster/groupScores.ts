@@ -32,6 +32,8 @@ function median(values: number[]): number {
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+
 function gradeOf(score: number): GroupGrade {
     if (score >= 70) return 'good';
     if (score >= 40) return 'fair';
@@ -57,8 +59,9 @@ export function scoreGroups(rows: GroupScoreInput[]): GroupScore[] {
             return { ...r, score: null, grade: 'insufficient', engagement: null, reasons: [`Mới có ${r.attempted} lượt đăng (cần ≥ ${MIN_SCORE_POSTS})`] };
         }
         const success = r.posted / r.attempted;
-        const published = r.posted > 0 ? 1 - r.held / r.posted : 0;
-        const survival = r.withLink > 0 ? 1 - r.removed / r.withLink : 1;
+        // Kẹp 0..1: kết quả và dòng theo dõi có thể lệch nhau ở mép khoảng thời gian.
+        const published = r.posted > 0 ? clamp01(1 - r.held / r.posted) : 0;
+        const survival = r.withLink > 0 ? clamp01(1 - r.removed / r.withLink) : 1;
         const value = valueOf(r);
         const measuredValue = value !== null && mid > 0;
         const ratio = measuredValue ? value / mid : null;
@@ -66,7 +69,7 @@ export function scoreGroups(rows: GroupScoreInput[]): GroupScore[] {
         const score = Math.round(20 * success + 25 * published + 20 * survival + 35 * engagement);
 
         const reasons: string[] = [];
-        if (published < 0.7) reasons.push(`${r.held}/${r.posted} bài phải chờ duyệt hoặc không tìm thấy`);
+        if (r.posted > 0 && published < 0.7) reasons.push(`${r.held}/${r.posted} bài phải chờ duyệt hoặc không tìm thấy`);
         if (r.removed > 0) reasons.push(`${r.removed} bài nghi bị xoá`);
         if (success < 0.8) reasons.push(`${r.failed}/${r.attempted} lần đăng lỗi`);
         if (ratio !== null && engagement < 0.35) reasons.push('Tương tác thấp hơn mức giữa của các nhóm');

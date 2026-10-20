@@ -38,8 +38,8 @@ describe('trackingFormat', () => {
   test('formatBestTimes lists hours and weekdays or reports insufficient data', () => {
     const slot = (key: string, label: string) => ({ key, label, avgEngagement: 1, measured: 5 });
     expect(formatBestTimes({ hours: [slot('09', '09h'), slot('20', '20h')], weekdays: [slot('6', 'Thứ 7'), slot('7', 'Chủ nhật')], insufficient: false }))
-      .toBe('Giờ nên đăng: 9h, 20h · Thứ nên đăng: Thứ 7, Chủ nhật (theo giờ máy)');
-    expect(formatBestTimes({ hours: [slot('21', '21h')], weekdays: [], insufficient: false })).toBe('Giờ nên đăng: 21h (theo giờ máy)');
+      .toBe('Giờ nên đăng: 9h, 20h · Thứ nên đăng: Thứ 7, Chủ nhật (60 ngày gần nhất, theo giờ máy)');
+    expect(formatBestTimes({ hours: [slot('21', '21h')], weekdays: [], insufficient: false })).toBe('Giờ nên đăng: 21h (60 ngày gần nhất, theo giờ máy)');
     expect(formatBestTimes({ hours: [], weekdays: [], insufficient: true })).toBe('Chưa đủ dữ liệu để gợi ý giờ đăng');
   });
 });

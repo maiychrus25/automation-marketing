@@ -28,8 +28,8 @@ export const GROUP_BY_OPTIONS: { value: Extract<PostStatsGroupBy, 'group' | 'pro
   { value: 'schedule', label: 'Lịch' },
   { value: 'campaign', label: 'Chiến dịch' },
   { value: 'variant', label: 'Biến thể' },
-  { value: 'hour', label: 'Giờ' },
-  { value: 'weekday', label: 'Thứ' },
+  { value: 'hour', label: 'Giờ (giờ máy)' },
+  { value: 'weekday', label: 'Thứ (giờ máy)' },
 ];
 
 export const RANGE_OPTIONS = [{ days: 7, label: '7 ngày' }, { days: 30, label: '30 ngày' }];
@@ -76,5 +76,5 @@ export function formatBestTimes(result: Pick<BestTimes, 'hours' | 'weekdays' | '
   if (result.insufficient || result.hours.length === 0) return 'Chưa đủ dữ liệu để gợi ý giờ đăng';
   const parts = [`Giờ nên đăng: ${result.hours.map((h) => h.label.replace(/^0/, '')).join(', ')}`];
   if (result.weekdays.length) parts.push(`Thứ nên đăng: ${result.weekdays.map((w) => w.label).join(', ')}`);
-  return `${parts.join(' · ')} (theo giờ máy)`;
+  return `${parts.join(' · ')} (60 ngày gần nhất, theo giờ máy)`;
 }

@@ -580,7 +580,7 @@ describe('post tracking store', () => {
       s.addResult(newResult('r1', { outcome: 'failed', errorCode: 'post_failed' }));
       s.addResult(newResult('r1', { outcome: 'skipped' }));
       s.addResult(newResult('rj', { outcome: 'posted' }));
-      s.addResult(newResult('rold', { outcome: 'posted' }));
+      s.addResult(newResult('rold', { outcome: 'posted', createdAt: 99_999 })); // ngoài khoảng theo thời điểm ghi kết quả
       s.addResult(newResult('r1', { targetUrl: G3, targetName: 'Nhóm 3', outcome: 'failed', errorCode: 'post_failed' }));
       s.createTracking(trackRow(1, { groupUrl: G1, postedAt: 150, linkStatus: 'known' }));
       s.createTracking(trackRow(2, { groupUrl: G1, postedAt: 160, linkStatus: 'not_found' }));
