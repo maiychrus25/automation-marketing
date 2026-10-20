@@ -6,6 +6,7 @@ import type { TelegramForumTopicContext } from '../../models/telegram';
 import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
 import type { UpdateState, ActionResult as UpdateActionResult } from '../../services/update/UpdateService';
 import type { ResearchConfig } from '../../services/research/researchConfig';
+import type { VideoJob, VideoStatus } from '../../models/video';
 import type { ResearchItem, ResearchScan, ResearchSort, ResearchSource } from '../../models/research';
 import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterLead, LeadStatus, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, CampaignStatus } from '../../models/facebookPoster';
 import type { GroupScore } from '../../services/facebookPoster/groupScores';
@@ -706,6 +707,18 @@ declare global {
         openLink:       (url: string) => Promise<{ success: boolean; error?: string }>;
         exportXlsx:     (scanId: string) => Promise<{ success: boolean; saved?: boolean; path?: string; error?: string }>;
       };
+      video: {
+        settingsGet:    () => Promise<{ success: boolean; url?: string; apiKeyHint?: string; configured?: boolean; error?: string }>;
+        settingsSet:    (input: { url: string; apiKey?: string }) => Promise<{ success: boolean; url?: string; apiKeyHint?: string; configured?: boolean; error?: string }>;
+        testConnection: () => Promise<{ success: boolean; version?: string; templateCount?: number; error?: string }>;
+        templates:      () => Promise<{ success: boolean; templates?: { id: string; name: string; description: string; aspects: string[]; durationSec: { min: number; max: number; default: number }; imageSlots: { min: number; max: number }; variables: Record<string, { type: 'string' | 'color' | 'number'; label: string; maxLength?: number; default: unknown }> }[]; music?: { id: string; name: string; durationSec: number; license: string; source: string }[]; error?: string }>;
+        render:         (params: { name: string; templateId?: string; aspect?: string; variables?: Record<string, unknown>; imagePaths?: string[]; musicId?: string | null; musicPath?: string; html?: string; width?: number; height?: number; assetPaths?: string[]; fps?: 24 | 30; quality?: 'standard' | 'high' }) => Promise<{ success: boolean; videoId?: string; status?: VideoStatus; error?: string }>;
+        status:         (videoId: string) => Promise<{ success: boolean; video?: VideoJob; error?: string }>;
+        list:           (params?: { status?: VideoStatus; limit?: number; offset?: number }) => Promise<{ success: boolean; videos?: VideoJob[]; total?: number; error?: string }>;
+        cancel:         (videoId: string) => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
+        delete:         (videoId: string) => Promise<{ success: boolean; error?: string }>;
+        exportFile:     (videoId: string) => Promise<{ success: boolean; saved?: boolean; path?: string; error?: string }>;
+      };
       facebookPoster: {
         start:          (kind: FbPosterKind, params: Record<string, unknown>) => Promise<{ success: boolean; runId?: string; error?: string }>;
         cancel:         () => Promise<{ success: boolean; error?: string }>;
@@ -912,6 +925,7 @@ export const ipc = {
   controlApi: window.electronAPI?.controlApi,
   facebookPoster: window.electronAPI?.facebookPoster,
   research: window.electronAPI?.research,
+  video: window.electronAPI?.video,
   update: window.electronAPI?.update,
 
   erp,

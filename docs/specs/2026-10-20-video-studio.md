@@ -226,3 +226,8 @@ Video giữ cho đến khi người dùng xoá. Tệp nằm ở `userData/videos
 - **Thoát khỏi Chrome sandbox:** `worker` không mạng, không bí mật, chỉ thấy việc hiện tại, filesystem chỉ đọc, user không root.
 - **Facebook nén lại video:** dùng H.264 chất lượng `standard`; video 9:16 ≤ 60 giây cho reels.
 - **Nhạc:** chỉ dùng CC0 có nguồn. Nhạc người dùng tải lên thuộc trách nhiệm người dùng (ghi trong giao diện).
+
+## Ghi chú sau phát hành
+
+- Sự kiện renderer đặt tên `video:changed` (không phải `videos:changed` như mục 6.3), cho đồng nhất với các kênh IPC `video:*`.
+- `videos.status` trả `{ video }` và `videos.list` trả `{ total, videos }`; cả hai bỏ `filePath`, `thumbPath`, `specJson` cho bot.

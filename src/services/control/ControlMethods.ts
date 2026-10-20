@@ -2,6 +2,7 @@ import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../facebookPoster/FacebookPosterService';
 import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../research/researchOperationsLogic';
+import { RenderError } from '../video/RenderClient';
 
 /** Mã lỗi cố định của giao thức (spec §3.2). */
 export type ControlErrorCode =
@@ -22,6 +23,17 @@ const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấ
 /** Trùng `WORKSPACE_SWITCHING_ERROR` của facebookPosterIpc/researchIpc (có test đối chiếu); không import để tránh kéo Electron vào đây. */
 const WORKSPACE_SWITCHING_MESSAGE = 'Đang đổi workspace, thử lại sau';
 
+/** Lỗi máy chủ render -> mã giao thức có sẵn (spec video §6.5); thông báo của RenderClient đã tiếng Việt và không chứa khoá API. */
+function fromRenderError(err: RenderError): ControlError {
+    switch (err.code) {
+        case 'limit': return new ControlError('LIMIT_REACHED', err.message);
+        case 'not_found': return new ControlError('NOT_FOUND', err.message);
+        case 'unconfigured':
+        case 'invalid': return new ControlError('INVALID_PARAMS', err.message);
+        default: return new ControlError('INTERNAL', err.message);
+    }
+}
+
 /**
  * Đổi lỗi ném ra từ posterOperations thành mã giao thức. Chỉ `new Error(msg)` thuần (lỗi kiểm tra có thông báo tiếng Việt)
  * mới thành INVALID_PARAMS; mọi lỗi khác (TypeError, lỗi SQLite/hệ thống tệp…) là INTERNAL, không lộ thông báo gốc.
@@ -30,6 +42,7 @@ export function toControlError(err: unknown): ControlError {
     if (err instanceof ControlError) return err;
     // Lớp con của Error nên phải xử lý trước nhánh "chỉ Error thuần".
     if (err instanceof UnknownProfilesError) return new ControlError('NOT_FOUND', err.message, { missing: err.missing });
+    if (err instanceof RenderError) return fromRenderError(err);
     const plain = err instanceof Error && err.constructor === Error && typeof (err as { code?: unknown }).code !== 'string';
     if (!plain) return new ControlError('INTERNAL', INTERNAL_MESSAGE);
     const message = (err as Error).message;
@@ -102,6 +115,15 @@ export interface CampaignPort {
     delete(params: any): any;
 }
 
+/** Video Studio (`videoOperations`); kiểm tra tham số nằm ở đó. */
+export interface VideoPort {
+    templates(): any;
+    render(params: any): any;
+    status(params: any): any;
+    list(params?: any): any;
+    cancel(params: any): any;
+}
+
 /** Khách tiềm năng và thu bình luận (`leadOperations`); kiểm tra tham số nằm ở đó. */
 export interface LeadPort {
     list(params?: any): any;
@@ -120,6 +142,7 @@ export interface ControlMethodDeps {
     tracking: TrackingPort;
     campaigns: CampaignPort;
     leads: LeadPort;
+    videos: VideoPort;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
     checkLogins(profileIds: string[] | null): { checkId: string; profileIds: string[] };
@@ -722,6 +745,64 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             }),
             resultSchema: obj({ config: { type: 'object', description: 'Cấu hình hiện hành' } }, ['config']),
             run: async (p) => (p.config === undefined ? deps.leads.getConfig() : deps.leads.setConfig(p.config)),
+        },
+        {
+            name: 'videos.templates',
+            description: 'Danh sách mẫu video và nhạc có sẵn của máy chủ render (mỗi mẫu có khổ hỗ trợ, số ảnh, các biến chữ/giá/màu và giới hạn độ dài). Gọi trước videos.render. INVALID_PARAMS nếu chưa cấu hình máy chủ render; INTERNAL nếu không kết nối được.',
+            destructive: false,
+            paramsSchema: obj({}),
+            resultSchema: obj({ templates: { type: 'array', items: { type: 'object' } }, music: { type: 'array', items: { type: 'object' } } }, ['templates', 'music']),
+            run: async () => deps.videos.templates(),
+        },
+        {
+            name: 'videos.render',
+            description: 'Tạo video bằng máy chủ render. Cần name và đúng MỘT trong hai kiểu. Kiểu mẫu: templateId, aspect (9:16 / 1:1 / 16:9), variables, imageIds (mã tệp /v1/media, ≤ 20 ảnh theo thứ tự), nhạc tuỳ chọn bằng musicId (nhạc có sẵn) hoặc musicMediaId (mã tệp /v1/media), không dùng cả hai. Kiểu HTML: html, width, height, assetIds (mã tệp /v1/media, trong HTML gọi theo tên asset1.<đuôi>, asset2.<đuôi>… theo thứ tự). Chạy nền, trả videoId ngay; xong có sự kiện videos.finished kèm mediaId để dùng ngay trong drafts.create.mediaIds (hết hạn sau 24 giờ). LIMIT_REACHED nếu hàng đợi máy chủ đầy hoặc quá hạn mức; INVALID_PARAMS nếu chưa cấu hình máy chủ render hoặc sai tham số.',
+            destructive: false,
+            paramsSchema: obj({
+                name: { type: 'string', minLength: 1, maxLength: 100, description: 'Tên video (1–100 ký tự)' },
+                templateId: str('Mã mẫu (kiểu mẫu)'),
+                aspect: { type: 'string', enum: ['9:16', '1:1', '16:9'], description: 'Khổ video (kiểu mẫu)' },
+                variables: { type: 'object', description: 'Giá trị các biến của mẫu (kiểu mẫu)' },
+                imageIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20, description: 'Mã tệp ảnh đã tải lên qua /v1/media, đúng thứ tự (kiểu mẫu)' },
+                musicId: { type: ['string', 'null'], description: 'Mã nhạc có sẵn; null = không nhạc' },
+                musicMediaId: str('Mã tệp nhạc đã tải lên qua /v1/media (thay cho musicId)'),
+                html: str('HTML tự viết (kiểu HTML, ≤ 512 KB)'),
+                width: int('Rộng (kiểu HTML)', { minimum: 1 }),
+                height: int('Cao (kiểu HTML)', { minimum: 1 }),
+                assetIds: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'Mã tệp đi kèm HTML đã tải lên qua /v1/media (kiểu HTML)' },
+                fps: { type: 'integer', enum: [24, 30], description: 'Số khung hình/giây (mặc định 30)' },
+                quality: { type: 'string', enum: ['standard', 'high'], description: 'Chất lượng (mặc định standard)' },
+            }, ['name']),
+            resultSchema: obj({ videoId: str('Mã video'), status: str('Trạng thái ban đầu (queued)') }, ['videoId', 'status']),
+            run: async (p) => deps.videos.render(pick(p, ['name', 'templateId', 'aspect', 'variables', 'imageIds', 'musicId', 'musicMediaId', 'html', 'width', 'height', 'assetIds', 'fps', 'quality'])),
+        },
+        {
+            name: 'videos.status',
+            description: 'Xem một video: trạng thái (queued / rendering / done / failed / cancelled), tiến độ 0–1, lỗi, thời lượng, dung lượng. NOT_FOUND nếu videoId lạ.',
+            destructive: false,
+            paramsSchema: obj({ videoId: str('Mã video') }, ['videoId']),
+            resultSchema: obj({ video: { type: 'object', description: 'Thông tin video (không có đường dẫn trên máy)' } }, ['video']),
+            run: async (p) => deps.videos.status(pick(p, ['videoId'])),
+        },
+        {
+            name: 'videos.list',
+            description: 'Danh sách video, mới nhất trước; lọc theo status, phân trang bằng limit (1–100, mặc định 50) và offset.',
+            destructive: false,
+            paramsSchema: obj({
+                status: { type: 'string', enum: ['uploading', 'queued', 'rendering', 'done', 'failed', 'cancelled'] },
+                limit: int('Số dòng (1–100)', { minimum: 1, maximum: 100 }),
+                offset: int('Bỏ qua bấy nhiêu dòng đầu', { minimum: 0 }),
+            }),
+            resultSchema: obj({ total: int('Tổng số video khớp'), videos: { type: 'array', items: { type: 'object' } } }, ['total', 'videos']),
+            run: async (p) => deps.videos.list(pick(p, ['status', 'limit', 'offset'])),
+        },
+        {
+            name: 'videos.cancel',
+            description: 'Huỷ video đang chờ hoặc đang render. cancelled = false nếu video không còn ở trạng thái huỷ được. NOT_FOUND nếu videoId lạ.',
+            destructive: false,
+            paramsSchema: obj({ videoId: str('Mã video') }, ['videoId']),
+            resultSchema: obj({ cancelled: { type: 'boolean' } }, ['cancelled']),
+            run: async (p) => deps.videos.cancel(pick(p, ['videoId'])),
         },
     ];
 

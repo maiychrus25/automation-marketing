@@ -10,6 +10,7 @@ import HttpRelayService from '../../src/services/http/HttpRelayService';
 import ConnectionManager from '../../src/utils/ConnectionManager';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
+import { startVideoPolling, stopVideoPolling } from './videoIpc';
 import { restartControlApi, stopControlApi, syncControlEventSink } from './controlApiIpc';
 import { closeAllBrowserProfiles } from './browserProfileIpc';
 import { RESEARCH_NOT_STOPPED_ERROR, cancelAndWaitResearch } from './researchIpc';
@@ -116,6 +117,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
         if (await cancelAndWaitFacebookPosterJobs()) {
             // Poster events of the stopped job are recorded; now stop serving so no call hits the DB mid-switch
             try { await stopControlApi(); } catch {}
+            try { stopVideoPolling(); } catch {} // timer của DB cũ không được chạm DB đang đổi
             return true;
         }
         try { startFacebookPosterScheduler(); } catch {}
@@ -227,6 +229,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                     // Also runs after a rolled-back switch (previous DB active again) or when no workspace is left
                     syncControlEventSink(); // new DB: events from the scheduler start below must not be lost
                     try { startFacebookPosterScheduler(); } catch {}
+                    try { startVideoPolling(); } catch {} // DB mới: tạo bảng video_jobs và theo dõi tiếp việc dở của nó
                     await restartControlApi(); // new workspace DB: its own config and keys (old keys stop working)
                 }
             } finally {
@@ -267,6 +270,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                     // Also runs after a rolled-back switch: the previous DB is active again
                     syncControlEventSink(); // new DB: events from the scheduler start below must not be lost
                     try { startFacebookPosterScheduler(); } catch {}
+                    try { startVideoPolling(); } catch {} // DB mới: tạo bảng video_jobs và theo dõi tiếp việc dở của nó
                     await restartControlApi(); // new workspace DB: its own config and keys (old keys stop working)
                 }
 
@@ -342,6 +346,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             // The DB was not switched, so the scheduler (possibly stopped above) belongs on the current DB; no-op if running
             syncControlEventSink();
             try { startFacebookPosterScheduler(); } catch {}
+            try { startVideoPolling(); } catch {}
             await restartControlApi();
             const msg = err?.message || String(err) || 'Unknown switch error';
             Logger.error(`[workspaceIpc] switch error: ${msg}`, err);

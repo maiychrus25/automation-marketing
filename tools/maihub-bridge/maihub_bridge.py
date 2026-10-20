@@ -72,6 +72,7 @@ WATCH_MIN_POLL_SEC = 1
 MAX_FIELD_CHARS = 200
 MAX_LEAD_SAMPLES = 3
 LEAD_TEXT_CHARS = 80
+VIDEO_ERROR_CHARS = 120
 MAX_MESSAGE_CHARS = 3500
 MAX_ERROR_LINES = 3
 KIND_LABELS = {"join": "Tham gia nhóm", "scan_groups": "Quét nhóm", "collect_comments": "Thu bình luận"}
@@ -1106,6 +1107,14 @@ def format_event(event, fetch_run):
             for sample in (samples if isinstance(samples, list) else [])[:MAX_LEAD_SAMPLES]:
                 if isinstance(sample, dict) and (sample.get("authorName") or sample.get("text")):
                     lines.append("%s: %s" % (clip(_one_line(sample.get("authorName")), MAX_FIELD_CHARS), clip(_one_line(sample.get("text")), LEAD_TEXT_CHARS)))
+    elif etype == "videos.finished":
+        name = clip(_one_line(payload.get("name")), MAX_FIELD_CHARS)
+        if payload.get("ok") is True:
+            seconds = payload.get("durationSec")
+            ok_seconds = isinstance(seconds, (int, float)) and not isinstance(seconds, bool)
+            lines = ["🎬 Video xong: %s (%ds)" % (name, int(round(seconds)))] if ok_seconds else ["🎬 Video xong: %s" % name]
+        else:
+            lines = ["⚠️ Video lỗi: %s — %s" % (name, clip(_one_line(payload.get("error")) or "lỗi không rõ", VIDEO_ERROR_CHARS))]
     return clip("\n".join(lines), MAX_MESSAGE_CHARS) if lines else None
 
 

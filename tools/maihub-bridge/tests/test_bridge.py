@@ -1852,5 +1852,27 @@ class InstallHardeningTests(InstallFixture):
         self.assertLess(out.index(backup), out.index("sudo rm -rf"))
 
 
+class FormatVideoFinishedTests(unittest.TestCase):
+    def fmt(self, **over):
+        payload = {"videoId": "v1", "name": "Flash sale", "ok": True, "durationSec": 20.4, "sizeBytes": 100, "mediaId": "m1"}
+        payload.update(over)
+        return bridge.format_event({"seq": 1, "type": "videos.finished", "payload": payload, "createdAt": 1}, lambda r: None)
+
+    def test_success_shows_name_and_rounded_seconds(self):
+        self.assertEqual(self.fmt(), "🎬 Video xong: Flash sale (20s)")
+        self.assertEqual(self.fmt(durationSec=19.6), "🎬 Video xong: Flash sale (20s)")
+
+    def test_success_without_duration_omits_seconds(self):
+        self.assertEqual(self.fmt(durationSec=None), "🎬 Video xong: Flash sale")
+
+    def test_failure_clips_error_to_120_chars(self):
+        self.assertEqual(self.fmt(ok=False, error="Hết hạn"), "⚠️ Video lỗi: Flash sale — Hết hạn")
+        line = self.fmt(ok=False, error="x" * 300)
+        self.assertEqual(line, "⚠️ Video lỗi: Flash sale — " + "x" * 119 + "…")
+
+    def test_failure_without_error_text(self):
+        self.assertEqual(self.fmt(ok=False, error=None), "⚠️ Video lỗi: Flash sale — lỗi không rõ")
+
+
 if __name__ == "__main__":
     unittest.main()

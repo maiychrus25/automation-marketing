@@ -52,14 +52,14 @@ const tplInput = (over: Record<string, unknown> = {}) => ({
 });
 const finished = () => events.filter((e) => e.type === 'videos.finished');
 
-test('render tải lên, lưu dòng queued và phát videos:changed', async () => {
+test('render tải lên, lưu dòng queued và phát video:changed', async () => {
     const svc = makeService();
     const job = await svc.render(tplInput());
     expect(job).toMatchObject({ status: 'queued', remoteId: 'remote-1', templateId: 'flash-sale', aspect: '9:16' });
     expect(server.uploads[0].spec.template.id).toBe('flash-sale');
     expect(job.specJson).not.toContain(dir); // không chứa đường dẫn máy
     expect(svc.get(job.id)?.status).toBe('queued');
-    expect(events.map((e) => e.type)).toContain('videos:changed');
+    expect(events.map((e) => e.type)).toContain('video:changed');
     expect(timers).toHaveLength(1);
 });
 

@@ -857,6 +857,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // ─── Research events ─────────────────────────────────────────
       'research:progress',
       'research:finished',
+      // ─── Video events ────────────────────────────────────────────
+      'video:changed',
       'controlApi:paired',
     ];
     if (validChannels.includes(channel)) {
@@ -925,6 +927,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     status:          ()                     => ipcRenderer.invoke('research:status'),
     openLink:        (url: string)          => ipcRenderer.invoke('research:openLink', { url }),
     exportXlsx:      (scanId: string)       => ipcRenderer.invoke('research:exportXlsx', { scanId }),
+  },
+  video: {
+    settingsGet:    ()                            => ipcRenderer.invoke('video:settingsGet'),
+    settingsSet:    (input: { url: string; apiKey?: string }) => ipcRenderer.invoke('video:settingsSet', input),
+    testConnection: ()                            => ipcRenderer.invoke('video:testConnection'),
+    templates:      ()                            => ipcRenderer.invoke('video:templates'),
+    render:         (params: any)                 => ipcRenderer.invoke('video:render', params),
+    status:         (videoId: string)             => ipcRenderer.invoke('video:status', { videoId }),
+    list:           (params?: any)                => ipcRenderer.invoke('video:list', params || {}),
+    cancel:         (videoId: string)             => ipcRenderer.invoke('video:cancel', { videoId }),
+    delete:         (videoId: string)             => ipcRenderer.invoke('video:delete', { videoId }),
+    exportFile:     (videoId: string)             => ipcRenderer.invoke('video:exportFile', { videoId }),
   },
   facebookPoster: {
     start:          (kind: string, params: any)  => ipcRenderer.invoke('facebookPoster:start', { kind, params }),

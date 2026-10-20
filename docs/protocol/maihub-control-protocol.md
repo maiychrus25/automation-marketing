@@ -188,6 +188,11 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `leads.list` | `status` (`new`/`contacted`/`won`/`ignored`), `campaignId` (`""` = không thuộc chiến dịch), `from`, `to`, `search`, `limit` (1–500), `offset` | `{ total, leads[] }` (mới nhất trước) | không |
 | `leads.update` | **`id`**, và `status` hoặc `note` (≤ 1000 ký tự; cần ít nhất một) | `{ lead }`. `NOT_FOUND` nếu `id` lạ; `INVALID_PARAMS` nếu tham số sai | không |
 | `leads.config` | `config` (`{ autoCollect, collectAtMinutes[], keywords[], detectPhone, aiEnabled, aiMinScore }`; `collectAtMinutes` 1–10 số tăng dần, 30–20160 phút; `keywords` 1–100 mục, mỗi mục 1–40 ký tự; `aiMinScore` 0–100). Không truyền = chỉ đọc | `{ config }`. `INVALID_PARAMS` nếu `config` sai | không |
+| `videos.templates` | — | `{ templates[], music[] }` lấy từ máy chủ render (mỗi mẫu có `aspects`, `imageSlots`, `variables` kèm giới hạn độ dài). `INVALID_PARAMS` "Chưa cấu hình máy chủ render video"; `INTERNAL` "Không kết nối được máy chủ render" | không |
+| `videos.render` | **`name`** (1–100 ký tự) và **đúng một** trong hai kiểu. Kiểu mẫu: `templateId`, `aspect` (`9:16` / `1:1` / `16:9`), `variables`, `imageIds` (1–20 mã tệp `/v1/media`, theo thứ tự), nhạc tuỳ chọn `musicId` (nhạc có sẵn, `null` = không nhạc) **hoặc** `musicMediaId` (mã tệp `/v1/media`). Kiểu HTML: `html`, `width`, `height`, `assetIds` (≤ 20 mã tệp `/v1/media`; trong HTML gọi tệp theo tên `asset1.<đuôi>`, `asset2.<đuôi>`… theo thứ tự). Chung: `fps` (24 / 30), `quality` (`standard` / `high`) | `{ videoId, status }`. Chạy nền; xong có sự kiện `videos.finished`. `LIMIT_REACHED` nếu hàng đợi máy chủ đầy hoặc quá hạn mức tạo việc; `INVALID_PARAMS` nếu chưa cấu hình máy chủ render, sai tham số, `mediaId` lạ hoặc hết hạn; `INTERNAL` nếu không kết nối được máy chủ | không |
+| `videos.status` | **`videoId`** | `{ video }` (`id`, `name`, `status`, `progress` 0–1, `error`, `durationSec`, `sizeBytes`, `createdAt`, `finishedAt`…; không có đường dẫn trên máy). `NOT_FOUND` nếu `videoId` lạ | không |
+| `videos.list` | `status` (`uploading`/`queued`/`rendering`/`done`/`failed`/`cancelled`), `limit` (1–100, mặc định 50), `offset` | `{ total, videos[] }` (mới nhất trước) | không |
+| `videos.cancel` | **`videoId`** | `{ cancelled }`; `false` nếu video không còn đang chờ hoặc đang render. `NOT_FOUND` nếu `videoId` lạ | không |
 
 `run.status` nhận một trong `running`, `done`, `cancelled`, `failed`, `missed`.
 
@@ -230,6 +235,7 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 | `research.finished` | Một lượt quét Nghiên cứu kết thúc (xong, lỗi hoặc bị huỷ) | `{ scanId, source, query, status, errorCode, itemCount }`; lấy kết quả bằng `research.get` |
 | `posts.trackFinished` | Một lượt theo dõi bài đăng kết thúc (xong, huỷ hoặc có lỗi; cả lượt do người dùng bấm hay MaiHub tự chạy) | `{ jobId, auto, cancelled, groups, checked, found, linked, removedSuspected, notFound, errors }`; `auto` là `true` khi MaiHub tự chạy, `errors` là số nhóm lỗi; chi tiết bằng `posts.trackStatus` |
 | `leads.found` | Có khách tiềm năng mới sau một lượt thu bình luận (một sự kiện cho cả lượt, `count` là tổng khách của lượt chứ không phải mỗi bài, cả thu tay lẫn tự thu; không phát khi không có khách mới) | `{ count, samples: [{ authorName, text, postUrl }] (tối đa 3), auto }`; xem đầy đủ bằng `leads.list` |
+| `videos.finished` | Một video render xong hoặc lỗi (cả video do ứng dụng tạo; huỷ bằng `videos.cancel` hoặc từ ứng dụng không phát sự kiện) | `{ videoId, name, ok, error?, durationSec?, sizeBytes?, mediaId? }`; `error` chỉ khi `ok = false` (hoặc khi video xong nhưng không chép được vào hộp thư); `mediaId` chỉ có với video do bot tạo bằng `videos.render`, dùng ngay trong `drafts.create.mediaIds` (hết hạn sau 24 giờ như mọi tệp hộp thư) |
 
 Sau `run.finished`, gọi `runs.get` với `runId` để lấy link bài và chi tiết từng đích.
 

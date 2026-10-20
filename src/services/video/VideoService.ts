@@ -102,7 +102,7 @@ export class VideoService {
             createdAt: this.deps.now(), finishedAt: null,
         };
         this.deps.store.create(job);
-        this.deps.emit('videos:changed');
+        this.deps.emit('video:changed');
         this.startPolling();
         return job;
     }
@@ -142,7 +142,7 @@ export class VideoService {
         for (const file of [job.filePath, job.thumbPath]) if (file) fs.rmSync(file, { force: true });
         this.lastContact.delete(id);
         this.deps.store.delete(id);
-        this.deps.emit('videos:changed');
+        this.deps.emit('video:changed');
     }
 
     private requireJob(id: string): VideoJob {
@@ -201,7 +201,7 @@ export class VideoService {
         if (view.status !== 'done') {
             if (view.status !== job.status || view.progress !== job.progress) {
                 this.deps.store.update(job.id, { status: view.status, progress: view.progress });
-                this.deps.emit('videos:changed');
+                this.deps.emit('video:changed');
             }
             return;
         }
@@ -225,7 +225,7 @@ export class VideoService {
     private finish(job: VideoJob, patch: Partial<VideoJob>, announce: boolean): void {
         this.deps.store.update(job.id, { ...patch, finishedAt: this.deps.now() });
         this.lastContact.delete(job.id);
-        this.deps.emit('videos:changed');
+        this.deps.emit('video:changed');
         if (!announce) return;
         const ok = patch.status === 'done';
         const event: Record<string, unknown> = { videoId: job.id, name: job.name, ok };

@@ -16,13 +16,14 @@ import { ControlApiServer } from '../../src/services/control/ControlApiServer';
 import { createControlMethods, type PosterPort } from '../../src/services/control/ControlMethods';
 import { createCertificate } from '../../src/services/control/certificate';
 import { CertificateKeyUnreadableError, CertificateStore } from '../../src/services/control/CertificateStore';
-import { InboxMediaStore } from '../../src/services/control/InboxMediaStore';
 import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
     CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, withStoredPublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
 import { checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations, trackingOperations, campaignOperations, leadOperations } from './facebookPosterIpc';
 import { researchOperations } from './researchIpc';
+import { videoOperations } from './videoIpc';
+import { getInboxMediaStore } from './inboxMedia';
 import { getBrowserEngineStatus, getBrowserProfileService, getBrowserSandboxState } from './browserProfileIpc';
 
 const HOUR_MS = 3_600_000;
@@ -74,7 +75,7 @@ function loadBridge(): void {
     Logger.error(`[controlApi] không tìm thấy tệp maihub_bridge.py đi kèm, đã thử: ${candidates.join(' | ')}`);
 }
 
-const inbox = () => new InboxMediaStore(path.join(controlDir(), 'inbox'));
+const inbox = getInboxMediaStore;
 const currentStore = () => new ControlStore(db());
 
 let certStoreInstance: CertificateStore | null = null;
@@ -156,6 +157,13 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             setConfig: leadOperations.setConfig,
             collect: leadOperations.collect,
             comments: leadOperations.comments,
+        },
+        videos: {
+            templates: videoOperations.templates,
+            render: (p) => videoOperations.render(p, 'bot'),
+            status: (p) => videoOperations.status(p, 'bot'),
+            list: (p) => videoOperations.list(p, 'bot'),
+            cancel: videoOperations.cancel,
         },
         listProfiles: () => {
             const list = db().getBrowserProfiles();

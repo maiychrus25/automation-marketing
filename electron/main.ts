@@ -24,6 +24,7 @@ import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
 import { registerProxyIpc } from './ipc/proxyIpc';
 import { registerBrowserProfileIpc, closeAllBrowserProfiles } from './ipc/browserProfileIpc';
 import { registerResearchIpc, cancelResearch } from './ipc/researchIpc';
+import { registerVideoIpc, startVideoPolling, stopVideoPolling } from './ipc/videoIpc';
 import { registerFacebookPosterIpc, cancelFacebookPosterJobs, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './ipc/facebookPosterIpc';
 import { registerUpdateIpc } from './ipc/updateIpc';
 import { registerErpTaskIpc } from './ipc/erpTaskIpc';
@@ -1178,10 +1179,12 @@ app.whenReady().then(async () => {
   registerBrowserProfileIpc();
   registerFacebookPosterIpc();
   registerResearchIpc();
+  registerVideoIpc();
   registerControlApiIpc();
   syncControlEventSink(); // sink first, synchronously: the scheduler below may fire schedule.missed / run.started at once
   startControlApi().catch((err: any) => Logger.error(`[ControlApi] start failed: ${err?.message}`));
   try { startFacebookPosterScheduler(); } catch (err: any) { Logger.error(`[FacebookPoster] scheduler start failed: ${err?.message}`); }
+  try { startVideoPolling(); } catch (err: any) { Logger.error(`[Video] polling start failed: ${err?.message}`); }
   registerErpTaskIpc();
   registerErpCalendarIpc();
   registerErpNoteIpc();
@@ -1344,6 +1347,10 @@ app.on('before-quit', () => {
 
   try {
     cancelFacebookPosterJobs();
+  } catch {}
+
+  try {
+    stopVideoPolling(); // trước DatabaseService.close(): không hỏi máy chủ render nữa; việc dở được theo dõi tiếp ở lần mở sau
   } catch {}
 
   try {

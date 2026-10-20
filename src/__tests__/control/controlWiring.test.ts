@@ -7,7 +7,7 @@ import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
 import { ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
-import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, buildLeadsFound, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
+import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, buildLeadsFound, buildVideoFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 import { createCertificate } from '../../services/control/certificate';
 import { parseBotIp, withStoredPublicHost } from '../../services/control/controlConfig';
 
@@ -305,5 +305,14 @@ describe('control events: leads', () => {
             count: 5, auto: true,
             samples: [1, 2, 3].map((i) => ({ authorName: `A${i}`, text: `t${i}`, postUrl: `u${i}` })),
         });
+    });
+});
+
+describe('control events: video', () => {
+    it('buildVideoFinished keeps only documented fields and omits absent optional ones', () => {
+        expect(buildVideoFinished({ videoId: 'v1', name: 'N', ok: true, durationSec: 20, sizeBytes: 5, mediaId: 'm', extra: 1 } as any))
+            .toEqual({ videoId: 'v1', name: 'N', ok: true, durationSec: 20, sizeBytes: 5, mediaId: 'm' });
+        expect(buildVideoFinished({ videoId: 'v2', name: 'M', ok: false, error: 'lỗi' } as any))
+            .toEqual({ videoId: 'v2', name: 'M', ok: false, error: 'lỗi' });
     });
 });

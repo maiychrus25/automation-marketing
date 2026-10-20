@@ -41,6 +41,7 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
     tracking: {} as any,
     campaigns: {} as any,
     leads: {} as any,
+    videos: {} as any,
     listProfiles: () => [],
     checkLogins: (ids) => ({ checkId: 'c1', profileIds: ids ?? [] }),
     systemStatus: () => ({}),

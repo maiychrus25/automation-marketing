@@ -2,7 +2,7 @@ import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import type { FbPosterResult, FbPosterRun, FbPosterSchedule, LoginCheckOutcome, LoginCheckSource, LoginState } from '../../models/facebookPoster';
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished';
 
 export function buildRunStarted(run: { runId: string; kind: string; scheduleId: string | null }) {
     return { runId: run.runId, kind: run.kind, scheduleId: run.scheduleId };
@@ -62,6 +62,17 @@ export function buildLeadsFound(e: { count: number; auto: boolean; samples: { au
     return {
         count: e.count, auto: e.auto,
         samples: e.samples.slice(0, 3).map((s) => ({ authorName: s.authorName, text: s.text, postUrl: s.postUrl })),
+    };
+}
+
+/** Video render xong hoặc lỗi; `error` chỉ khi lỗi, `mediaId` chỉ với video do bot tạo. */
+export function buildVideoFinished(e: { videoId: string; name: string; ok: boolean; error?: string; durationSec?: number; sizeBytes?: number; mediaId?: string }) {
+    return {
+        videoId: e.videoId, name: e.name, ok: e.ok,
+        ...(e.error !== undefined ? { error: e.error } : {}),
+        ...(e.durationSec !== undefined ? { durationSec: e.durationSec } : {}),
+        ...(e.sizeBytes !== undefined ? { sizeBytes: e.sizeBytes } : {}),
+        ...(e.mediaId !== undefined ? { mediaId: e.mediaId } : {}),
     };
 }
 

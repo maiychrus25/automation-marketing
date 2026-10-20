@@ -1,5 +1,6 @@
 import { ControlError, createControlMethods, describe as describeMethods, toControlError, type ControlMethodDeps } from '../../services/control/ControlMethods';
 import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../../services/research/researchOperationsLogic';
+import { RenderError } from '../../services/video/RenderClient';
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../../services/facebookPoster/FacebookPosterService';
 
 function makeDeps() {
@@ -251,6 +252,7 @@ describe('describe', () => {
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
             'comments.collect', 'comments.list', 'leads.list', 'leads.update', 'leads.config',
+            'videos.templates', 'videos.render', 'videos.status', 'videos.list', 'videos.cancel',
         ]);
         for (const m of d.methods) {
             expect(m.description).toMatch(/\S/);
@@ -642,5 +644,54 @@ describe('lead and comment methods', () => {
         expect(found).toHaveLength(5);
         for (const m of found) expect(m.destructive).toBe(false);
         expect(found.find((m) => m.name === 'comments.collect').description).toMatch(/leads\.found/);
+    });
+});
+
+describe('videos.*', () => {
+    const videos = () => ({
+        templates: jest.fn(async () => ({ templates: [], music: [] })),
+        render: jest.fn(async (_p: any) => ({ videoId: 'v1', status: 'queued' })),
+        status: jest.fn((_p: any) => ({ video: { id: 'v1' } })),
+        list: jest.fn((_p: any) => ({ videos: [], total: 0 })),
+        cancel: jest.fn(async (_p: any) => ({ cancelled: true })),
+    });
+    const setupVideos = () => {
+        const v = videos();
+        const methods = createControlMethods({ ...makeDeps(), videos: v } as unknown as ControlMethodDeps);
+        return { v, call: (name: string, params: any = {}) => methods.find((m) => m.name === name)!.run(params, {}) };
+    };
+
+    it('maps to the video port passing only documented keys', async () => {
+        const { v, call } = setupVideos();
+        await call('videos.templates');
+        expect(v.templates).toHaveBeenCalled();
+        const params = { name: 'N', templateId: 't', aspect: '9:16', variables: {}, imageIds: ['a'], musicId: null, musicMediaId: 'm', html: 'h', width: 1, height: 2, assetIds: ['x'], fps: 30, quality: 'high', junk: 1 };
+        expect(await call('videos.render', params)).toEqual({ videoId: 'v1', status: 'queued' });
+        const { junk, ...documented } = params;
+        expect(v.render).toHaveBeenCalledWith(documented);
+        await call('videos.status', { videoId: 'v1', junk: 1 });
+        expect(v.status).toHaveBeenCalledWith({ videoId: 'v1' });
+        await call('videos.list', { status: 'done', limit: 5, offset: 1, junk: 1 });
+        expect(v.list).toHaveBeenCalledWith({ status: 'done', limit: 5, offset: 1 });
+        expect(await call('videos.cancel', { videoId: 'v1' })).toEqual({ cancelled: true });
+        expect(v.cancel).toHaveBeenCalledWith({ videoId: 'v1' });
+    });
+
+    it('does not require confirmation for any videos method', () => {
+        const methods = createControlMethods(makeDeps() as unknown as ControlMethodDeps);
+        for (const m of methods.filter((x) => x.name.startsWith('videos.'))) expect(m.destructive).toBe(false);
+    });
+
+    it.each([
+        ['unconfigured', 'Chưa cấu hình máy chủ render video', 'INVALID_PARAMS'],
+        ['limit', 'Hàng đợi đầy', 'LIMIT_REACHED'],
+        ['unreachable', 'Không kết nối được máy chủ render', 'INTERNAL'],
+        ['not_found', 'Không tìm thấy video', 'NOT_FOUND'],
+        ['invalid', 'Tên video phải có 1–100 ký tự', 'INVALID_PARAMS'],
+        ['server', 'Máy chủ render trả lỗi 500', 'INTERNAL'],
+    ] as const)('maps RenderError %s to %s keeping the Vietnamese message', async (code, message, expected) => {
+        const { v, call } = setupVideos();
+        v.render.mockRejectedValueOnce(new RenderError(code, message));
+        await expect(call('videos.render', { name: 'x' })).rejects.toMatchObject({ code: expected, message });
     });
 });
