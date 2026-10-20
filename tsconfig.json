@@ -18,5 +18,5 @@
     }
   },
   "include": ["src/**/*", "electron/**/*"], // Thư mục bao gồm
-  "exclude": ["node_modules", "dist", "dist-electron", "dist-electron-build"] // Thư mục loại trừ
+  "exclude": ["node_modules", "dist", "dist-electron", "dist-electron-build", "services"] // Thư mục loại trừ
 }

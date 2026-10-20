@@ -11,4 +11,7 @@ module.exports = {
     }],
   },
   testMatch: ['<rootDir>/src/__tests__/**/*.test.ts'], // Đường dẫn đến các tệp test
+  // services/ là gói riêng (máy chủ render) có package.json và jest riêng, không quét trong Jest của MaiHub
+  testPathIgnorePatterns: ["/node_modules/", "<rootDir>/services/"],
+  modulePathIgnorePatterns: ["<rootDir>/services/"],
 };

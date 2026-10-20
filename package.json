@@ -142,7 +142,8 @@
       "node_modules/ffmpeg-static/**/*",
       "node_modules/@ngrok/ngrok/**/*",
       "node_modules/cloudflared/**/*",
-      "package.json"
+      "package.json",
+      "!services/**"
     ],
     "asarUnpack": [
       "resources/icons/**",
