@@ -26,18 +26,24 @@ export class Queue {
   }
 
   enqueue(job: Job): void {
+    const t = this.checkLimits(job.owner);
+    this.record(job.owner, t);
+    this.waiting.push(job.id);
+  }
+
+  /** Ném `LimitError` nếu `owner` không được thêm việc (hàng đợi chung, việc chờ theo khoá, giới hạn theo giờ); trả về thời điểm kiểm. */
+  checkLimits(owner: string): number {
     const t = this.now();
     if (this.waiting.length + (this.running ? 1 : 0) >= LIMITS.maxQueue) {
       throw new LimitError(`Hàng đợi đã đầy (tối đa ${LIMITS.maxQueue} việc).`);
     }
-    if (this.waiting.filter((id) => this.store.get(id)?.owner === job.owner).length >= LIMITS.maxPendingPerKey) {
+    if (this.waiting.filter((id) => this.store.get(id)?.owner === owner).length >= LIMITS.maxPendingPerKey) {
       throw new LimitError(`Đã có ${LIMITS.maxPendingPerKey} việc đang chờ, vui lòng đợi.`);
     }
-    if (this.recent(job.owner, t).length >= LIMITS.maxJobsPerHourPerKey) {
+    if (this.recent(owner, t).length >= LIMITS.maxJobsPerHourPerKey) {
       throw new LimitError(`Tối đa ${LIMITS.maxJobsPerHourPerKey} lần tạo video mỗi giờ.`);
     }
-    this.record(job.owner, t);
-    this.waiting.push(job.id);
+    return t;
   }
 
   /** Vị trí trong hàng đợi (1 = kế tiếp); undefined nếu không còn chờ. */
@@ -46,13 +52,22 @@ export class Queue {
     return i < 0 ? undefined : i + 1;
   }
 
-  /** Lấy việc kế tiếp và đánh dấu `rendering`; undefined nếu đang có việc chạy hoặc hàng trống. */
+  /** Lấy việc kế tiếp và đánh dấu `rendering`; việc không cập nhật được bị đánh dấu `failed` và bỏ qua. */
   next(): Job | undefined {
     if (this.running) return undefined;
-    const id = this.waiting.shift();
-    if (!id) return undefined;
-    this.running = id;
-    return this.store.update(id, { status: 'rendering', startedAt: this.now() });
+    for (let id = this.waiting.shift(); id; id = this.waiting.shift()) {
+      try {
+        const job = this.store.update(id, { status: 'rendering', startedAt: this.now() });
+        this.running = id;
+        return job;
+      } catch (e) {
+        console.error('[render] Không bắt đầu được việc:', (e as Error).message);
+        try {
+          this.store.update(id, { status: 'failed', error: 'Lỗi nội bộ khi bắt đầu việc', finishedAt: this.now() });
+        } catch { /* kho hỏng: bỏ qua việc này */ }
+      }
+    }
+    return undefined;
   }
 
   /** Báo việc đang chạy đã xong (kể cả thất bại) để nhận việc kế tiếp. */

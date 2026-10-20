@@ -6,7 +6,7 @@ import { FileKind, FileType, KIND_OF, sniff } from './fileTypes';
 import { LIMITS } from './limits';
 
 export class UploadError extends Error {
-  constructor(readonly status: 400 | 413 | 415, readonly code: 'INVALID_SPEC' | 'TOO_LARGE' | 'UNSUPPORTED_FILE', message: string) {
+  constructor(readonly status: 400 | 413 | 415 | 500, readonly code: 'INVALID_SPEC' | 'TOO_LARGE' | 'UNSUPPORTED_FILE' | 'INTERNAL', message: string) {
     super(message);
     this.name = 'UploadError';
   }
@@ -87,6 +87,11 @@ export function receiveMultipart(req: IncomingMessage, destDir: string, limits: 
         files.push({ original, stored, type, kind, size: 0 });
         ws = fs.createWriteStream(path.join(destDir, stored));
         streams.push(ws);
+        ws.on('error', (e) => { // đĩa đầy / mất thư mục: không để lỗi chưa bắt làm sập tiến trình
+          console.error('[render] Lỗi ghi tệp tải lên:', (e as Error).message);
+          abort(new UploadError(500, 'INTERNAL', 'Không lưu được tệp tải lên.'));
+          done();
+        });
         ws.write(head);
         return true;
       };
@@ -126,6 +131,7 @@ export function receiveMultipart(req: IncomingMessage, destDir: string, limits: 
     bb.on('filesLimit', () => abort(new UploadError(413, 'TOO_LARGE', `Tối đa ${MAX_FILES} tệp mỗi việc.`)));
     bb.on('partsLimit', () => abort(new UploadError(400, 'INVALID_SPEC', 'Quá nhiều phần trong yêu cầu.')));
     bb.on('error', () => abort(new UploadError(400, 'INVALID_SPEC', 'Yêu cầu multipart không hợp lệ.')));
+    req.on('error', () => abort(new UploadError(400, 'INVALID_SPEC', 'Kết nối bị lỗi khi đang gửi.')));
     req.on('aborted', () => abort(new UploadError(400, 'INVALID_SPEC', 'Kết nối bị ngắt khi đang gửi.')));
     bb.on('close', () => {
       if (failed) return;

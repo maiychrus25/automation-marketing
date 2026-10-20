@@ -252,16 +252,16 @@ describe('API maihub-render', () => {
       orch.tick();
       expect(fs.existsSync(path.join(shared, 'current', 'job.json'))).toBe(true);
       expect(fs.existsSync(path.join(shared, 'current', 'img1.jpg'))).toBe(true);
-      fs.writeFileSync(out('progress.json'), `{"jobId":"${id}","percent":40}`);
+      fs.writeFileSync(out(`${id}.progress.json`), `{"jobId":"${id}","percent":40}`);
       orch.tick();
       let s = await call('GET', `/v1/jobs/${id}`, { key: KEY_A });
       expect(s.json).toMatchObject({ status: 'rendering', progress: 0.4 });
       expect(s.json.position).toBeUndefined();
       expect((await call('GET', `/v1/jobs/${id}/video`, { key: KEY_A })).status).toBe(404);
 
-      fs.writeFileSync(out('video.mp4'), Buffer.from('0123456789'));
-      fs.writeFileSync(out('thumb.jpg'), JPEG);
-      fs.writeFileSync(out('result.json'), `{"jobId":"${id}","ok":true,"durationMs":5000}`);
+      fs.writeFileSync(out(`${id}.mp4`), Buffer.from('0123456789'));
+      fs.writeFileSync(out(`${id}.jpg`), JPEG);
+      fs.writeFileSync(out(`${id}.result.json`), `{"jobId":"${id}","ok":true,"durationMs":5000}`);
       orch.tick();
       s = await call('GET', `/v1/jobs/${id}`, { key: KEY_A });
       expect(s.json).toMatchObject({ status: 'done', progress: 1, sizeBytes: 10, durationSec: 5 });
@@ -286,7 +286,7 @@ describe('API maihub-render', () => {
       const b = (await create(KEY_B, [{ name: 'spec', data: templateSpec([]) }])).json.jobId;
       orch.tick();
       expect((await call('GET', `/v1/jobs/${b}`, { key: KEY_B })).json).toMatchObject({ status: 'queued', position: 1 });
-      fs.writeFileSync(out('result.json'), `{"jobId":"${a}","ok":false,"error":"hỏng"}`);
+      fs.writeFileSync(out(`${a}.result.json`), `{"jobId":"${a}","ok":false,"error":"hỏng"}`);
       orch.tick();
       expect((await call('GET', `/v1/jobs/${a}`, { key: KEY_A })).json).toMatchObject({ status: 'failed', error: 'hỏng' });
       orch.tick();
@@ -299,8 +299,8 @@ describe('API maihub-render', () => {
       const r = await call('DELETE', `/v1/jobs/${id}`, { key: KEY_A });
       expect(r.status).toBe(202);
       expect(fs.existsSync(path.join(shared, 'current', 'cancel'))).toBe(true);
-      fs.writeFileSync(out('video.mp4'), 'x');
-      fs.writeFileSync(out('result.json'), `{"jobId":"${id}","ok":true}`);
+      fs.writeFileSync(out(`${id}.mp4`), 'x');
+      fs.writeFileSync(out(`${id}.result.json`), `{"jobId":"${id}","ok":true}`);
       orch.tick();
       expect(store.get(id)).toMatchObject({ status: 'cancelled' });
       expect(fs.existsSync(path.join(store.jobDir(id), 'output', 'video.mp4'))).toBe(false);
@@ -311,7 +311,7 @@ describe('API maihub-render', () => {
     it('xoá việc đã kết thúc', async () => {
       const id = (await create(KEY_A, [{ name: 'spec', data: templateSpec([]) }])).json.jobId;
       orch.tick();
-      fs.writeFileSync(out('result.json'), `{"jobId":"${id}","ok":false,"error":"x"}`);
+      fs.writeFileSync(out(`${id}.result.json`), `{"jobId":"${id}","ok":false,"error":"x"}`);
       orch.tick();
       expect((await call('DELETE', `/v1/jobs/${id}`, { key: KEY_A })).status).toBe(200);
       expect((await call('GET', `/v1/jobs/${id}`, { key: KEY_A })).status).toBe(404);
@@ -340,6 +340,196 @@ describe('API maihub-render', () => {
       orch2.init();
       expect(store2.get(id)!.status).toBe('failed');
       expect(fs.readdirSync(path.join(shared, 'current'))).toEqual([]);
+    });
+  });
+
+  describe('độ bền (lỗi nội bộ, ngắt kết nối, giới hạn trước khi đọc thân)', () => {
+    const spec0 = () => [{ name: 'spec', data: templateSpec([]) }];
+    const quiet = () => jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const afterEachRestore = () => jest.restoreAllMocks();
+    afterEach(afterEachRestore);
+
+    /** Tạo sẵn một việc `done` với tệp video cho trước. */
+    function doneJob(video: Buffer): string {
+      const id = '11111111-1111-4111-8111-111111111111';
+      store.create({ id, owner: 'alpha', status: 'done', progress: 1, createdAt: Date.now(), finishedAt: Date.now(), spec: {} as any });
+      fs.writeFileSync(path.join(store.jobDir(id), 'output', 'video.mp4'), video);
+      return id;
+    }
+
+    /** Mở một yêu cầu tải lên và giữ dở dang (đã gửi header, chưa gửi hết thân). */
+    function stalledUpload(key: string): http.ClientRequest {
+      const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/jobs', headers: {
+        Authorization: `Bearer ${key}`, 'Content-Type': 'multipart/form-data; boundary=zz', 'Content-Length': 100000,
+      } });
+      req.on('error', () => undefined);
+      req.write('--zz\r\nContent-Disposition: form-data; name="spec"\r\n\r\n{');
+      return req;
+    }
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    it('pollCurrent ném lỗi: việc failed, current/ được dọn, hàng đợi chạy tiếp', async () => {
+      quiet();
+      const a = (await create(KEY_A, spec0())).json.jobId;
+      const b = (await create(KEY_B, spec0())).json.jobId;
+      orch.tick();
+      jest.spyOn(handoff, 'poll').mockImplementationOnce(() => { throw new Error('boom'); });
+      orch.tick();
+      expect(store.get(a)).toMatchObject({ status: 'failed', error: 'Lỗi nội bộ khi hoàn tất việc' });
+      orch.tick();
+      expect(store.get(b)!.status).toBe('rendering');
+    });
+
+    it('store.update ném lỗi khi cập nhật tiến độ cũng không làm kẹt hàng đợi', async () => {
+      quiet();
+      const a = (await create(KEY_A, spec0())).json.jobId;
+      const b = (await create(KEY_B, spec0())).json.jobId;
+      orch.tick();
+      fs.writeFileSync(path.join(shared, 'out', `${a}.progress.json`), `{"jobId":"${a}","percent":10}`);
+      const real = store.update.bind(store);
+      let n = 0;
+      jest.spyOn(store, 'update').mockImplementation((id, patch) => { if (n++ === 0) throw new Error('disk'); return real(id, patch); });
+      orch.tick();
+      expect(store.get(a)!.status).toBe('failed');
+      orch.tick();
+      expect(store.get(b)!.status).toBe('rendering');
+    });
+
+    it('queue.next: store.update ném lỗi thì đánh dấu failed và chạy việc kế tiếp', async () => {
+      quiet();
+      const a = (await create(KEY_A, spec0())).json.jobId;
+      const b = (await create(KEY_B, spec0())).json.jobId;
+      const real = store.update.bind(store);
+      let n = 0;
+      jest.spyOn(store, 'update').mockImplementation((id, patch) => { if (n++ === 0) throw new Error('disk'); return real(id, patch); });
+      expect(queue.next()?.id).toBe(b);
+      expect(store.get(a)).toMatchObject({ status: 'failed' });
+    });
+
+    it('khởi động với out/ và current/ còn tệp cũ: dọn sạch, không giao cho việc nào', async () => {
+      fs.mkdirSync(path.join(shared, 'out'), { recursive: true });
+      fs.mkdirSync(path.join(shared, 'current'), { recursive: true });
+      for (const f of ['video.mp4', 'old.mp4', 'old.result.json', 'old.progress.json']) fs.writeFileSync(path.join(shared, 'out', f), 'x');
+      fs.writeFileSync(path.join(shared, 'current', 'job.json'), '{"jobId":"old"}');
+      const o = new Orchestrator({ store, queue, handoff, retention: new Retention(store) });
+      o.init();
+      expect(fs.readdirSync(path.join(shared, 'out'))).toEqual([]);
+      expect(fs.readdirSync(path.join(shared, 'current'))).toEqual([]);
+      const id = (await create(KEY_A, spec0())).json.jobId;
+      o.tick();
+      expect(store.get(id)!.status).toBe('rendering');
+    });
+
+    it('lỗi ghi tệp khi nhận upload: 500 INTERNAL, dọn sạch, tiến trình vẫn sống', async () => {
+      quiet();
+      const rawFs = require('fs');
+      const real = rawFs.createWriteStream;
+      const spy = jest.spyOn(rawFs, 'createWriteStream').mockImplementation(((_p: any, o: any) => real('/nonexistent-dir-xyz/f', o)) as any);
+      const r = await create(KEY_A, [{ name: 'spec', data: templateSpec(['a.jpg']) }, { name: 'files', data: JPEG, filename: 'a.jpg' }]);
+      expect(r.status).toBe(500);
+      expect(r.json.error.code).toBe('INTERNAL');
+      expect(jobsDirEntries()).toHaveLength(0);
+      spy.mockRestore();
+      expect((await call('GET', '/v1/health')).status).toBe(200);
+      expect((await create(KEY_A, spec0())).status).toBe(201);
+    });
+
+    it('client ngắt khi đang tải video: luồng đọc bị đóng, máy chủ vẫn hoạt động', async () => {
+      const id = doneJob(Buffer.alloc(40 * 1024 * 1024, 7));
+      const streams: fs.ReadStream[] = [];
+      const rawFs = require('fs');
+      const real = rawFs.createReadStream;
+      jest.spyOn(rawFs, 'createReadStream').mockImplementation(((...a: any[]) => { const s = (real as any)(...a); streams.push(s); return s; }) as any);
+      await new Promise<void>((resolve) => {
+        const req = http.get({ host: '127.0.0.1', port, path: `/v1/jobs/${id}/video`, headers: { Authorization: `Bearer ${KEY_A}` } }, (res) => {
+          res.once('data', () => { req.destroy(); resolve(); });
+        });
+        req.on('error', () => undefined);
+      });
+      for (let i = 0; i < 40 && !streams[0]?.destroyed; i++) await sleep(50);
+      expect(streams).toHaveLength(1);
+      expect(streams[0].destroyed).toBe(true);
+      expect((await call('GET', '/v1/health')).status).toBe(200);
+    });
+
+    it('video 0 byte: 200 rỗng; Range thì 416; không ném lỗi', async () => {
+      const id = doneJob(Buffer.alloc(0));
+      const r = await call('GET', `/v1/jobs/${id}/video`, { key: KEY_A });
+      expect(r.status).toBe(200);
+      expect(r.headers['content-length']).toBe('0');
+      expect(r.body.length).toBe(0);
+      expect((await call('GET', `/v1/jobs/${id}/video`, { key: KEY_A, headers: { Range: 'bytes=0-' } })).status).toBe(416);
+      expect((await call('GET', `/v1/jobs/${id}/video`, { key: KEY_A, headers: { Range: 'bytes=-5' } })).status).toBe(416);
+    });
+
+    it('Range: vượt cỡ / ngược / hậu tố 0 là 416; hậu tố và đoạn cuối hợp lệ là 206', async () => {
+      const id = doneJob(Buffer.from('0123456789'));
+      const get = (range: string) => call('GET', `/v1/jobs/${id}/video`, { key: KEY_A, headers: { Range: range } });
+      for (const bad of ['bytes=100-200', 'bytes=5-2', 'bytes=-0', 'bytes=10-', 'bytes=-', 'bytes=a-b']) {
+        const r = await get(bad);
+        expect([bad, r.status]).toEqual([bad, 416]);
+        expect(r.headers['content-range']).toBe('bytes */10');
+      }
+      const suffix = await get('bytes=-3');
+      expect([suffix.status, suffix.body.toString(), suffix.headers['content-range']]).toEqual([206, '789', 'bytes 7-9/10']);
+      const open = await get('bytes=8-');
+      expect([open.status, open.body.toString()]).toEqual([206, '89']);
+      const clamp = await get('bytes=8-99');
+      expect([clamp.status, clamp.headers['content-range']]).toEqual([206, 'bytes 8-9/10']);
+      const big = await get('bytes=-99');
+      expect([big.status, big.body.toString()]).toEqual([206, '0123456789']);
+    });
+
+    it('429 trả về ngay khi khoá đã đầy, trước khi đọc thân yêu cầu', async () => {
+      for (let i = 0; i < 5; i++) expect((await create(KEY_A, spec0())).status).toBe(201);
+      const r = await new Promise<{ status: number; code: string }>((resolve, reject) => {
+        const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/jobs', headers: {
+          Authorization: `Bearer ${KEY_A}`, 'Content-Type': 'multipart/form-data; boundary=zz', 'Content-Length': 100000,
+        } }, (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, code: JSON.parse(Buffer.concat(chunks).toString()).error.code }));
+        });
+        req.on('error', reject);
+        req.write('--zz\r\n'); // chỉ gửi vài byte; thân không bao giờ gửi hết
+        setTimeout(() => req.destroy(), 1500).unref();
+      });
+      expect(r).toEqual({ status: 429, code: 'LIMIT_REACHED' });
+      expect(jobsDirEntries()).toHaveLength(5);
+    });
+
+    it('tối đa 2 lượt tải lên đồng thời mỗi khoá; xong hoặc ngắt thì nhả chỗ', async () => {
+      const u1 = stalledUpload(KEY_A);
+      const u2 = stalledUpload(KEY_A);
+      await sleep(150);
+      const r = await create(KEY_A, spec0());
+      expect(r.status).toBe(429);
+      expect((await create(KEY_B, spec0())).status).toBe(201); // khoá khác không bị ảnh hưởng
+      u1.destroy(); u2.destroy();
+      let ok = false;
+      for (let i = 0; i < 40 && !ok; i++) { await sleep(50); ok = (await create(KEY_A, spec0())).status === 201; }
+      expect(ok).toBe(true);
+    });
+
+    it('tối đa 4 lượt tải lên đồng thời toàn máy', async () => {
+      const KEY_C = 'key-gamma-000000000000000000000000000000000000';
+      const server2 = createServer({
+        keys: new Map([['alpha', hashKey(KEY_A)], ['beta', hashKey(KEY_B)], ['gamma', hashKey(KEY_C)]]),
+        store, queue, orchestrator: orch, templatesDir: path.join(root, 'templates'), music: [], version: '1', hyperframes: '0',
+      });
+      await new Promise<void>((r) => server2.listen(0, '127.0.0.1', r));
+      const saved = port;
+      port = (server2.address() as AddressInfo).port;
+      const ups = [stalledUpload(KEY_A), stalledUpload(KEY_A), stalledUpload(KEY_B), stalledUpload(KEY_B)];
+      try {
+        await sleep(200);
+        expect((await create(KEY_C, spec0())).status).toBe(429);
+      } finally {
+        ups.forEach((u) => u.destroy());
+        await sleep(100);
+        port = saved;
+        await new Promise((r) => server2.close(r));
+      }
     });
   });
 

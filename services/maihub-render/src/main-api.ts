@@ -64,7 +64,19 @@ export class Orchestrator {
   }
 
   tick(): void {
-    if (this.currentId) this.pollCurrent(this.currentId);
+    if (this.currentId) {
+      const id = this.currentId;
+      try {
+        this.pollCurrent(id);
+      } catch (e) {
+        // mọi lỗi khi theo dõi việc: kết thúc việc là failed để hàng đợi không bị kẹt
+        console.error('[render] Lỗi khi theo dõi việc:', (e as Error).message);
+        try { this.deps.handoff.clean(); } catch { /* bỏ qua */ }
+        try { this.settle(id, { status: 'failed', error: 'Lỗi nội bộ khi hoàn tất việc' }); } catch (e2) {
+          console.error('[render] Không ghi được trạng thái việc:', (e2 as Error).message);
+        }
+      }
+    }
     if (!this.currentId) this.startNext();
   }
 

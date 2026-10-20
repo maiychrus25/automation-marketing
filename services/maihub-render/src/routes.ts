@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { IncomingMessage, ServerResponse } from 'http';
+import { pipeline } from 'stream';
 import { LIMITS } from './limits';
 import { Job, JobStore } from './jobStore';
 import { verifyKey } from './keys';
@@ -9,6 +10,9 @@ import { ReceivedFile, UploadError, UploadLimits, receiveMultipart } from './mul
 import { LimitError, Queue } from './queue';
 import { NormalizedSpec, SpecError, validateJobSpec } from './spec';
 import { TemplateDef, loadTemplates } from './templates';
+
+const MAX_UPLOADS_PER_KEY = 2;
+const MAX_UPLOADS_GLOBAL = 4;
 
 export interface MusicInfo { id: string; name: string; durationSec: number; license: string; source: string }
 
@@ -71,28 +75,34 @@ function renameFiles(dir: string, files: ReceivedFile[], spec: NormalizedSpec): 
 function sendFile(req: IncomingMessage, res: ServerResponse, file: string, type: string): void {
   let size: number;
   try { size = fs.statSync(file).size; } catch { return sendError(res, 404, 'Tệp chưa sẵn sàng.'); }
+  const unsatisfiable = (): void => {
+    res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+    res.end();
+  };
   let start = 0;
   let end = size - 1;
   let status = 200;
   const range = req.headers.range;
-  if (range) {
+  if (range?.startsWith('bytes=')) {
     const m = /^bytes=(\d*)-(\d*)$/.exec(range);
-    if (!m || (m[1] === '' && m[2] === '')) {
-      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
-      return void res.end();
+    if (!m || (m[1] === '' && m[2] === '')) return unsatisfiable();
+    if (m[1] === '') {
+      const suffix = Number(m[2]);
+      if (suffix === 0 || size === 0) return unsatisfiable();
+      start = Math.max(0, size - suffix);
+    } else {
+      start = Number(m[1]);
+      if (m[2] !== '') end = Math.min(end, Number(m[2]));
     }
-    if (m[1] === '') { start = Math.max(0, size - Number(m[2])); }
-    else { start = Number(m[1]); if (m[2] !== '') end = Math.min(end, Number(m[2])); }
-    if (start > end || start >= size) {
-      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
-      return void res.end();
-    }
+    if (start >= size || start > end) return unsatisfiable();
     status = 206;
   }
-  const headers: Record<string, string | number> = { 'Content-Type': type, 'Content-Length': end - start + 1, 'Accept-Ranges': 'bytes' };
+  const headers: Record<string, string | number> = { 'Content-Type': type, 'Content-Length': size === 0 ? 0 : end - start + 1, 'Accept-Ranges': 'bytes' };
   if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
   res.writeHead(status, headers);
-  fs.createReadStream(file, { start, end }).on('error', () => res.destroy()).pipe(res);
+  if (size === 0) return void res.end();
+  // pipeline huỷ luồng đọc (đóng fd) khi client ngắt giữa chừng
+  pipeline(fs.createReadStream(file, { start, end }), res, () => undefined);
 }
 
 export function createRouter(deps: ApiDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
@@ -101,12 +111,38 @@ export function createRouter(deps: ApiDeps): (req: IncomingMessage, res: ServerR
   const templates: TemplateDef[] = fs.existsSync(deps.templatesDir) ? loadTemplates(deps.templatesDir) : [];
   const musicIds = deps.music.map((m) => m.id);
 
+  // Số lần tải lên đang diễn ra: tối đa MAX_UPLOADS_PER_KEY mỗi khoá và MAX_UPLOADS_GLOBAL toàn máy.
+  const uploads = new Map<string, number>();
+  let uploadsTotal = 0;
+
   async function createJob(req: IncomingMessage, res: ServerResponse, owner: string): Promise<void> {
     const type = req.headers['content-type'] ?? '';
     if (!/^multipart\/form-data/i.test(type)) return sendError(res, 400, 'Yêu cầu phải là multipart/form-data.');
     if (Number(req.headers['content-length'] ?? 0) > limits.maxTotalBytes + 1024 * 1024) {
       return rejectEarly(req, res, 'Yêu cầu quá lớn.');
     }
+    // kiểm giới hạn TRƯỚC khi đọc thân yêu cầu
+    try {
+      queue.checkLimits(owner);
+    } catch (e) {
+      if (e instanceof LimitError) return rejectEarly(req, res, e.message, 429);
+      throw e;
+    }
+    if ((uploads.get(owner) ?? 0) >= MAX_UPLOADS_PER_KEY || uploadsTotal >= MAX_UPLOADS_GLOBAL) {
+      return rejectEarly(req, res, 'Đang có quá nhiều lượt tải lên, vui lòng thử lại sau.', 429);
+    }
+    uploads.set(owner, (uploads.get(owner) ?? 0) + 1);
+    uploadsTotal++;
+    try {
+      await receiveAndCreate(req, res, owner);
+    } finally {
+      const left = (uploads.get(owner) ?? 1) - 1;
+      if (left > 0) uploads.set(owner, left); else uploads.delete(owner);
+      uploadsTotal--;
+    }
+  }
+
+  async function receiveAndCreate(req: IncomingMessage, res: ServerResponse, owner: string): Promise<void> {
     const id = randomUUID();
     const jobDir = store.jobDir(id);
     const inputDir = path.join(jobDir, 'input');
@@ -137,7 +173,7 @@ export function createRouter(deps: ApiDeps): (req: IncomingMessage, res: ServerR
   }
 
   /** Báo lỗi khi phần thân chưa nhận hết: đóng kết nối sau khi trả lời để ngừng nhận. */
-  function rejectEarly(req: IncomingMessage, res: ServerResponse, message: string, status: 400 | 413 | 415 = 413, code?: string): void {
+  function rejectEarly(req: IncomingMessage, res: ServerResponse, message: string, status: 400 | 413 | 415 | 429 | 500 = 413, code?: string): void {
     res.setHeader('Connection', 'close');
     sendError(res, status, message, code);
     req.resume();

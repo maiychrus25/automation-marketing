@@ -105,22 +105,24 @@ function run(cmd: string, args: string[], timeout = 60000): Promise<string> {
   });
 }
 
-export interface FinalizeOptions { videoFile: string; outDir: string; ffmpegPath?: string; ffprobePath?: string }
+export interface FinalizeOptions { videoFile: string; outDir: string; videoName?: string; thumbName?: string; ffmpegPath?: string; ffprobePath?: string }
 
-/** Đọc thời lượng (ffprobe), tạo thumb.jpg ở khung giữa, rồi đặt video.mp4 + thumb.jpg vào `outDir` bằng tệp tạm + rename. */
+/** Đọc thời lượng (ffprobe), tạo ảnh bìa ở khung giữa, rồi đặt video + ảnh bìa (mặc định video.mp4, thumb.jpg) vào `outDir` bằng tệp tạm + rename. */
 export async function finalizeVideo(opts: FinalizeOptions): Promise<{ durationMs: number }> {
   const ffmpeg = opts.ffmpegPath ?? 'ffmpeg';
   const ffprobe = opts.ffprobePath ?? 'ffprobe';
   const seconds = Number((await run(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', opts.videoFile])).trim());
   if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('Video render ra không đọc được thời lượng');
   fs.mkdirSync(opts.outDir, { recursive: true });
-  const thumbTmp = path.join(opts.outDir, '.thumb.jpg.tmp');
-  const videoTmp = path.join(opts.outDir, '.video.mp4.tmp');
+  const videoName = opts.videoName ?? 'video.mp4';
+  const thumbName = opts.thumbName ?? 'thumb.jpg';
+  const thumbTmp = path.join(opts.outDir, `.${thumbName}.tmp`);
+  const videoTmp = path.join(opts.outDir, `.${videoName}.tmp`);
   try {
     await run(ffmpeg, ['-y', '-v', 'error', '-ss', String(seconds / 2), '-i', opts.videoFile, '-frames:v', '1', '-q:v', '3', '-f', 'image2', thumbTmp]);
     fs.copyFileSync(opts.videoFile, videoTmp); // volume khác nhau: sao chép rồi rename
-    fs.renameSync(videoTmp, path.join(opts.outDir, 'video.mp4'));
-    fs.renameSync(thumbTmp, path.join(opts.outDir, 'thumb.jpg'));
+    fs.renameSync(videoTmp, path.join(opts.outDir, videoName));
+    fs.renameSync(thumbTmp, path.join(opts.outDir, thumbName));
   } finally {
     fs.rmSync(thumbTmp, { force: true });
     fs.rmSync(videoTmp, { force: true });

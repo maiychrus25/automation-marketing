@@ -22,11 +22,10 @@ export interface WorkerConfig {
 
 interface JobFile { jobId: string; spec: NormalizedSpec }
 
-const OUT_FILES = ['video.mp4', 'thumb.jpg', 'progress.json', 'result.json'];
-
 /**
- * Worker: đọc /shared/current/job.json, render, ghi out/progress.json và out/result.json (cuối cùng).
- * Hợp đồng ở handoff.ts: mọi tệp trả về đều mang đúng `jobId` của job.json; việc đã xong không làm lại.
+ * Worker: đọc /shared/current/job.json, render, ghi out/<jobId>.{mp4,jpg,progress.json,result.json} (result cuối cùng).
+ * Hợp đồng ở handoff.ts: đầu ra mang tên theo jobId; job.json mất hoặc đổi jobId (hoặc current/cancel chứa jobId)
+ * thì dừng render và không ghi kết quả thành công; việc đã xử lý không làm lại.
  */
 export class RenderWorker {
   private readonly current: string;
@@ -77,29 +76,41 @@ export class RenderWorker {
     }
   }
 
+  /** Việc không còn hiện hành: job.json mất / đổi jobId, hoặc current/cancel chứa jobId. */
   private isCancelled(jobId: string): boolean {
     try {
-      const content = fs.readFileSync(path.join(this.current, 'cancel'), 'utf8').trim();
-      return content === '' || content === jobId; // cancel của việc khác là tệp cũ
+      const data = JSON.parse(fs.readFileSync(path.join(this.current, 'job.json'), 'utf8'));
+      if (data?.jobId !== jobId) return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return true;
+      // job.json ghi dở / hỏng thoáng qua: coi là chưa đổi
+    }
+    try {
+      return fs.readFileSync(path.join(this.current, 'cancel'), 'utf8').trim() === jobId; // cancel của việc khác là tệp cũ
     } catch {
       return false;
     }
   }
 
-  private writeJson(name: string, data: unknown): void {
+  private writeJson(jobId: string, name: string, data: unknown): void {
     fs.mkdirSync(this.out, { recursive: true });
-    const tmp = path.join(this.out, `.${name}.tmp`);
+    const tmp = path.join(this.out, `.${jobId}.${name}.tmp`);
     fs.writeFileSync(tmp, JSON.stringify(data));
-    fs.renameSync(tmp, path.join(this.out, name));
+    fs.renameSync(tmp, path.join(this.out, `${jobId}.${name}`));
+  }
+
+  private discardOutputs(jobId: string): void {
+    for (const ext of ['mp4', 'jpg']) fs.rmSync(path.join(this.out, `${jobId}.${ext}`), { force: true });
   }
 
   private async runJob(job: JobFile): Promise<void> {
     const { jobId } = job;
-    for (const f of OUT_FILES) fs.rmSync(path.join(this.out, f), { force: true }); // tệp cũ của việc khác
-    const fail = (error: string) => this.writeJson('result.json', { jobId, ok: false, error });
+    fs.mkdirSync(this.out, { recursive: true });
+    for (const f of fs.readdirSync(this.out)) fs.rmSync(path.join(this.out, f), { recursive: true, force: true }); // tệp cũ của việc khác
+    const fail = (error: string) => this.writeJson(jobId, 'result.json', { jobId, ok: false, error });
     if (this.isCancelled(jobId)) return fail('cancelled');
 
-    this.writeJson('progress.json', { jobId, percent: 0 });
+    this.writeJson(jobId, 'progress.json', { jobId, percent: 0 });
     fs.mkdirSync(this.cfg.tmpRoot, { recursive: true });
     const tmp = fs.mkdtempSync(path.join(this.cfg.tmpRoot, 'job-'));
     const ac = new AbortController();
@@ -116,16 +127,20 @@ export class RenderWorker {
         timeoutMs: this.cfg.timeoutMs ?? LIMITS.renderTimeoutMs, killGraceMs: this.cfg.killGraceMs, signal: ac.signal, env: this.cfg.env,
         onProgress: (pct) => {
           const percent = Math.min(99, Math.floor(pct));
-          if (percent > last) { last = percent; this.writeJson('progress.json', { jobId, percent }); }
+          if (percent > last) { last = percent; this.writeJson(jobId, 'progress.json', { jobId, percent }); }
         },
       });
       if (outcome.status === 'cancelled') return fail('cancelled');
       if (outcome.status !== 'done') return fail(outcome.error ?? 'Render thất bại');
       if (ac.signal.aborted) return fail('cancelled');
-      const { durationMs } = await finalizeVideo({ videoFile: outFile, outDir: this.out, ffmpegPath: this.cfg.ffmpegPath, ffprobePath: this.cfg.ffprobePath });
-      this.writeJson('result.json', { jobId, ok: true, durationMs }); // CUỐI CÙNG
+      const { durationMs } = await finalizeVideo({
+        videoFile: outFile, outDir: this.out, videoName: `${jobId}.mp4`, thumbName: `${jobId}.jpg`,
+        ffmpegPath: this.cfg.ffmpegPath, ffprobePath: this.cfg.ffprobePath,
+      });
+      if (this.isCancelled(jobId)) return this.discardOutputs(jobId); // đã bị bỏ: không báo thành công
+      this.writeJson(jobId, 'result.json', { jobId, ok: true, durationMs }); // CUỐI CÙNG
     } catch (e) {
-      for (const f of ['video.mp4', 'thumb.jpg']) fs.rmSync(path.join(this.out, f), { force: true });
+      this.discardOutputs(jobId);
       fail(`Render thất bại: ${(e as Error).message}`.slice(0, 300));
     } finally {
       clearInterval(watcher);

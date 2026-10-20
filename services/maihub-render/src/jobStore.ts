@@ -45,18 +45,18 @@ export class JobStore {
     this.write(job);
   }
 
+  /** Việc hỏng (job.json không đọc được) trả về dạng `failed` không thuộc khoá nào để retention còn dọn được. */
   get(id: string): Job | undefined {
-    if (!ID_RE.test(id)) return undefined;
-    try {
-      return JSON.parse(fs.readFileSync(path.join(this.jobDir(id), 'job.json'), 'utf8')) as Job;
-    } catch {
-      return undefined;
-    }
+    const raw = this.read(id);
+    if (raw !== 'corrupt') return raw;
+    let finishedAt = 0;
+    try { finishedAt = fs.statSync(path.join(this.jobDir(id), 'job.json')).mtimeMs; } catch { /* giữ 0 */ }
+    return { id, owner: '', status: 'failed', progress: 0, error: 'Dữ liệu việc bị hỏng', spec: undefined as unknown as NormalizedSpec, createdAt: finishedAt, finishedAt };
   }
 
   update(id: string, patch: Partial<Job>): Job {
-    const job = this.get(id);
-    if (!job) throw new Error('Không tìm thấy việc');
+    const job = this.read(id);
+    if (!job || job === 'corrupt') throw new Error('Không tìm thấy việc');
     const next = { ...job, ...patch };
     this.write(next);
     return next;
@@ -80,10 +80,32 @@ export class JobStore {
     return this.list();
   }
 
+  private read(id: string): Job | 'corrupt' | undefined {
+    if (!ID_RE.test(id)) return undefined;
+    let text: string;
+    try {
+      text = fs.readFileSync(path.join(this.jobDir(id), 'job.json'), 'utf8');
+    } catch {
+      return undefined; // chưa có
+    }
+    try {
+      return JSON.parse(text) as Job;
+    } catch {
+      console.warn(`[render] job.json của việc ${id} bị hỏng`);
+      return 'corrupt';
+    }
+  }
+
   private write(job: Job): void {
     const file = path.join(this.jobDir(job.id), 'job.json');
     const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(job));
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeSync(fd, JSON.stringify(job));
+      fs.fsyncSync(fd); // xuống đĩa trước khi rename
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, file);
   }
 }

@@ -3,10 +3,17 @@ import * as path from 'path';
 import { LIMITS } from './limits';
 
 /**
- * Hợp đồng worker (Task 4): job.json mang `jobId`; worker PHẢI ghi lại đúng `jobId` đó trong
- * out/progress.json (`{ jobId, percent }`) và out/result.json (`{ jobId, ok, error?, durationMs? }`).
- * Tệp nào có jobId khác (hoặc thiếu) bị coi là cũ: bỏ qua và xoá.
- * Khi api bỏ việc (im lặng / quá hạn) hoặc huỷ, api ghi `current/cancel` (nội dung là jobId).
+ * Hợp đồng api <-> worker (thư mục dùng chung):
+ * - api giao việc bằng `current/job.json` (mang `jobId`), ghi CUỐI CÙNG.
+ * - Mọi đầu ra của worker nằm trong `out/` và mang tên theo jobId: `<jobId>.mp4`, `<jobId>.jpg`
+ *   (tệp tạm + rename), `<jobId>.progress.json` (`{ jobId, percent }`) và `<jobId>.result.json`
+ *   (`{ jobId, ok, error?, durationMs? }`) được ghi SAU CÙNG. Tệp nào không mang jobId hiện tại
+ *   đều là tệp cũ: bị xoá, không bao giờ được giao.
+ * - Huỷ = `job.json` không còn nêu việc của worker: worker đọc lại `current/job.json` mỗi giây khi render;
+ *   nếu mất, đổi jobId, hoặc `current/cancel` chứa jobId của nó thì dừng render và không ghi kết quả thành công
+ *   (có thể ghi result `cancelled` cho jobId của chính nó, api bỏ qua nếu việc đó không còn hiện hành).
+ *   Vì vậy api bỏ việc / huỷ / khởi động lại chỉ cần dọn `current/`.
+ * - Worker không làm lại jobId đã xử lý.
  */
 export interface HandoffResult { jobId?: string; ok: boolean; error?: string; durationMs?: number }
 export interface HandoffPoll {
@@ -34,6 +41,7 @@ export class Handoff {
   start(job: { id: string; [k: string]: unknown }, inputDir: string, workdirFiles: Record<string, string | Buffer> = {}): void {
     this.clean();
     for (const name of fs.readdirSync(inputDir)) {
+      if (name === 'job.json' || name === 'cancel') continue; // tên dành riêng cho hợp đồng
       fs.copyFileSync(path.join(inputDir, name), path.join(this.current, name));
     }
     for (const [name, data] of Object.entries(workdirFiles)) {
@@ -48,6 +56,7 @@ export class Handoff {
   poll(): HandoffPoll {
     const jobId = this.currentJobId();
     if (!jobId) return { state: 'idle' };
+    this.sweepStale(jobId);
     const result = this.readScoped<HandoffResult>('result.json', jobId);
     if (result) return { state: 'done', result };
     this.startedAt ??= this.now(); // api vừa khởi động lại: tính từ lần poll đầu
@@ -62,17 +71,19 @@ export class Handoff {
     fs.writeFileSync(path.join(this.current, 'cancel'), this.currentJobId() ?? '');
   }
 
-  /** Chuyển kết quả sang `destDir` rồi dọn sạch `current/` và `out/`. Trả về các tệp đã chuyển. */
+  /** Chuyển kết quả sang `destDir` rồi dọn sạch `current/` và `out/`. Chỉ nhận tệp mang jobId hiện tại. */
   collect(destDir: string): string[] {
     fs.mkdirSync(destDir, { recursive: true });
     const moved: string[] = [];
     const jobId = this.currentJobId();
     const result = jobId ? this.readScoped<HandoffResult>('result.json', jobId) : undefined;
-    for (const name of ['video.mp4', 'thumb.jpg']) {
-      const src = path.join(this.out, name);
-      if (!result || !fs.existsSync(src)) continue; // chưa có kết quả đúng việc -> không nhận tệp
-      fs.copyFileSync(src, path.join(destDir, name)); // volume khác nhau: không dùng rename
-      moved.push(name);
+    if (jobId && result) {
+      for (const [ext, name] of [['mp4', 'video.mp4'], ['jpg', 'thumb.jpg']]) {
+        const src = path.join(this.out, `${jobId}.${ext}`);
+        if (!fs.existsSync(src)) continue;
+        fs.copyFileSync(src, path.join(destDir, name)); // volume khác nhau: không dùng rename
+        moved.push(name);
+      }
     }
     this.clean();
     return moved;
@@ -86,11 +97,9 @@ export class Handoff {
     this.startedAt = undefined;
   }
 
+  /** Bỏ việc: dọn `current/` (job.json mất = tín hiệu dừng cho worker) và `out/`. */
   private abandon(error: string): HandoffPoll {
-    const jobId = this.currentJobId() ?? '';
     this.clean();
-    // báo worker dừng; tệp cancel được start() của việc sau xoá trước khi giao job.json mới
-    fs.writeFileSync(path.join(this.current, 'cancel'), jobId);
     return { state: 'done', result: { ok: false, error } };
   }
 
@@ -103,9 +112,9 @@ export class Handoff {
     }
   }
 
-  /** Đọc tệp của worker; chỉ nhận khi jobId khớp, tệp của việc khác bị xoá. */
+  /** Đọc `out/<jobId>.<name>`; chỉ nhận khi jobId bên trong cũng khớp. */
   private readScoped<T extends { jobId?: string }>(name: string, jobId: string): T | undefined {
-    const file = path.join(this.out, name);
+    const file = path.join(this.out, `${jobId}.${name}`);
     let parsed: T;
     try {
       parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as T;
@@ -115,5 +124,13 @@ export class Handoff {
     if (parsed?.jobId === jobId) return parsed;
     fs.rmSync(file, { force: true });
     return undefined;
+  }
+
+  /** Xoá mọi thứ trong `out/` không mang jobId hiện tại (worker bị bỏ ghi muộn, tệp cũ). */
+  private sweepStale(jobId: string): void {
+    for (const name of fs.readdirSync(this.out)) {
+      if (name.startsWith(`${jobId}.`) || name.startsWith(`.${jobId}.`)) continue;
+      fs.rmSync(path.join(this.out, name), { recursive: true, force: true });
+    }
   }
 }

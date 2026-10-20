@@ -201,7 +201,7 @@ describe('RenderWorker', () => {
       const s = spec ?? { kind: 'template', templateId: 'demo', aspect: '9:16', width: 1080, height: 1920, fps: 24, quality: 'standard', variables: { title: 'T' }, images: ['img1.jpg'], musicId: null, musicFile: null };
       fs.writeFileSync(path.join(current, 'job.json'), JSON.stringify({ id, jobId: id, spec: s }));
     };
-    const result = () => JSON.parse(fs.readFileSync(path.join(out, 'result.json'), 'utf8'));
+    const result = (id: string) => JSON.parse(fs.readFileSync(path.join(out, `${id}.result.json`), 'utf8'));
     return { d, current, out, worker, give, result };
   }
 
@@ -215,14 +215,14 @@ describe('RenderWorker', () => {
       return real(from, to);
     });
     try { await worker.processOnce(); } finally { spy.mockRestore(); }
-    const r = result();
+    const r = result('job-a');
     expect(r).toMatchObject({ jobId: 'job-a', ok: true });
     expect(r.durationMs).toBeGreaterThan(1800);
-    expect(JSON.parse(fs.readFileSync(path.join(out, 'progress.json'), 'utf8')).jobId).toBe('job-a');
-    expect(fs.existsSync(path.join(out, 'video.mp4'))).toBe(true);
-    expect(fs.existsSync(path.join(out, 'thumb.jpg'))).toBe(true);
-    expect(placed[placed.length - 1]).toBe('result.json');
-    expect(placed).toEqual(expect.arrayContaining(['video.mp4', 'thumb.jpg', 'progress.json']));
+    expect(JSON.parse(fs.readFileSync(path.join(out, 'job-a.progress.json'), 'utf8')).jobId).toBe('job-a');
+    expect(fs.existsSync(path.join(out, 'job-a.mp4'))).toBe(true);
+    expect(fs.existsSync(path.join(out, 'job-a.jpg'))).toBe(true);
+    expect(placed[placed.length - 1]).toBe('job-a.result.json');
+    expect(placed).toEqual(expect.arrayContaining(['job-a.mp4', 'job-a.jpg', 'job-a.progress.json']));
     expect(fs.readdirSync(out).filter((f) => f.startsWith('.'))).toEqual([]);
     expect(fs.readdirSync(d.tmp)).toEqual([]); // đã dọn thư mục tạm
   });
@@ -231,26 +231,26 @@ describe('RenderWorker', () => {
     const { out, worker, give, result } = setup({ FAKE_MODE: 'fail' });
     give('job-b');
     await worker.processOnce();
-    expect(result()).toMatchObject({ jobId: 'job-b', ok: false });
-    fs.rmSync(path.join(out, 'result.json'));
+    expect(result('job-b')).toMatchObject({ jobId: 'job-b', ok: false });
+    fs.rmSync(path.join(out, 'job-b.result.json'));
     await worker.processOnce(); // job.json vẫn còn, api chưa dọn
-    expect(fs.existsSync(path.join(out, 'result.json'))).toBe(false);
+    expect(fs.existsSync(path.join(out, 'job-b.result.json'))).toBe(false);
   });
 
   it('lỗi render -> result ok:false có thông báo, không có video', async () => {
     const { out, worker, give, result } = setup({ FAKE_MODE: 'fail' });
     give('job-c');
     await worker.processOnce();
-    expect(result().ok).toBe(false);
-    expect(result().error).toContain('Boom');
-    expect(fs.existsSync(path.join(out, 'video.mp4'))).toBe(false);
+    expect(result('job-c').ok).toBe(false);
+    expect(result('job-c').error).toContain('Boom');
+    expect(fs.existsSync(path.join(out, 'job-c.mp4'))).toBe(false);
   });
 
   it('quá hạn -> error timeout', async () => {
     const { worker, give, result } = setup({ FAKE_MODE: 'hang' }, { timeoutMs: 300 });
     give('job-d');
     await worker.processOnce();
-    expect(result()).toMatchObject({ jobId: 'job-d', ok: false, error: 'timeout' });
+    expect(result('job-d')).toMatchObject({ jobId: 'job-d', ok: false, error: 'timeout' });
   });
 
   it('cancel giữa chừng -> result cancelled, không để video', async () => {
@@ -258,8 +258,8 @@ describe('RenderWorker', () => {
     give('job-e');
     setTimeout(() => fs.writeFileSync(path.join(current, 'cancel'), 'job-e'), 400);
     await worker.processOnce();
-    expect(result()).toMatchObject({ jobId: 'job-e', ok: false, error: 'cancelled' });
-    expect(fs.existsSync(path.join(out, 'video.mp4'))).toBe(false);
+    expect(result('job-e')).toMatchObject({ jobId: 'job-e', ok: false, error: 'cancelled' });
+    expect(fs.existsSync(path.join(out, 'job-e.mp4'))).toBe(false);
   });
 
   it('cancel có sẵn trước khi bắt đầu -> cancelled ngay, không chạy CLI', async () => {
@@ -269,7 +269,7 @@ describe('RenderWorker', () => {
     give('job-f');
     fs.writeFileSync(path.join(current, 'cancel'), 'job-f');
     await worker.processOnce();
-    expect(result()).toMatchObject({ jobId: 'job-f', ok: false, error: 'cancelled' });
+    expect(result('job-f')).toMatchObject({ jobId: 'job-f', ok: false, error: 'cancelled' });
     expect(fs.existsSync(log)).toBe(false);
   });
 
@@ -278,14 +278,14 @@ describe('RenderWorker', () => {
     give('job-g');
     fs.writeFileSync(path.join(current, 'cancel'), 'older-job');
     await worker.processOnce();
-    expect(result().error).toContain('Boom'); // đã chạy, không bị coi là huỷ
+    expect(result('job-g').error).toContain('Boom'); // đã chạy, không bị coi là huỷ
   });
 
   it('spec lỗi (mẫu không có) -> result ok:false', async () => {
     const { worker, give, result } = setup();
     give('job-h', { kind: 'template', templateId: 'none', aspect: '9:16', width: 1, height: 1, fps: 24, quality: 'standard', variables: {}, images: [], musicId: null, musicFile: null });
     await worker.processOnce();
-    expect(result()).toMatchObject({ jobId: 'job-h', ok: false });
+    expect(result('job-h')).toMatchObject({ jobId: 'job-h', ok: false });
   });
 
   it('job.json hỏng hoặc không có jobId thì bỏ qua', async () => {
@@ -302,8 +302,33 @@ describe('RenderWorker', () => {
     give('job-1');
     await worker.processOnce();
     give('job-2'); // api đã dọn out/ thật ra; ở đây cố ý để tệp cũ
-    fs.writeFileSync(path.join(out, 'progress.json'), JSON.stringify({ jobId: 'job-1', percent: 50 }));
+    fs.writeFileSync(path.join(out, 'job-1.progress.json'), JSON.stringify({ jobId: 'job-1', percent: 50 }));
     await worker.processOnce();
-    expect(result().jobId).toBe('job-2');
+    expect(result('job-2').jobId).toBe('job-2');
+    expect(fs.existsSync(path.join(out, 'job-1.progress.json'))).toBe(false);
+  });
+
+  it('job.json bị xoá giữa chừng -> dừng render, không ghi kết quả thành công', async () => {
+    const { current, out, worker, give } = setup({ FAKE_MODE: 'hang' });
+    give('job-i');
+    setTimeout(() => fs.rmSync(path.join(current, 'job.json')), 400);
+    const t = Date.now();
+    await worker.processOnce();
+    expect(Date.now() - t).toBeLessThan(5000); // không chờ hết timeout 20 giây
+    const files = fs.readdirSync(out);
+    expect(files.filter((f) => /\.(mp4|jpg)$/.test(f))).toEqual([]);
+    const r = path.join(out, 'job-i.result.json');
+    if (fs.existsSync(r)) expect(JSON.parse(fs.readFileSync(r, 'utf8'))).toMatchObject({ ok: false, error: 'cancelled' });
+  });
+
+  it('job.json đổi sang jobId khác -> dừng; việc mới được xử lý sau đó', async () => {
+    const { current, out, worker, give, result } = setup({ FAKE_MODE: 'hang' });
+    give('job-j');
+    setTimeout(() => give('job-k'), 400);
+    await worker.processOnce();
+    expect(fs.existsSync(path.join(out, 'job-j.mp4'))).toBe(false);
+    if (fs.existsSync(path.join(out, 'job-j.result.json'))) expect(result('job-j').ok).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(current, 'job.json'), 'utf8')).jobId).toBe('job-k');
+    expect(fs.existsSync(path.join(out, 'job-k.result.json'))).toBe(false); // chưa xử lý, chờ vòng sau
   });
 });

@@ -40,6 +40,30 @@ describe('JobStore', () => {
     expect(s2.get(U('j1'))).toMatchObject({ status: 'failed', error: 'Máy chủ khởi động lại khi đang render', finishedAt: clock });
     expect(s2.get(U('j2'))?.status).toBe('queued');
   });
+  it('job.json hỏng: ghi cảnh báo, hiện là failed (không thuộc khoá nào) và retention dọn được', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const s = new JobStore(path.join(root, 'data'), now);
+    s.create(mk('bad'));
+    fs.writeFileSync(path.join(s.jobDir(U('bad')), 'job.json'), '{hỏng');
+    expect(s.get(U('bad'))).toMatchObject({ id: U('bad'), status: 'failed', owner: '' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(U('bad')));
+    expect(s.list().map((j) => j.id)).toContain(U('bad'));
+    expect(() => s.update(U('bad'), { progress: 1 })).toThrow();
+    expect(new Retention(s, () => Date.now() + 8 * 24 * 3600 * 1000).purge()).toBe(1);
+    expect(fs.existsSync(s.jobDir(U('bad')))).toBe(false);
+    warn.mockRestore();
+  });
+  it('ghi job.json có fsync trước khi rename', () => {
+    const order: string[] = [];
+    const rawFs = require('fs');
+    const f = jest.spyOn(rawFs, 'fsyncSync').mockImplementation(() => { order.push('fsync'); });
+    const origRename = rawFs.renameSync;
+    const r = jest.spyOn(rawFs, 'renameSync').mockImplementation(((...a: any[]) => { order.push('rename'); return origRename(...a); }) as any);
+    const s = new JobStore(path.join(root, 'data'), now);
+    s.create(mk('fs1'));
+    f.mockRestore(); r.mockRestore();
+    expect(order).toEqual(['fsync', 'rename']);
+  });
   it('id không hợp lệ bị từ chối (chống ../)', () => {
     const s = new JobStore(path.join(root, 'data'));
     expect(() => s.jobDir('../x')).toThrow();
@@ -126,7 +150,7 @@ describe('Handoff', () => {
     fs.mkdirSync(path.join(shared, 'current'), { recursive: true });
     fs.mkdirSync(path.join(shared, 'out'), { recursive: true });
     fs.writeFileSync(path.join(shared, 'current', 'old.jpg'), 'old');
-    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"ok":true}');
+    fs.writeFileSync(path.join(shared, 'out', 'old.result.json'), '{"ok":true}');
     const writes: string[] = [];
     const rawFs = require('fs');
     const orig = rawFs.renameSync;
@@ -137,7 +161,7 @@ describe('Handoff', () => {
     h.start({ id: 'j1', spec }, input, { 'index.html': '<html></html>' });
     spy.mockRestore();
     expect(fs.readdirSync(path.join(shared, 'current')).sort()).toEqual(['img1.jpg', 'index.html', 'job.json']);
-    expect(fs.existsSync(path.join(shared, 'out', 'result.json'))).toBe(false);
+    expect(fs.existsSync(path.join(shared, 'out', 'old.result.json'))).toBe(false);
     // khi đổi tên thành job.json, các tệp khác đã đủ
     expect(writes[writes.length - 1]).toMatch(/^job\.json:/);
     expect(writes[writes.length - 1]).toContain('img1.jpg');
@@ -149,17 +173,17 @@ describe('Handoff', () => {
     expect(h.poll()).toEqual({ state: 'idle' });
     h.start({ id: 'j1', spec }, input, {});
     expect(h.poll().state).toBe('running');
-    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"jobId":"j1","percent":42}');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.progress.json'), '{"jobId":"j1","percent":42}');
     clock += 100_000;
     expect(h.poll()).toMatchObject({ state: 'running', progress: 0.42 });
-    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"jobId":"j1","ok":true,"durationMs":1234}');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.result.json'), '{"jobId":"j1","ok":true,"durationMs":1234}');
     expect(h.poll()).toMatchObject({ state: 'done', result: { ok: true, durationMs: 1234 } });
   });
   it('result.json ghi dở không làm hỏng poll', () => {
     const h = prep(); const { shared, input } = dirs();
     h.start({ id: 'j1', spec }, input, {});
-    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"jobId":"j1","percent":1}');
-    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"ok":');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.progress.json'), '{"jobId":"j1","percent":1}');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.result.json'), '{"ok":');
     expect(h.poll().state).toBe('running');
   });
   it('worker im lặng 60 giây -> failed và dọn sạch', () => {
@@ -171,16 +195,16 @@ describe('Handoff', () => {
     const p = h.poll();
     expect(p.state).toBe('done');
     expect(p.result).toMatchObject({ ok: false });
-    expect(fs.readdirSync(path.join(shared, 'current'))).toEqual(['cancel']);
+    expect(fs.readdirSync(path.join(shared, 'current'))).toEqual([]); // job.json mất = worker tự dừng
     expect(h.poll()).toEqual({ state: 'idle' });
   });
   it('quá 15 phút dù có progress -> failed timeout', () => {
     const h = prep(); const { shared, input } = dirs();
     h.start({ id: 'j1', spec }, input, {});
-    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"jobId":"j1","percent":50}');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.progress.json'), '{"jobId":"j1","percent":50}');
     clock += LIMITS.renderTimeoutMs + 1;
     expect(h.poll().result).toMatchObject({ ok: false, error: 'timeout' });
-    expect(fs.readdirSync(path.join(shared, 'current'))).toEqual(['cancel']);
+    expect(fs.readdirSync(path.join(shared, 'current'))).toEqual([]);
   });
   it('kết quả muộn của việc đã bỏ không bị tính cho việc kế tiếp', () => {
     const h = prep(); const { shared, input } = dirs();
@@ -188,32 +212,55 @@ describe('Handoff', () => {
     clock += 61_000;
     expect(h.poll().result?.ok).toBe(false); // j1 bị bỏ
     h.start({ id: 'j2', spec }, input, {});
-    // worker cũ vẫn còn chạy và ghi muộn
-    fs.writeFileSync(path.join(shared, 'out', 'video.mp4'), 'old');
-    fs.writeFileSync(path.join(shared, 'out', 'progress.json'), '{"jobId":"j1","percent":99}');
-    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"jobId":"j1","ok":true}');
+    // worker cũ vẫn còn chạy và ghi muộn (tên theo jobId của nó)
+    fs.writeFileSync(path.join(shared, 'out', 'j1.mp4'), 'old');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.progress.json'), '{"jobId":"j1","percent":99}');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.result.json'), '{"jobId":"j1","ok":true}');
     expect(h.poll()).toMatchObject({ state: 'running', progress: 0 });
-    expect(fs.existsSync(path.join(shared, 'out', 'result.json'))).toBe(false);
+    expect(fs.readdirSync(path.join(shared, 'out'))).toEqual([]);
     expect(h.collect(path.join(root, 'dest'))).toEqual([]);
+  });
+  it('video muộn của việc bị bỏ không bao giờ giao cho việc kế tiếp, kể cả khi result của việc mới đã có', () => {
+    const h = prep(); const { shared, input } = dirs();
+    h.start({ id: 'j1', spec }, input, {});
+    clock += 61_000;
+    expect(h.poll().result?.ok).toBe(false);
+    h.start({ id: 'j2', spec }, input, {});
+    fs.writeFileSync(path.join(shared, 'out', 'j2.result.json'), '{"jobId":"j2","ok":true,"durationMs":1}'); // j2 xong nhưng chưa có video
+    fs.writeFileSync(path.join(shared, 'out', 'j1.mp4'), 'late-from-j1');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.jpg'), 'late-from-j1');
+    expect(h.collect(path.join(root, 'dest'))).toEqual([]);
+    expect(fs.existsSync(path.join(root, 'dest', 'video.mp4'))).toBe(false);
+    expect(fs.readdirSync(path.join(shared, 'out'))).toEqual([]);
+  });
+  it('poll xoá mọi tệp lạ trong out/ (không mang jobId hiện tại)', () => {
+    const h = prep(); const { shared, input } = dirs();
+    h.start({ id: 'j2', spec }, input, {});
+    fs.writeFileSync(path.join(shared, 'out', 'video.mp4'), 'x');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.mp4'), 'x');
+    fs.writeFileSync(path.join(shared, 'out', 'j2.mp4'), 'mine');
+    h.poll();
+    expect(fs.readdirSync(path.join(shared, 'out'))).toEqual(['j2.mp4']);
   });
   it('out/ cũ còn sót lúc khởi động bị bỏ qua', () => {
     const { shared, input } = dirs();
     fs.mkdirSync(input, { recursive: true });
     fs.mkdirSync(path.join(shared, 'out'), { recursive: true });
-    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"jobId":"old","ok":true}');
-    fs.writeFileSync(path.join(shared, 'out', 'video.mp4'), 'old');
+    fs.writeFileSync(path.join(shared, 'out', 'old.result.json'), '{"jobId":"old","ok":true}');
+    fs.writeFileSync(path.join(shared, 'out', 'old.mp4'), 'old');
     const h = new Handoff(shared, now);
     h.clean(); // api dọn khi khởi động
     expect(h.poll()).toEqual({ state: 'idle' });
     h.start({ id: 'j1', spec }, input, {});
     expect(h.poll().state).toBe('running');
+    expect(fs.readdirSync(path.join(shared, 'out'))).toEqual([]);
   });
   it('result.json của việc khác (không dọn khi khởi động) không được nhận', () => {
     const { shared, input } = dirs();
     fs.mkdirSync(input, { recursive: true });
     const h = new Handoff(shared, now);
     h.start({ id: 'j1', spec }, input, {});
-    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"ok":true}'); // thiếu jobId
+    fs.writeFileSync(path.join(shared, 'out', 'j1.result.json'), '{"ok":true}'); // thiếu jobId bên trong
     expect(h.poll().state).toBe('running');
   });
   it('cancel ghi current/cancel', () => {
@@ -225,9 +272,9 @@ describe('Handoff', () => {
   it('collect chuyển video/thumb và dọn sạch', () => {
     const h = prep(); const { shared, input } = dirs();
     h.start({ id: 'j1', spec }, input, {});
-    fs.writeFileSync(path.join(shared, 'out', 'video.mp4'), 'vid');
-    fs.writeFileSync(path.join(shared, 'out', 'thumb.jpg'), 'th');
-    fs.writeFileSync(path.join(shared, 'out', 'result.json'), '{"jobId":"j1","ok":true,"durationMs":1}');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.mp4'), 'vid');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.jpg'), 'th');
+    fs.writeFileSync(path.join(shared, 'out', 'j1.result.json'), '{"jobId":"j1","ok":true,"durationMs":1}');
     const dest = path.join(root, 'dest');
     h.collect(dest);
     expect(fs.readFileSync(path.join(dest, 'video.mp4'), 'utf8')).toBe('vid');
