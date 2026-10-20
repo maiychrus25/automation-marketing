@@ -163,7 +163,9 @@ test('huỷ việc đang chờ; việc đang chạy chờ máy chủ báo cancel
     const queued = await svc.render(tplInput());
     await expect(svc.cancel(queued.id)).resolves.toEqual({ cancelled: true });
     expect(svc.get(queued.id)?.status).toBe('cancelled');
-    expect(finished()).toHaveLength(0);
+    expect(finished()).toHaveLength(1); // huỷ cục bộ phát đúng một videos.finished
+    expect(finished()[0].payload).toEqual({ videoId: queued.id, name: 'Video 1', ok: false, error: 'Đã huỷ' });
+    expect(events.map((e) => e.type)).toContain('video:changed');
 
     const running = await svc.render(tplInput());
     server.jobs.set('remote-2', { status: 'rendering', progress: 0.2 });
@@ -215,4 +217,43 @@ test('khoá API không xuất hiện trong log, lỗi hay sự kiện', async ()
     await lost.tick();
     const everything = JSON.stringify([logs, events, svc.get(job.id)]);
     expect(everything).not.toContain(TEST_KEY);
+});
+
+test('delete không xoá tệp nằm ngoài thư mục video', async () => {
+    const svc = makeService();
+    const job = await svc.render(tplInput());
+    const outside = path.join(dir, 'precious.txt');
+    fs.writeFileSync(outside, 'keep');
+    const store = new VideoStore(db);
+    store.update(job.id, { filePath: outside, thumbPath: path.join(dir, 'videos', '..', 'precious.txt') });
+    await svc.delete(job.id);
+    expect(fs.existsSync(outside)).toBe(true);
+    expect(svc.get(job.id)).toBeNull();
+});
+
+test('delete trong lúc tick đang chạy: không tạo lại tệp, không phát videos.finished', async () => {
+    const svc = makeService();
+    const job = await svc.render(tplInput());
+    svc.startPolling();
+    server.jobs.set('remote-1', { status: 'done', progress: 1, sizeBytes: 14 });
+    const ticking = svc.tick(); // bắt đầu hỏi máy chủ
+    await svc.delete(job.id); // xoá trước khi tick kịp tải
+    await ticking;
+    expect(svc.get(job.id)).toBeNull();
+    expect(finished()).toHaveLength(0);
+    const videosDir = path.join(dir, 'videos');
+    expect(fs.existsSync(videosDir) ? fs.readdirSync(videosDir) : []).toEqual([]);
+});
+
+test('huỷ trong lúc tick thấy done: không ghi đè trạng thái đã huỷ, không phát hai lần', async () => {
+    const svc = makeService();
+    const job = await svc.render(tplInput());
+    svc.startPolling();
+    server.jobs.set('remote-1', { status: 'done', progress: 1, sizeBytes: 14 });
+    const ticking = svc.tick();
+    await svc.cancel(job.id).catch(() => undefined);
+    await ticking;
+    const status = svc.get(job.id)!.status;
+    expect(status).toBe('cancelled'); // DELETE trên việc vừa xong xoá việc phía máy chủ: coi như đã huỷ
+    expect(finished()).toHaveLength(1);
 });

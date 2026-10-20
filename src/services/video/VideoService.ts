@@ -10,7 +10,9 @@ export const POLL_INTERVAL_MS = 3000;
 export const LOST_CONTACT_MS = 30 * 60_000;
 const CATALOG_TTL_MS = 10 * 60_000;
 const MAX_NAME_LENGTH = 100;
+const CANCELLED_MESSAGE = 'Đã huỷ';
 const LOST_CONTACT_MESSAGE = 'Mất liên lạc với máy chủ render';
+const TERMINAL: VideoStatus[] = ['done', 'failed', 'cancelled'];
 const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 export interface VideoRenderInput {
@@ -127,11 +129,11 @@ export class VideoService {
         if (!job.remoteId || !['queued', 'rendering'].includes(job.status)) return { cancelled: false };
         try {
             const res = await this.deps.client().cancel(job.remoteId);
-            if (res.status === 'cancelled') this.finish(job, { status: 'cancelled', error: 'Đã huỷ' }, false);
+            if (res.status === 'cancelled' || res.deleted) this.finish(job, { status: 'cancelled', error: CANCELLED_MESSAGE }, true);
         } catch (e) {
             // Máy chủ không còn việc này: coi như đã huỷ; lỗi khác để người dùng thử lại.
             if (!(e instanceof RenderError) || e.code !== 'not_found') throw e;
-            this.finish(job, { status: 'cancelled', error: 'Đã huỷ' }, false);
+            this.finish(job, { status: 'cancelled', error: CANCELLED_MESSAGE }, true);
         }
         return { cancelled: true };
     }
@@ -139,10 +141,31 @@ export class VideoService {
     async delete(id: string): Promise<void> {
         const job = this.requireJob(id);
         if (job.remoteId) await this.deps.client().cancel(job.remoteId).catch(() => undefined); // máy chủ tự dọn việc đã xong
-        for (const file of [job.filePath, job.thumbPath]) if (file) fs.rmSync(file, { force: true });
+        for (const file of [job.filePath, job.thumbPath]) if (file) this.removeInsideVideosDir(file);
         this.lastContact.delete(id);
         this.deps.store.delete(id);
         this.deps.emit('video:changed');
+    }
+
+    /** Chỉ xoá tệp nằm trong thư mục video (đường dẫn trong DB không được tin hoàn toàn). */
+    private removeInsideVideosDir(file: string): void {
+        const root = path.resolve(this.deps.videosDir);
+        const target = path.resolve(file);
+        let inside = target.startsWith(root + path.sep);
+        if (inside) { // chống lối tắt symlink: thư mục chứa tệp phải thật sự nằm trong thư mục video
+            try { inside = (fs.realpathSync(path.dirname(target)) + path.sep).startsWith(fs.realpathSync(root) + path.sep); } catch { inside = false; }
+        }
+        if (!inside) {
+            Logger.warn(`[VideoService] Bỏ qua tệp ngoài thư mục video: ${path.basename(file)}`);
+            return;
+        }
+        fs.rmSync(target, { force: true });
+    }
+
+    /** Dòng hiện tại nếu còn đang chạy; null khi đã bị xoá hoặc đã kết thúc (kết quả await cũ không còn giá trị). */
+    private liveRow(id: string): VideoJob | null {
+        const row = this.deps.store.get(id);
+        return row && !TERMINAL.includes(row.status) ? row : null;
     }
 
     private requireJob(id: string): VideoJob {
@@ -179,8 +202,10 @@ export class VideoService {
         if (!this.lastContact.has(job.id)) this.lastContact.set(job.id, now);
         try {
             const view = await this.deps.client().job(job.remoteId);
-            await this.apply(job, view);
+            const live = this.liveRow(job.id);
+            if (!live) return;
             this.lastContact.set(job.id, this.deps.now());
+            await this.apply(live, view);
         } catch (e) {
             if (e instanceof RenderError && e.code === 'not_found') {
                 this.finish(job, { status: 'failed', error: 'Máy chủ render không còn việc này' }, true);
@@ -195,7 +220,7 @@ export class VideoService {
 
     private async apply(job: VideoJob, view: RenderJobView): Promise<void> {
         if (view.status === 'failed' || view.status === 'cancelled') {
-            this.finish(job, { status: view.status, error: view.error || (view.status === 'cancelled' ? 'Đã huỷ' : 'Render lỗi') }, true);
+            this.finish(job, { status: view.status, error: view.error || (view.status === 'cancelled' ? CANCELLED_MESSAGE : 'Render lỗi') }, true);
             return;
         }
         if (view.status !== 'done') {
@@ -211,18 +236,25 @@ export class VideoService {
         if (!filePath) {
             filePath = path.join(this.deps.videosDir, `${job.id}.mp4`);
             await this.deps.client().download(job.remoteId!, 'video', filePath);
+            if (!this.liveRow(job.id)) { fs.rmSync(filePath, { force: true }); return; } // bị xoá/huỷ trong lúc tải
             this.deps.store.update(job.id, { filePath });
         }
         let thumbPath = job.thumbPath;
         if (!thumbPath) {
             const dest = path.join(this.deps.videosDir, `${job.id}.jpg`);
             try { await this.deps.client().download(job.remoteId!, 'thumb', dest); thumbPath = dest; } catch { /* không có bìa vẫn dùng được video */ }
+            if (!this.liveRow(job.id)) {
+                fs.rmSync(dest, { force: true });
+                if (!this.deps.store.get(job.id)) fs.rmSync(filePath, { force: true });
+                return;
+            }
         }
         const sizeBytes = view.sizeBytes ?? fs.statSync(filePath).size;
         this.finish(job, { status: 'done', error: '', progress: 1, filePath, thumbPath, sizeBytes, durationSec: view.durationSec ?? null }, true);
     }
 
     private finish(job: VideoJob, patch: Partial<VideoJob>, announce: boolean): void {
+        if (!this.liveRow(job.id)) return; // đã xoá hoặc đã kết thúc: không ghi, không phát sự kiện lần nữa
         this.deps.store.update(job.id, { ...patch, finishedAt: this.deps.now() });
         this.lastContact.delete(job.id);
         this.deps.emit('video:changed');
