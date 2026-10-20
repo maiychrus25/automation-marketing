@@ -34,7 +34,7 @@ class UnsafeOutputError extends Error {}
 function openRegular(file: string, maxBytes: number): { fd: number; size: number } {
   const lst = fs.lstatSync(file);
   if (!lst.isFile()) throw new UnsafeOutputError(`${path.basename(file)} không phải tệp thường`);
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); // NONBLOCK: FIFO không có bên ghi sẽ không treo api, fstat bên dưới loại nó
   try {
     const st = fs.fstatSync(fd);
     if (!st.isFile() || st.size > maxBytes) throw new UnsafeOutputError(`${path.basename(file)} không hợp lệ`);
@@ -43,6 +43,18 @@ function openRegular(file: string, maxBytes: number): { fd: number; size: number
     fs.closeSync(fd);
     throw e;
   }
+}
+
+/** Đọc đúng `size` byte đã kiểm từ fd (tệp bị nối thêm không vượt trần). */
+function readExact(fd: number, size: number): Buffer {
+  const buf = Buffer.alloc(size);
+  let got = 0;
+  while (got < size) {
+    const n = fs.readSync(fd, buf, got, size - got, null);
+    if (n === 0) break;
+    got += n;
+  }
+  return buf.subarray(0, got);
 }
 
 /** Chép từ `src` (không theo liên kết) sang `dest` qua fd, tối đa `maxBytes`. */
@@ -178,8 +190,8 @@ export class Handoff {
     const file = path.join(this.out, `${jobId}.${name}`);
     let text: string;
     try {
-      const { fd } = openRegular(file, MAX_JSON_BYTES);
-      try { text = fs.readFileSync(fd, 'utf8'); } finally { fs.closeSync(fd); }
+      const { fd, size } = openRegular(file, MAX_JSON_BYTES);
+      try { text = readExact(fd, size).toString('utf8'); } finally { fs.closeSync(fd); }
     } catch (e) {
       if (e instanceof UnsafeOutputError) throw e;
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined; // chưa có

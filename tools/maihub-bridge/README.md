@@ -64,7 +64,7 @@ python3 maihub_bridge.py --env-file .env upload /duong/dan/anh.jpg
 python3 maihub_bridge.py --env-file .env wait --after 0 --timeout 25
 ```
 
-`runAt` là mili giây epoch, phải sau hiện tại ít nhất 1 phút (thay `<epoch-ms-trong-tương-lai>` bằng số thật, ví dụ lấy từ `date -d '+1 day' +%s000`); `when: "now"` đăng ngay nên bắt buộc `confirm: true`. `upload` chỉ nhận đuôi jpg, jpeg, png, gif, webp, mp4, mov, webm. Kết quả JSON ra stdout. Lỗi ra stderr dạng `<MÃ_LỖI>: thông báo`; mã thoát 1 là lỗi từ MaiHub, 2 là thiếu hoặc sai cấu hình, 3 là lỗi mạng hoặc ghim chứng chỉ. Khoá chống gọi trùng chỉ gửi khi có `--idempotency-key` hoặc `--auto-idem`. `wait` ghi nhớ `after` là việc của bot: lấy `seq` lớn nhất đã nhận. Kết quả `wait` kèm `workspaceId`; `seq` thuộc DB từng workspace nên khi `workspaceId` đổi thì đặt lại `after` về 0.
+`runAt` là mili giây epoch, phải sau hiện tại ít nhất 1 phút (thay `<epoch-ms-trong-tương-lai>` bằng số thật, ví dụ lấy từ `date -d '+1 day' +%s000`); `when: "now"` đăng ngay nên bắt buộc `confirm: true`. `upload` chỉ nhận đuôi jpg, jpeg, png, gif, webp, mp4, mov, webm và nhạc mp3, m4a, wav (nhạc chỉ để làm `musicMediaId` của `videos.render`, không dùng cho bản nháp). Kết quả JSON ra stdout. Lỗi ra stderr dạng `<MÃ_LỖI>: thông báo`; mã thoát 1 là lỗi từ MaiHub, 2 là thiếu hoặc sai cấu hình, 3 là lỗi mạng hoặc ghim chứng chỉ. Khoá chống gọi trùng chỉ gửi khi có `--idempotency-key` hoặc `--auto-idem`. `wait` ghi nhớ `after` là việc của bot: lấy `seq` lớn nhất đã nhận. Kết quả `wait` kèm `workspaceId`; `seq` thuộc DB từng workspace nên khi `workspaceId` đổi thì đặt lại `after` về 0.
 
 ### Ghép nối (`pair`)
 

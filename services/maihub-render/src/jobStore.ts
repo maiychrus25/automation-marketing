@@ -64,6 +64,10 @@ export class JobStore {
     if (!job || job === 'corrupt') throw new Error('Không tìm thấy việc');
     const next = { ...job, ...patch };
     this.write(next);
+    // mọi đường kết thúc (xong, lỗi, huỷ, khởi động lại, hết giờ) đều đi qua đây: đầu vào không còn dùng, chỉ giữ đầu ra
+    if (next.status === 'done' || next.status === 'failed' || next.status === 'cancelled') {
+      fs.rmSync(path.join(this.jobDir(id), 'input'), { recursive: true, force: true });
+    }
     return next;
   }
 

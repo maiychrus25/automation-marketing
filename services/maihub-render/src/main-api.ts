@@ -136,8 +136,6 @@ export class Orchestrator {
   private settle(id: string, patch: Parameters<JobStore['update']>[1]): void {
     try {
       this.deps.store.update(id, { ...patch, finishedAt: this.now() });
-      // tệp đầu vào đã chép sang worker: không cần giữ 7 ngày, chỉ giữ đầu ra
-      fs.rmSync(path.join(this.deps.store.jobDir(id), 'input'), { recursive: true, force: true });
     } finally {
       this.deps.queue.finish(id);
       this.currentId = undefined;

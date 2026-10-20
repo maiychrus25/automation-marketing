@@ -278,7 +278,7 @@ class MediaTypeAndStdioTests(BridgeTestCase):
         return self.client.upload(path)
 
     def test_fixed_media_types(self):
-        expected = {"a.webp": "image/webp", "a.JPG": "image/jpeg", "a.mov": "video/quicktime", "a.webm": "video/webm", "a.mp4": "video/mp4"}
+        expected = {"a.webp": "image/webp", "a.JPG": "image/jpeg", "a.mov": "video/quicktime", "a.webm": "video/webm", "a.mp4": "video/mp4", "a.MP3": "audio/mpeg", "a.m4a": "audio/mp4", "a.wav": "audio/wav"}
         for name, ctype in expected.items():
             self.hub.requests[:] = []
             self.upload_named(name)

@@ -6,6 +6,8 @@ import { Queue, LimitError } from '../src/queue';
 import { Handoff } from '../src/handoff';
 import { Retention } from '../src/retention';
 import { LIMITS } from '../src/limits';
+import { Orchestrator } from '../src/main-api';
+import { execFileSync } from 'child_process';
 
 const spec: any = { kind: 'html', html: '<div></div>', durationSec: 5, width: 1080, height: 1920, fps: 30, quality: 'standard' };
 let root: string;
@@ -27,7 +29,7 @@ describe('JobStore', () => {
     s.update(U('j1'), { status: 'done', progress: 1 });
     expect(new JobStore(path.join(root, 'data')).get(U('j1'))?.status).toBe('done');
     expect(fs.readdirSync(s.jobDir(U('j1'))).some((f) => f.endsWith('.tmp'))).toBe(false);
-    expect(fs.existsSync(path.join(s.jobDir(U('j1')), 'input'))).toBe(true);
+    expect(fs.existsSync(path.join(s.jobDir(U('j1')), 'input'))).toBe(false); // việc đã done: đầu vào bị xoá (đổi có chủ ý, I6b)
     expect(fs.existsSync(path.join(s.jobDir(U('j1')), 'output'))).toBe(true);
   });
   it('nạp lại: rendering -> failed, queued giữ nguyên', () => {
@@ -70,6 +72,55 @@ describe('JobStore', () => {
     expect(() => s.jobDir('not-a-uuid')).toThrow();
     expect(() => s.jobDir(U('ok') + '/..')).toThrow();
     expect(s.get('../x')).toBeUndefined();
+  });
+});
+
+describe('đầu vào bị xoá ở mọi đường kết thúc', () => {
+  const withInput = (s: JobStore, id: string) => {
+    s.create(mk(id));
+    fs.writeFileSync(path.join(s.jobDir(U(id)), 'input', 'img1.jpg'), 'x');
+    fs.writeFileSync(path.join(s.jobDir(U(id)), 'output', 'keep.txt'), 'y');
+  };
+  const gone = (s: JobStore, id: string) => !fs.existsSync(path.join(s.jobDir(U(id)), 'input'));
+  const kept = (s: JobStore, id: string) => fs.existsSync(path.join(s.jobDir(U(id)), 'output', 'keep.txt'));
+  it('huỷ việc đang chờ', () => {
+    const s = new JobStore(path.join(root, 'data'), now); const q = new Queue(s, now);
+    withInput(s, 'c1'); q.enqueue(s.get(U('c1'))!);
+    expect(q.cancel(U('c1'))).toBe('removed');
+    expect(gone(s, 'c1') && kept(s, 'c1')).toBe(true);
+  });
+  it('khởi động lại: rendering -> failed', () => {
+    const s = new JobStore(path.join(root, 'data'), now);
+    withInput(s, 'r1'); withInput(s, 'q1');
+    s.update(U('r1'), { status: 'rendering' });
+    s.load();
+    expect(gone(s, 'r1') && kept(s, 'r1')).toBe(true);
+    expect(gone(s, 'q1')).toBe(false); // việc còn chờ giữ đầu vào
+  });
+  it('Queue.next không bắt đầu được việc', () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const s = new JobStore(path.join(root, 'data'), now); const q = new Queue(s, now);
+    withInput(s, 'n1'); q.enqueue(s.get(U('n1'))!);
+    const orig = s.update.bind(s);
+    jest.spyOn(s, 'update').mockImplementationOnce(() => { throw new Error('đĩa lỗi'); }).mockImplementation(orig);
+    expect(q.next()).toBeUndefined();
+    expect(s.get(U('n1'))!.status).toBe('failed');
+    expect(gone(s, 'n1')).toBe(true);
+    jest.restoreAllMocks();
+  });
+  it.each(['done', 'failed'] as const)('settle %s', (status) => {
+    const s = new JobStore(path.join(root, 'data'), now);
+    withInput(s, 's1');
+    s.update(U('s1'), { status });
+    expect(gone(s, 's1') && kept(s, 's1')).toBe(true);
+  });
+  it('worker im lặng quá hạn (timeout) -> failed và xoá đầu vào', () => {
+    const s = new JobStore(path.join(root, 'data'), now); const q = new Queue(s, now);
+    withInput(s, 't1'); q.enqueue(s.get(U('t1'))!);
+    const o = new Orchestrator({ store: s, queue: q, handoff: new Handoff(path.join(root, 'shared'), now), retention: new Retention(s, now), now });
+    o.tick(); clock += 61_000; o.tick();
+    expect(s.get(U('t1'))!.status).toBe('failed');
+    expect(gone(s, 't1')).toBe(true);
   });
 });
 
@@ -305,6 +356,21 @@ describe('Handoff', () => {
     h.start({ id: 'j1', spec }, input, {});
     fs.writeFileSync(path.join(shared, 'out', 'j1.progress.json'), JSON.stringify({ jobId: 'j1', percent: 1, pad: 'x'.repeat(100_000) }));
     expect(h.poll().result).toMatchObject({ ok: false });
+  });
+  it('FIFO thay cho result.json không làm api treo: việc failed', () => {
+    const h = prep(); const { shared, input } = dirs();
+    h.start({ id: 'j1', spec }, input, {});
+    const fifo = path.join(shared, 'out', 'j1.result.json');
+    try { execFileSync('mkfifo', [fifo]); } catch { return; } // máy không có mkfifo: bỏ qua
+    const p = h.poll(); // nếu open chặn thì test này treo
+    expect(p.result).toMatchObject({ ok: false, error: 'Máy render trả về tệp không hợp lệ' });
+  });
+  it('FIFO thay cho video.mp4 bị từ chối khi collect', () => {
+    const h = prep(); const { shared, input } = dirs();
+    h.start({ id: 'j1', spec }, input, {});
+    fs.writeFileSync(path.join(shared, 'out', 'j1.result.json'), '{"jobId":"j1","ok":true}');
+    try { execFileSync('mkfifo', [path.join(shared, 'out', 'j1.mp4')]); } catch { return; }
+    expect(() => h.collect(path.join(root, 'dest'))).toThrow('không hợp lệ');
   });
   it('collect chuyển video/thumb và dọn sạch', () => {
     const h = prep(); const { shared, input } = dirs();

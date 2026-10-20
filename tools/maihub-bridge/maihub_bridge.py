@@ -40,6 +40,7 @@ UPLOAD_TOOL = "maihub_upload_media"
 MEDIA_TYPES = {
     "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp",
     "mp4": "video/mp4", "mov": "video/quicktime", "webm": "video/webm",
+    "mp3": "audio/mpeg", "m4a": "audio/mp4", "wav": "audio/wav",  # nhạc cho videos.render (musicMediaId)
 }
 CONFIRM_GUIDANCE = "Hãy hỏi người dùng xác nhận rồi gọi lại với confirm: true"
 DESTRUCTIVE_NOTE = "Cần confirm: true (hỏi người dùng trước)"
@@ -320,7 +321,7 @@ class MaiHubClient(object):
         name = os.path.basename(path)
         ctype = MEDIA_TYPES.get(os.path.splitext(name)[1].lstrip(".").lower())
         if ctype is None:
-            raise BridgeError("INVALID_PARAMS", "Chỉ tải được ảnh/video: %s" % ", ".join(sorted(MEDIA_TYPES)))
+            raise BridgeError("INVALID_PARAMS", "Chỉ tải được ảnh/video/nhạc: %s" % ", ".join(sorted(MEDIA_TYPES)))
         size = os.path.getsize(path)
         with open(path, "rb") as handle:
             headers = {"Content-Type": ctype, "Content-Length": str(size), "X-Filename": urllib.parse.quote(name, safe="")}
@@ -346,7 +347,7 @@ def build_tools(describe_result):
         tools.append({"name": tool_name(m["name"]), "description": desc, "inputSchema": schema, "_method": m["name"]})
     tools.append({
         "name": UPLOAD_TOOL,
-        "description": "Tải một tệp ảnh/video trên máy bot lên MaiHub, trả về mediaId để dùng trong drafts.create/update.",
+        "description": "Tải một tệp ảnh/video/nhạc (mp3, m4a, wav) trên máy bot lên MaiHub, trả về mediaId để dùng trong drafts.create/update (ảnh/video) hoặc musicMediaId của videos.render (nhạc).",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "Đường dẫn tệp trên máy bot"}}, "required": ["path"]},
         "_method": None,
     })
@@ -1335,7 +1336,7 @@ def build_parser():
     p_call.add_argument("params", nargs="?", default="{}", help="Tham số dạng JSON (mặc định {})")
     p_call.add_argument("--idempotency-key", help="Khoá chống gọi trùng")
     p_call.add_argument("--auto-idem", action="store_true", help="Tự sinh khoá chống gọi trùng (uuid4)")
-    p_up = sub.add_parser("upload", parents=[shared], help="Tải ảnh/video lên MaiHub")
+    p_up = sub.add_parser("upload", parents=[shared], help="Tải ảnh/video/nhạc lên MaiHub")
     p_up.add_argument("path")
     p_wait = sub.add_parser("wait", parents=[shared], help="Chờ sự kiện (events.wait)")
     p_wait.add_argument("--after", type=int, default=0)
