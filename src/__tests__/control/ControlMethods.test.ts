@@ -8,9 +8,9 @@ function makeDeps() {
         scheduleList: jest.fn(() => ({ schedules: [{ id: 's1', draft: false }, { id: 'd1', draft: true }, { id: 'd2', draft: true }], queuedIds: ['s1'] })),
         scheduleUpdate: jest.fn(() => ({ schedule: { id: 's1' } })),
         scheduleDelete: jest.fn(() => undefined),
-        draftSave: jest.fn(() => ({ schedule: { id: 'd1' } })),
+        draftSave: jest.fn((_input?: any): any => ({ schedule: { id: 'd1' } })),
         draftGet: jest.fn(() => ({ draft: { id: 'd1', name: 'Nháp', params: { mode: 'group', text: 'cũ', mediaPaths: ['a.jpg'] } }, media: [{ path: '/m/a.jpg', size: 1 }] })),
-        draftApprove: jest.fn(() => ({ schedule: { id: 'd1' } })),
+        draftApprove: jest.fn((_input?: any): any => ({ schedule: { id: 'd1' } })),
         cancel: jest.fn(() => undefined),
         current: jest.fn(() => ({ run: null, progress: null })),
         listGroups: jest.fn(() => ({ groups: [] })),
@@ -249,6 +249,7 @@ describe('describe', () => {
             'runs.current', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
             'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.cancel',
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.trackConfig',
+            'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
         ]);
         for (const m of d.methods) {
             expect(m.description).toMatch(/\S/);
@@ -423,5 +424,119 @@ describe('posts tracking methods', () => {
         expect(found).toHaveLength(6);
         for (const m of found) expect(m.destructive).toBe(false);
         expect(found[0].description).toMatch(/posts\.trackFinished/);
+    });
+});
+
+describe('campaign and variant fields', () => {
+    function setupCampaigns() {
+        const campaigns = {
+            list: jest.fn((_p?: any): any => ({ campaigns: [] })),
+            get: jest.fn((_p?: any): any => ({ campaign: { id: 'c1' } })),
+            create: jest.fn((_p?: any): any => ({ campaign: { id: 'c1' } })),
+            update: jest.fn((_p?: any): any => ({ campaign: { id: 'c1' } })),
+            delete: jest.fn((_p?: any): any => ({ deleted: true })),
+        };
+        const tracking = {
+            list: jest.fn((_p?: any): any => ({ total: 0, rows: [] })),
+            stats: jest.fn((_p: any): any => ({ rows: [] })),
+        };
+        const deps = { ...makeDeps(), campaigns, tracking };
+        const methods = createControlMethods(deps as unknown as ControlMethodDeps);
+        const call = (name: string, params: any = {}) => methods.find((m) => m.name === name)!.run(params, {});
+        return { deps, campaigns, tracking, methods, call };
+    }
+
+    it('passes only documented params to the campaign port', async () => {
+        const { campaigns, call } = setupCampaigns();
+        await call('campaigns.list', { status: 'paused', junk: 1 });
+        expect(campaigns.list).toHaveBeenCalledWith({ status: 'paused' });
+        await call('campaigns.list');
+        expect(campaigns.list).toHaveBeenLastCalledWith({});
+        await call('campaigns.get', { id: 'c1', junk: 1 });
+        expect(campaigns.get).toHaveBeenCalledWith({ id: 'c1' });
+        await call('campaigns.create', { name: 'N', goal: 'g', startAt: 1, endAt: 2, junk: 1 });
+        expect(campaigns.create).toHaveBeenCalledWith({ name: 'N', goal: 'g', startAt: 1, endAt: 2 });
+        await call('campaigns.update', { id: 'c1', status: 'paused', endAt: null, junk: 1 });
+        expect(campaigns.update).toHaveBeenCalledWith({ id: 'c1', status: 'paused', endAt: null });
+    });
+
+    it('campaigns.delete needs confirmation', async () => {
+        const { campaigns, call, methods } = setupCampaigns();
+        expect(await call('campaigns.delete', { id: 'c1' }).catch((e) => e)).toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+        expect(campaigns.delete).not.toHaveBeenCalled();
+        expect(await call('campaigns.delete', { id: 'c1', confirm: true })).toEqual({ deleted: true });
+        expect(campaigns.delete).toHaveBeenCalledWith({ id: 'c1' });
+        const flags = Object.fromEntries(describeMethods(methods).methods.map((m) => [m.name, m.destructive]));
+        expect(flags['campaigns.delete']).toBe(true);
+        expect(flags['campaigns.create'] || flags['campaigns.update'] || flags['campaigns.list'] || flags['campaigns.get']).toBe(false);
+    });
+
+    it('maps campaign errors', async () => {
+        const { campaigns, call } = setupCampaigns();
+        campaigns.get.mockImplementationOnce(() => { throw new Error('Không tìm thấy chiến dịch'); });
+        expect(await call('campaigns.get', { id: 'x' }).catch((e) => e)).toMatchObject({ code: 'NOT_FOUND' });
+        campaigns.delete.mockImplementationOnce(() => { throw new Error('Chiến dịch còn 2 lịch/bài nháp, hãy chuyển hoặc xoá trước'); });
+        expect(await call('campaigns.delete', { id: 'c1', confirm: true }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+        campaigns.create.mockImplementationOnce(() => { throw new Error('Tên chiến dịch đã tồn tại'); });
+        expect(await call('campaigns.create', { name: 'N' }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
+    });
+
+    it('drafts.create passes variants in params and campaignId beside name', async () => {
+        const { deps, call } = setupCampaigns();
+        await call('drafts.create', { mode: 'group', text: 'A', variants: ['B', 'C'], campaignId: 'c1' });
+        expect(deps.poster.draftSave).toHaveBeenCalledWith({
+            name: undefined, plannedAt: undefined, campaignId: 'c1',
+            params: { mode: 'group', text: 'A', variants: ['B', 'C'], mediaPaths: [] },
+        });
+    });
+
+    it('drafts.update changes campaignId only when sent, and null clears it', async () => {
+        const { deps, call } = setupCampaigns();
+        await call('drafts.update', { id: 'd1', text: 'mới' });
+        expect(deps.poster.draftSave.mock.calls[0][0]).not.toHaveProperty('campaignId');
+        await call('drafts.update', { id: 'd1', campaignId: null, variants: ['B'] });
+        const input = deps.poster.draftSave.mock.calls[1][0] as any;
+        expect(input.campaignId).toBeNull();
+        expect(input.params.variants).toEqual(['B']);
+    });
+
+    it('drafts.approve forwards campaignId only when sent', async () => {
+        const { deps, call } = setupCampaigns();
+        await call('drafts.approve', { id: 'd1', when: { kind: 'once', runAt: 5 } });
+        expect(deps.poster.draftApprove.mock.calls[0][0]).not.toHaveProperty('campaignId');
+        await call('drafts.approve', { id: 'd1', when: 'now', confirm: true, campaignId: 'c1' });
+        expect(deps.poster.draftApprove).toHaveBeenLastCalledWith({ id: 'd1', when: 'now', campaignId: 'c1' });
+    });
+
+    it('schedules.list and schedules.update forward campaignId', async () => {
+        const { deps, call } = setupCampaigns();
+        await call('schedules.list', { campaignId: '' });
+        expect(deps.poster.scheduleList).toHaveBeenLastCalledWith({ campaignId: '' });
+        await call('schedules.list');
+        expect(deps.poster.scheduleList).toHaveBeenLastCalledWith({});
+        await call('schedules.update', { id: 's1', campaignId: null });
+        expect(deps.poster.scheduleUpdate).toHaveBeenLastCalledWith({ id: 's1', campaignId: null });
+    });
+
+    it('posts.stats and posts.list forward groupBy variant and filters; old requests are unchanged', async () => {
+        const { tracking, call, methods } = setupCampaigns();
+        await call('posts.stats', { groupBy: 'variant', campaignId: '', scheduleId: 's1' });
+        expect(tracking.stats).toHaveBeenLastCalledWith({ groupBy: 'variant', campaignId: '', scheduleId: 's1' });
+        await call('posts.stats', { groupBy: 'group', from: 1 });
+        expect(tracking.stats).toHaveBeenLastCalledWith({ groupBy: 'group', from: 1 });
+        await call('posts.list', { campaignId: 'c1', scheduleId: 's1', limit: 5 });
+        expect(tracking.list).toHaveBeenLastCalledWith({ campaignId: 'c1', scheduleId: 's1', limit: 5 });
+        await call('posts.list', { limit: 5 });
+        expect(tracking.list).toHaveBeenLastCalledWith({ limit: 5 });
+        const stats = describeMethods(methods).methods.find((m) => m.name === 'posts.stats') as any;
+        expect(stats.paramsSchema.properties.groupBy.enum).toEqual(expect.arrayContaining(['campaign', 'variant']));
+    });
+
+    it('old bots: drafts.create without new fields sends no campaign or variants', async () => {
+        const { deps, call } = setupCampaigns();
+        await call('drafts.create', { mode: 'group', text: 'A' });
+        const input = deps.poster.draftSave.mock.calls[0][0] as any;
+        expect(input).not.toHaveProperty('campaignId');
+        expect(input.params).not.toHaveProperty('variants');
     });
 });

@@ -17,7 +17,7 @@ export class ControlError extends Error {
 }
 
 const INTERNAL_MESSAGE = 'Lỗi nội bộ của MaiHub, thử lại sau';
-const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy', SCAN_NOT_FOUND_ERROR];
+const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy', 'Không tìm thấy chiến dịch', SCAN_NOT_FOUND_ERROR];
 
 /** Trùng `WORKSPACE_SWITCHING_ERROR` của facebookPosterIpc/researchIpc (có test đối chiếu); không import để tránh kéo Electron vào đây. */
 const WORKSPACE_SWITCHING_MESSAGE = 'Đang đổi workspace, thử lại sau';
@@ -91,12 +91,22 @@ export interface TrackingPort {
     setConfig(params: any): any;
 }
 
+/** Các thao tác chiến dịch (`campaignOperations`); kiểm tra tham số nằm ở đó. */
+export interface CampaignPort {
+    list(params?: any): any;
+    get(params: any): any;
+    create(params: any): any;
+    update(params: any): any;
+    delete(params: any): any;
+}
+
 export interface ControlEventRow { seq: number; type: string; payload: unknown; createdAt: number }
 
 export interface ControlMethodDeps {
     poster: PosterPort;
     research: ResearchPort;
     tracking: TrackingPort;
+    campaigns: CampaignPort;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
     checkLogins(profileIds: string[] | null): { checkId: string; profileIds: string[] };
@@ -145,9 +155,11 @@ const draftFields: Record<string, object> = {
     concurrency: int('Số profile chạy song song (1–10)', { minimum: 1, maximum: 10 }),
     staggerMinSec: int('Giãn cách khởi động tối thiểu giữa các profile (giây, 0–3600)', { minimum: 0, maximum: 3600 }),
     staggerMaxSec: int('Giãn cách khởi động tối đa giữa các profile (giây, 0–3600)', { minimum: 0, maximum: 3600 }),
+    variants: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 4, description: 'Biến thể nội dung B…E (1–4 chuỗi, khác text và khác nhau); các đích lần lượt nhận A, B, …' },
+    campaignId: { type: ['string', 'null'], description: 'Mã chiến dịch; null để bỏ gắn; bỏ trống = giữ nguyên' },
 };
-// Các trường nằm trong params của bản nháp (phần còn lại — name/plannedAt/mediaIds — xử lý riêng).
-const DRAFT_PARAM_KEYS = ['mode', 'text', 'comment', 'commentDelayMin', 'profiles', 'minDelaySec', 'maxDelaySec', 'concurrency', 'staggerMinSec', 'staggerMaxSec'];
+// Các trường nằm trong params của bản nháp (phần còn lại — name/plannedAt/campaignId/mediaIds — xử lý riêng).
+const DRAFT_PARAM_KEYS = ['mode', 'text', 'comment', 'commentDelayMin', 'profiles', 'minDelaySec', 'maxDelaySec', 'concurrency', 'staggerMinSec', 'staggerMaxSec', 'variants'];
 
 const timingProps = {
     runAt: int('Giờ chạy một lần (mili giây epoch, sau hiện tại ít nhất 1 phút)'),
@@ -268,6 +280,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             run: async (p) => poster.draftSave({
                 name: p.name,
                 plannedAt: p.plannedAt,
+                ...pick(p, ['campaignId']),
                 params: { ...pick(p, DRAFT_PARAM_KEYS), mediaPaths: p.mediaIds === undefined ? [] : readMediaPaths(deps, p.mediaIds) },
             }),
         },
@@ -286,6 +299,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                     id,
                     name: p.name ?? current.draft.name,
                     plannedAt: p.plannedAt,
+                    ...pick(p, ['campaignId']),
                     params: { ...current.draft.params, ...pick(p, DRAFT_PARAM_KEYS), mediaPaths },
                 });
             },
@@ -316,32 +330,33 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                         { type: 'object', required: ['kind'], properties: { kind: { type: 'string', enum: ['once', 'recurring'] }, ...timingProps } },
                     ],
                 },
+                campaignId: draftFields.campaignId,
                 confirm: confirmProp,
             }, ['id', 'when']),
             resultSchema: anyResult,
             run: async (p) => {
                 const id = requireString(p, 'id');
-                if (p.when === 'now') return poster.draftApprove({ id, when: 'now' });
+                if (p.when === 'now') return poster.draftApprove({ id, when: 'now', ...pick(p, ['campaignId']) });
                 if (!p.when || typeof p.when !== 'object') {
                     throw new ControlError('INVALID_PARAMS', 'when phải là "now" hoặc đối tượng lịch', { field: 'when' });
                 }
-                return poster.draftApprove({ id, when: 'schedule', kind: p.when.kind, runAt: p.when.runAt, days: p.when.days, time: p.when.time });
+                return poster.draftApprove({ id, when: 'schedule', kind: p.when.kind, runAt: p.when.runAt, days: p.when.days, time: p.when.time, ...pick(p, ['campaignId']) });
             },
         },
         {
             name: 'schedules.list', description: 'Danh sách lịch đăng (không gồm bản nháp), kèm queuedIds đang chờ chạy.',
-            destructive: false, paramsSchema: noParams, resultSchema: obj({ schedules: { type: 'array', items: { type: 'object' }, description: 'Các lịch' }, queuedIds: { type: 'array', items: { type: 'string' }, description: 'Lịch đang chờ chạy' } }, ['schedules', 'queuedIds']),
-            run: async () => {
-                const { schedules, queuedIds } = await poster.scheduleList();
+            destructive: false, paramsSchema: obj({ campaignId: str("Chỉ lịch của chiến dịch này; '' = lịch không thuộc chiến dịch") }), resultSchema: obj({ schedules: { type: 'array', items: { type: 'object' }, description: 'Các lịch' }, queuedIds: { type: 'array', items: { type: 'string' }, description: 'Lịch đang chờ chạy' } }, ['schedules', 'queuedIds']),
+            run: async (p) => {
+                const { schedules, queuedIds } = await poster.scheduleList(pick(p, ['campaignId']));
                 return { schedules: (schedules as any[]).filter((s) => !s.draft), queuedIds };
             },
         },
         {
             name: 'schedules.update', description: 'Sửa lịch: tên, bật/tắt, giờ (cùng quy tắc với app). runAt chỉ dùng cho lịch một lần; days/time chỉ dùng cho lịch lặp.',
             destructive: false,
-            paramsSchema: obj({ id: str('Mã lịch'), name: str('Tên mới'), enabled: { type: 'boolean', description: 'Bật hoặc tắt lịch' }, ...timingProps }, ['id']),
+            paramsSchema: obj({ id: str('Mã lịch'), name: str('Tên mới'), enabled: { type: 'boolean', description: 'Bật hoặc tắt lịch' }, campaignId: draftFields.campaignId, ...timingProps }, ['id']),
             resultSchema: anyResult,
-            run: async (p) => poster.scheduleUpdate(pick(p, ['id', 'name', 'enabled', 'runAt', 'days', 'time'])),
+            run: async (p) => poster.scheduleUpdate(pick(p, ['id', 'name', 'enabled', 'runAt', 'days', 'time', 'campaignId'])),
         },
         {
             name: 'schedules.delete', description: 'Xoá một lịch; từ chối khi lịch đang chạy. Cần confirm: true.',
@@ -373,7 +388,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             run: async (p) => poster.listRuns(pick(p, ['limit', 'offset', 'kind'])),
         },
         {
-            name: 'runs.get', description: 'Chi tiết một lần chạy: kết quả từng đích, link bài, trạng thái bình luận.',
+            name: 'runs.get', description: 'Chi tiết một lần chạy: kết quả từng đích (kèm variant đã đăng), link bài, trạng thái bình luận; run có campaignId.',
             destructive: false, paramsSchema: obj({ runId: str('Mã lần chạy') }, ['runId']), resultSchema: anyResult,
             run: async (p) => poster.getRun({ runId: p.runId }),
         },
@@ -509,24 +524,28 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                 linkStatus: { type: 'string', enum: ['known', 'missing', 'pending_approval', 'not_found'], description: 'Lọc theo trạng thái link' },
                 groupUrl: str('Lọc theo link nhóm'),
                 profileId: str('Lọc theo profile'),
+                campaignId: str("Lọc theo chiến dịch; '' = bài không thuộc chiến dịch"),
+                scheduleId: str('Lọc theo lịch'),
                 limit: int('Tối đa bao nhiêu dòng (1–500)', { minimum: 1, maximum: 500 }),
                 offset: int('Bỏ qua bao nhiêu dòng đầu', { minimum: 0 }),
             }),
             resultSchema: obj({ total: int('Tổng số dòng khớp'), rows: { type: 'array', items: { type: 'object' }, description: 'Các dòng trong trang' } }, ['total', 'rows']),
-            run: async (p) => deps.tracking.list(pick(p, ['from', 'to', 'linkStatus', 'groupUrl', 'profileId', 'limit', 'offset'])),
+            run: async (p) => deps.tracking.list(pick(p, ['from', 'to', 'linkStatus', 'groupUrl', 'profileId', 'campaignId', 'scheduleId', 'limit', 'offset'])),
         },
         {
             name: 'posts.stats',
-            description: 'Báo cáo hiệu quả bài đăng nhóm theo nhóm / profile / lịch / ngày / từng bài: số bài, số có link, chờ duyệt, nghi bị xoá, reactions/comments/shares (lần đo mới nhất), tương tác trung bình và tỉ lệ so với số thành viên nhóm (null nếu chưa biết).',
+            description: 'Báo cáo hiệu quả bài đăng nhóm theo nhóm / profile / lịch / ngày / từng bài / chiến dịch / biến thể: số bài, số có link, chờ duyệt, nghi bị xoá, reactions/comments/shares (lần đo mới nhất), tương tác trung bình và tỉ lệ so với số thành viên nhóm (null nếu chưa biết).',
             destructive: false,
             paramsSchema: obj({
-                groupBy: { type: 'string', enum: ['group', 'profile', 'schedule', 'day', 'post'], description: 'Gom theo' },
+                groupBy: { type: 'string', enum: ['group', 'profile', 'schedule', 'day', 'post', 'campaign', 'variant'], description: 'Gom theo (variant: so sánh biến thể trong cùng một lịch; dòng có insufficient = chưa đủ 5 bài đo)' },
+                campaignId: str("Lọc theo chiến dịch; '' = bài không thuộc chiến dịch"),
+                scheduleId: str('Lọc theo lịch'),
                 from: int('Từ thời điểm (epoch ms; mặc định 30 ngày trước)', { minimum: 0 }),
                 to: int('Đến thời điểm (epoch ms)', { minimum: 0 }),
                 limit: int('Tối đa bao nhiêu dòng (1–500)', { minimum: 1, maximum: 500 }),
             }, ['groupBy']),
             resultSchema: obj({ rows: { type: 'array', items: { type: 'object' }, description: 'Các dòng báo cáo' } }, ['rows']),
-            run: async (p) => deps.tracking.stats(pick(p, ['groupBy', 'from', 'to', 'limit'])),
+            run: async (p) => deps.tracking.stats(pick(p, ['groupBy', 'from', 'to', 'limit', 'campaignId', 'scheduleId'])),
         },
         {
             name: 'posts.trackConfig',
@@ -545,6 +564,52 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             }),
             resultSchema: obj({ config: { type: 'object', description: 'Cấu hình hiện hành' } }, ['config']),
             run: async (p) => (p.config === undefined ? deps.tracking.getConfig() : deps.tracking.setConfig(p.config)),
+        },
+        {
+            name: 'campaigns.list',
+            description: 'Danh sách chiến dịch (mặc định mọi trạng thái trừ archived), kèm số lịch / bài nháp, runnable và summary hiệu quả.',
+            destructive: false,
+            paramsSchema: obj({ status: { type: 'string', enum: ['active', 'paused', 'archived'], description: 'Chỉ chiến dịch ở trạng thái này' } }),
+            resultSchema: obj({ campaigns: { type: 'array', items: { type: 'object' }, description: 'Các chiến dịch' } }, ['campaigns']),
+            run: async (p) => deps.campaigns.list(pick(p, ['status'])),
+        },
+        {
+            name: 'campaigns.get', description: 'Xem một chiến dịch kèm danh sách lịch / bài nháp của nó. NOT_FOUND nếu id lạ.',
+            destructive: false, paramsSchema: idOnly, resultSchema: obj({ campaign: { type: 'object', description: 'Chiến dịch kèm schedules' } }, ['campaign']),
+            run: async (p) => deps.campaigns.get(pick(p, ['id'])),
+        },
+        {
+            name: 'campaigns.create', description: 'Tạo chiến dịch (tên 1–100 ký tự, không trùng; mục tiêu ≤ 1000 ký tự; startAt/endAt là mili giây epoch, startAt ≤ endAt).',
+            destructive: false,
+            paramsSchema: obj({
+                name: { type: 'string', minLength: 1, maxLength: 100, description: 'Tên chiến dịch' },
+                goal: { type: 'string', maxLength: 1000, description: 'Mục tiêu (tuỳ chọn)' },
+                startAt: { type: ['integer', 'null'], description: 'Bắt đầu (mili giây epoch)' },
+                endAt: { type: ['integer', 'null'], description: 'Kết thúc (mili giây epoch)' },
+            }, ['name']),
+            resultSchema: obj({ campaign: { type: 'object', description: 'Chiến dịch vừa tạo' } }, ['campaign']),
+            run: async (p) => deps.campaigns.create(pick(p, ['name', 'goal', 'startAt', 'endAt'])),
+        },
+        {
+            name: 'campaigns.update', description: 'Sửa chiến dịch: chỉ gửi id và các trường muốn đổi. status = paused thì lịch của chiến dịch không chạy; startAt/endAt = null để bỏ giới hạn.',
+            destructive: false,
+            paramsSchema: obj({
+                id: str('Mã chiến dịch'),
+                name: { type: 'string', minLength: 1, maxLength: 100, description: 'Tên mới' },
+                goal: { type: 'string', maxLength: 1000, description: 'Mục tiêu mới' },
+                status: { type: 'string', enum: ['active', 'paused', 'archived'], description: 'Trạng thái mới' },
+                startAt: { type: ['integer', 'null'], description: 'Bắt đầu (mili giây epoch); null để bỏ' },
+                endAt: { type: ['integer', 'null'], description: 'Kết thúc (mili giây epoch); null để bỏ' },
+            }, ['id']),
+            resultSchema: obj({ campaign: { type: 'object', description: 'Chiến dịch sau khi sửa' } }, ['campaign']),
+            run: async (p) => deps.campaigns.update(pick(p, ['id', 'name', 'goal', 'status', 'startAt', 'endAt'])),
+        },
+        {
+            name: 'campaigns.delete', description: 'Xoá một chiến dịch; INVALID_PARAMS nếu còn lịch / bài nháp. Cần confirm: true.',
+            destructive: true,
+            paramsSchema: obj({ id: str('Mã chiến dịch'), confirm: confirmProp }, ['id', 'confirm']),
+            resultSchema: obj({ deleted: { type: 'boolean' } }, ['deleted']),
+            run: async (p) => deps.campaigns.delete(pick(p, ['id'])),
         },
     ];
 

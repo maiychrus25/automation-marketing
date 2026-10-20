@@ -21,7 +21,7 @@ import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
     CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, withStoredPublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
-import { checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations, trackingOperations } from './facebookPosterIpc';
+import { checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations, trackingOperations, campaignOperations } from './facebookPosterIpc';
 import { researchOperations } from './researchIpc';
 import { getBrowserEngineStatus, getBrowserProfileService, getBrowserSandboxState } from './browserProfileIpc';
 
@@ -139,6 +139,13 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             stats: trackingOperations.stats,
             getConfig: trackingOperations.getConfig,
             setConfig: trackingOperations.setConfig,
+        },
+        campaigns: {
+            list: campaignOperations.list,
+            get: campaignOperations.get,
+            create: campaignOperations.create,
+            update: campaignOperations.update,
+            delete: campaignOperations.delete,
         },
         listProfiles: () => {
             const list = db().getBrowserProfiles();
