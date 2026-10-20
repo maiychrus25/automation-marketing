@@ -15,6 +15,35 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.23.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🏅 Chấm điểm nhóm 0–100 kèm lý do (hay bắt chờ duyệt, nghi xoá bài, đăng lỗi, tương tác so với các nhóm khác)',
+      '🕘 Gợi ý giờ và thứ nên đăng dựa trên tương tác',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Bảng Hiệu quả có cột Điểm (bấm xem lý do) khi gom theo Nhóm',
+          'Gom theo Giờ / Thứ (giờ máy)',
+          'Dòng "Giờ nên đăng" (60 ngày gần nhất)',
+          'Soạn bài hiện điểm cạnh tên nhóm',
+          'Hộp Hẹn giờ gợi ý "Giờ hiệu quả"',
+          'Bot AI có posts.groupScores và posts.bestTimes',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Lỗi do profile (hết phiên, không mở được trình duyệt, bị huỷ) không tính vào điểm nhóm',
+          'Nhóm dưới 3 lượt đăng hoặc giờ dưới 5 bài đã đo ghi "chưa đủ dữ liệu"',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.22.0',
     date: '10/2026',
     type: 'minor',

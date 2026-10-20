@@ -200,3 +200,11 @@
   - Spec: dòng Trạng thái ghi "Đã phát hành 26.23.0 (D + F)"; phần E vẫn chờ.
   - Plan thêm "Điều chỉnh khi triển khai".
   - Merge `main`, gắn tag; anh push; kiểm tra CI.
+
+## Điều chỉnh khi triển khai
+
+- Task 2: thêm bộ lọc `groupUrl` vào `statsReport` để dùng cho `bestTimes`.
+- Sửa của controller b358fcb: xử lý kết quả `skipped`, chỉ tính bài có theo dõi là đã đăng.
+- Task 3 và 4 được làm trong một lượt subagent.
+- Vòng sửa sau review cuối: 0406132.
+- Sửa giao diện: 7b5f42c.

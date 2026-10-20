@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 20/10/2026 |
-| Trạng thái | Đã duyệt (20/10/2026) |
+| Trạng thái | Đã phát hành 26.23.0 (D + F, 20/10/2026); E chờ 26.24 |
 | Kế hoạch | `docs/plans/2026-10-20-group-scores-best-times.md` (26.23: D + F); kế hoạch E viết sau khi 26.23 phát hành |
 | Intent | `docs/intent/2026-10-20-group-scores-times-leads.md` (đã duyệt) |
 | Nhánh | `feat/26.23-group-scores-best-times` (D + F); E làm trên nhánh riêng |
@@ -200,3 +200,15 @@ Dữ liệu giữ 180 ngày, cùng nhịp dọn với dữ liệu theo dõi.
 - **Giờ máy khác giờ người xem.** Ghi rõ trong giao diện: "theo giờ máy".
 - **(E) Đọc bình luận phụ thuộc giao diện Facebook; tự thu làm tăng số lần mở trang.** Giảm bằng mốc thưa, giới hạn mỗi lượt, khe việc chung, lùi lịch khi lỗi, có công tắc tắt.
 - **(E) AI tốn token và có thể sai.** AI tắt sẵn, chỉ chấm bình luận đã khớp từ khoá, có ngưỡng điểm, và người dùng vẫn đổi trạng thái tay được.
+
+## Ghi chú sau phát hành (26.23)
+
+- `bestTimes` trả các mục với trường `key` (không phải `hour`), đúng như code và protocol.
+- Kết quả được đếm theo `created_at` của kết quả (khớp `posted_at` của theo dõi); các thành phần điểm được chặn trong 0..1.
+- Không có lý do "chờ duyệt" khi số bài đã đăng (posted) bằng 0.
+- Dòng "Giờ nên đăng" và gợi ý ở hộp Hẹn giờ luôn dùng 60 ngày gần nhất (có nhãn trên màn hình), không theo khoảng 7/30 ngày của bảng, vì khoảng ngắn hiếm khi đủ 5 bài đã đo mỗi khung.
+- Nhãn gom của bảng là "Giờ (giờ máy)" / "Thứ (giờ máy)".
+- Cột Điểm đặt ngay sau tên nhóm.
+- Nhóm có ~70% bài bị giữ vẫn rơi quanh "Trung bình" (≈55) vì trọng số thành công / sống sót giữ đầy đủ; có thể cần chỉnh trọng số sau khi có dữ liệu thật.
+- Gợi ý trong ScheduleDialog không xét chiến dịch.
+- Chip điểm trong Soạn bài chỉ hiện cho nhóm khớp đúng `group_url`.
