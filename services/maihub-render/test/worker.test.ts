@@ -1,0 +1,309 @@
+import { spawnSync } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { buildWorkdir } from '../src/buildWorkdir';
+import { prepareMusic } from '../src/music';
+import { finalizeVideo, runRender } from '../src/renderRunner';
+import { RenderWorker, WorkerConfig } from '../src/worker';
+
+const FIXTURES = path.join(__dirname, 'fixtures');
+const FAKE = path.join(FIXTURES, 'fake-hf.js');
+const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0 && spawnSync('ffprobe', ['-version']).status === 0;
+const maybe = hasFfmpeg ? it : it.skip; // máy không có FFmpeg: bỏ qua có chủ đích
+
+let root: string;
+let video: string;
+let audio: string;
+const tpl = (name: string) => path.join(root, name);
+
+beforeAll(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'wk-'));
+  video = path.join(root, 'src.mp4');
+  audio = path.join(root, 'src.wav');
+  if (hasFfmpeg) {
+    spawnSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=10:duration=2', '-pix_fmt', 'yuv420p', video]);
+    spawnSync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', audio]);
+  }
+});
+afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+
+function dirs() {
+  const base = fs.mkdtempSync(path.join(root, 'case-'));
+  const d = { input: path.join(base, 'input'), tmp: path.join(base, 'tmp'), shared: path.join(base, 'shared'), music: path.join(base, 'music') };
+  for (const x of Object.values(d)) fs.mkdirSync(x, { recursive: true });
+  return d;
+}
+const probeDur = (f: string) => Number(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f]).stdout.toString());
+
+describe('buildWorkdir', () => {
+  const templatesDir = path.join(FIXTURES, 'tpl');
+  const baseSpec = { width: 1080, height: 1920, fps: 30, quality: 'standard' as const };
+
+  it('mẫu: chép mẫu, ảnh vào assets/, ghi variables.json', async () => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.input, 'img1.jpg'), 'a');
+    fs.writeFileSync(path.join(d.input, 'img2.png'), 'b');
+    fs.writeFileSync(path.join(d.input, 'job.json'), '{}');
+    const spec = { ...baseSpec, kind: 'template' as const, templateId: 'demo', aspect: '9:16' as const, variables: { title: 'Hi' }, images: ['img1.jpg', 'img2.png'], musicId: null, musicFile: null };
+    const r = await buildWorkdir({ id: 'j1', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    expect([r.width, r.height]).toEqual([1080, 1920]);
+    expect(fs.existsSync(path.join(r.dir, 'index.html'))).toBe(true);
+    expect(fs.readFileSync(path.join(r.dir, 'assets', 'img2.png'), 'utf8')).toBe('b');
+    expect(fs.existsSync(path.join(r.dir, 'job.json'))).toBe(false);
+    const vars = JSON.parse(fs.readFileSync(path.join(r.dir, 'variables.json'), 'utf8'));
+    expect(vars).toMatchObject({ title: 'Hi', images: ['assets/img1.jpg', 'assets/img2.png'], width: 1080, height: 1920, durationSec: 6 });
+    expect(fs.existsSync(path.join(templatesDir, 'demo', 'variables.json'))).toBe(false); // không sửa mẫu gốc
+  });
+
+  it('mẫu: tên ảnh có ../ hoặc id mẫu lạ bị từ chối', async () => {
+    const d = dirs();
+    const spec = { ...baseSpec, kind: 'template' as const, templateId: 'demo', aspect: '9:16' as const, variables: {}, images: ['../x.jpg'], musicId: null, musicFile: null };
+    const o = { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp };
+    await expect(buildWorkdir({ id: 'j', spec }, o)).rejects.toThrow();
+    await expect(buildWorkdir({ id: 'j', spec: { ...spec, images: [], templateId: '../demo' } }, o)).rejects.toThrow();
+    await expect(buildWorkdir({ id: 'j', spec: { ...spec, images: [], templateId: 'none' } }, o)).rejects.toThrow(/none/);
+  });
+
+  it('HTML: ghi index.html và tài nguyên, không chép job.json/cancel', async () => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.input, 'index.html'), '<div data-composition-id="m" data-duration="3"></div>');
+    fs.writeFileSync(path.join(d.input, 'asset1.jpg'), 'z');
+    fs.writeFileSync(path.join(d.input, 'job.json'), '{}');
+    fs.writeFileSync(path.join(d.input, 'cancel'), 'j');
+    const spec = { ...baseSpec, kind: 'html' as const, html: '', durationSec: 3, width: 1920, height: 1080 };
+    const r = await buildWorkdir({ id: 'j2', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    expect([r.width, r.height]).toEqual([1920, 1080]);
+    expect(fs.readdirSync(r.dir).sort()).toEqual(['asset1.jpg', 'index.html']);
+  });
+
+  maybe('mẫu có nhạc gửi kèm: tạo assets/music.m4a', async () => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.input, 'img1.jpg'), 'a');
+    fs.copyFileSync(audio, path.join(d.input, 'audio1.wav'));
+    const spec = { ...baseSpec, kind: 'template' as const, templateId: 'demo', aspect: '9:16' as const, variables: {}, images: ['img1.jpg'], musicId: null, musicFile: 'audio1.wav' };
+    const r = await buildWorkdir({ id: 'j3', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    expect(probeDur(path.join(r.dir, 'assets', 'music.m4a'))).toBeGreaterThan(5);
+  });
+
+  maybe('mẫu có nhạc có sẵn theo musicId', async () => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.input, 'img1.jpg'), 'a');
+    fs.copyFileSync(audio, path.join(d.music, 'calm.wav'));
+    const spec = { ...baseSpec, kind: 'template' as const, templateId: 'demo', aspect: '9:16' as const, variables: {}, images: ['img1.jpg'], musicId: 'calm', musicFile: null };
+    const r = await buildWorkdir({ id: 'j4', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    expect(fs.existsSync(path.join(r.dir, 'assets', 'music.m4a'))).toBe(true);
+  });
+});
+
+describe('prepareMusic', () => {
+  maybe('lặp nhạc ngắn cho đủ thời lượng, ra M4A', async () => {
+    const out = path.join(root, 'loop.m4a');
+    await prepareMusic(audio, 4, out);
+    expect(probeDur(out)).toBeGreaterThan(3.7);
+    expect(probeDur(out)).toBeLessThan(4.4);
+  });
+  maybe('cắt nhạc dài theo thời lượng', async () => {
+    const out = path.join(root, 'cut.m4a');
+    await prepareMusic(audio, 0.5, out);
+    expect(probeDur(out)).toBeLessThan(0.8);
+  });
+  it('FFmpeg lỗi thì ném', async () => {
+    await expect(prepareMusic(audio, 2, path.join(root, 'x.m4a'), '/nonexistent/ffmpeg')).rejects.toThrow();
+  });
+});
+
+describe('runRender', () => {
+  const base = (over: Record<string, unknown> = {}) => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.tmp, 'variables.json'), '{}');
+    return {
+      d,
+      opts: { dir: d.tmp, outFile: path.join(d.tmp, 'o.mp4'), fps: 24, quality: 'high' as const, command: [process.execPath, FAKE], timeoutMs: 20000, killGraceMs: 300, env: { FAKE_VIDEO: video, FAKE_LOG: path.join(d.tmp, 'log.json') } as Record<string, string>, ...over },
+    };
+  };
+
+  it('chạy đúng tham số, đọc @hf-progress, tắt telemetry', async () => {
+    const { d, opts } = base();
+    const seen: number[] = [];
+    const r = await runRender({ ...opts, onProgress: (p) => seen.push(p) });
+    expect(r).toEqual({ status: 'done' });
+    expect(seen).toEqual([5, 50, 80, 99]);
+    const log = JSON.parse(fs.readFileSync(path.join(d.tmp, 'log.json'), 'utf8'));
+    expect(log.argv).toEqual(expect.arrayContaining(['render', d.tmp, '-o', opts.outFile, '--variables-file', path.join(d.tmp, 'variables.json'), '--fps', '24', '--quality', 'high', '--workers', '2']));
+    expect(log.argv).not.toContain('--quiet');
+    expect(log.env).toEqual({ t: '1', d: '1', s: '1' });
+    expect(fs.existsSync(opts.outFile)).toBe(true);
+  });
+
+  it('CLI in ít dòng tiến độ: vẫn xong', async () => {
+    const { opts } = base({ env: { FAKE_VIDEO: video, FAKE_MODE: 'silent' } });
+    const seen: number[] = [];
+    expect((await runRender({ ...opts, onProgress: (p) => seen.push(p) })).status).toBe('done');
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it('lỗi render -> failed kèm dòng lỗi cuối', async () => {
+    const { opts } = base({ env: { FAKE_MODE: 'fail' } });
+    const r = await runRender(opts);
+    expect(r.status).toBe('failed');
+    expect(r.error).toContain('Boom');
+  });
+
+  it('quá hạn -> timeout, tiến trình bị dừng', async () => {
+    const { opts } = base({ env: { FAKE_MODE: 'hang' }, timeoutMs: 400 });
+    const t = Date.now();
+    expect((await runRender(opts)).status).toBe('timeout');
+    expect(Date.now() - t).toBeLessThan(5000);
+  });
+
+  it('huỷ -> cancelled; tiến trình phớt lờ SIGTERM thì bị SIGKILL', async () => {
+    const { opts } = base({ env: { FAKE_MODE: 'stubborn' } });
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 300);
+    const t = Date.now();
+    expect((await runRender({ ...opts, signal: ac.signal })).status).toBe('cancelled');
+    expect(Date.now() - t).toBeLessThan(5000);
+  });
+
+  it('lệnh không tồn tại -> failed', async () => {
+    const { opts } = base({ command: ['/nonexistent/hf'] });
+    expect((await runRender(opts)).status).toBe('failed');
+  });
+});
+
+describe('finalizeVideo', () => {
+  maybe('tạo thumb.jpg và đọc thời lượng', async () => {
+    const d = dirs();
+    const { durationMs } = await finalizeVideo({ videoFile: video, outDir: d.shared });
+    expect(durationMs).toBeGreaterThan(1800);
+    expect(durationMs).toBeLessThan(2300);
+    expect(fs.readFileSync(path.join(d.shared, 'thumb.jpg')).subarray(0, 2).toString('hex')).toBe('ffd8');
+    expect(fs.readFileSync(path.join(d.shared, 'video.mp4')).length).toBe(fs.statSync(video).size);
+    expect(fs.readdirSync(d.shared).sort()).toEqual(['thumb.jpg', 'video.mp4']); // không để tệp tạm
+  });
+});
+
+describe('RenderWorker', () => {
+  function setup(env: Record<string, string> = {}, over: Partial<WorkerConfig> = {}) {
+    const d = dirs();
+    const current = path.join(d.shared, 'current');
+    const out = path.join(d.shared, 'out');
+    fs.mkdirSync(current, { recursive: true });
+    fs.mkdirSync(out, { recursive: true });
+    const worker = new RenderWorker({
+      sharedDir: d.shared, templatesDir: path.join(FIXTURES, 'tpl'), musicDir: d.music, tmpRoot: d.tmp,
+      hyperframesCmd: [process.execPath, FAKE], pollMs: 50, cancelPollMs: 50, timeoutMs: 20000, killGraceMs: 300,
+      env: { FAKE_VIDEO: video, ...env }, ...over,
+    });
+    const give = (id: string, spec?: unknown) => {
+      fs.writeFileSync(path.join(current, 'img1.jpg'), 'x');
+      const s = spec ?? { kind: 'template', templateId: 'demo', aspect: '9:16', width: 1080, height: 1920, fps: 24, quality: 'standard', variables: { title: 'T' }, images: ['img1.jpg'], musicId: null, musicFile: null };
+      fs.writeFileSync(path.join(current, 'job.json'), JSON.stringify({ id, jobId: id, spec: s }));
+    };
+    const result = () => JSON.parse(fs.readFileSync(path.join(out, 'result.json'), 'utf8'));
+    return { d, current, out, worker, give, result };
+  }
+
+  maybe('việc thành công: video + thumb + progress, result.json ghi CUỐI, đúng jobId', async () => {
+    const { out, worker, give, result, d } = setup();
+    give('job-a');
+    const placed: string[] = []; // thứ tự các tệp được đặt vào out/ (rename = lúc tệp xuất hiện)
+    const real = fs.renameSync;
+    const spy = jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (path.dirname(String(to)) === out) placed.push(path.basename(String(to)));
+      return real(from, to);
+    });
+    try { await worker.processOnce(); } finally { spy.mockRestore(); }
+    const r = result();
+    expect(r).toMatchObject({ jobId: 'job-a', ok: true });
+    expect(r.durationMs).toBeGreaterThan(1800);
+    expect(JSON.parse(fs.readFileSync(path.join(out, 'progress.json'), 'utf8')).jobId).toBe('job-a');
+    expect(fs.existsSync(path.join(out, 'video.mp4'))).toBe(true);
+    expect(fs.existsSync(path.join(out, 'thumb.jpg'))).toBe(true);
+    expect(placed[placed.length - 1]).toBe('result.json');
+    expect(placed).toEqual(expect.arrayContaining(['video.mp4', 'thumb.jpg', 'progress.json']));
+    expect(fs.readdirSync(out).filter((f) => f.startsWith('.'))).toEqual([]);
+    expect(fs.readdirSync(d.tmp)).toEqual([]); // đã dọn thư mục tạm
+  });
+
+  it('không xử lý lại việc đã xong (cùng jobId)', async () => {
+    const { out, worker, give, result } = setup({ FAKE_MODE: 'fail' });
+    give('job-b');
+    await worker.processOnce();
+    expect(result()).toMatchObject({ jobId: 'job-b', ok: false });
+    fs.rmSync(path.join(out, 'result.json'));
+    await worker.processOnce(); // job.json vẫn còn, api chưa dọn
+    expect(fs.existsSync(path.join(out, 'result.json'))).toBe(false);
+  });
+
+  it('lỗi render -> result ok:false có thông báo, không có video', async () => {
+    const { out, worker, give, result } = setup({ FAKE_MODE: 'fail' });
+    give('job-c');
+    await worker.processOnce();
+    expect(result().ok).toBe(false);
+    expect(result().error).toContain('Boom');
+    expect(fs.existsSync(path.join(out, 'video.mp4'))).toBe(false);
+  });
+
+  it('quá hạn -> error timeout', async () => {
+    const { worker, give, result } = setup({ FAKE_MODE: 'hang' }, { timeoutMs: 300 });
+    give('job-d');
+    await worker.processOnce();
+    expect(result()).toMatchObject({ jobId: 'job-d', ok: false, error: 'timeout' });
+  });
+
+  it('cancel giữa chừng -> result cancelled, không để video', async () => {
+    const { current, out, worker, give, result } = setup({ FAKE_MODE: 'hang' });
+    give('job-e');
+    setTimeout(() => fs.writeFileSync(path.join(current, 'cancel'), 'job-e'), 400);
+    await worker.processOnce();
+    expect(result()).toMatchObject({ jobId: 'job-e', ok: false, error: 'cancelled' });
+    expect(fs.existsSync(path.join(out, 'video.mp4'))).toBe(false);
+  });
+
+  it('cancel có sẵn trước khi bắt đầu -> cancelled ngay, không chạy CLI', async () => {
+    const { current, worker, give, result, d } = setup({ FAKE_LOG: '' });
+    const log = path.join(d.tmp, 'ran.json');
+    (worker as any).cfg.env.FAKE_LOG = log;
+    give('job-f');
+    fs.writeFileSync(path.join(current, 'cancel'), 'job-f');
+    await worker.processOnce();
+    expect(result()).toMatchObject({ jobId: 'job-f', ok: false, error: 'cancelled' });
+    expect(fs.existsSync(log)).toBe(false);
+  });
+
+  it('cancel cũ của việc khác không huỷ việc mới', async () => {
+    const { current, worker, give, result } = setup({ FAKE_MODE: 'fail' });
+    give('job-g');
+    fs.writeFileSync(path.join(current, 'cancel'), 'older-job');
+    await worker.processOnce();
+    expect(result().error).toContain('Boom'); // đã chạy, không bị coi là huỷ
+  });
+
+  it('spec lỗi (mẫu không có) -> result ok:false', async () => {
+    const { worker, give, result } = setup();
+    give('job-h', { kind: 'template', templateId: 'none', aspect: '9:16', width: 1, height: 1, fps: 24, quality: 'standard', variables: {}, images: [], musicId: null, musicFile: null });
+    await worker.processOnce();
+    expect(result()).toMatchObject({ jobId: 'job-h', ok: false });
+  });
+
+  it('job.json hỏng hoặc không có jobId thì bỏ qua', async () => {
+    const { current, out, worker } = setup();
+    fs.writeFileSync(path.join(current, 'job.json'), '{oops');
+    await worker.processOnce();
+    fs.writeFileSync(path.join(current, 'job.json'), '{"spec":{}}');
+    await worker.processOnce();
+    expect(fs.readdirSync(out)).toEqual([]);
+  });
+
+  maybe('việc mới sau việc cũ: xoá tệp cũ trong out/ và render đúng jobId mới', async () => {
+    const { out, worker, give, result } = setup();
+    give('job-1');
+    await worker.processOnce();
+    give('job-2'); // api đã dọn out/ thật ra; ở đây cố ý để tệp cũ
+    fs.writeFileSync(path.join(out, 'progress.json'), JSON.stringify({ jobId: 'job-1', percent: 50 }));
+    await worker.processOnce();
+    expect(result().jobId).toBe('job-2');
+  });
+});
