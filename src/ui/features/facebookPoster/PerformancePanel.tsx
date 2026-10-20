@@ -156,7 +156,7 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
                       <td className={`${TD} text-right`}>{formatCount(r.pending)}</td><td className={`${TD} text-right`}>{formatCount(r.notFound)}</td>
                       <td className={`${TD} text-right ${r.removedSuspected ? 'text-red-400' : ''}`}>{formatCount(r.removedSuspected)}</td>
                       <td className={`${TD} text-right`}>{formatCount(r.reactions)}</td><td className={`${TD} text-right`}>{formatCount(r.comments)}</td><td className={`${TD} text-right`}>{formatCount(r.shares)}</td>
-                      <td className={`${TD} text-right`}>{r.insufficient ? <span className="text-gray-500">chưa đủ dữ liệu</span> : r.avgEngagement === null ? '—' : r.avgEngagement.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</td>
+                      <td className={`${TD} text-right`}>{r.insufficient ? <span className="text-gray-400">chưa đủ dữ liệu</span> : r.avgEngagement === null ? '—' : r.avgEngagement.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</td>
                       <td className={`${TD} text-right`}>{formatRate(r.engagementRate)}</td>
                     </tr>
                   ))}

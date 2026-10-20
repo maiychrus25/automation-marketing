@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
@@ -32,30 +32,42 @@ export default function CampaignsTab() {
   const [detail, setDetail] = useState<CampaignDetail | null>(null);
   const [detailError, setDetailError] = useState('');
   const [now, setNow] = useState(Date.now());
+  const openFacebookPoster = useAppStore((s) => s.openFacebookPoster);
+  const setPosterFocusScheduleId = useAppStore((s) => s.setPosterFocusScheduleId);
+  // Chỉ phản hồi của lần gọi mới nhất được ghi vào state; mọi lần gọi bị bỏ khi tab đã gỡ.
+  const loadSeq = useRef(0);
+  const detailSeq = useRef(0);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const openSchedule = (id: string) => { setPosterFocusScheduleId(id); openFacebookPoster('schedule'); };
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       // Mặc định API ẩn lưu trữ; khi bật công tắc thì gọi thêm danh sách lưu trữ.
       const [res, archived] = await Promise.all([
         ipc.facebookPoster?.campaignList(),
         showArchived ? ipc.facebookPoster?.campaignList({ status: 'archived' }) : Promise.resolve(undefined),
       ]);
+      if (seq !== loadSeq.current || !alive.current) return;
       if (!res?.success) throw new Error(res?.error || 'Không tải được danh sách chiến dịch');
       if (archived && !archived.success) throw new Error(archived.error || 'Không tải được danh sách chiến dịch');
       setCampaigns([...(res.campaigns || []), ...(archived?.campaigns || [])]);
       setError('');
       setNow(Date.now());
-    } catch (err) { setError(err instanceof Error ? err.message : 'Không tải được danh sách chiến dịch'); }
-    finally { setLoading(false); }
+    } catch (err) { if (seq === loadSeq.current && alive.current) setError(err instanceof Error ? err.message : 'Không tải được danh sách chiến dịch'); }
+    finally { if (seq === loadSeq.current && alive.current) setLoading(false); }
   }, [showArchived]);
 
   const loadDetail = useCallback(async (id: string) => {
+    const seq = ++detailSeq.current;
     try {
       const res = await ipc.facebookPoster?.campaignGet(id);
+      if (seq !== detailSeq.current || !alive.current) return;
       if (!res?.success || !res.campaign) throw new Error(res?.error || 'Không tải được chiến dịch');
       setDetail(res.campaign);
       setDetailError('');
-    } catch (err) { setDetail(null); setDetailError(err instanceof Error ? err.message : 'Không tải được chiến dịch'); }
+    } catch (err) { if (seq !== detailSeq.current || !alive.current) return; setDetail(null); setDetailError(err instanceof Error ? err.message : 'Không tải được chiến dịch'); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -134,7 +146,8 @@ export default function CampaignsTab() {
               : detail.schedules.length === 0 ? <p className="poster-muted text-xs">Chưa có lịch hay bài nháp nào. Soạn bài rồi chọn chiến dịch này.</p>
                 : <ul className="space-y-2">
                   {detail.schedules.map((s) => (
-                    <li key={s.id} className="poster-schedule-row">
+                    <li key={s.id}>
+                      <button type="button" className="poster-schedule-row w-full text-left focus-visible:ring-2 focus-visible:ring-blue-500" onClick={() => openSchedule(s.id)} aria-label={`Mở ${s.draft ? 'bài nháp' : 'lịch'} ${s.name} trong Lịch đăng`}>
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold truncate" title={s.name}>{s.name}</p>
                         <p className="poster-muted text-xs mt-1">
@@ -143,6 +156,7 @@ export default function CampaignsTab() {
                           {` · ${s.nextRunAt ? formatShort(s.nextRunAt) : 'Không có lần chạy tới'}`}
                         </p>
                       </div>
+                      </button>
                     </li>
                   ))}
                 </ul>}
@@ -180,7 +194,7 @@ export default function CampaignsTab() {
                     {c.summary
                       ? ` · ${formatCount(c.summary.posts)} bài · ${formatCount(c.summary.withLink)} có link · TB/bài `
                       : ' · Chưa có bài'}
-                    {c.summary && (c.summary.insufficient ? <span className="text-gray-500">chưa đủ dữ liệu</span>
+                    {c.summary && (c.summary.insufficient ? <span className="text-gray-400">chưa đủ dữ liệu</span>
                       : c.summary.avgEngagement === null ? '—' : c.summary.avgEngagement.toLocaleString('vi-VN', { maximumFractionDigits: 1 }))}
                   </p>
                   {actions(c)}

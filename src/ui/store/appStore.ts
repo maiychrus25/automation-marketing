@@ -142,6 +142,9 @@ interface AppStore {
 
   setView: (view: AppView) => void;
   openFacebookPoster: (section: FacebookPosterSection) => void;
+  /** Lịch cần mở chi tiết khi vào Lịch đăng (đặt từ chi tiết chiến dịch); ScheduleTab xoá sau khi mở. */
+  posterFocusScheduleId: string | null;
+  setPosterFocusScheduleId: (id: string | null) => void;
   setLoading: (loading: boolean) => void;
   showNotification: (message: string, type?: 'success' | 'error' | 'info' | 'warning') => void;
   hideNotification: () => void;
@@ -368,6 +371,7 @@ function persistFlag(zaloId: string, contactId: string, flags: { is_muted?: numb
 export const useAppStore = create<AppStore>((set, get) => ({
   view: 'dashboard',
   facebookPosterSection: 'schedule',
+  posterFocusScheduleId: null,
   isLoading: false,
   notification: null,
   erpPermissionDialog: null,
@@ -433,6 +437,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   setView: (view) => set({ view }),
   openFacebookPoster: (facebookPosterSection) => set({ view: 'facebookPoster', facebookPosterSection }),
+  setPosterFocusScheduleId: (posterFocusScheduleId) => set({ posterFocusScheduleId }),
   setLoading: (isLoading) => set({ isLoading }),
   showNotification: (message, type = 'info') => {
     set({ notification: { message, type } });

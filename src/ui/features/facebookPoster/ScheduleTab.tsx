@@ -80,6 +80,19 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
   }, []);
   const campaignName = (id: string | null) => (id ? campaigns.find(c => c.id === id)?.name ?? '(chiến dịch đã xoá)' : '');
   const matchesCampaign = (schedule: FbPosterScheduleView) => campaignFilter === 'all' || (campaignFilter === 'none' ? schedule.campaignId === null : schedule.campaignId === campaignFilter);
+  // Mở chi tiết lịch được chọn từ trang Chiến dịch, rồi xoá yêu cầu.
+  const focusId = useAppStore(s => s.posterFocusScheduleId);
+  const setFocusId = useAppStore(s => s.setPosterFocusScheduleId);
+  useEffect(() => {
+    if (!focusId || loading) return;
+    const schedule = schedules.find(item => item.id === focusId);
+    setFocusId(null);
+    if (!schedule) { showNotification('Không tìm thấy lịch (có thể đã bị xoá)', 'error'); return; }
+    setOperationError('');
+    const isQueued = queued.has(schedule.id);
+    setDetail({ schedule, at: schedule.nextRunAt ?? schedule.runAt ?? schedule.lastRun?.startedAt ?? Date.now(), queued: isQueued,
+      historical: !schedule.draft && schedule.kind === 'once' && !!schedule.lastRun && schedule.nextRunAt === null && !isQueued });
+  }, [focusId, loading, schedules, queued, setFocusId, showNotification]);
   useEffect(() => {
     const dialog = detailRef.current;
     if (detail && dialog && !dialog.open) dialog.showModal();
