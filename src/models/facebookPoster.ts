@@ -88,7 +88,37 @@ export interface FbPosterComment {
     authorUrl: string;
     text: string;
     commentedAt: string;
+    /** Thời điểm ước tính đổi từ commentedAt; null nếu không đọc được. */
+    commentedAtMs: number | null;
     collectedAt: number;
+}
+
+export type LeadStatus = 'new' | 'contacted' | 'won' | 'ignored';
+
+/** Khách tiềm năng lọc từ bình luận (bảng fb_poster_leads). */
+export interface FbPosterLead {
+    id: number;
+    commentKey: string;
+    postUrl: string;
+    resultId: number | null;
+    groupUrl: string;
+    campaignId: string | null;
+    variant: string;
+    profileId: string;
+    authorId: string;
+    authorName: string;
+    authorUrl: string;
+    text: string;
+    commentedAtMs: number | null;
+    /** Từ khoá khớp; có thêm 'phone' nếu khớp số điện thoại. */
+    matched: string[];
+    aiIntent: 'buy' | 'question' | 'other' | null;
+    aiScore: number | null;
+    aiReason: string | null;
+    status: LeadStatus;
+    note: string;
+    detectedAt: number;
+    updatedAt: number;
 }
 
 export type LoginState = 'ok' | 'logged_out' | 'checkpoint';
@@ -129,6 +159,9 @@ export interface PostTrackingRow {
     nextCheckAt: number | null;
     /** Nhãn các mốc đo đã làm, dạng `${phút}m` (ví dụ "60m", "1440m"). */
     statsDone: string[];
+    /** Nhãn các mốc thu bình luận đã làm, dạng `${phút}m`. */
+    commentsDone: string[];
+    nextCommentAt: number | null;
 }
 
 export interface PostStatsSnapshot {

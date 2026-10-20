@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS fb_poster_comments (
     text         TEXT NOT NULL DEFAULT '',
     commented_at TEXT NOT NULL DEFAULT '', -- chữ thời gian Facebook hiển thị, ví dụ "2 giờ"
     collected_at INTEGER NOT NULL
+    -- commented_at_ms: thêm bằng migration (26.24)
 );
 CREATE INDEX IF NOT EXISTS idx_fb_poster_comments_post ON fb_poster_comments(post_url);
 
@@ -117,6 +118,33 @@ CREATE TABLE IF NOT EXISTS fb_poster_campaigns (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- Khách tiềm năng từ bình luận: docs/specs/2026-10-20-group-scores-times-leads.md mục 6.3
+CREATE TABLE IF NOT EXISTS fb_poster_leads (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    comment_key     TEXT NOT NULL UNIQUE,    -- fb_poster_comments.key, chống trùng
+    post_url        TEXT NOT NULL,
+    result_id       INTEGER DEFAULT NULL,
+    group_url       TEXT NOT NULL DEFAULT '',
+    campaign_id     TEXT DEFAULT NULL,
+    variant         TEXT NOT NULL DEFAULT '',
+    profile_id      TEXT NOT NULL,
+    author_id       TEXT NOT NULL DEFAULT '',
+    author_name     TEXT NOT NULL DEFAULT '',
+    author_url      TEXT NOT NULL DEFAULT '',
+    text            TEXT NOT NULL DEFAULT '',
+    commented_at_ms INTEGER DEFAULT NULL,
+    matched         TEXT NOT NULL DEFAULT '', -- từ khoá khớp, cách nhau dấu phẩy; có thể có 'phone'
+    ai_intent       TEXT DEFAULT NULL,
+    ai_score        INTEGER DEFAULT NULL,
+    ai_reason       TEXT DEFAULT NULL,
+    status          TEXT NOT NULL DEFAULT 'new', -- new | contacted | won | ignored
+    note            TEXT NOT NULL DEFAULT '',
+    detected_at     INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_leads_status ON fb_poster_leads(status, detected_at);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_leads_campaign ON fb_poster_leads(campaign_id);
 `;
 
 // Chạy sau FB_POSTER_SCHEMA_SQL, từng câu trong try/catch (cột đã có thì ALTER ném lỗi, bỏ qua).
@@ -133,4 +161,9 @@ export const FB_POSTER_MIGRATIONS: string[] = [
     "ALTER TABLE fb_poster_post_tracking ADD COLUMN variant TEXT NOT NULL DEFAULT ''",
     'CREATE INDEX IF NOT EXISTS idx_fb_poster_schedules_campaign ON fb_poster_schedules(campaign_id)',
     'CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_campaign ON fb_poster_post_tracking(campaign_id)',
+    // 26.24: thu bình luận tự động và khách tiềm năng. Index tạo sau ALTER.
+    'ALTER TABLE fb_poster_comments ADD COLUMN commented_at_ms INTEGER DEFAULT NULL',
+    "ALTER TABLE fb_poster_post_tracking ADD COLUMN comments_done TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE fb_poster_post_tracking ADD COLUMN next_comment_at INTEGER DEFAULT NULL',
+    'CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_next_comment ON fb_poster_post_tracking(next_comment_at)',
 ];

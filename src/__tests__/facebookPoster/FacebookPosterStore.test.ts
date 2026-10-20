@@ -171,7 +171,7 @@ test('listComments lọc theo postUrl và phân trang', () => {
   assert.strictEqual(page.total, 3);
   assert.strictEqual(page.comments.length, 1);
   const first = page.comments[0];
-  assert.deepStrictEqual(Object.keys(first).sort(), ['authorId', 'authorName', 'authorUrl', 'collectedAt', 'commentedAt', 'key', 'postUrl', 'profileId', 'text']);
+  assert.deepStrictEqual(Object.keys(first).sort(), ['authorId', 'authorName', 'authorUrl', 'collectedAt', 'commentedAt', 'commentedAtMs', 'key', 'postUrl', 'profileId', 'text']);
 });
 
 test('listPostedUrls: chỉ dòng có post_url, mỗi URL một lần, mới nhất trước', () => {
@@ -840,5 +840,150 @@ describe('statsReport by campaign and variant', () => {
     expect(s.listTracking({ campaignId: 'c1' }).map((r) => r.resultId).sort()).toEqual([1, 2]);
     expect(s.listTracking({ campaignId: '' }).map((r) => r.resultId).sort()).toEqual([3, 5, 6, 7]);
     expect(s.listTracking({ scheduleId: 's2' }).map((r) => r.resultId).sort()).toEqual([3, 4]);
+  });
+});
+
+// ─── Khách tiềm năng từ bình luận (26.24) ────────────────────────────────────
+
+describe('comment leads store', () => {
+  const POST = 'https://www.facebook.com/groups/1/posts/1/';
+  function lead(over: Record<string, unknown> = {}) {
+    return {
+      commentKey: 'k1', postUrl: POST, resultId: null as number | null, groupUrl: 'https://www.facebook.com/groups/1/', campaignId: null as string | null,
+      variant: '', profileId: 'p1', authorId: 'a1', authorName: 'Nguyễn An', authorUrl: 'https://www.facebook.com/an', text: 'Giá bao nhiêu vậy',
+      commentedAtMs: null as number | null, matched: ['giá'], aiIntent: null, aiScore: null, aiReason: null,
+      status: 'new' as const, note: '', detectedAt: 1000, updatedAt: 1000, ...over,
+    } as any;
+  }
+  function track(s: FacebookPosterStore, resultId: number, over: Record<string, unknown> = {}) {
+    s.createTracking({
+      resultId, runId: 'r1', scheduleId: null, profileId: 'p1', groupUrl: 'https://www.facebook.com/groups/1/', groupId: '',
+      postId: '', postUrl: `https://www.facebook.com/groups/1/posts/${resultId}/`, postedAt: 1000, textHead: 'x', linkStatus: 'known',
+      removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null, statsDone: [],
+      commentsDone: [], nextCommentAt: 500, ...over,
+    } as any);
+  }
+
+  test('migration on an old DB is idempotent and adds columns and index', () => {
+    const db = memoryDb();
+    db.exec(`CREATE TABLE fb_poster_comments (key TEXT PRIMARY KEY, profile_id TEXT NOT NULL, post_url TEXT NOT NULL, author_id TEXT NOT NULL DEFAULT '',
+      author_name TEXT NOT NULL DEFAULT '', author_url TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '', commented_at TEXT NOT NULL DEFAULT '', collected_at INTEGER NOT NULL)`);
+    db.exec(`CREATE TABLE fb_poster_post_tracking (result_id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, schedule_id TEXT DEFAULT NULL, profile_id TEXT NOT NULL,
+      group_url TEXT NOT NULL, group_id TEXT NOT NULL DEFAULT '', post_id TEXT NOT NULL DEFAULT '', post_url TEXT DEFAULT NULL, posted_at INTEGER NOT NULL,
+      text_head TEXT NOT NULL DEFAULT '', link_status TEXT NOT NULL, removed_suspected INTEGER NOT NULL DEFAULT 0, last_seen_at INTEGER DEFAULT NULL,
+      last_checked_at INTEGER DEFAULT NULL, check_count INTEGER NOT NULL DEFAULT 0, next_check_at INTEGER DEFAULT NULL, stats_done TEXT NOT NULL DEFAULT '')`);
+    const s = new FacebookPosterStore(db);
+    s.ensureSchema();
+    s.ensureSchema();
+    const columns = (t: string) => db.query<{ name: string }>(`PRAGMA table_info(${t})`).map((c) => c.name);
+    expect(columns('fb_poster_comments')).toContain('commented_at_ms');
+    expect(columns('fb_poster_post_tracking')).toEqual(expect.arrayContaining(['comments_done', 'next_comment_at']));
+    const indexes = db.query<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'index'`).map((i) => i.name);
+    expect(indexes).toEqual(expect.arrayContaining(['idx_fb_poster_post_tracking_next_comment', 'idx_fb_poster_leads_status', 'idx_fb_poster_leads_campaign']));
+  });
+
+  test('insertCommentsReturningNew returns only new rows; saveComments still returns the count', () => {
+    const s = store();
+    const a = comment({ text: 'a' });
+    const b = comment({ text: 'b' });
+    expect(s.insertCommentsReturningNew('p1', [a, b], 5000).map((c) => c.text)).toEqual(['a', 'b']);
+    expect(s.insertCommentsReturningNew('p1', [a, comment({ text: 'c' })], 6000).map((c) => c.text)).toEqual(['c']);
+    expect(s.saveComments('p1', [a, comment({ text: 'd' }), comment({ text: 'e' })], 7000)).toBe(2);
+    expect(s.saveComments('p1', [a], 8000)).toBe(0);
+  });
+
+  test('commented_at_ms is parsed from the label at collection time', () => {
+    const s = store();
+    const hour = 3600_000;
+    s.saveComments('p1', [comment({ text: 'x', commentedAt: '2 giờ' }), comment({ text: 'y', commentedAt: 'không rõ' })], 10 * hour);
+    const rows = s.listComments({ limit: 10, offset: 0 }).comments;
+    expect(rows.find((c) => c.text === 'x')!.commentedAtMs).toBe(8 * hour);
+    expect(rows.find((c) => c.text === 'y')!.commentedAtMs).toBeNull();
+  });
+
+  test('createLeads de-duplicates by comment_key and returns only created rows', () => {
+    const s = store();
+    const first = s.createLeads([lead({ commentKey: 'k1' }), lead({ commentKey: 'k2', matched: ['ib', 'phone'] })]);
+    expect(first.map((l) => l.commentKey)).toEqual(['k1', 'k2']);
+    expect(first[0].id).toBeGreaterThan(0);
+    expect(first[1].matched).toEqual(['ib', 'phone']);
+    const again = s.createLeads([lead({ commentKey: 'k1' }), lead({ commentKey: 'k3' })]);
+    expect(again.map((l) => l.commentKey)).toEqual(['k3']);
+    expect(s.listLeads({ limit: 10, offset: 0 }).total).toBe(3);
+  });
+
+  test('listLeads filters, searches without accents, and paginates', () => {
+    const s = store();
+    s.createLeads([
+      lead({ commentKey: 'k1', detectedAt: 1000, campaignId: 'c1', authorName: 'Nguyễn An', text: 'Giá bao nhiêu' }),
+      lead({ commentKey: 'k2', detectedAt: 2000, campaignId: 'c2', status: 'won', authorName: 'Bình', text: 'Đặt hàng ship Hà Nội' }),
+      lead({ commentKey: 'k3', detectedAt: 3000, campaignId: 'c1', status: 'contacted', authorName: 'Châu', text: 'ib em' }),
+    ]);
+    expect(s.listLeads({ limit: 10, offset: 0 }).leads.map((l) => l.commentKey)).toEqual(['k3', 'k2', 'k1']);
+    expect(s.listLeads({ status: 'won', limit: 10, offset: 0 }).leads.map((l) => l.commentKey)).toEqual(['k2']);
+    expect(s.listLeads({ campaignId: 'c1', limit: 10, offset: 0 }).total).toBe(2);
+    expect(s.listLeads({ from: 1500, to: 2500, limit: 10, offset: 0 }).leads.map((l) => l.commentKey)).toEqual(['k2']);
+    expect(s.listLeads({ search: 'nguyen', limit: 10, offset: 0 }).leads.map((l) => l.commentKey)).toEqual(['k1']);
+    expect(s.listLeads({ search: 'DAT HANG', limit: 10, offset: 0 }).leads.map((l) => l.commentKey)).toEqual(['k2']);
+    const page = s.listLeads({ search: 'a', limit: 1, offset: 1 });
+    expect(page.total).toBe(3);
+    expect(page.leads).toHaveLength(1);
+    expect(s.listLeads({ limit: 2, offset: 2 })).toMatchObject({ total: 3, leads: [{ commentKey: 'k1' }] });
+  });
+
+  test('updateLead patches status and note, returns null for an unknown id', () => {
+    const s = store();
+    const [created] = s.createLeads([lead()]);
+    const updated = s.updateLead(created.id, { status: 'contacted', note: 'đã gọi' }, 9000)!;
+    expect(updated).toMatchObject({ status: 'contacted', note: 'đã gọi', updatedAt: 9000 });
+    expect(s.updateLead(created.id, { note: 'x' }, 9500)).toMatchObject({ status: 'contacted', note: 'x' });
+    expect(s.updateLead(9999, { status: 'won' }, 1)).toBeNull();
+  });
+
+  test('listDueCommentPosts picks known linked rows that are due, in order', () => {
+    const s = store();
+    track(s, 1, { nextCommentAt: 300 });
+    track(s, 2, { nextCommentAt: 100 });
+    track(s, 3, { nextCommentAt: 900 });
+    track(s, 4, { nextCommentAt: null });
+    track(s, 5, { nextCommentAt: 100, linkStatus: 'missing' });
+    track(s, 6, { nextCommentAt: 100, postUrl: '' });
+    track(s, 7, { nextCommentAt: 100, postUrl: null });
+    expect(s.listDueCommentPosts(500, 10).map((r) => r.resultId)).toEqual([2, 1]);
+    expect(s.listDueCommentPosts(500, 1).map((r) => r.resultId)).toEqual([2]);
+  });
+
+  test('updateCommentSchedule writes the labels and next time', () => {
+    const s = store();
+    track(s, 1);
+    s.updateCommentSchedule(1, { commentsDone: ['120m'], nextCommentAt: 7000 });
+    expect(s.listTracking({})[0]).toMatchObject({ commentsDone: ['120m'], nextCommentAt: 7000 });
+    s.updateCommentSchedule(1, { commentsDone: ['120m', '1440m'], nextCommentAt: null });
+    expect(s.listTracking({})[0]).toMatchObject({ commentsDone: ['120m', '1440m'], nextCommentAt: null });
+  });
+
+  test('pruneLeadsOlderThan removes old leads only', () => {
+    const s = store();
+    s.createLeads([lead({ commentKey: 'old', detectedAt: 100 }), lead({ commentKey: 'new', detectedAt: 900 })]);
+    expect(s.pruneLeadsOlderThan(500)).toBe(1);
+    expect(s.listLeads({ limit: 10, offset: 0 }).leads.map((l) => l.commentKey)).toEqual(['new']);
+  });
+
+  test('leadCommentKeys returns the keys that are leads, over 500 entries', () => {
+    const s = store();
+    s.createLeads([lead({ commentKey: 'k1' }), lead({ commentKey: 'k2' })]);
+    const keys = Array.from({ length: 1200 }, (_, i) => `x${i}`).concat(['k1', 'k2', 'k9']);
+    expect([...s.leadCommentKeys(keys)].sort()).toEqual(['k1', 'k2']);
+    expect(s.leadCommentKeys([]).size).toBe(0);
+  });
+
+  test('trackingByPostUrls maps by post_url across more than 500 urls', () => {
+    const s = store();
+    for (let i = 1; i <= 3; i++) track(s, i);
+    const urls = Array.from({ length: 1100 }, (_, i) => `https://nope/${i}`).concat(['https://www.facebook.com/groups/1/posts/2/', 'https://www.facebook.com/groups/1/posts/3/']);
+    const map = s.trackingByPostUrls(urls);
+    expect([...map.keys()].sort()).toEqual(['https://www.facebook.com/groups/1/posts/2/', 'https://www.facebook.com/groups/1/posts/3/']);
+    expect(map.get('https://www.facebook.com/groups/1/posts/2/')!.resultId).toBe(2);
+    expect(s.trackingByPostUrls([]).size).toBe(0);
   });
 });

@@ -1,9 +1,11 @@
 import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from './schema';
 import { MIN_MEASURED_FOR_COMPARISON } from './postTracking';
 import { keyOf, type CollectedComment } from './collectComments';
+import { parseCommentTime } from './commentTime';
+import { stripAccents } from './leadRules';
 import type { GroupScoreInput } from './groupScores';
 import type {
-    FbPosterComment, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
+    FbPosterComment, FbPosterLead, LeadStatus, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
     CampaignStatus, FbPosterCampaign, FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
     LinkStatus, PostStatsGroupBy, PostStatsReportRow, PostStatsSnapshot, PostTrackingRow,
 } from '../../models/facebookPoster';
@@ -109,6 +111,34 @@ function mapTracking(row: any): PostTrackingRow {
         checkCount: row.check_count,
         nextCheckAt: row.next_check_at ?? null,
         statsDone: row.stats_done === '' ? [] : String(row.stats_done).split(','),
+        commentsDone: !row.comments_done ? [] : String(row.comments_done).split(','),
+        nextCommentAt: row.next_comment_at ?? null,
+    };
+}
+
+function mapLead(row: any): FbPosterLead {
+    return {
+        id: row.id,
+        commentKey: row.comment_key,
+        postUrl: row.post_url,
+        resultId: row.result_id ?? null,
+        groupUrl: row.group_url,
+        campaignId: row.campaign_id ?? null,
+        variant: row.variant ?? '',
+        profileId: row.profile_id,
+        authorId: row.author_id,
+        authorName: row.author_name,
+        authorUrl: row.author_url,
+        text: row.text,
+        commentedAtMs: row.commented_at_ms ?? null,
+        matched: row.matched === '' ? [] : String(row.matched).split(','),
+        aiIntent: row.ai_intent ?? null,
+        aiScore: row.ai_score ?? null,
+        aiReason: row.ai_reason ?? null,
+        status: row.status,
+        note: row.note,
+        detectedAt: row.detected_at,
+        updatedAt: row.updated_at,
     };
 }
 
@@ -150,6 +180,7 @@ function mapComment(row: any): FbPosterComment {
         authorUrl: row.author_url,
         text: row.text,
         commentedAt: row.commented_at,
+        commentedAtMs: row.commented_at_ms ?? null,
         collectedAt: row.collected_at,
     };
 }
@@ -419,17 +450,31 @@ export class FacebookPosterStore {
 
     /** Trả số dòng thật sự thêm mới (dòng trùng khoá bị bỏ qua). */
     saveComments(profileId: string, rows: CollectedComment[], collectedAt: number): number {
+        return this.insertCommentsReturningNew(profileId, rows, collectedAt).length;
+    }
+
+    /** Ghi bình luận (kèm commented_at_ms ước tính) và trả các dòng thật sự mới, theo thứ tự đầu vào. */
+    insertCommentsReturningNew(profileId: string, rows: CollectedComment[], collectedAt: number): FbPosterComment[] {
         return this.db.transaction(() => {
-            const before = this.count('SELECT COUNT(*) AS n FROM fb_poster_comments');
+            const created: FbPosterComment[] = [];
             for (const c of rows) {
+                const key = keyOf(c);
+                const commentedAtMs = parseCommentTime(c.commentedAt, collectedAt);
+                const before = this.count('SELECT COUNT(*) AS n FROM fb_poster_comments');
                 this.db.run(
                     `INSERT OR IGNORE INTO fb_poster_comments
-                        (key, profile_id, post_url, author_id, author_name, author_url, text, commented_at, collected_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [keyOf(c), profileId, c.postUrl, c.authorId, c.authorName, c.authorUrl, c.text, c.commentedAt, collectedAt],
+                        (key, profile_id, post_url, author_id, author_name, author_url, text, commented_at, commented_at_ms, collected_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [key, profileId, c.postUrl, c.authorId, c.authorName, c.authorUrl, c.text, c.commentedAt, commentedAtMs, collectedAt],
                 );
+                if (this.count('SELECT COUNT(*) AS n FROM fb_poster_comments') > before) {
+                    created.push({
+                        key, profileId, postUrl: c.postUrl, authorId: c.authorId, authorName: c.authorName, authorUrl: c.authorUrl,
+                        text: c.text, commentedAt: c.commentedAt, commentedAtMs, collectedAt,
+                    });
+                }
             }
-            return this.count('SELECT COUNT(*) AS n FROM fb_poster_comments') - before;
+            return created;
         });
     }
 
@@ -472,15 +517,15 @@ export class FacebookPosterStore {
 
     // ─── Theo dõi bài đã đăng ────────────────────────────────────────────────
 
-    createTracking(row: Omit<PostTrackingRow, 'campaignId' | 'variant'> & { campaignId?: string | null; variant?: string }): void {
+    createTracking(row: Omit<PostTrackingRow, 'campaignId' | 'variant' | 'commentsDone' | 'nextCommentAt'> & { campaignId?: string | null; variant?: string; commentsDone?: string[]; nextCommentAt?: number | null }): void {
         this.db.run(
             `INSERT OR IGNORE INTO fb_poster_post_tracking
                (result_id, run_id, schedule_id, campaign_id, variant, profile_id, group_url, group_id, post_id, post_url, posted_at, text_head,
-                link_status, removed_suspected, last_seen_at, last_checked_at, check_count, next_check_at, stats_done)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                link_status, removed_suspected, last_seen_at, last_checked_at, check_count, next_check_at, stats_done, comments_done, next_comment_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [row.resultId, row.runId, row.scheduleId, row.campaignId ?? null, row.variant ?? '', row.profileId, row.groupUrl, row.groupId, row.postId, row.postUrl, row.postedAt,
              row.textHead, row.linkStatus, row.removedSuspected ? 1 : 0, row.lastSeenAt, row.lastCheckedAt, row.checkCount,
-             row.nextCheckAt, row.statsDone.join(',')],
+             row.nextCheckAt, row.statsDone.join(','), (row.commentsDone ?? []).join(','), row.nextCommentAt ?? null],
         );
     }
 
@@ -535,6 +580,112 @@ export class FacebookPosterStore {
         }
         if (sets.length === 0) return;
         this.db.run(`UPDATE fb_poster_post_tracking SET ${sets.join(', ')} WHERE result_id = ?`, [...params, resultId]);
+    }
+
+    /** Dòng theo dõi theo post_url (chia lô 500); nhiều dòng cùng URL thì lấy dòng result_id nhỏ nhất. */
+    trackingByPostUrls(postUrls: string[]): Map<string, PostTrackingRow> {
+        const out = new Map<string, PostTrackingRow>();
+        for (const urls of chunk([...new Set(postUrls)], IN_CHUNK)) {
+            const rows = this.db.query<any>(
+                `SELECT * FROM fb_poster_post_tracking WHERE post_url IN (${urls.map(() => '?').join(',')}) ORDER BY result_id DESC`,
+                urls,
+            );
+            for (const row of rows) out.set(row.post_url, mapTracking(row)); // result_id giảm dần nên dòng nhỏ nhất ghi đè sau cùng
+        }
+        return out;
+    }
+
+    // ─── Thu bình luận tự động ───────────────────────────────────────────────
+
+    /** Bài đã có link, đến mốc thu bình luận kế tiếp; sớm nhất trước. */
+    listDueCommentPosts(now: number, limit: number): PostTrackingRow[] {
+        return this.db.query<any>(
+            `SELECT * FROM fb_poster_post_tracking
+             WHERE link_status = 'known' AND post_url IS NOT NULL AND post_url <> '' AND next_comment_at IS NOT NULL AND next_comment_at <= ?
+             ORDER BY next_comment_at ASC, result_id ASC LIMIT ?`,
+            [now, limit],
+        ).map(mapTracking);
+    }
+
+    updateCommentSchedule(resultId: number, patch: { commentsDone: string[]; nextCommentAt: number | null }): void {
+        this.db.run(
+            'UPDATE fb_poster_post_tracking SET comments_done = ?, next_comment_at = ? WHERE result_id = ?',
+            [patch.commentsDone.join(','), patch.nextCommentAt, resultId],
+        );
+    }
+
+    // ─── Khách tiềm năng ─────────────────────────────────────────────────────
+
+    /** INSERT OR IGNORE theo comment_key; trả các dòng thật sự được tạo (có id). */
+    createLeads(leads: Omit<FbPosterLead, 'id'>[]): FbPosterLead[] {
+        return this.db.transaction(() => {
+            const created: FbPosterLead[] = [];
+            for (const l of leads) {
+                const before = this.count('SELECT COUNT(*) AS n FROM fb_poster_leads');
+                const id = this.db.runInsert(
+                    `INSERT OR IGNORE INTO fb_poster_leads
+                       (comment_key, post_url, result_id, group_url, campaign_id, variant, profile_id, author_id, author_name, author_url, text,
+                        commented_at_ms, matched, ai_intent, ai_score, ai_reason, status, note, detected_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [l.commentKey, l.postUrl, l.resultId, l.groupUrl, l.campaignId, l.variant, l.profileId, l.authorId, l.authorName, l.authorUrl, l.text,
+                     l.commentedAtMs, l.matched.join(','), l.aiIntent, l.aiScore, l.aiReason, l.status, l.note, l.detectedAt, l.updatedAt],
+                );
+                if (this.count('SELECT COUNT(*) AS n FROM fb_poster_leads') > before) created.push({ ...l, id });
+            }
+            return created;
+        });
+    }
+
+    /** Lọc theo trạng thái / chiến dịch / khoảng detected_at ở SQL; tìm chữ không dấu, không phân biệt hoa thường ở JS rồi mới phân trang. */
+    listLeads(filter: { status?: LeadStatus; campaignId?: string; from?: number; to?: number; search?: string; limit: number; offset: number }): { leads: FbPosterLead[]; total: number } {
+        const where: string[] = [];
+        const params: any[] = [];
+        if (filter.status !== undefined) { where.push('status = ?'); params.push(filter.status); }
+        if (filter.campaignId !== undefined) { where.push('campaign_id = ?'); params.push(filter.campaignId); }
+        if (filter.from !== undefined) { where.push('detected_at >= ?'); params.push(filter.from); }
+        if (filter.to !== undefined) { where.push('detected_at <= ?'); params.push(filter.to); }
+        const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+        const needle = stripAccents((filter.search ?? '').trim());
+        if (needle === '') {
+            const rows = this.db.query<any>(
+                `SELECT * FROM fb_poster_leads ${clause} ORDER BY detected_at DESC, id DESC LIMIT ? OFFSET ?`,
+                [...params, filter.limit, filter.offset],
+            );
+            return { leads: rows.map(mapLead), total: this.count(`SELECT COUNT(*) AS n FROM fb_poster_leads ${clause}`, params) };
+        }
+        const matching = this.db.query<any>(`SELECT * FROM fb_poster_leads ${clause} ORDER BY detected_at DESC, id DESC`, params)
+            .filter((row) => stripAccents(row.author_name).includes(needle) || stripAccents(row.text).includes(needle));
+        return { leads: matching.slice(filter.offset, filter.offset + filter.limit).map(mapLead), total: matching.length };
+    }
+
+    updateLead(id: number, patch: { status?: LeadStatus; note?: string }, at: number): FbPosterLead | null {
+        const sets: string[] = ['updated_at = ?'];
+        const params: any[] = [at];
+        if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status); }
+        if (patch.note !== undefined) { sets.push('note = ?'); params.push(patch.note); }
+        this.db.run(`UPDATE fb_poster_leads SET ${sets.join(', ')} WHERE id = ?`, [...params, id]);
+        const row = this.db.queryOne<any>('SELECT * FROM fb_poster_leads WHERE id = ?', [id]);
+        return row ? mapLead(row) : null;
+    }
+
+    /** Xoá khách phát hiện trước `ms`; trả số dòng đã xoá. */
+    pruneLeadsOlderThan(ms: number): number {
+        return this.db.transaction(() => {
+            const before = this.count('SELECT COUNT(*) AS n FROM fb_poster_leads');
+            this.db.run('DELETE FROM fb_poster_leads WHERE detected_at < ?', [ms]);
+            return before - this.count('SELECT COUNT(*) AS n FROM fb_poster_leads');
+        });
+    }
+
+    /** Trong các khoá bình luận đã cho, những khoá đã thành khách. */
+    leadCommentKeys(keys: string[]): Set<string> {
+        const out = new Set<string>();
+        for (const part of chunk([...new Set(keys)], IN_CHUNK)) {
+            for (const row of this.db.query<{ comment_key: string }>(
+                `SELECT comment_key FROM fb_poster_leads WHERE comment_key IN (${part.map(() => '?').join(',')})`, part,
+            )) out.add(row.comment_key);
+        }
+        return out;
     }
 
     addPostStats(resultId: number, snap: { capturedAt: number; reactions: number | null; comments: number | null; shares: number | null }): void {

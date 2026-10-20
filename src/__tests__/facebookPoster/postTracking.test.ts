@@ -13,7 +13,7 @@ function row(over: Partial<PostTrackingRow> = {}): PostTrackingRow {
         resultId: 1, runId: 'r', scheduleId: null, campaignId: null, variant: '', profileId: 'p1', groupUrl: 'https://www.facebook.com/groups/1/', groupId: '',
         postId: '', postUrl: null, postedAt: 1_000_000, textHead: normalizeHead('Bán  Hàng  Giá Rẻ hôm nay'),
         linkStatus: 'missing', removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null,
-        statsDone: [], ...over,
+        statsDone: [], commentsDone: [], nextCommentAt: null, ...over,
     };
 }
 const item = (over: Record<string, unknown> = {}) => ({ fbId: 'f1', title: 'bán hàng giá rẻ hôm nay', authorId: 'u1', postedAt: 1_000_000 + MIN, ...over }) as any;

@@ -525,7 +525,7 @@ export class FacebookPosterService {
                 groupId: /\/groups\/(\d+)/.exec(row.url)?.[1] ?? '',
                 postId: postUrl ? /\/(?:posts|permalink)\/(\d+)|[?&]story_fbid=(\d+)/.exec(postUrl)?.slice(1).find(Boolean) ?? '' : '',
                 postUrl, postedAt, textHead: normalizeHead(variantText(params, index)), linkStatus,
-                removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null as number | null, statsDone: [] as string[],
+                removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null as number | null, statsDone: [] as string[], commentsDone: [] as string[], nextCommentAt: null as number | null,
             };
             const config = this.deps.readTrackingConfig?.() ?? DEFAULT_POST_TRACKING_CONFIG;
             tracking.nextCheckAt = computeNextCheckAt(tracking, config, postedAt);
