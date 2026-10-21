@@ -15,6 +15,34 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.28.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🛡️ Đăng Facebook dừng ngay profile bị checkpoint hoặc bị đăng xuất, báo Telegram 🔒',
+      '⏱️ Lượt đăng nhiều nhóm lỗi xong nhanh hơn: chỉ nghỉ ngắn khi chưa đăng được bài',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Mã lỗi mới: checkpoint (Facebook bắt xác minh) và browser_closed (trình duyệt đóng giữa chừng, bài chưa lên)',
+          'Mỗi lần đăng lỗi lưu ảnh chụp và ghi chú trong thư mục fb-poster-diagnostics trên máy (tự dọn sau 7 ngày, tối đa 500 tệp)',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Lỗi trước khi đăng chỉ nghỉ 20–60 giây trước nhóm kế tiếp (không dài hơn khoảng nghỉ đã đặt)',
+          'Mở trình duyệt lỗi thoáng qua thì tự thử lại một lần',
+          'Theo dõi bài, thu bình luận, kiểm tra đăng nhập nhường giờ khi sắp tới lịch đăng',
+          'Lấy link bài vừa đăng chắc hơn (chờ tới khi có, tối đa 8 giây)',
+          'Profile mất đăng nhập lúc mở được báo đúng là chưa đăng nhập',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.27.0',
     date: '10/2026',
     type: 'minor',
