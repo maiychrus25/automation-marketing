@@ -80,6 +80,22 @@ function buildFromHtml(dir: string, opts: WorkdirOptions): void {
     if (!entry.isFile() || entry.name.startsWith('.') || entry.name === 'job.json' || entry.name === 'cancel') continue;
     fs.copyFileSync(path.join(opts.inputDir, entry.name), path.join(dir, entry.name));
   }
+  // Worker không có mạng: cấp sẵn đúng bản GSAP đã ghim của các mẫu để HTML gọi `<script src="gsap.min.js">`.
+  const gsap = findPinnedGsap(opts.templatesDir);
+  if (gsap && !fs.existsSync(path.join(dir, GSAP_FILE))) fs.copyFileSync(gsap, path.join(dir, GSAP_FILE));
+}
+
+const GSAP_FILE = 'gsap.min.js';
+
+/** `gsap.min.js` của mẫu đầu tiên (theo tên) có tệp này; không có thì null. */
+function findPinnedGsap(templatesDir: string): string | null {
+  let names: string[];
+  try { names = fs.readdirSync(templatesDir).sort(); } catch { return null; }
+  for (const name of names) {
+    const file = path.join(templatesDir, name, GSAP_FILE);
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
 }
 
 /** Dựng thư mục render riêng cho việc (mẫu hoặc HTML tự viết) dưới `tmpDir`. */

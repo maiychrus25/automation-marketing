@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { buildWorkdir } from './buildWorkdir';
 import { LIMITS } from './limits';
-import { finalizeVideo, runRender } from './renderRunner';
+import { finalizeVideo, lintHtml, runRender } from './renderRunner';
 import { NormalizedSpec } from './spec';
 
 export interface WorkerConfig {
@@ -120,6 +120,12 @@ export class RenderWorker {
         templatesDir: this.cfg.templatesDir, musicDir: this.cfg.musicDir, inputDir: this.current, tmpDir: tmp, ffmpegPath: this.cfg.ffmpegPath,
       });
       if (ac.signal.aborted) return fail('cancelled');
+      if (job.spec.kind === 'html') {
+        // HTML tự viết sai quy ước vẫn render "thành công" ra video đứng yên: chặn sớm, báo lỗi để bot sửa.
+        const lintError = await lintHtml({ dir: work.dir, command: this.cfg.hyperframesCmd, env: this.cfg.env });
+        if (lintError) return fail(lintError);
+        if (ac.signal.aborted) return fail('cancelled');
+      }
       const outFile = path.join(tmp, 'render.mp4');
       let last = 0;
       const outcome = await runRender({

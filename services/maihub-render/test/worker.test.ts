@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { buildWorkdir } from '../src/buildWorkdir';
 import { prepareMusic } from '../src/music';
-import { finalizeVideo, runRender } from '../src/renderRunner';
+import { finalizeVideo, lintHtml, runRender } from '../src/renderRunner';
 import { RenderWorker, WorkerConfig } from '../src/worker';
 
 const FIXTURES = path.join(__dirname, 'fixtures');
@@ -75,6 +75,18 @@ describe('buildWorkdir', () => {
     const r = await buildWorkdir({ id: 'j2', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
     expect([r.width, r.height]).toEqual([1920, 1080]);
     expect(fs.readdirSync(r.dir).sort()).toEqual(['asset1.jpg', 'index.html']);
+  });
+
+  it('HTML: tự thêm gsap.min.js đã ghim của mẫu (không có mạng để tải)', async () => {
+    const d = dirs();
+    const tplWithGsap = fs.mkdtempSync(path.join(root, 'tpl-'));
+    fs.cpSync(templatesDir, tplWithGsap, { recursive: true });
+    fs.writeFileSync(path.join(tplWithGsap, 'demo', 'gsap.min.js'), '/* gsap */');
+    fs.writeFileSync(path.join(d.input, 'index.html'), '<div></div>');
+    const spec = { ...baseSpec, kind: 'html' as const, html: '', durationSec: 3, width: 1080, height: 1080 };
+    const r = await buildWorkdir({ id: 'j5', spec }, { templatesDir: tplWithGsap, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    expect(fs.readdirSync(r.dir).sort()).toEqual(['gsap.min.js', 'index.html']);
+    expect(fs.readFileSync(path.join(r.dir, 'gsap.min.js'), 'utf8')).toBe('/* gsap */');
   });
 
   maybe('mẫu có nhạc gửi kèm: tạo assets/music.m4a', async () => {
@@ -180,6 +192,19 @@ describe('runRender', () => {
   });
 });
 
+describe('lintHtml', () => {
+  const run = (env: Record<string, string>, command = [process.execPath, FAKE]) => lintHtml({ dir: root, command, env, timeoutMs: 10000 });
+  it('có lỗi -> thông báo tiếng Việt kèm mã lỗi, bỏ cảnh báo', async () => {
+    const msg = await run({ FAKE_LINT: 'errors' });
+    expect(msg).toBe('HTML chưa đúng quy ước HyperFrames: root_missing_composition_id (Root composition is missing `data-composition-id`.); missing_timeline_registry (Missing `window.__timelines` registration.). Xem phần video HTML trong maihub_guide.');
+  });
+  it('không lỗi -> null', async () => { expect(await run({ FAKE_LINT: 'ok' })).toBeNull(); });
+  it('đầu ra hỏng hoặc không chạy được lint -> null (không chặn render)', async () => {
+    expect(await run({ FAKE_LINT: 'garbage' })).toBeNull();
+    expect(await run({}, ['/nonexistent/hf'])).toBeNull();
+  });
+});
+
 describe('finalizeVideo', () => {
   maybe('tạo thumb.jpg và đọc thời lượng', async () => {
     const d = dirs();
@@ -252,6 +277,33 @@ describe('RenderWorker', () => {
     expect(result('job-c').ok).toBe(false);
     expect(result('job-c').error).toContain('Boom');
     expect(fs.existsSync(path.join(out, 'job-c.mp4'))).toBe(false);
+  });
+
+  it('HTML sai quy ước -> lỗi ngay từ lint, không render', async () => {
+    const { out, worker, give, result } = setup({ FAKE_LINT: 'errors', FAKE_MODE: 'fail' });
+    fs.writeFileSync(path.join(worker['current'], 'index.html'), '<div></div>');
+    give('job-l', { kind: 'html', html: '', width: 1080, height: 1080, durationSec: 3, fps: 24, quality: 'standard' });
+    await worker.processOnce();
+    const r = result('job-l');
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('root_missing_composition_id');
+    expect(r.error).not.toContain('Boom'); // không chạy tới bước render
+    expect(fs.existsSync(path.join(out, 'job-l.mp4'))).toBe(false);
+  });
+
+  it('HTML: lint không đọc được thì vẫn render (không chặn oan)', async () => {
+    const { worker, give, result } = setup({ FAKE_LINT: 'garbage', FAKE_MODE: 'fail' });
+    fs.writeFileSync(path.join(worker['current'], 'index.html'), '<div></div>');
+    give('job-m', { kind: 'html', html: '', width: 1080, height: 1080, durationSec: 3, fps: 24, quality: 'standard' });
+    await worker.processOnce();
+    expect(result('job-m').error).toContain('Boom');
+  });
+
+  it('mẫu có sẵn không chạy lint', async () => {
+    const { worker, give, result } = setup({ FAKE_LINT: 'errors', FAKE_MODE: 'fail' });
+    give('job-n');
+    await worker.processOnce();
+    expect(result('job-n').error).toContain('Boom');
   });
 
   it('quá hạn -> error timeout', async () => {

@@ -101,6 +101,33 @@ export function runRender(opts: RunRenderOptions): Promise<RenderOutcome> {
   });
 }
 
+export interface LintOptions { dir: string; command: string[]; env?: Record<string, string>; timeoutMs?: number }
+const MAX_LINT_ERRORS = 3;
+
+/**
+ * `hyperframes lint <dir> --json` cho HTML tự viết. Có lỗi (severity "error") thì trả thông báo tiếng Việt kèm
+ * tối đa 3 mã lỗi để bot sửa; không lỗi, hoặc lint không chạy được / đầu ra hỏng, thì trả null (không chặn render oan).
+ */
+export function lintHtml(opts: LintOptions): Promise<string | null> {
+  const [bin, ...prefix] = opts.command;
+  return new Promise((resolve) => {
+    execFile(bin, [...prefix, 'lint', opts.dir, '--json'],
+      { cwd: opts.dir, timeout: opts.timeoutMs ?? 60000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, ...opts.env, ...ENV_FIXED } },
+      (_err, stdout) => {
+        try {
+          const report = JSON.parse(String(stdout));
+          const errors = (Array.isArray(report?.findings) ? report.findings : [])
+            .filter((f: any) => f && f.severity === 'error' && typeof f.code === 'string');
+          if (errors.length === 0) return resolve(null);
+          const list = errors.slice(0, MAX_LINT_ERRORS).map((f: any) => `${f.code} (${String(f.message ?? '').slice(0, 120)})`).join('; ');
+          resolve(`HTML chưa đúng quy ước HyperFrames: ${list}. Xem phần video HTML trong maihub_guide.`);
+        } catch {
+          resolve(null);
+        }
+      });
+  });
+}
+
 function run(cmd: string, args: string[], timeout = 60000): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { timeout }, (err, stdout, stderr) => {

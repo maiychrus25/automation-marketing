@@ -127,6 +127,8 @@ Nghi lộ khoá: xoá cặp đó ngay rồi khởi động lại.
 
 ## 5. An toàn
 
+**HTML tự viết.** Thư mục render của việc HTML được cấp sẵn `gsap.min.js` (bản đã ghim của mẫu đầu tiên có tệp này), vì `worker` không có mạng. Trước khi render, `worker` chạy `hyperframes lint <dir> --json` (`lintHtml` ở `src/renderRunner.ts`): có lỗi mức `error` thì việc thất bại ngay với "HTML chưa đúng quy ước HyperFrames: <mã> (<thông báo>); …" (tối đa 3 lỗi), để bot sửa thay vì nhận video đứng yên; lint không chạy được hoặc đầu ra hỏng thì vẫn render. Mẫu có sẵn không qua lint (còn các ô `{{…}}` chưa điền).
+
 **Cách ly.** HTML do bot viết là mã không tin cậy, chạy trong `worker`:
 
 - `network_mode: none`: không có mạng (không gọi ra ngoài, không tới metadata cloud, không tới `api`);
