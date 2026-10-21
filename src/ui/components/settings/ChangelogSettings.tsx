@@ -15,6 +15,30 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.26.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🎬 Tin Telegram "Video xong" gửi kèm luôn tệp video để xem ngay',
+      '🤖 Bot AI tải được video đã tạo về máy để gửi hoặc xem ảnh bìa',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Bot AI có tool maihub_download_video và lệnh download-video (video hoặc ảnh bìa)',
+          'Tin Telegram 🎬 kèm tệp video khi video ≤ 50 MB; lớn hơn thì vẫn báo bằng chữ',
+        ],
+      },
+      {
+        category: 'security',
+        items: [
+          'Tải video qua API điều khiển dùng cùng khoá, danh sách IP và giới hạn tốc độ như các lệnh khác; có ghi nhật ký',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.25.0',
     date: '10/2026',
     type: 'minor',

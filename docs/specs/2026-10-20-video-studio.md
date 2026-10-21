@@ -253,5 +253,5 @@ Video giữ cho đến khi người dùng xoá. Tệp nằm ở `userData/videos
 - Đã kiểm tích hợp cục bộ bằng docker compose (không có Caddy): dựng video mẫu 1:1 dài 18 giây mất khoảng 52 giây; HTML độc hại bị chặn.
 - Chưa kiểm Caddy/TLS và triển khai thật lên VPS.
 - Cài đặt máy chủ render là một tab riêng trong Cài đặt.
-- Thêm sau phát hành: bot tải video đã xong về bằng `GET /v1/videos/file` (tool `maihub_download_video`, lệnh `download-video`), và `watch` gửi kèm tệp video (≤ 50 MiB) cho tin `🎬 Video xong`. Không thêm thao tác hay mã lỗi.
+- Thêm trong 26.26.0: bot tải video đã xong về bằng `GET /v1/videos/file` (tool `maihub_download_video`, lệnh `download-video`), và `watch` gửi kèm tệp video (≤ 50 MiB) cho tin `🎬 Video xong`. Không thêm thao tác hay mã lỗi.
 - Triển khai thật: Caddy tắt bằng `docker-compose.override.yml` vì VPS đã có nginx giữ 80/443; `api` chỉ nghe `127.0.0.1:18080`, nginx làm TLS (Let's Encrypt).
