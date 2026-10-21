@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 20/10/2026 |
-| Trạng thái | Đã phát hành 26.25.0 (20/10/2026); maihub-render 1.0.0 chưa triển khai lên VPS |
+| Trạng thái | Đã phát hành 26.25.0 (20/10/2026); maihub-render 1.0.0 triển khai lên VPS 21/10/2026 (sau nginx sẵn có, không dùng Caddy) |
 | Kế hoạch | `docs/plans/2026-10-20-video-studio.md` (viết sau khi spec được duyệt) |
 | Intent | `docs/intent/2026-10-20-video-studio.md` (đã duyệt) |
 | Spike | `docs/reports/2026-10-20-hyperframes-spike.md` |
@@ -254,3 +254,4 @@ Video giữ cho đến khi người dùng xoá. Tệp nằm ở `userData/videos
 - Chưa kiểm Caddy/TLS và triển khai thật lên VPS.
 - Cài đặt máy chủ render là một tab riêng trong Cài đặt.
 - Thêm sau phát hành: bot tải video đã xong về bằng `GET /v1/videos/file` (tool `maihub_download_video`, lệnh `download-video`), và `watch` gửi kèm tệp video (≤ 50 MiB) cho tin `🎬 Video xong`. Không thêm thao tác hay mã lỗi.
+- Triển khai thật: Caddy tắt bằng `docker-compose.override.yml` vì VPS đã có nginx giữ 80/443; `api` chỉ nghe `127.0.0.1:18080`, nginx làm TLS (Let's Encrypt).
