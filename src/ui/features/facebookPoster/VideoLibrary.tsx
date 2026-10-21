@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { toLocalMediaUrl } from '@/lib/localMedia';
 import type { VideoJob } from '../../../models/video';
 import { formatBytes, formatDuration, isActiveStatus, videoStatusChip, VIDEO_TONE_CLASS } from './videoFormat';
@@ -18,18 +18,46 @@ const BTN = 'poster-button';
 
 function PlayerDialog({ video, onClose }: { video: VideoJob; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     const dialog = ref.current;
     dialog?.showModal();
     return () => dialog?.close();
   }, []);
+  useEffect(() => {
+    // <video> đọc thẳng local-media:// theo từng đoạn: Chromium huỷ yêu cầu khi tạm dừng tải rồi báo
+    // PIPELINE_ERROR_READ "data source error" thay vì đọc tiếp. Tải cả tệp thành Blob thì phát và tua ổn định.
+    let url: string | null = null;
+    let cancelled = false;
+    setSrc(null);
+    setFailed(false);
+    fetch(toLocalMediaUrl(video.filePath ?? ''))
+      .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.blob(); })
+      .then((blob) => {
+        if (cancelled) return;
+        url = URL.createObjectURL(blob);
+        setSrc(url);
+      })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [video.filePath]);
   return (
     <dialog ref={ref} aria-labelledby="video-player-title" className="poster-dialog space-y-3 p-4 max-w-2xl"
       onCancel={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}>
       <h2 id="video-player-title" className="text-base font-semibold break-words">{video.name}</h2>
-      <video controls preload="metadata" className="w-full max-h-[70dvh] rounded-lg bg-black" src={toLocalMediaUrl(video.filePath ?? '')}>
-        Không phát được video này.
-      </video>
+      {failed ? (
+        <p role="alert" className="text-sm text-red-400 break-words">Không mở được tệp video. Thử "Tải về" để xem bằng trình phát khác.</p>
+      ) : src ? (
+        <video controls preload="metadata" className="w-full max-h-[70dvh] rounded-lg bg-black" src={src}>
+          Không phát được video này.
+        </video>
+      ) : (
+        <div role="status" className="grid min-h-40 place-items-center rounded-lg bg-black text-sm text-white">Đang tải video…</div>
+      )}
       <div className="flex justify-end"><button type="button" className={BTN} onClick={onClose} autoFocus>Đóng</button></div>
     </dialog>
   );
