@@ -94,6 +94,7 @@ Thứ tự xử lý mỗi yêu cầu: (1) IP có trong danh sách? (2) IP đang 
 | `GET` | `/v1/bridge.py` | không | Tải `maihub_bridge.py` của chính bản MaiHub này (`text/x-python; charset=utf-8`); `404` khi MaiHub không có tệp |
 | `POST` | `/v1/call` | có | Gọi một thao tác: `{ "method": "drafts.create", "params": {…}, "idempotencyKey": "…" }` |
 | `POST` | `/v1/media` | có | Tải một ảnh/video/nhạc (thân nhị phân), xem mục 8 |
+| `GET` | `/v1/videos/file?videoId=<id>&kind=video\|thumb` | có | Tải về MP4 (hoặc ảnh bìa JPG) của video đã render xong, xem mục 8.1 |
 
 ### 4.1 Ghép nối
 
@@ -212,6 +213,14 @@ Tham số giờ (`T`): `runAt` (epoch ms, sau hiện tại ít nhất 1 phút; c
 - Kết quả: `{ "mediaId": "<uuid>", "name": "anh.jpg", "size": 123456, "kind": "image" }` (`kind` là `image`, `video` hoặc `audio`).
 - Tệp lưu ở `userData/control-api/inbox/<mediaId>.<đuôi>` trên máy MaiHub và **bị xoá sau 24 giờ** (dọn mỗi giờ). Hết hạn thì `drafts.create/update` với `mediaId` đó trả `INVALID_PARAMS` (`details.field = "mediaIds"`): tải lại.
 - Dùng: truyền `mediaIds: ["<uuid>", …]` cho `drafts.create` / `drafts.update`. App sao tệp sang thư mục của bản nháp nên sau khi tạo nháp, tệp trong inbox không còn cần thiết. Thứ tự `mediaIds` là thứ tự ảnh trong bài.
+
+### 8.1 Tải video đã render về máy bot
+
+`GET /v1/videos/file?videoId=<id>&kind=video|thumb` (`kind` mặc định `video`). Chịu cùng danh sách IP, khoá, giới hạn tốc độ và chế độ nhân viên như `/v1/call`; ghi nhật ký với tên `videos.download`.
+
+- Thành công: `200`, thân là nội dung tệp (`video/mp4` hoặc `image/jpeg`), có `Content-Length` và `Content-Disposition: attachment; filename="<videoId>.mp4|.jpg"`. Không có phong bì JSON.
+- Lỗi: phong bì JSON như mục 5. `videoId` sai dạng (`^[A-Za-z0-9-]{1,64}$`) hoặc `kind` lạ → `400 INVALID_PARAMS` (`details.field`); mã lạ, video chưa xong (`status` khác `done`), không có ảnh bìa hoặc tệp không còn trên máy MaiHub → `404 NOT_FOUND`; sai phương thức → 405.
+- Bridge: tool MCP `maihub_download_video` (`videoId`, `kind?`, `path?`) và lệnh `download-video <videoId> [--kind thumb] [-o <tệp hoặc thư mục>]`; mặc định lưu `~/maihub-videos/<videoId>.mp4|.jpg` và trả `{ path, sizeBytes }`.
 
 ## 9. Sự kiện
 
@@ -350,6 +359,7 @@ $B call drafts.create '{"mode":"group","text":"Nội dung bài đăng","mediaIds
 $B call drafts.approve '{"id":"<ma-nhap>","when":{"kind":"once","runAt":<epoch-ms-trong-tuong-lai>}}'
 $B call drafts.approve '{"id":"<ma-nhap>","when":"now","confirm":true}'     # đăng ngay: sau khi người dùng đồng ý
 $B wait --after 0 --timeout 25
+$B download-video <ma-video>                         # sau videos.finished: lưu ~/maihub-videos/<ma-video>.mp4
 $B call runs.get '{"runId":"<ma-run>"}'
 ```
 
@@ -357,7 +367,7 @@ Mã thoát của CLI: 0 thành công; 1 lỗi từ MaiHub (stderr `<MÃ_LỖI>: 
 
 ### Thông báo Telegram (`watch`)
 
-Bridge có lệnh `watch` chạy liên tục: chờ `events.wait` (25 giây một lượt) rồi gửi tin tiếng Việt qua Telegram bằng token của bot (`TG_TOKEN` trong `.env` của bot). Tin gửi: lượt đăng/tham gia/quét/thu bình luận xong, có lỗi hoặc bị huỷ (`run.finished`), lỡ lịch (`schedule.missed`), profile hết phiên hoặc bị checkpoint (`profile.loginProblem`), mất và có lại liên lạc với MaiHub, khoá bị từ chối hoặc sai ghim chứng chỉ. Không báo `run.started`, `draft.approved`, `profiles.checkFinished`.
+Bridge có lệnh `watch` chạy liên tục: chờ `events.wait` (25 giây một lượt) rồi gửi tin tiếng Việt qua Telegram bằng token của bot (`TG_TOKEN` trong `.env` của bot). Tin gửi: lượt đăng/tham gia/quét/thu bình luận xong, có lỗi hoặc bị huỷ (`run.finished`), lỡ lịch (`schedule.missed`), profile hết phiên hoặc bị checkpoint (`profile.loginProblem`), video xong (`videos.finished`: gửi kèm tệp video khi ≤ 50 MiB, không thì chỉ gửi chữ), mất và có lại liên lạc với MaiHub, khoá bị từ chối hoặc sai ghim chứng chỉ. Không báo `run.started`, `draft.approved`, `profiles.checkFinished`.
 
 Khoá `.env` liên quan: `MAIHUB_NOTIFY_CHAT_ID` (`.env` MaiHub; mặc định lấy `ALLOWED_CHAT_ID`/`ADMIN_USER_ID` của bot), `TELEGRAM_API_BASE` (bắt buộc `https://`) và `TELEGRAM_PROXY` (`.env` MaiHub; đường tới Telegram khi VPS cần proxy; SOCKS không hỗ trợ). `watch --check-telegram` gọi Telegram `getMe` một lần qua tuyến đó rồi thoát. Khi khoá bị từ chối hoặc ghim lệch, `watch` báo một lần rồi nạp lại `.env` sau mỗi 300 giây nên ghép nối lại (`pair`, giữ nguyên các dòng khác của `.env`) tự có hiệu lực. Trạng thái (con trỏ sự kiện) lưu ở `state/watch-state.json`; `--dry-run` in tin ra stdout và không lưu gì.
 

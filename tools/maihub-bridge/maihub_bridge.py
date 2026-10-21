@@ -36,6 +36,12 @@ VERSION = "1.0.0"
 MCP_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18"]
 DEFAULT_TIMEOUT = 30
 UPLOAD_TOOL = "maihub_upload_media"
+DOWNLOAD_TOOL = "maihub_download_video"
+VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}\Z")
+VIDEO_KINDS = {"video": "mp4", "thumb": "jpg"}  # kind -> đuôi tệp
+DOWNLOAD_CHUNK = 65536
+TELEGRAM_VIDEO_LIMIT = 50 * 1024 * 1024  # giới hạn tải lên của Telegram Bot API
+TELEGRAM_VIDEO_TIMEOUT = 300
 # Đúng các đuôi MaiHub nhận (mediaRules): kiểu nội dung cố định, không phụ thuộc mimetypes của hệ điều hành.
 MEDIA_TYPES = {
     "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp",
@@ -327,6 +333,72 @@ class MaiHubClient(object):
             headers = {"Content-Type": ctype, "Content-Length": str(size), "X-Filename": urllib.parse.quote(name, safe="")}
             return self._unwrap(*self.request("POST", "/v1/media", handle, headers, max(self.timeout, 300)))
 
+    def download_video(self, video_id, kind, dest_path):
+        """Tải video/ảnh bìa đã xong về dest_path (ghi qua tệp .part rồi đổi tên). Trả {"path", "sizeBytes"}."""
+        if not isinstance(video_id, str) or not VIDEO_ID_RE.match(video_id):
+            raise BridgeError("INVALID_PARAMS", "videoId không hợp lệ")
+        if kind not in VIDEO_KINDS:
+            raise BridgeError("INVALID_PARAMS", "kind phải là video hoặc thumb")
+        part = dest_path + ".part"
+
+        def local_error(err):  # lỗi ghi trên máy bot (thư mục không có, đĩa đầy...), không phải lỗi mạng
+            return BridgeError("INVALID_PARAMS", "Không ghi được tệp đích %s: %s" % (dest_path, getattr(err, "strerror", None) or err))
+
+        conn = self._connect(max(self.timeout, 300))
+        fd = None
+        try:
+            try:
+                query = urllib.parse.urlencode({"videoId": video_id, "kind": kind})
+                conn.request("GET", "/v1/videos/file?" + query, headers={"Authorization": "Bearer " + self.config.api_key})
+                resp = conn.getresponse()
+                if resp.status != 200:
+                    raw = resp.read()
+                    try:
+                        data = json.loads(raw.decode("utf-8"))
+                    except ValueError:
+                        raise BridgeError("BAD_RESPONSE", "MaiHub trả về dữ liệu không phải JSON (HTTP %d)" % resp.status, status=resp.status)
+                    self._unwrap(resp.status, data)
+                    raise BridgeError("BAD_RESPONSE", "Phản hồi không đúng định dạng (HTTP %d)" % resp.status, status=resp.status)
+                expected = resp.getheader("Content-Length")
+                received = 0
+                try:
+                    fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                except OSError as err:
+                    raise local_error(err)
+                while True:
+                    chunk = resp.read(DOWNLOAD_CHUNK)
+                    if not chunk:
+                        break
+                    view = memoryview(chunk)
+                    try:
+                        while view:
+                            view = view[os.write(fd, view):]
+                    except OSError as err:
+                        raise local_error(err)
+                    received += len(chunk)
+            except (socket.error, ssl.SSLError, http.client.HTTPException, OSError) as err:
+                raise BridgeError("UNREACHABLE", "Lỗi khi tải video từ MaiHub: %s" % err)
+            if expected is not None and expected.isdigit() and int(expected) != received:
+                raise BridgeError("UNREACHABLE", "Tải video bị cắt ngang (%d/%s byte)" % (received, expected))
+            try:
+                os.close(fd)
+                fd = None
+                os.replace(part, dest_path)
+            except OSError as err:
+                raise local_error(err)
+            return {"path": dest_path, "sizeBytes": received}
+        finally:
+            conn.close()
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+
 
 # ---------------------------------------------------------------- MCP
 
@@ -349,6 +421,16 @@ def build_tools(describe_result):
         "name": UPLOAD_TOOL,
         "description": "Tải một tệp ảnh/video/nhạc (mp3, m4a, wav) trên máy bot lên MaiHub, trả về mediaId để dùng trong drafts.create/update (ảnh/video) hoặc musicMediaId của videos.render (nhạc).",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "Đường dẫn tệp trên máy bot"}}, "required": ["path"]},
+        "_method": None,
+    })
+    tools.append({
+        "name": DOWNLOAD_TOOL,
+        "description": "Tải một video MaiHub đã render xong (hoặc ảnh bìa với kind=thumb) về máy bot để bot gửi đi hoặc xem ảnh bìa; trả về đường dẫn tệp trên máy bot.",
+        "inputSchema": {"type": "object", "properties": {
+            "videoId": {"type": "string", "description": "Mã video (videoId)"},
+            "kind": {"type": "string", "enum": sorted(VIDEO_KINDS), "description": "video (mặc định) hoặc thumb (ảnh bìa)"},
+            "path": {"type": "string", "description": "Tệp đích hoặc thư mục có sẵn (mặc định ~/maihub-videos/<videoId>.mp4|.jpg)"},
+        }, "required": ["videoId"]},
         "_method": None,
     })
     return tools
@@ -444,6 +526,16 @@ class McpServer(object):
                 if not os.path.isfile(path):
                     raise BridgeError("INVALID_PARAMS", "Không thấy tệp: %s" % path)
                 result = self.client.upload(path)
+            elif name == DOWNLOAD_TOOL:
+                kind = args.get("kind") or "video"
+                if kind not in VIDEO_KINDS:
+                    raise BridgeError("INVALID_PARAMS", "kind phải là video hoặc thumb")
+                video_id, target = args.get("videoId"), args.get("path")
+                if target is not None and not isinstance(target, str):
+                    raise BridgeError("INVALID_PARAMS", "path phải là chuỗi")
+                if not isinstance(video_id, str) or not VIDEO_ID_RE.match(video_id):
+                    raise BridgeError("INVALID_PARAMS", "videoId không hợp lệ")
+                result = self.client.download_video(video_id, kind, resolve_download_path(video_id, kind, target))
             else:
                 tool = next((t for t in self.tools() if t["name"] == name), None)
                 if tool is None:
@@ -461,6 +553,16 @@ class McpServer(object):
 
 
 # ---------------------------------------------------------------- CLI
+
+def resolve_download_path(video_id, kind, target):
+    """Đường dẫn đích: target là tệp, hoặc thư mục có sẵn; bỏ trống thì dùng ~/maihub-videos (tạo 0o700)."""
+    name = "%s.%s" % (video_id, VIDEO_KINDS[kind])
+    if not target:
+        target = os.path.expanduser("~/maihub-videos")
+        if not os.path.isdir(target):
+            os.makedirs(target, 0o700)
+    return os.path.join(target, name) if os.path.isdir(target) else target
+
 
 def utf8_stream(stream, write=False):
     """Bọc luồng nhị phân thành UTF-8, tránh lỗi mã hoá khi locale là ASCII (Python 3.6)."""
@@ -1014,7 +1116,10 @@ class TelegramSender(object):
     def _call(self, url, body):
         request = urllib.request.Request(url, json.dumps(body).encode("utf-8"),
                                          {"Content-Type": "application/json"}, method="POST")
-        resp = self.opener.open(request, timeout=DEFAULT_TIMEOUT)
+        self._open(request, DEFAULT_TIMEOUT)
+
+    def _open(self, request, timeout):
+        resp = self.opener.open(request, timeout=timeout)
         try:
             data = json.loads(resp.read().decode("utf-8"))
         finally:
@@ -1040,6 +1145,40 @@ class TelegramSender(object):
             finally:
                 err.close()
         return None
+
+    def send_video(self, path, caption):
+        """Gửi tệp video (multipart sendVideo) một lần; 429 thì chờ retry_after rồi thử thêm một lần. Không ném lỗi."""
+        try:
+            with open(path, "rb") as handle:
+                content = handle.read()
+            boundary = uuid.uuid4().hex
+            fields = [("chat_id", self.chat_id), ("caption", caption), ("supports_streaming", "true")]
+            if self.thread_id is not None:
+                fields.append(("message_thread_id", self.thread_id))
+            parts = []
+            for key, value in fields:
+                parts.append(("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n" % (boundary, key, value)).encode("utf-8"))
+            filename = os.path.basename(path).replace('"', "_")
+            parts.append(("--%s\r\nContent-Disposition: form-data; name=\"video\"; filename=\"%s\"\r\nContent-Type: video/mp4\r\n\r\n" % (boundary, filename)).encode("utf-8"))
+            parts.append(content)
+            parts.append(("\r\n--%s--\r\n" % boundary).encode("utf-8"))
+            body = b"".join(parts)
+        except Exception as err:
+            print("Không gửi được video Telegram (%s)" % self._describe(err), file=sys.stderr)
+            return False
+        url = "%s/sendVideo" % self.url.rsplit("/", 1)[0]
+        for attempt in range(2):
+            try:
+                request = urllib.request.Request(url, body, {"Content-Type": "multipart/form-data; boundary=" + boundary}, method="POST")
+                self._open(request, TELEGRAM_VIDEO_TIMEOUT)
+                return True
+            except Exception as err:
+                wait = self._retry_after(err) if attempt == 0 else None
+                if wait is None:
+                    print("Không gửi được video Telegram (%s)" % self._describe(err), file=sys.stderr)
+                    return False
+                self.sleep(wait)
+        return False
 
     def send(self, text):
         """Gửi văn bản thuần; thử lại sau 2, 10, 30 giây (429: chờ retry_after). Hết lượt thì ghi log, trả False."""
@@ -1247,6 +1386,34 @@ class Watcher(object):
         self._save()
         self.sleep(WATCH_RETRY_SEC)
 
+    def _send_video(self, event, caption):
+        """videos.finished thành công: tải video rồi gửi kèm chú thích. True nếu đã gửi; mọi lỗi/không áp dụng -> False (gửi văn bản)."""
+        payload = event.get("payload") or {}
+        if event.get("type") != "videos.finished" or payload.get("ok") is not True or payload.get("cancelled") is True:
+            return False
+        video_id = payload.get("videoId")
+        if not hasattr(self.sender, "send_video") or not isinstance(video_id, str) or not VIDEO_ID_RE.match(video_id):
+            return False
+        size = payload.get("sizeBytes")
+        if isinstance(size, (int, float)) and not isinstance(size, bool) and size > TELEGRAM_VIDEO_LIMIT:
+            return False
+        path = os.path.join(os.path.dirname(self.state_path) or ".", "video-%s.mp4" % video_id)
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            self.client.download_video(video_id, "video", path)
+            if os.path.getsize(path) > TELEGRAM_VIDEO_LIMIT:
+                return False
+            return bool(self.sender.send_video(path, caption))
+        except Exception as err:
+            describe = getattr(self.sender, "_describe", None)
+            print("Không gửi được video %s, gửi văn bản (%s)" % (video_id, describe(err) if describe else type(err).__name__), file=sys.stderr)
+            return False
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     def step(self):
         """Một vòng events.wait (hoặc một lần xử lý lỗi)."""
         try:
@@ -1273,7 +1440,7 @@ class Watcher(object):
                 self.sleep(WATCH_MIN_POLL_SEC)  # trả rỗng ngay: tránh vòng lặp nóng
             for event in result.get("events") or []:
                 text = format_event(event, lambda run_id: self.client.call("runs.get", {"runId": run_id}))
-                if text:
+                if text and not self._send_video(event, text):
                     self.sender.send(text)
                 self.state["cursor"] = event["seq"]
                 self._save()
@@ -1338,6 +1505,10 @@ def build_parser():
     p_call.add_argument("--auto-idem", action="store_true", help="Tự sinh khoá chống gọi trùng (uuid4)")
     p_up = sub.add_parser("upload", parents=[shared], help="Tải ảnh/video/nhạc lên MaiHub")
     p_up.add_argument("path")
+    p_dl = sub.add_parser("download-video", parents=[shared], help="Tải video MaiHub đã xong (hoặc ảnh bìa) về máy")
+    p_dl.add_argument("video_id")
+    p_dl.add_argument("--kind", default="video", choices=sorted(VIDEO_KINDS))
+    p_dl.add_argument("-o", "--output", help="Tệp đích hoặc thư mục có sẵn (mặc định ~/maihub-videos/<videoId>.mp4|.jpg)")
     p_wait = sub.add_parser("wait", parents=[shared], help="Chờ sự kiện (events.wait)")
     p_wait.add_argument("--after", type=int, default=0)
     p_wait.add_argument("--timeout", type=int, default=25, help="Giây, tối đa 25")
@@ -1399,6 +1570,10 @@ def main(argv=None):
             if not os.path.isfile(args.path):
                 raise BridgeError("INVALID_PARAMS", "Không thấy tệp: %s" % args.path)
             print_json(client.upload(args.path))
+        elif args.command == "download-video":
+            if args.kind not in VIDEO_KINDS or not VIDEO_ID_RE.match(args.video_id):
+                raise BridgeError("INVALID_PARAMS", "videoId hoặc kind không hợp lệ")
+            print_json(client.download_video(args.video_id, args.kind, resolve_download_path(args.video_id, args.kind, args.output)))
         elif args.command == "wait":
             timeout = max(0, min(25, args.timeout))
             print_json(client.call("events.wait", {"after": args.after, "timeoutSec": timeout}))

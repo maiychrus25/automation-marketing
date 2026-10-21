@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { Readable } from 'stream';
 import { createVideoOperations, routeVideoEvent, type VideoOperationsDeps } from '../../services/video/videoOperations';
 import { RenderError } from '../../services/video/RenderClient';
 import type { VideoJob } from '../../models/video';
@@ -253,5 +254,57 @@ describe('routeVideoEvent', () => {
         routeVideoEvent({ broadcast, emitControl }, 'videos.finished', { videoId: 'v1', name: 'N', ok: true, durationSec: 20, sizeBytes: 5, mediaId: 'm', extra: 1 });
         expect(emitControl).toHaveBeenCalledWith('videos.finished', { videoId: 'v1', name: 'N', ok: true, durationSec: 20, sizeBytes: 5, mediaId: 'm' });
         expect(broadcast).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('openFile', () => {
+    const read = async (stream: Readable) => { const parts: Buffer[] = []; for await (const c of stream) parts.push(c as Buffer); return Buffer.concat(parts); };
+    const failure = async (p: Promise<unknown>) => p.then(() => null, (e) => e);
+
+    test('trả luồng và kích thước đúng cho video và ảnh bìa', async () => {
+        fs.writeFileSync(path.join(dir, 'out.mp4'), 'video-bytes');
+        fs.writeFileSync(path.join(dir, 'out.jpg'), 'jpg');
+        const { ops } = setup();
+        const video = await ops.openFile({ videoId: 'v1' });
+        expect(video.size).toBe(11);
+        expect((await read(video.stream)).toString()).toBe('video-bytes');
+        const thumb = await ops.openFile({ videoId: 'v1', kind: 'thumb' });
+        expect(thumb.size).toBe(3);
+        expect((await read(thumb.stream)).toString()).toBe('jpg');
+    });
+
+    test('kind sai là lỗi invalid; thiếu videoId là lỗi invalid', async () => {
+        const { ops } = setup();
+        expect(await failure(ops.openFile({ videoId: 'v1', kind: 'audio' }))).toMatchObject({ code: 'invalid' });
+        expect(await failure(ops.openFile({}))).toMatchObject({ code: 'invalid' });
+    });
+
+    test('id lạ, chưa xong, thiếu ảnh bìa, tệp mất đều là not_found', async () => {
+        const { ops, service } = setup();
+        expect(await failure(ops.openFile({ videoId: 'zzz' }))).toMatchObject({ code: 'not_found' });
+        service.get.mockReturnValueOnce(job({ status: 'rendering' }));
+        expect(await failure(ops.openFile({ videoId: 'v1' }))).toMatchObject({ code: 'not_found' });
+        service.get.mockReturnValueOnce(job({ thumbPath: null }));
+        expect(await failure(ops.openFile({ videoId: 'v1', kind: 'thumb' }))).toMatchObject({ code: 'not_found' });
+        const missing = await failure(ops.openFile({ videoId: 'v1', kind: 'thumb' })); // out.jpg chưa tạo
+        expect(missing).toBeInstanceOf(RenderError);
+        expect(missing).toMatchObject({ code: 'not_found' });
+        expect(missing.message).not.toContain(dir);
+    });
+
+    test('thư mục không phải tệp thường là not_found', async () => {
+        const { ops, service } = setup();
+        service.get.mockReturnValueOnce(job({ filePath: dir }));
+        expect(await failure(ops.openFile({ videoId: 'v1' }))).toMatchObject({ code: 'not_found' });
+    });
+
+    (process.platform === 'win32' ? test.skip : test)('từ chối đường dẫn là symlink', async () => {
+        const real = path.join(dir, 'real.mp4');
+        fs.writeFileSync(real, 'x');
+        const link = path.join(dir, 'link.mp4');
+        fs.symlinkSync(real, link);
+        const { ops, service } = setup();
+        service.get.mockReturnValueOnce(job({ filePath: link }));
+        expect(await failure(ops.openFile({ videoId: 'v1' }))).toMatchObject({ code: 'not_found' });
     });
 });

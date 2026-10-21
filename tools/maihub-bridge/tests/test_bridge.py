@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import ssl
 import subprocess
 import sys
@@ -62,6 +63,8 @@ class FakeMaiHub(object):
         self.requests = []
         self.describe_fail = False
         self.pair_tickets = {PAIR_TICKET}
+        self.video_bytes = b"VIDEO" * 50000  # 250 KB: nhiều hơn một khối 64 KiB
+        self.video_missing_tail = 0  # >0: khai Content-Length lớn hơn số byte thật gửi
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -89,6 +92,17 @@ class FakeMaiHub(object):
                     if outer.describe_fail:
                         return self._reply(500, {"ok": False, "error": {"code": "INTERNAL", "message": "hỏng"}})
                     return self._reply(200, {"ok": True, "result": DESCRIBE})
+                if self.path.startswith("/v1/videos/file?"):
+                    query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                    if query.get("videoId") == ["missing"]:
+                        return self._reply(404, {"ok": False, "error": {"code": "NOT_FOUND", "message": "Không thấy video"}})
+                    data = outer.video_bytes
+                    self.send_response(200)
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Content-Length", str(len(data) + outer.video_missing_tail))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 self._reply(404, {"ok": False, "error": {"code": "NOT_FOUND", "message": "không có"}})
 
             def do_POST(self):
@@ -193,7 +207,7 @@ class McpTests(BridgeTestCase):
     def test_tools_list_mapping(self):
         replies = self.mcp([json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})])
         tools = dict((t["name"], t) for t in replies[0]["result"]["tools"])
-        self.assertEqual(sorted(tools), ["maihub_drafts_delete", "maihub_events_wait", "maihub_system_status", "maihub_upload_media"])
+        self.assertEqual(sorted(tools), ["maihub_download_video", "maihub_drafts_delete", "maihub_events_wait", "maihub_system_status", "maihub_upload_media"])
         self.assertIn("Cần confirm: true (hỏi người dùng trước)", tools["maihub_drafts_delete"]["description"])
         self.assertNotIn("Cần confirm", tools["maihub_system_status"]["description"])
         self.assertEqual(tools["maihub_system_status"]["inputSchema"]["properties"]["idempotencyKey"]["type"], "string")
@@ -211,7 +225,7 @@ class McpTests(BridgeTestCase):
         server.stdin, server.stdout = io.StringIO(req + "\n" + req.replace('"id": 1', '"id": 2') + "\n"), io.StringIO()
         server.run()
         replies = [json.loads(l) for l in server.stdout.getvalue().splitlines()]
-        self.assertEqual(len(replies[0]["result"]["tools"]), 4)
+        self.assertEqual(len(replies[0]["result"]["tools"]), 5)
         describes = [r for r in self.hub.requests if r["path"] == "/v1/describe"]
         self.assertEqual(len(describes), 2)  # 1 lỗi + 1 thành công; lần 3 dùng cache
 
@@ -310,6 +324,108 @@ class MediaTypeAndStdioTests(BridgeTestCase):
         replies = self.mcp([json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "maihub_system_status", "arguments": {"idempotencyKey": 5}}})])
         self.assertTrue(replies[0]["result"]["isError"])
         self.assertIn("INVALID_PARAMS", replies[0]["result"]["content"][0]["text"])
+
+
+class DownloadVideoTests(BridgeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.dest = os.path.join(self.dir, "out.mp4")
+
+    def test_success_writes_exact_bytes(self):
+        result = self.client.download_video("vid-1", "video", self.dest)
+        self.assertEqual(result, {"path": self.dest, "sizeBytes": 250000})
+        with open(self.dest, "rb") as handle:
+            self.assertEqual(handle.read(), self.hub.video_bytes)
+        self.assertEqual(os.listdir(self.dir), ["out.mp4"])
+        self.assertEqual(os.stat(self.dest).st_mode & 0o777, 0o600)
+        req = self.hub.requests[-1]
+        self.assertEqual(req["path"], "/v1/videos/file?videoId=vid-1&kind=video")
+        self.assertEqual(req["headers"]["Authorization"], "Bearer " + API_KEY)
+
+    def test_not_found_json_error_leaves_no_file(self):
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            self.client.download_video("missing", "video", self.dest)
+        self.assertEqual(ctx.exception.code, "NOT_FOUND")
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_unwritable_destination_is_local_error_not_network(self):
+        dest = os.path.join(self.dir, "no-such-dir", "out.mp4")
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            self.client.download_video("vid-1", "video", dest)
+        self.assertEqual(ctx.exception.code, "INVALID_PARAMS")
+        self.assertIn("Không ghi được tệp đích", ctx.exception.message)
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_invalid_params_rejected_before_network(self):
+        for video_id, kind in (("../x", "video"), ("", "video"), ("a" * 65, "video"), ("v1", "audio"), (None, "video")):
+            with self.assertRaises(bridge.BridgeError) as ctx:
+                self.client.download_video(video_id, kind, self.dest)
+            self.assertEqual(ctx.exception.code, "INVALID_PARAMS")
+        self.assertEqual(self.hub.requests, [])
+
+    def test_truncated_body_is_error_and_leaves_no_file(self):
+        self.hub.video_missing_tail = 10
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            self.client.download_video("vid-1", "video", self.dest)
+        self.assertEqual(ctx.exception.code, "UNREACHABLE")
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_pin_mismatch_never_sends_key(self):
+        client = bridge.MaiHubClient(bridge.Config(self.hub.url, API_KEY, "0" * 64), timeout=10)
+        with self.assertRaises(bridge.BridgeError) as ctx:
+            client.download_video("vid-1", "video", self.dest)
+        self.assertEqual(ctx.exception.code, "PIN_MISMATCH")
+        self.assertEqual(self.hub.requests, [])
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def call_tool(self, arguments):
+        replies = self.mcp([json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                        "params": {"name": "maihub_download_video", "arguments": arguments}})])
+        return replies[0]["result"]
+
+    def test_tool_listed(self):
+        replies = self.mcp([json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})])
+        tools = dict((t["name"], t) for t in replies[0]["result"]["tools"])
+        schema = tools["maihub_download_video"]["inputSchema"]
+        self.assertEqual(schema["required"], ["videoId"])
+        self.assertEqual(schema["properties"]["kind"]["enum"], ["thumb", "video"])
+
+    def test_tool_default_dir_under_home(self):
+        with mock.patch.dict(os.environ, {"HOME": self.dir}):
+            result = self.call_tool({"videoId": "vid-1"})
+            thumb = self.call_tool({"videoId": "vid-1", "kind": "thumb"})
+        folder = os.path.join(self.dir, "maihub-videos")
+        self.assertEqual(json.loads(result["content"][0]["text"])["path"], os.path.join(folder, "vid-1.mp4"))
+        self.assertEqual(json.loads(thumb["content"][0]["text"])["path"], os.path.join(folder, "vid-1.jpg"))
+        self.assertEqual(os.stat(folder).st_mode & 0o777, 0o700)
+        self.assertEqual(os.path.getsize(os.path.join(folder, "vid-1.mp4")), 250000)
+
+    def test_tool_explicit_directory_and_file(self):
+        result = self.call_tool({"videoId": "vid-1", "path": self.dir})
+        self.assertEqual(json.loads(result["content"][0]["text"])["path"], os.path.join(self.dir, "vid-1.mp4"))
+        result = self.call_tool({"videoId": "vid-1", "path": self.dest})
+        self.assertEqual(json.loads(result["content"][0]["text"])["path"], self.dest)
+
+    def test_tool_errors(self):
+        result = self.call_tool({"videoId": "missing", "path": self.dir})
+        self.assertTrue(result["isError"])
+        self.assertTrue(result["content"][0]["text"].startswith("NOT_FOUND: "))
+        self.assertTrue(self.call_tool({"videoId": "../x", "path": self.dir})["isError"])
+        self.assertTrue(self.call_tool({"videoId": "vid-1", "kind": "audio", "path": self.dir})["isError"])
+
+    def test_cli(self):
+        code, out, _ = self.run_cli(["download-video", "vid-1", "--kind", "video", "-o", self.dest])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), {"path": self.dest, "sizeBytes": 250000})
+        code, out, err = self.run_cli(["download-video", "missing", "-o", self.dir])
+        self.assertEqual(code, bridge.EXIT_SERVER_ERROR)
+        self.assertEqual(out, "")
+        self.assertIn("NOT_FOUND", err)
+        code, _, err = self.run_cli(["download-video", "../x"])
+        self.assertEqual(code, bridge.EXIT_SERVER_ERROR)
+        self.assertIn("INVALID_PARAMS", err)
 
 
 class CliTests(BridgeTestCase):
@@ -1875,6 +1991,188 @@ class FormatVideoFinishedTests(unittest.TestCase):
 
     def test_cancelled_is_silent(self):
         self.assertIsNone(self.fmt(ok=False, cancelled=True, error="Đã huỷ"))
+
+
+class SendVideoTests(unittest.TestCase):
+    def make(self, script, thread_id=None):
+        clock = FakeClock()
+        opener = FakeOpener(script)
+        target = {"token": TG_TOKEN, "chat_id": "42", "thread_id": thread_id}
+        sender = bridge.TelegramSender(target, ROUTE, sleep=clock.sleep, opener=opener)
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "video-v1.mp4")
+        with open(path, "wb") as handle:
+            handle.write(b"\x00MP4DATA\xff")
+        return sender, opener, clock, path
+
+    def test_multipart_request_shape(self):
+        sender, opener, _, path = self.make([OK_BODY], thread_id=7)
+        self.assertTrue(sender.send_video(path, "🎬 Video xong: A"))
+        req = opener.requests[0]
+        self.assertEqual(req.full_url, "https://api.telegram.org/bot%s/sendVideo" % TG_TOKEN)
+        ctype = req.get_header("Content-type")
+        self.assertTrue(ctype.startswith("multipart/form-data; boundary="))
+        self.assertIn(ctype.split("boundary=")[1].encode("ascii"), req.data)
+        for needle in (b'name="chat_id"\r\n\r\n42', b'name="message_thread_id"\r\n\r\n7', b'name="supports_streaming"\r\n\r\ntrue',
+                       "name=\"caption\"\r\n\r\n🎬 Video xong: A".encode("utf-8"),
+                       b'name="video"; filename="video-v1.mp4"\r\nContent-Type: video/mp4\r\n\r\n\x00MP4DATA\xff\r\n'):
+            self.assertIn(needle, req.data)
+
+    def test_no_thread_field_when_unset(self):
+        sender, opener, _, path = self.make([OK_BODY])
+        self.assertTrue(sender.send_video(path, "c"))
+        self.assertNotIn(b"message_thread_id", opener.requests[0].data)
+
+    def test_retry_after_once_then_gives_up(self):
+        sender, opener, clock, path = self.make([http_429(3), OK_BODY])
+        self.assertTrue(sender.send_video(path, "c"))
+        self.assertEqual(clock.slept, [3])
+        sender, opener, clock, path = self.make([http_429(3), http_429(3)])
+        with mock.patch("sys.stderr", io.StringIO()):
+            self.assertFalse(sender.send_video(path, "c"))
+        self.assertEqual(len(opener.requests), 2)
+
+    def test_failure_returns_false_and_hides_token(self):
+        for script in ([OSError("conn %s" % TG_TOKEN)], [FakeResponse(b'{"ok": false}')]):
+            sender, opener, clock, path = self.make(script)
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err):
+                self.assertFalse(sender.send_video(path, "c"))
+            self.assertNotIn(TG_TOKEN, err.getvalue())
+            self.assertEqual(len(opener.requests), 1)
+            self.assertEqual(clock.slept, [])
+
+    def test_missing_file_returns_false(self):
+        sender, opener, _, path = self.make([OK_BODY])
+        with mock.patch("sys.stderr", io.StringIO()):
+            self.assertFalse(sender.send_video(path + ".nope", "c"))
+        self.assertEqual(opener.requests, [])
+
+
+class VideoSender(FakeSender):
+    def __init__(self, result=True):
+        super().__init__()
+        self.videos = []
+        self.result = result
+        self.seen_file = None
+
+    def _describe(self, err):
+        return "%s: %s" % (type(err).__name__, err)
+
+    def send_video(self, path, caption):
+        self.seen_file = os.path.exists(path)
+        self.videos.append((path, caption))
+        return self.result
+
+
+class VideoDownloadClient(FakeWatchClient):
+    def __init__(self, script, fail=None, size=1000):
+        super().__init__(script)
+        self.fail = fail
+        self.size = size
+        self.downloads = []
+
+    def download_video(self, video_id, kind, dest_path):
+        self.downloads.append((video_id, kind, dest_path))
+        if self.fail:
+            raise self.fail
+        with open(dest_path, "wb") as handle:
+            handle.write(b"x" * self.size)
+        return {"path": dest_path, "sizeBytes": self.size}
+
+
+def video_event(seq, **over):
+    payload = {"videoId": "v1", "name": "Flash sale", "ok": True, "durationSec": 20.4, "sizeBytes": 1000, "mediaId": "m1"}
+    payload.update(over)
+    return {"seq": seq, "type": "videos.finished", "payload": payload, "createdAt": 1}
+
+
+class WatcherVideoTests(unittest.TestCase):
+    CAPTION = "🎬 Video xong: Flash sale (20s)"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state_path = os.path.join(self.tmp.name, "state", "watch-state.json")
+        self.clock = FakeClock()
+
+    def run_events(self, events, sender, client=None):
+        self.client = client or VideoDownloadClient([page([]), page(events)])
+        w = bridge.Watcher(self.client, sender, self.state_path, clock=self.clock, sleep=self.clock.sleep)
+        with mock.patch("sys.stderr", io.StringIO()) as err:
+            w.step()
+            w.step()
+        self.err = err.getvalue()
+        with open(self.state_path) as handle:
+            self.cursor = json.load(handle)["cursor"]
+
+    def assert_state_clean(self):
+        self.assertEqual(os.listdir(os.path.dirname(self.state_path)), ["watch-state.json"])
+
+    def test_ok_video_is_sent_with_caption_and_temp_removed(self):
+        sender = VideoSender()
+        self.run_events([video_event(1)], sender)
+        self.assertEqual(sender.videos, [(os.path.join(os.path.dirname(self.state_path), "video-v1.mp4"), self.CAPTION)])
+        self.assertTrue(sender.seen_file)
+        self.assertEqual(sender.sent, [])
+        self.assertEqual(self.client.downloads[0][:2], ("v1", "video"))
+        self.assertEqual(self.cursor, 1)
+        self.assert_state_clean()
+
+    def test_oversize_payload_sends_text_only(self):
+        sender = VideoSender()
+        self.run_events([video_event(1, sizeBytes=50 * 1024 * 1024 + 1)], sender)
+        self.assertEqual(sender.sent, [self.CAPTION])
+        self.assertEqual(sender.videos, [])
+        self.assertEqual(self.client.downloads, [])
+
+    def test_oversize_after_download_falls_back(self):
+        sender = VideoSender()
+        client = VideoDownloadClient([page([]), page([video_event(1)])], size=50 * 1024 * 1024 + 1)
+        self.run_events([], sender, client)
+        self.assertEqual(sender.sent, [self.CAPTION])
+        self.assertEqual(sender.videos, [])
+        self.assert_state_clean()
+
+    def test_download_failure_falls_back_to_text(self):
+        sender = VideoSender()
+        client = VideoDownloadClient([page([]), page([video_event(1), video_event(2, videoId="v2")])],
+                                     fail=bridge.BridgeError("NOT_FOUND", "x"))
+        self.run_events([], sender, client)
+        self.assertEqual(sender.sent, [self.CAPTION, self.CAPTION])
+        self.assertEqual(self.cursor, 2)
+        self.assertIn("BridgeError: NOT_FOUND", self.err)
+        self.assert_state_clean()
+
+    def test_send_video_false_falls_back_to_text(self):
+        sender = VideoSender(result=False)
+        self.run_events([video_event(1)], sender)
+        self.assertEqual(sender.sent, [self.CAPTION])
+        self.assertEqual(self.cursor, 1)
+        self.assert_state_clean()
+
+    def test_send_video_exception_falls_back_to_text(self):
+        sender = VideoSender()
+        sender.send_video = mock.Mock(side_effect=RuntimeError("boom"))
+        self.run_events([video_event(1)], sender)
+        self.assertEqual(sender.sent, [self.CAPTION])
+        self.assert_state_clean()
+
+    def test_failed_cancelled_and_bad_id_unchanged(self):
+        sender = VideoSender()
+        self.run_events([video_event(1, ok=False, error="Hết hạn"), video_event(2, ok=False, cancelled=True),
+                         video_event(3, videoId="../x")], sender)
+        self.assertEqual(sender.sent, ["⚠️ Video lỗi: Flash sale — Hết hạn", self.CAPTION])
+        self.assertEqual(sender.videos, [])
+        self.assertEqual(self.client.downloads, [])
+        self.assertEqual(self.cursor, 3)
+
+    def test_sender_without_video_support_keeps_text_only(self):
+        sender = FakeSender()  # như PrintSender của --dry-run
+        self.run_events([video_event(1)], sender)
+        self.assertEqual(sender.sent, [self.CAPTION])
+        self.assertEqual(self.client.downloads, [])
 
 
 if __name__ == "__main__":

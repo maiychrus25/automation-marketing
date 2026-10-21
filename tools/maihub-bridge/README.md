@@ -48,7 +48,7 @@ command = "python3"
 args = ["/opt/bot/maihub/maihub_bridge.py", "mcp", "--env-file", "/opt/bot/maihub/.env"]
 ```
 
-Danh sách tool sinh tự động từ `GET /v1/describe` (`maihub_<thao_tac>`, dấu chấm thành gạch dưới), cộng tool `maihub_upload_media` nhận `path`. Mỗi tool có thêm tham số tuỳ chọn `idempotencyKey` để chống gọi trùng. Nếu MaiHub chưa với tới được lúc liệt kê tool, bridge trả lỗi và thử lại ở lần liệt kê kế tiếp.
+Danh sách tool sinh tự động từ `GET /v1/describe` (`maihub_<thao_tac>`, dấu chấm thành gạch dưới), cộng tool `maihub_upload_media` nhận `path` và tool `maihub_download_video` (`videoId`, `kind` = `video` / `thumb`, `path` tuỳ chọn) tải video đã render xong (hoặc ảnh bìa) về máy bot, mặc định `~/maihub-videos/<videoId>.mp4|.jpg`, trả `{ path, sizeBytes }` để bot gửi tệp hoặc xem ảnh bìa. Mỗi tool có thêm tham số tuỳ chọn `idempotencyKey` để chống gọi trùng. Nếu MaiHub chưa với tới được lúc liệt kê tool, bridge trả lỗi và thử lại ở lần liệt kê kế tiếp.
 
 ## CLI
 
@@ -61,6 +61,7 @@ python3 maihub_bridge.py --env-file .env call drafts.approve '{"id":"<ma-nhap>",
 python3 maihub_bridge.py --env-file .env call drafts.approve '{"id":"<ma-nhap>","when":"now","confirm":true}'
 python3 maihub_bridge.py --env-file .env call runs.cancel '{"confirm": true}' --auto-idem
 python3 maihub_bridge.py --env-file .env upload /duong/dan/anh.jpg
+python3 maihub_bridge.py --env-file .env download-video <ma-video> [--kind thumb] [-o /duong/dan/]
 python3 maihub_bridge.py --env-file .env wait --after 0 --timeout 25
 ```
 
@@ -107,7 +108,7 @@ python3 maihub_bridge.py watch --env-file <.env MaiHub> --notify-env <.env của
 - `--dry-run`: in tin ra stdout, không gửi Telegram.
 - Gửi lỗi thì thử lại sau 2, 10, 30 giây (HTTP 429 thì chờ `retry_after`), vẫn lỗi thì ghi stderr và bỏ tin đó.
 
-Các loại tin: `✅` lượt xong; `⚠️` lượt có lỗi (kèm tối đa 3 dòng `• đích: lỗi`); `⏹` lượt bị huỷ; `⏰` lỡ lịch; `🔒` profile hết phiên hoặc bị checkpoint; `📈` theo dõi bài đăng (`posts.trackFinished`, chỉ khi có link mới hoặc bài có thể đã bị xoá); `🎯` khách tiềm năng mới (`leads.found`, số khách kèm tối đa 3 dòng `tên: nội dung` cắt 80 ký tự; không báo khi không có khách mới); `🎬` video xong (`videos.finished`, `🎬 Video xong: <tên> (<giây>s)`) và `⚠️ Video lỗi: <tên> — <lỗi cắt 120 ký tự>` (video bị huỷ, `cancelled = true`, thì không báo); `⚠️` mất liên lạc MaiHub từ 300 giây (một tin) và `✅` khi kết nối lại; `🔑` khoá bị từ chối và `🔐` sai ghim chứng chỉ (một tin, thử lại mỗi 5 phút); "Đã chuyển workspace" khi MaiHub đổi workspace. Không báo `run.started`, `draft.approved`, `profiles.checkFinished`.
+Các loại tin: `✅` lượt xong; `⚠️` lượt có lỗi (kèm tối đa 3 dòng `• đích: lỗi`); `⏹` lượt bị huỷ; `⏰` lỡ lịch; `🔒` profile hết phiên hoặc bị checkpoint; `📈` theo dõi bài đăng (`posts.trackFinished`, chỉ khi có link mới hoặc bài có thể đã bị xoá); `🎯` khách tiềm năng mới (`leads.found`, số khách kèm tối đa 3 dòng `tên: nội dung` cắt 80 ký tự; không báo khi không có khách mới); `🎬` video xong (`videos.finished`, `🎬 Video xong: <tên> (<giây>s)`; video ≤ 50 MiB được tải về thư mục trạng thái rồi gửi kèm bằng `sendVideo` với dòng đó làm chú thích, xoá tệp tạm sau khi gửi; quá giới hạn hoặc lỗi thì gửi chữ như cũ; `--dry-run` không tải) và `⚠️ Video lỗi: <tên> — <lỗi cắt 120 ký tự>` (video bị huỷ, `cancelled = true`, thì không báo); `⚠️` mất liên lạc MaiHub từ 300 giây (một tin) và `✅` khi kết nối lại; `🔑` khoá bị từ chối và `🔐` sai ghim chứng chỉ (một tin, thử lại mỗi 5 phút); "Đã chuyển workspace" khi MaiHub đổi workspace. Không báo `run.started`, `draft.approved`, `profiles.checkFinished`.
 
 ### Cài `watch` thành service (`install-watch`)
 

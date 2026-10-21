@@ -14,6 +14,7 @@ import { EventNotifier } from '../../services/control/EventNotifier';
 import { ControlError, createControlMethods, type ControlMethod } from '../../services/control/ControlMethods';
 import { ControlApiServer, DEFAULT_CONTROL_PORT } from '../../services/control/ControlApiServer';
 import { PairingTickets } from '../../services/control/PairingTickets';
+import { RenderError } from '../../services/video/RenderClient';
 import { createCertificate } from '../../services/control/certificate';
 
 interface Reply { status: number; headers: any; body: any; raw: string; fingerprint: string }
@@ -30,7 +31,7 @@ const fakeMethods: ControlMethod[] = [
   { name: 'crash', description: 'x', destructive: false, paramsSchema: obj, resultSchema: obj, run: async () => { throw new TypeError('secret internal detail'); } },
 ];
 
-async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any; poster?: any; isBlocked?: () => boolean; bridgeScript?: () => Buffer | null } = {}) {
+async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any; poster?: any; isBlocked?: () => boolean; bridgeScript?: () => Buffer | null; openVideoFile?: any } = {}) {
   const db = memoryDb();
   db.exec(CONTROL_SCHEMA_SQL);
   const store = new ControlStore(db);
@@ -62,7 +63,7 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
     tls: { key: cert.key, cert: cert.cert }, port: 0, host: '127.0.0.1',
     allowList: opts.allowList ?? ['127.0.0.1'],
     store, methods: [...real, ...fakeMethods], idempotency: new IdempotencyCache(store),
-    rateLimiter: new RateLimiter(opts.rate ?? 60), lockout, saveMedia, isBlocked: opts.isBlocked,
+    rateLimiter: new RateLimiter(opts.rate ?? 60), lockout, saveMedia, isBlocked: opts.isBlocked, openVideoFile: opts.openVideoFile,
     pairing: { consume: (t, ip) => tickets.consume(t, ip), onPaired: (i) => { paired.push(i); } },
     bridgeScript: opts.bridgeScript,
   });
@@ -720,5 +721,94 @@ describe('ControlApiServer pairing and bridge script', () => {
   it('non-allow-listed ip is closed before TLS for /v1/pair', async () => {
     ctx = await setup({ allowList: ['10.9.9.9'] });
     await expect(pair(JSON.stringify({ ticket: 'x' }))).rejects.toBeDefined();
+  });
+});
+
+describe('ControlApiServer /v1/videos/file', () => {
+  const bytes = Buffer.from('fake-mp4-bytes-0123456789');
+  const open = () => jest.fn(async (_id: string, _kind: 'video' | 'thumb') => ({ stream: Readable.from([bytes]), size: bytes.length }));
+
+  it('streams the video with download headers and exact bytes', async () => {
+    const openVideoFile = open();
+    ctx = await setup({ openVideoFile });
+    const r = await ctx.send('GET', '/v1/videos/file?videoId=v-1');
+    expect(r.status).toBe(200);
+    expect(openVideoFile).toHaveBeenCalledWith('v-1', 'video');
+    expect(r.headers['content-type']).toBe('video/mp4');
+    expect(r.headers['content-length']).toBe(String(bytes.length));
+    expect(r.headers['cache-control']).toBe('no-store');
+    expect(r.headers['content-disposition']).toBe('attachment; filename="v-1.mp4"');
+    expect(r.raw).toBe(bytes.toString('utf8'));
+  });
+
+  it('serves the thumbnail as image/jpeg', async () => {
+    const openVideoFile = open();
+    ctx = await setup({ openVideoFile });
+    const r = await ctx.send('GET', '/v1/videos/file?videoId=v1&kind=thumb');
+    expect(r.status).toBe(200);
+    expect(openVideoFile).toHaveBeenCalledWith('v1', 'thumb');
+    expect(r.headers['content-type']).toBe('image/jpeg');
+    expect(r.headers['content-disposition']).toBe('attachment; filename="v1.jpg"');
+  });
+
+  it('requires a valid key', async () => {
+    ctx = await setup({ openVideoFile: open() });
+    expect((await ctx.send('GET', '/v1/videos/file?videoId=v1', { key: null })).status).toBe(401);
+    expect((await ctx.send('GET', '/v1/videos/file?videoId=v1', { key: 'wrong' })).status).toBe(401);
+  });
+
+  it('rejects bad videoId and bad kind with INVALID_PARAMS', async () => {
+    const openVideoFile = open();
+    ctx = await setup({ openVideoFile });
+    for (const q of ['', '?videoId=', '?videoId=../etc', `?videoId=${'a'.repeat(65)}`]) {
+      const r = await ctx.send('GET', `/v1/videos/file${q}`);
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'videoId' } });
+    }
+    const k = await ctx.send('GET', '/v1/videos/file?videoId=v1&kind=audio');
+    expect(k.status).toBe(400);
+    expect(k.body.error).toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'kind' } });
+    expect(openVideoFile).not.toHaveBeenCalled();
+  });
+
+  it('answers 405 to non-GET', async () => {
+    ctx = await setup({ openVideoFile: open() });
+    const r = await ctx.send('POST', '/v1/videos/file?videoId=v1');
+    expect(r.status).toBe(405);
+    expect(r.headers.allow).toBe('GET');
+  });
+
+  it('maps RenderError not_found to 404', async () => {
+    ctx = await setup({ openVideoFile: jest.fn(async () => { throw new RenderError('not_found', 'Không tìm thấy video'); }) });
+    const r = await ctx.send('GET', '/v1/videos/file?videoId=v1');
+    expect(r.status).toBe(404);
+    expect(r.body.error).toMatchObject({ code: 'NOT_FOUND', message: 'Không tìm thấy video' });
+  });
+
+  it('answers 404 when no openVideoFile option is wired', async () => {
+    ctx = await setup();
+    const r = await ctx.send('GET', '/v1/videos/file?videoId=v1');
+    expect(r.status).toBe(404);
+    expect(r.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('writes one videos.download audit row on success and on failure', async () => {
+    ctx = await setup({ openVideoFile: open() });
+    await ctx.send('GET', '/v1/videos/file?videoId=v1&kind=thumb');
+    await ctx.send('GET', '/v1/videos/file?videoId=bad/id');
+    const rows = ctx.store.listAudit(10).filter((a: any) => a.method === 'videos.download');
+    expect(rows).toHaveLength(2);
+    const ok = rows.find((a: any) => a.ok)!;
+    const failed = rows.find((a: any) => !a.ok)!;
+    expect(JSON.parse(ok.paramsSummary)).toEqual({ videoId: 'v1', kind: 'thumb', size: bytes.length });
+    expect(failed.errorCode).toBe('INVALID_PARAMS');
+    expect(failed.paramsSummary).not.toContain('bad/id');
+  });
+
+  it('is blocked with 503 in employee mode', async () => {
+    const openVideoFile = open();
+    ctx = await setup({ openVideoFile, isBlocked: () => true });
+    expect((await ctx.send('GET', '/v1/videos/file?videoId=v1')).status).toBe(503);
+    expect(openVideoFile).not.toHaveBeenCalled();
   });
 });

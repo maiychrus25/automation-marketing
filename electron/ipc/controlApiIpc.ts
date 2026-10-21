@@ -193,6 +193,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
         idempotency: new IdempotencyCache(store), rateLimiter: new RateLimiter(60), lockout: new AuthLockout(),
         saveMedia: (name, contentType, stream) => mediaStore.save(name, contentType, stream),
         isBlocked: isFacebookPosterEmployeeBlocked,
+        openVideoFile: (videoId, kind) => videoOperations.openFile({ videoId, kind }),
         pairing: {
             consume: (ticket, ip) => pairing.consume(ticket, ip),
             onPaired: (info) => EventBroadcaster.emit('controlApi:paired', { keyName: info.keyName, ip: info.ip }),

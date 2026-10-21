@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import type { Readable } from 'stream';
 import * as path from 'path';
 import { buildVideoFinished } from '../control/controlEvents';
 import { AUDIO_EXTENSIONS } from '../facebookPoster/mediaRules';
@@ -169,6 +170,35 @@ export function createVideoOperations(deps: VideoOperationsDeps) {
         cancel: async (params: any) => deps.service().cancel(readVideoId(params)),
 
         delete: async (params: any): Promise<void> => deps.service().delete(readVideoId(params)),
+
+        /**
+         * Mở tệp mp4/ảnh bìa để Control API phát cho bot tải. Không theo symlink (O_NOFOLLOW; Windows không có thì bỏ qua)
+         * và không bao giờ đưa đường dẫn máy chủ vào thông báo lỗi.
+         */
+        openFile: async (params: any): Promise<{ stream: Readable; size: number }> => {
+            const id = readVideoId(params);
+            const kind = params?.kind ?? 'video';
+            if (kind !== 'video' && kind !== 'thumb') bad('kind phải là video hoặc thumb');
+            const job = deps.service().get(id);
+            if (!job) throw new RenderError('not_found', 'Không tìm thấy video');
+            if (job.status !== 'done') throw new RenderError('not_found', 'Video chưa render xong');
+            const target = kind === 'video' ? job.filePath : job.thumbPath;
+            if (!target) throw new RenderError('not_found', kind === 'video' ? 'Video chưa render xong' : 'Video không có ảnh bìa');
+            const gone = () => new RenderError('not_found', 'Tệp video không còn trên máy');
+            let handle: fs.promises.FileHandle;
+            try {
+                handle = await fs.promises.open(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+            } catch { throw gone(); }
+            try {
+                const stat = await handle.stat();
+                if (!stat.isFile()) throw gone();
+                // Đọc đúng `size` byte đã báo trong Content-Length, kể cả nếu tệp có bị ghi thêm sau fstat.
+                return { stream: handle.createReadStream(stat.size > 0 ? { start: 0, end: stat.size - 1 } : undefined), size: stat.size };
+            } catch (err) {
+                await handle.close().catch(() => undefined);
+                throw err instanceof RenderError ? err : gone();
+            }
+        },
 
         /** Lưu MP4 ra nơi người dùng chọn; chỉ dùng trong app (hộp thoại), không có trong Control API. */
         exportFile: async (params: any): Promise<{ saved: boolean; path?: string }> => {

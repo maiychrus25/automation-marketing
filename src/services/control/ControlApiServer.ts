@@ -54,6 +54,8 @@ export interface ControlApiServerOptions {
     saveMedia(name: string, contentType: string, stream: Readable): Promise<SavedMedia>;
     /** Chế độ nhân viên: mọi lời gọi đã xác thực bị từ chối 503 BUSY, kể cả khi server chưa kịp dừng. */
     isBlocked?: () => boolean;
+    /** Mở tệp video/ảnh bìa đã render để bot tải qua GET /v1/videos/file; thiếu thì đường dẫn này 404. Ném lỗi qua toControlError. */
+    openVideoFile?: (videoId: string, kind: 'video' | 'thumb') => Promise<{ stream: Readable; size: number }>;
     /** Ghép nối bằng vé một lần (không cần khoá Bearer). `consume` kiểm vé + IP; `onPaired` báo cho app sau khi đã tạo khoá. */
     pairing?: {
         consume(ticket: string, ip: string): { name: string } | null;
@@ -263,6 +265,9 @@ export class ControlApiServer {
         } else if (path === '/v1/media') {
             if (req.method !== 'POST') { this.sendMethodNotAllowed(res, 'POST'); return; }
             await this.handleMedia(req, res, keyInfo.name, ip);
+        } else if (path === '/v1/videos/file') {
+            if (req.method !== 'GET') { this.sendMethodNotAllowed(res, 'GET'); return; }
+            await this.handleVideoDownload(req, res, keyInfo.name, ip);
         } else {
             this.sendError(res, new ControlError('NOT_FOUND', 'Không có đường dẫn này'));
         }
@@ -373,6 +378,56 @@ export class ControlApiServer {
                     at: startedAt, keyName, ip, method: methodName, paramsSummary: summarizeParams(params),
                     ok: errorCode === null, errorCode, durationMs: this.now() - startedAt,
                 });
+            } catch (err) {
+                Logger.error('[control] Không ghi được nhật ký:', errorText(err));
+            }
+        }
+    }
+
+    private async handleVideoDownload(req: IncomingMessage, res: ServerResponse, keyName: string, ip: string): Promise<void> {
+        const startedAt = this.now();
+        let errorCode: string | null = null;
+        const summary: { videoId?: string; kind?: string; size?: number } = {};
+        try {
+            const query = new URL(req.url ?? '/', 'http://localhost').searchParams;
+            const videoId = query.get('videoId') ?? '';
+            if (!/^[A-Za-z0-9-]{1,64}$/.test(videoId)) throw new ControlError('INVALID_PARAMS', 'videoId thiếu hoặc không hợp lệ', { field: 'videoId' });
+            summary.videoId = videoId;
+            const kind = query.get('kind') ?? 'video';
+            if (kind !== 'video' && kind !== 'thumb') throw new ControlError('INVALID_PARAMS', 'kind phải là video hoặc thumb', { field: 'kind' });
+            summary.kind = kind;
+            if (!this.opts.openVideoFile) throw new ControlError('NOT_FOUND', 'Không có đường dẫn này');
+            let file: { stream: Readable; size: number };
+            try {
+                file = await this.opts.openVideoFile(videoId, kind);
+            } catch (err) {
+                const mapped = toControlError(err);
+                if (mapped.code === 'INTERNAL') Logger.error('[control] Mở tệp video lỗi:', errorText(err));
+                throw mapped;
+            }
+            summary.size = file.size;
+            const { stream } = file;
+            // Client ngắt giữa chừng: đóng luồng tệp để nhả file descriptor.
+            res.on('close', () => { if (!res.writableFinished) stream.destroy(); });
+            stream.on('error', (err) => {
+                Logger.error('[control] Đọc tệp video lỗi:', errorText(err));
+                if (res.headersSent) res.destroy(); else this.sendError(res, new ControlError('INTERNAL', INTERNAL_MESSAGE), true);
+            });
+            res.writeHead(200, {
+                'Content-Type': kind === 'video' ? 'video/mp4' : 'image/jpeg',
+                'Content-Length': String(file.size),
+                'Cache-Control': 'no-store',
+                'Content-Disposition': `attachment; filename="${videoId}.${kind === 'video' ? 'mp4' : 'jpg'}"`,
+            });
+            stream.pipe(res);
+        } catch (err) {
+            const controlError = toControlError(err);
+            errorCode = controlError.code;
+            delete summary.size;
+            this.sendError(res, controlError);
+        } finally {
+            try {
+                this.opts.store.addAudit({ at: startedAt, keyName, ip, method: 'videos.download', paramsSummary: JSON.stringify(summary), ok: errorCode === null, errorCode, durationMs: this.now() - startedAt });
             } catch (err) {
                 Logger.error('[control] Không ghi được nhật ký:', errorText(err));
             }
