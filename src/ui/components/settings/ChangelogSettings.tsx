@@ -15,6 +15,30 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.29.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🎬 Bot AI làm video HTML tự viết có hoạt ảnh đúng chuẩn, sai quy ước thì được báo lỗi ngay để tự sửa',
+    ],
+    changes: [
+      {
+        category: 'improved',
+        items: [
+          'Mô tả videos.render và hướng dẫn của bot có quy ước HTML HyperFrames kèm khung mẫu đã kiểm',
+          'Máy chủ render: việc HTML có sẵn GSAP, kiểm lint trước khi render (báo lỗi trong vài giây thay vì ra video đứng yên)',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Máy chủ render: video 1080p dài (ví dụ 40 giây) không còn lỗi "Render thất bại (mã 1)" do thiếu chỗ tạm',
+          'Lỗi render báo đúng nguyên nhân thay vì câu gợi ý chung "Try --docker"',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.28.0',
     date: '10/2026',
     type: 'minor',
