@@ -15,6 +15,23 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.30.0',
+    date: '10/2026',
+    type: 'patch',
+    highlights: [
+      '🎬 Nút Xem trong thư viện video phát và tua được bình thường',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Thư viện video: bấm Xem không còn ra khung đen (lỗi "data source error"); tệp mất thì báo rõ',
+          'Máy chủ render: video HTML gọi GSAP từ CDN chạy được (tự dùng bản có sẵn), lỗi render báo đủ chi tiết',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.29.0',
     date: '10/2026',
     type: 'minor',
