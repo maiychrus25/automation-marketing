@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 21/10/2026 |
-| Trạng thái | Đã duyệt 21/10/2026; đã cài đặt (chờ phát hành 26.27.0) |
+| Trạng thái | Đã phát hành 26.27.0 (21/10/2026) |
 | Intent | `docs/intent/2026-10-21-bot-autonomy.md` |
 | Kế hoạch | `docs/plans/2026-10-21-bot-autonomy.md` |
 | Phiên bản dự kiến | 26.27.0 |

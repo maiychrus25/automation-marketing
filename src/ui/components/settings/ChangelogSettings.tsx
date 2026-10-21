@@ -15,6 +15,33 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.27.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🤖 Bot AI tự chạy vòng làm việc ít bị kẹt hơn: chờ việc xong trong một lần gọi, lỗi kèm gợi ý cách xử lý',
+      '🔕 Tin Telegram bớt ồn: không báo các lượt việc phụ chạy xong không lỗi',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Bot có tool maihub_wait_for (chờ quét / render / thu bình luận xong) và bản hướng dẫn vòng làm việc gửi khi kết nối',
+          'Thu bình luận có sự kiện xong (comments.collectFinished), xem trạng thái và huỷ qua API',
+          'system.status cho biết giờ và múi giờ của máy MaiHub',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Lỗi trả cho bot kèm chi tiết (trường sai, mã lạ) và gợi ý xử lý',
+          'Sự kiện khách tiềm năng kèm mã khách, mã chiến dịch; lượt chạy xong kèm mã chiến dịch',
+          'Kết quả trả cho bot gọn hơn, tốn ít token hơn',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.26.0',
     date: '10/2026',
     type: 'minor',
