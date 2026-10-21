@@ -131,6 +131,7 @@ Nghi lộ khoá: xoá cặp đó ngay rồi khởi động lại.
 
 - `network_mode: none`: không có mạng (không gọi ra ngoài, không tới metadata cloud, không tới `api`);
 - `read_only: true`, tmpfs `/tmp` (2 GB), `cap_drop: ALL`, `no-new-privileges`, user `node` không phải root;
+- `HF_CAPTURE_PARALLEL_STREAM=true`: với 3 GB RAM, HyperFrames chụp từng khung hình; không có cờ này thì 2 worker lưu mọi khung ra `/tmp` (1080p 40 giây cần khoảng 2 GB, vượt tmpfs, render dừng ngay với lỗi "Disk capture may need …"). Bật thì khung được ghép thẳng vào video;
 - chỉ gắn `shared/current` (chỉ đọc, chỉ có việc hiện tại) và `shared/out` (ghi kết quả). **Không** có `data/`, `.env`, khoá API hay việc của khoá khác;
 - `api` không gắn Docker socket, và `worker` không nói chuyện với `api` qua mạng: hai bên trao đổi bằng tệp trong `shared/`;
 - `api` coi `shared/out` là dữ liệu không tin cậy: chỉ đọc đúng tên `<jobId>.mp4|jpg|progress.json|result.json`, không theo liên kết tượng trưng (`O_NOFOLLOW`), chỉ nhận tệp thường trong giới hạn kích thước, sai thì việc `failed`;

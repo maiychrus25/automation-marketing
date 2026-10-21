@@ -255,3 +255,8 @@ Video giữ cho đến khi người dùng xoá. Tệp nằm ở `userData/videos
 - Cài đặt máy chủ render là một tab riêng trong Cài đặt.
 - Thêm trong 26.26.0: bot tải video đã xong về bằng `GET /v1/videos/file` (tool `maihub_download_video`, lệnh `download-video`), và `watch` gửi kèm tệp video (≤ 50 MiB) cho tin `🎬 Video xong`. Không thêm thao tác hay mã lỗi.
 - Triển khai thật: Caddy tắt bằng `docker-compose.override.yml` vì VPS đã có nginx giữ 80/443; `api` chỉ nghe `127.0.0.1:18080`, nginx làm TLS (Let's Encrypt).
+
+## Ghi chú sau triển khai (21/10/2026)
+
+- Video HTML 1920×1080 dài 40 giây do bot gửi bị lỗi sau 4 giây: worker 3 GB RAM khiến HyperFrames chụp từng khung và với 2 worker thì lưu mọi khung ra `/tmp` (cần ~1,99 GB, tmpfs chỉ 2 GB). Sửa bằng `HF_CAPTURE_PARALLEL_STREAM=true` cho `worker` (ghép thẳng vào video). Đo trên VPS: 960 khung 1080p xong trong 129 giây, 1200 khung trong 135 giây, `/tmp` gần như không dùng.
+- `renderRunner` báo dòng lỗi thật của HyperFrames (dòng tiến độ `Failed: …`) thay vì dòng gợi ý chung cuối cùng (`Try --docker for containerized rendering`).

@@ -41,6 +41,8 @@ export function runRender(opts: RunRenderOptions): Promise<RenderOutcome> {
     }
     let stopReason: 'timeout' | 'cancelled' | undefined;
     let lastLine = '';
+    // HyperFrames in lỗi thật ở dòng tiến độ "Failed: …"; dòng cuối thường chỉ là gợi ý chung ("Try --docker …").
+    let failedLine = '';
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
 
@@ -82,7 +84,9 @@ export function runRender(opts: RunRenderOptions): Promise<RenderOutcome> {
           if (typeof pct === 'number' && Number.isFinite(pct)) opts.onProgress?.(Math.min(100, Math.max(0, pct)));
         } catch { /* dòng dở dang */ }
       }
-      if (!text.includes('@hf-progress') && !/^[\s█░▓▒]*\d+%/.test(text)) lastLine = text.slice(0, 300);
+      const failed = /^[\s█░▓▒]*\d+%\s+Failed:\s*(.+)$/.exec(text);
+      if (failed) failedLine = failed[1].slice(0, 300);
+      if (!text.includes('@hf-progress') && !/^[\s█░▓▒]*\d+%/.test(text) && !/^Try --docker\b/.test(text)) lastLine = text.slice(0, 300);
     };
     child.stdout!.on('data', onData);
     child.stderr!.on('data', onData);
@@ -91,7 +95,8 @@ export function runRender(opts: RunRenderOptions): Promise<RenderOutcome> {
       if (buffer) handleLine(buffer);
       if (stopReason) return finish({ status: stopReason, ...(stopReason === 'timeout' && { error: 'timeout' }) });
       if (code === 0) return finish({ status: 'done' });
-      finish({ status: 'failed', error: `Render thất bại (mã ${code})${lastLine ? `: ${lastLine}` : ''}` });
+      const reason = failedLine || lastLine;
+      finish({ status: 'failed', error: `Render thất bại (mã ${code})${reason ? `: ${reason}` : ''}` });
     });
   });
 }

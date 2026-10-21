@@ -54,6 +54,10 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
+    environment:
+      # RAM < 8 GB nên HyperFrames chụp từng khung (screenshot); không có cờ này thì nhiều worker ghi mọi khung
+      # ra /tmp (1080p 40 giây ~2 GB, vượt tmpfs). Bật thì ghép thẳng vào video, không cần đĩa tạm.
+      HF_CAPTURE_PARALLEL_STREAM: "true"
     # không có .env, không có /data; chỉ thấy việc hiện tại và thư mục kết quả
     volumes:
       - ./shared/current:/shared/current:ro

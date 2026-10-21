@@ -150,6 +150,14 @@ describe('runRender', () => {
     expect(r.error).toContain('Boom');
   });
 
+  it('lỗi render: báo dòng "Failed:" thật, không báo dòng gợi ý "Try --docker"', async () => {
+    const { opts } = base({ env: { FAKE_MODE: 'fail-hint' } });
+    const r = await runRender(opts);
+    expect(r.status).toBe('failed');
+    expect(r.error).toBe('Render thất bại (mã 1): Disk capture may need ~1990.7 MB of temporary frame storage, but only 2146.8 MB is free');
+    expect(r.error).not.toContain('Try --docker');
+  });
+
   it('quá hạn -> timeout, tiến trình bị dừng', async () => {
     const { opts } = base({ env: { FAKE_MODE: 'hang' }, timeoutMs: 400 });
     const t = Date.now();
