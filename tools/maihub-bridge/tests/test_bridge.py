@@ -207,7 +207,7 @@ class McpTests(BridgeTestCase):
     def test_tools_list_mapping(self):
         replies = self.mcp([json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})])
         tools = dict((t["name"], t) for t in replies[0]["result"]["tools"])
-        self.assertEqual(sorted(tools), ["maihub_download_video", "maihub_drafts_delete", "maihub_events_wait", "maihub_system_status", "maihub_upload_media"])
+        self.assertEqual(sorted(tools), ["maihub_download_video", "maihub_drafts_delete", "maihub_events_wait", "maihub_guide", "maihub_system_status", "maihub_upload_media", "maihub_wait_for"])
         self.assertIn("Cần confirm: true (hỏi người dùng trước)", tools["maihub_drafts_delete"]["description"])
         self.assertNotIn("Cần confirm", tools["maihub_system_status"]["description"])
         self.assertEqual(tools["maihub_system_status"]["inputSchema"]["properties"]["idempotencyKey"]["type"], "string")
@@ -225,7 +225,7 @@ class McpTests(BridgeTestCase):
         server.stdin, server.stdout = io.StringIO(req + "\n" + req.replace('"id": 1', '"id": 2') + "\n"), io.StringIO()
         server.run()
         replies = [json.loads(l) for l in server.stdout.getvalue().splitlines()]
-        self.assertEqual(len(replies[0]["result"]["tools"]), 5)
+        self.assertEqual(len(replies[0]["result"]["tools"]), 7)
         describes = [r for r in self.hub.requests if r["path"] == "/v1/describe"]
         self.assertEqual(len(describes), 2)  # 1 lỗi + 1 thành công; lần 3 dùng cache
 
@@ -244,7 +244,7 @@ class McpTests(BridgeTestCase):
     def test_call_error_is_error_result(self):
         result = self.call("maihub_drafts_delete", {"id": "missing", "confirm": True})
         self.assertTrue(result["isError"])
-        self.assertEqual(result["content"][0]["text"], "NOT_FOUND: Không thấy nháp")
+        self.assertEqual(result["content"][0]["text"].split("\n")[0], "NOT_FOUND: Không thấy nháp")
 
     def test_call_confirmation_required_guidance(self):
         result = self.call("maihub_drafts_delete", {"id": "d1"})
@@ -252,6 +252,40 @@ class McpTests(BridgeTestCase):
         text = result["content"][0]["text"]
         self.assertTrue(text.startswith("CONFIRMATION_REQUIRED: Cần xác nhận"))
         self.assertIn("Hãy hỏi người dùng xác nhận rồi gọi lại với confirm: true", text)
+
+    def test_error_text_has_details_and_hint(self):
+        err = bridge.BridgeError("NOT_FOUND", "Không thấy", {"missing": ["p1"]})
+        lines = bridge.format_tool_error(err).split("\n")
+        self.assertEqual(len(lines), 3)
+        self.assertEqual(lines[0], "NOT_FOUND: Không thấy")
+        self.assertEqual(lines[1], 'Chi tiết: {"missing":["p1"]}')
+        self.assertEqual(lines[2], "Gợi ý: " + bridge.ERROR_HINTS["NOT_FOUND"])
+
+    def test_error_text_unknown_code_is_single_line(self):
+        self.assertEqual(bridge.format_tool_error(bridge.BridgeError("WEIRD", "lạ")), "WEIRD: lạ")
+
+    def test_error_text_confirmation_keeps_guidance(self):
+        text = bridge.format_tool_error(bridge.BridgeError("CONFIRMATION_REQUIRED", "Cần xác nhận"))
+        self.assertIn(bridge.CONFIRM_GUIDANCE, text)
+
+    def test_initialize_has_instructions(self):
+        replies = self.mcp([json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})])
+        self.assertEqual(replies[0]["result"]["instructions"], bridge.GUIDE)
+
+    def test_guide_tool_returns_guide(self):
+        result = self.call("maihub_guide", {})
+        self.assertNotIn("isError", result)
+        self.assertEqual(result["content"][0]["text"], bridge.GUIDE)
+
+    def test_guide_mentions_real_tools_and_events(self):
+        for word in ("maihub_wait_for", "maihub_upload_media", "maihub_download_video", "run.finished", "comments.collectFinished",
+                     "videos.finished", "idempotencyKey", "serverNowMs", "uncertain_after_submit"):
+            self.assertIn(word, bridge.GUIDE)
+
+    def test_success_result_is_compact_json(self):
+        text = self.call("maihub_system_status", {})["content"][0]["text"]
+        self.assertNotIn("\n  ", text)
+        self.assertNotIn('": ', text)
 
     def test_unknown_tool(self):
         result = self.call("maihub_nothing", {})
@@ -1028,6 +1062,274 @@ def page(events, workspace="ws1"):
     return {"events": events, "workspaceId": workspace}
 
 
+class FakeWaitClient(object):
+    """MaiHub giả cho maihub_wait_for: sự kiện chỉ hiện từ lần gọi events.wait thứ `visible_from`; rỗng thì đồng hồ giả chạy hết timeoutSec."""
+
+    def __init__(self, clock, events=(), last_event_seq=0, workspace="ws1"):
+        self.clock = clock
+        self.events = list(events)  # (visible_from, event)
+        self.status = {"workspace": None} if last_event_seq is None else {"lastEventSeq": last_event_seq, "workspace": {"id": workspace}}
+        self.workspace = workspace
+        self.workspace_by_call = {}
+        self.waits = []  # (after, timeoutSec)
+        self.calls = []
+
+    def call(self, method, params=None, idempotency_key=None):
+        self.calls.append(method)
+        if method == "system.status":
+            if isinstance(self.status, Exception):
+                raise self.status
+            return self.status
+        if method != "events.wait":
+            return {"started": True}
+        self.waits.append((params["after"], params["timeoutSec"]))
+        n = len(self.waits)
+        found = [e for v, e in self.events if v <= n and e["seq"] > params["after"]]
+        if not found:
+            self.clock.now += params["timeoutSec"]
+        return {"events": found, "workspaceId": self.workspace_by_call.get(n, self.workspace)}
+
+
+def wait_event(seq, etype="videos.finished", **payload):
+    return {"seq": seq, "type": etype, "payload": payload, "createdAt": 1}
+
+
+class WaitForTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = FakeClock()
+
+    def server(self, client):
+        server = bridge.McpServer(client, io.StringIO(), io.StringIO(), io.StringIO(), clock=self.clock, sleep=self.clock.sleep)
+        server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        return server
+
+    def test_matching_event_after_session_mark_returns_at_once(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(11, videoId="v1"))], last_event_seq=10)
+        server = self.server(client)
+        self.assertEqual(server.session_after, 10)
+        result = server.wait_for({"types": ["videos.finished"], "match": {"videoId": "v1"}})
+        self.assertEqual(result, {"event": wait_event(11, videoId="v1"), "after": 11, "workspaceId": "ws1"})
+        self.assertEqual(client.waits, [(10, 25)])
+
+    def test_explicit_after_uses_per_call_workspace_baseline(self):
+        client = FakeWaitClient(self.clock, [], last_event_seq=10)
+        client.status = {"lastEventSeq": 10}  # phiên không biết workspace: so với workspace thấy đầu tiên trong lời gọi
+        server = self.server(client)
+        client.workspace = "ws2"
+        self.assertTrue(server.wait_for({"after": 0, "maxSec": 100}).get("timedOut"))
+
+    def test_event_before_session_mark_is_ignored(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(5, videoId="v1"))], last_event_seq=10)
+        result = self.server(client).wait_for({"maxSec": 5})
+        self.assertEqual(result, {"timedOut": True, "after": 10, "workspaceId": "ws1"})
+
+    def test_match_on_third_round_skips_other_events(self):
+        events = [(1, wait_event(11, videoId="other")), (3, wait_event(12, videoId="v1"))]
+        client = FakeWaitClient(self.clock, events, last_event_seq=10)
+        result = self.server(client).wait_for({"match": {"videoId": "v1"}, "maxSec": 100})
+        self.assertEqual(result["event"]["seq"], 12)
+        self.assertEqual(len(client.waits), 3)
+
+    def test_timeout_reports_highest_seq_seen(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(11, videoId="x"))], last_event_seq=10)
+        result = self.server(client).wait_for({"match": {"videoId": "v1"}, "maxSec": 30})
+        self.assertEqual(result, {"timedOut": True, "after": 11, "workspaceId": "ws1"})
+
+    def test_workspace_change(self):
+        client = FakeWaitClient(self.clock, [], last_event_seq=10)
+        client.workspace_by_call = {2: "ws2"}
+        events = [(1, wait_event(11, videoId="x")), (2, wait_event(12, videoId="v1"))]
+        client.events = events
+        result = self.server(client).wait_for({"match": {"videoId": "v1"}, "maxSec": 100})
+        self.assertEqual(result, {"workspaceChanged": True})
+
+    def test_workspace_switched_before_call_marks_new_workspace_at_once(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(3, videoId="old"))], last_event_seq=500)
+        server = self.server(client)
+        self.assertEqual(server.session_workspace, "ws1")
+        client.status = {"workspace": None}  # lần duyệt lại dùng events.wait
+        client.workspace = "ws2"  # workspace mới có seq nhỏ hơn mốc cũ
+        self.assertEqual(server.wait_for({"match": {"videoId": "v1"}}), {"workspaceChanged": True})
+        self.assertEqual((server.session_after, server.session_workspace), (3, "ws2"))
+        # Sự kiện xảy ra sau khi phát hiện nhưng trước lần chờ kế tiếp vẫn được trả về; sự kiện cũ của ws2 thì không.
+        client.events.append((len(client.waits) + 1, wait_event(5, videoId="v1")))
+        result = server.wait_for({"match": {"videoId": "v1"}})
+        self.assertEqual(result["event"]["seq"], 5)
+        self.assertEqual(server.wait_for({"match": {"videoId": "old"}, "maxSec": 5}).get("timedOut"), True)
+
+    def test_workspace_switched_during_call_marks_new_workspace(self):
+        client = FakeWaitClient(self.clock, [], last_event_seq=500)
+        client.workspace_by_call = {2: "ws2", 3: "ws2"}
+        server = self.server(client)
+        client.status = {"workspace": None}
+        self.assertEqual(server.wait_for({"maxSec": 100}), {"workspaceChanged": True})
+        self.assertEqual(len(client.waits), 3)  # 2 lần chờ + 1 lần duyệt lấy mốc mới
+        self.assertEqual((server.session_after, server.session_workspace), (0, "ws2"))
+
+    def test_workspace_change_with_unreachable_rescan_clears_session(self):
+        client = FakeWaitClient(self.clock, [], last_event_seq=500)
+        client.workspace_by_call = {1: "ws2"}
+        server = self.server(client)
+        original = client.call
+        def failing(method, params=None, idempotency_key=None):
+            if len(client.waits) >= 1:
+                raise bridge.BridgeError("UNREACHABLE", "mất mạng")
+            return original(method, params, idempotency_key)
+        client.call = failing
+        self.assertEqual(server.wait_for({"maxSec": 100}), {"workspaceChanged": True})
+        self.assertEqual((server.session_after, server.session_workspace), (None, None))
+
+    def test_explicit_after_detects_workspace_switch_from_session(self):
+        client = FakeWaitClient(self.clock, [(2, wait_event(3, videoId="v1"))], last_event_seq=500)
+        server = self.server(client)
+        client.status = {"lastEventSeq": 2, "workspace": {"id": "ws2"}}
+        client.workspace = "ws2"
+        self.assertEqual(server.wait_for({"after": 500}), {"workspaceChanged": True})
+        self.assertEqual((server.session_after, server.session_workspace), (2, "ws2"))
+        self.assertEqual(server.wait_for({"match": {"videoId": "v1"}})["event"]["seq"], 3)
+
+    def test_workspace_id_with_after_catches_switch_back_to_same_session_workspace(self):
+        # phiên đang ở wsB; bot lấy mốc 3 từ wsA; MaiHub quay lại wsB: chỉ workspaceId đi kèm after mới lộ ra
+        client = FakeWaitClient(self.clock, [(2, wait_event(4, videoId="v1"))], last_event_seq=20, workspace="wsB")
+        server = self.server(client)
+        self.assertEqual(server.session_workspace, "wsB")
+        self.assertTrue(server.wait_for({"after": 3, "maxSec": 1}).get("timedOut"))  # không workspaceId: như cũ
+        client.status = {"lastEventSeq": 20, "workspace": {"id": "wsB"}}
+        self.assertEqual(server.wait_for({"after": 3, "workspaceId": "wsA"}), {"workspaceChanged": True})
+
+    def test_workspace_id_ignored_without_after(self):
+        client = FakeWaitClient(self.clock, [], last_event_seq=10)
+        server = self.server(client)
+        self.assertEqual(server.wait_for({"workspaceId": "other", "maxSec": 1}), {"timedOut": True, "after": 10, "workspaceId": "ws1"})
+
+    def test_result_workspace_id_is_last_seen_or_baseline(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(11, videoId="v1"))], last_event_seq=10)
+        client.workspace = None  # MaiHub chưa mở workspace: dùng workspace gốc
+        server = self.server(client)
+        self.assertEqual(server.wait_for({"match": {"videoId": "v1"}})["workspaceId"], "ws1")
+        self.assertEqual(server.wait_for({"after": 0, "workspaceId": "ws1"})["workspaceId"], "ws1")
+
+    def test_tool_schema_has_workspace_id(self):
+        tool = [t for t in bridge.build_tools({"methods": []}) if t["name"] == bridge.WAIT_TOOL][0]
+        self.assertIn("workspaceId", tool["inputSchema"]["properties"])
+        self.assertIn("truyền kèm workspaceId", tool["description"])
+        self.assertIn("workspaceId", bridge.ERROR_HINTS["BUSY"])
+        self.assertIn("workspaceId", bridge.GUIDE)
+
+    def test_scan_prefers_status_last_event_seq(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(8, videoId="old"))], last_event_seq=7)
+        client.status = bridge.BridgeError("UNREACHABLE", "mất mạng")
+        server = self.server(client)
+        client.status = {"lastEventSeq": 7, "workspace": {"id": "ws1"}}
+        client.calls = []
+        self.assertEqual(server.wait_for({"match": {"videoId": "none"}, "maxSec": 1}), {"timedOut": True, "after": 8, "workspaceId": "ws1"})
+        self.assertEqual(client.calls[:2], ["system.status", "events.wait"])  # 1 lời gọi lấy mốc, rồi chờ ngay (không duyệt trang)
+        self.assertEqual(client.waits[0], (7, 1))
+        self.assertEqual(server.session_workspace, "ws1")
+
+    def test_tool_call_sets_missing_mark_before_starting_job(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(11, jobId="j1"))], last_event_seq=10)
+        client.status = bridge.BridgeError("UNREACHABLE", "mất mạng")
+        server = self.server(client)
+        self.assertIsNone(server.session_after)
+        client.status = {"lastEventSeq": 10, "workspace": {"id": "ws1"}}
+        server._tools = bridge.build_tools({"methods": [{"name": "comments.collect", "description": "x"}]})
+        client.calls = []
+        server.call_tool("maihub_comments_collect", {})
+        self.assertEqual(client.calls, ["system.status", "comments.collect"])
+        self.assertEqual(server.wait_for({"match": {"jobId": "j1"}})["event"]["seq"], 11)
+        client.calls = []
+        server.session_after = None
+        server.call_tool(bridge.GUIDE_TOOL, {})
+        self.assertEqual(client.calls, [])  # maihub_guide không cần mốc
+
+    def test_default_clock_is_monotonic(self):
+        self.assertIs(bridge.McpServer(None).clock, bridge.time.monotonic)
+
+    def test_busy_hint_and_guide_advise_after(self):
+        self.assertIn("lastEventSeq", bridge.ERROR_HINTS["BUSY"])
+        self.assertNotIn("run.finished", bridge.ERROR_HINTS["BUSY"])
+        for text in ("Sau workspaceChanged, gọi lại không kèm after.", "luôn truyền after lấy từ kết quả trước",
+                     "Giữ maxSec ≤ 50"):
+            self.assertIn(text, bridge.GUIDE)
+
+    def test_explicit_after_replaces_session_mark(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(5, videoId="v1"))], last_event_seq=10)
+        result = self.server(client).wait_for({"after": 0})
+        self.assertEqual(result["event"]["seq"], 5)
+        self.assertEqual(client.waits[0][0], 0)
+
+    def test_mark_computed_by_scanning_when_status_lacks_last_event_seq(self):
+        events = [(1, wait_event(3, videoId="old")), (1, wait_event(4, videoId="old")), (3, wait_event(5, videoId="v1"))]
+        client = FakeWaitClient(self.clock, events, last_event_seq=None)
+        server = self.server(client)
+        self.assertIsNone(server.session_after)
+        self.assertEqual(client.waits, [])
+        result = server.wait_for({"match": {"videoId": "v1"}})
+        self.assertEqual(client.waits[0], (0, 0))  # duyệt từ đầu với timeoutSec=0
+        self.assertEqual(server.session_after, 4)
+        self.assertEqual(result["event"]["seq"], 5)
+
+    def test_initialize_survives_unreachable_status(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(2, videoId="old")), (3, wait_event(5, videoId="v1"))], last_event_seq=None)
+        client.status = bridge.BridgeError("UNREACHABLE", "mất mạng")
+        server = bridge.McpServer(client, io.StringIO(), io.StringIO(), io.StringIO(), clock=self.clock, sleep=self.clock.sleep)
+        server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        self.assertIn('"instructions"', server.stdout.getvalue())
+        self.assertIsNone(server.session_after)
+        client.status = {"lastEventSeq": 2}
+        self.assertEqual(server.wait_for({"maxSec": 100})["event"]["seq"], 5)  # mốc tính ở lần wait_for đầu
+
+    def test_consecutive_waits_without_after_both_see_their_events(self):
+        events = [(1, wait_event(11, videoId="a")), (1, wait_event(12, videoId="b"))]
+        client = FakeWaitClient(self.clock, events, last_event_seq=10)
+        server = self.server(client)
+        self.assertEqual(server.wait_for({"match": {"videoId": "a"}})["event"]["seq"], 11)
+        self.assertEqual(server.wait_for({"match": {"videoId": "b"}})["event"]["seq"], 12)
+
+    def test_invalid_params(self):
+        server = self.server(FakeWaitClient(self.clock, [], last_event_seq=0))
+        bad = [{"maxSec": 0}, {"maxSec": 601}, {"maxSec": "5"}, {"maxSec": True}, {"match": []}, {"match": {"a": [1]}},
+               {"match": {"a": None}}, {"types": "run.finished"}, {"types": [1]}, {"after": -1}, {"after": "1"}, {"after": True},
+               {"after": 1, "workspaceId": ""}, {"after": 1, "workspaceId": 5}]
+        for args in bad:
+            with self.assertRaises(bridge.BridgeError) as ctx:
+                server.wait_for(args)
+            self.assertEqual(ctx.exception.code, "INVALID_PARAMS", args)
+            if "workspaceId" in args:
+                self.assertEqual(ctx.exception.details, {"field": "workspaceId"})
+
+    def test_match_does_not_confuse_bool_with_number(self):
+        client = FakeWaitClient(self.clock, [(1, wait_event(11, ok=1))], last_event_seq=10)
+        result = self.server(client).wait_for({"match": {"ok": True}, "maxSec": 1})
+        self.assertTrue(result.get("timedOut"))
+
+    def test_each_poll_timeout_capped_and_within_remaining_time(self):
+        client = FakeWaitClient(self.clock, [], last_event_seq=0)
+        self.server(client).wait_for({"maxSec": 60})
+        self.assertEqual([t for _, t in client.waits], [25, 25, 10])
+        client = FakeWaitClient(self.clock, [], last_event_seq=0)
+        self.server(client).wait_for({"maxSec": 1})
+        self.assertEqual([t for _, t in client.waits], [1])
+
+    def test_default_max_sec_is_50(self):
+        client = FakeWaitClient(self.clock, [], last_event_seq=0)
+        self.server(client).wait_for({})
+        self.assertEqual([t for _, t in client.waits], [25, 25])
+
+    def test_tool_listed_and_errors_formatted(self):
+        client = FakeWaitClient(self.clock, [], last_event_seq=0)
+        server = self.server(client)
+        server._tools = bridge.build_tools({"methods": []})
+        names = [t["name"] for t in server.tools()]
+        self.assertIn(bridge.WAIT_TOOL, names)
+        result = server.call_tool(bridge.WAIT_TOOL, {"maxSec": 0})
+        self.assertTrue(result["isError"])
+        self.assertTrue(result["content"][0]["text"].startswith("INVALID_PARAMS: "))
+        ok = server.call_tool(bridge.WAIT_TOOL, {"maxSec": 1})
+        self.assertEqual(json.loads(ok["content"][0]["text"]), {"timedOut": True, "after": 0, "workspaceId": "ws1"})
+
+
 class FormatEventTests(unittest.TestCase):
     def fmt(self, event, runs=None):
         def fetch(run_id):
@@ -1040,10 +1342,8 @@ class FormatEventTests(unittest.TestCase):
     def test_done_labels(self):
         self.assertEqual(self.fmt(finished(1)), "✅ Đăng ngay: xong 2/2")
         self.assertEqual(self.fmt(finished(1, scheduleName="Sáng", skipped=1)), "✅ Sáng: xong 2/3")
-        self.assertEqual(self.fmt(finished(1, kind="join")), "✅ Tham gia nhóm: xong 2/2")
-        self.assertEqual(self.fmt(finished(1, kind="scan_groups")), "✅ Quét nhóm: xong 2/2")
-        self.assertEqual(self.fmt(finished(1, kind="collect_comments")), "✅ Thu bình luận: xong 2/2")
-        self.assertEqual(self.fmt(finished(1, kind="join", scheduleName="Lịch A")), "✅ Lịch A: xong 2/2")
+        self.assertEqual(self.fmt(finished(1, kind="join", failed=1, posted=1)).split("\n")[0], "⚠️ Tham gia nhóm: xong 1/2, lỗi 1")
+        self.assertEqual(self.fmt(finished(1, kind="scan_groups", status="cancelled", posted=1, failed=0)), "⏹ Quét nhóm: đã huỷ (1/1)")
 
     def test_failed_includes_up_to_three_error_lines(self):
         results = [{"outcome": "failed", "targetName": "Nhóm %d" % i, "error": "Lỗi %d" % i} for i in range(5)]
@@ -1072,6 +1372,16 @@ class FormatEventTests(unittest.TestCase):
         cp = {"seq": 3, "type": "profile.loginProblem", "payload": {"profileName": "Mai", "state": "checkpoint"}}
         self.assertEqual(self.fmt(cp), "🔒 Profile \"Mai\": bị checkpoint\nMở MaiHub để đăng nhập lại.")
 
+    def test_side_jobs_done_without_failure_are_silent(self):
+        for kind in ("join", "scan_groups", "collect_comments"):
+            self.assertIsNone(self.fmt(finished(1, kind=kind)))
+            self.assertIsNotNone(self.fmt(finished(1, kind=kind, failed=1)))
+            self.assertIsNotNone(self.fmt(finished(1, kind=kind, status="cancelled")))
+        self.assertEqual(self.fmt(finished(1, kind="post")), "✅ Đăng ngay: xong 2/2")
+
+    def test_collect_finished_is_silent(self):
+        self.assertIsNone(self.fmt({"seq": 1, "type": "comments.collectFinished", "payload": {"jobId": "j1", "leads": 3}}))
+
     def test_silent_types(self):
         for kind in ("run.started", "draft.approved", "profiles.checkFinished", "something.new"):
             self.assertIsNone(self.fmt({"seq": 1, "type": kind, "payload": {}}))
@@ -1091,8 +1401,8 @@ class FormatEventTests(unittest.TestCase):
 
 class FormatDoneWithoutCountsTests(unittest.TestCase):
     def test_done_with_zero_total_has_no_counts(self):
-        text = bridge.format_event(finished(1, kind="scan_groups", posted=0, failed=0, skipped=0), lambda r: None)
-        self.assertEqual(text, "✅ Quét nhóm: xong")
+        text = bridge.format_event(finished(1, posted=0, failed=0, skipped=0), lambda r: None)
+        self.assertEqual(text, "✅ Đăng ngay: xong")
         self.assertEqual(bridge.format_event(finished(2), lambda r: None), "✅ Đăng ngay: xong 2/2")
 
 

@@ -7,13 +7,14 @@ import type { LeadClassifier, LeadVerdict } from './leadAi';
 
 const AI_BATCH_SIZE = 20;
 const MAX_SAMPLES = 3;
+const MAX_IDS = 20;
 
 export interface LeadDetectorDeps {
     store: Pick<FacebookPosterStore, 'trackingByPostUrls' | 'createLeads'>;
     readConfig: () => LeadConfig;
     /** Chưa có thì coi như AI không dùng được. */
     classify?: LeadClassifier;
-    emit: (type: 'leads.found', payload: { count: number; samples: { authorName: string; text: string; postUrl: string }[]; auto: boolean }) => void;
+    emit: (type: 'leads.found', payload: { count: number; samples: { authorName: string; text: string; postUrl: string }[]; auto: boolean; leadIds: number[]; campaignIds: string[] }) => void;
     now?: () => number;
     log: (message: string) => void;
 }
@@ -28,11 +29,14 @@ export interface LeadProcessOptions {
 }
 type LeadsFoundPayload = Parameters<LeadDetectorDeps['emit']>[1];
 
-/** Gộp các khách mới của một lượt thành nội dung sự kiện `leads.found`: tổng số + tối đa 3 mẫu mới nhất. */
+/** Gộp các khách mới của một lượt thành nội dung sự kiện `leads.found`: tổng số + tối đa 3 mẫu mới nhất + tối đa 20 mã khách / mã chiến dịch (mới nhất trước). */
 export function buildLeadsFoundPayload(leads: FbPosterLead[], auto: boolean): LeadsFoundPayload {
     const samples = leads.slice(-MAX_SAMPLES).reverse()
         .map((l) => ({ authorName: l.authorName, text: l.text, postUrl: l.postUrl }));
-    return { count: leads.length, samples, auto };
+    const newestFirst = leads.slice().reverse();
+    const leadIds = newestFirst.slice(0, MAX_IDS).map((l) => l.id);
+    const campaignIds = [...new Set(newestFirst.map((l) => l.campaignId).filter((c): c is string => c != null))].slice(0, MAX_IDS);
+    return { count: leads.length, samples, auto, leadIds, campaignIds };
 }
 
 interface Candidate { comment: FbPosterComment; matched: string[]; verdict: LeadVerdict | null }

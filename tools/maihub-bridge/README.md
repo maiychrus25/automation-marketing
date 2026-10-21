@@ -48,7 +48,7 @@ command = "python3"
 args = ["/opt/bot/maihub/maihub_bridge.py", "mcp", "--env-file", "/opt/bot/maihub/.env"]
 ```
 
-Danh sách tool sinh tự động từ `GET /v1/describe` (`maihub_<thao_tac>`, dấu chấm thành gạch dưới), cộng tool `maihub_upload_media` nhận `path` và tool `maihub_download_video` (`videoId`, `kind` = `video` / `thumb`, `path` tuỳ chọn) tải video đã render xong (hoặc ảnh bìa) về máy bot, mặc định `~/maihub-videos/<videoId>.mp4|.jpg`, trả `{ path, sizeBytes }` để bot gửi tệp hoặc xem ảnh bìa. Mỗi tool có thêm tham số tuỳ chọn `idempotencyKey` để chống gọi trùng. Nếu MaiHub chưa với tới được lúc liệt kê tool, bridge trả lỗi và thử lại ở lần liệt kê kế tiếp.
+Danh sách tool sinh tự động từ `GET /v1/describe` (`maihub_<thao_tac>`, dấu chấm thành gạch dưới), cộng tool `maihub_upload_media` nhận `path` và tool `maihub_download_video` (`videoId`, `kind` = `video` / `thumb`, `path` tuỳ chọn) tải video đã render xong (hoặc ảnh bìa) về máy bot, mặc định `~/maihub-videos/<videoId>.mp4|.jpg`, trả `{ path, sizeBytes }` để bot gửi tệp hoặc xem ảnh bìa; tool `maihub_wait_for` (`types?`, `match?`, `after?`, `maxSec` 1–600 mặc định 50) chờ một sự kiện khớp trong một lần gọi; tool `maihub_guide` trả bản hướng dẫn vòng làm việc (cũng gửi trong `instructions` của `initialize`). Tool lỗi trả kèm `Chi tiết` (`details`) và `Gợi ý` cách xử lý theo mã lỗi; kết quả là JSON gọn. Chi tiết: `docs/protocol/maihub-control-protocol.md` mục 10. Mỗi tool có thêm tham số tuỳ chọn `idempotencyKey` để chống gọi trùng. Nếu MaiHub chưa với tới được lúc liệt kê tool, bridge trả lỗi và thử lại ở lần liệt kê kế tiếp.
 
 ## CLI
 

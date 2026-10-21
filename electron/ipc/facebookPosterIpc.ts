@@ -36,7 +36,7 @@ import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
-import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound } from '../../src/services/control/controlEvents';
+import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished } from '../../src/services/control/controlEvents';
 import { getResearchStore } from './researchIpc';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
 import type { FbPosterLead, FbPosterRun, LeadStatus, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
@@ -244,7 +244,7 @@ function flushManualLeads(): void {
 }
 
 /** Phát khi có khách mới: cho giao diện và cho Control API (`leads.found`, vào Telegram qua bridge). */
-function emitLeadsFound(payload: { count: number; samples: { authorName: string; text: string; postUrl: string }[]; auto: boolean }): void {
+function emitLeadsFound(payload: { count: number; samples: { authorName: string; text: string; postUrl: string }[]; auto: boolean; leadIds: number[]; campaignIds: string[] }): void {
     EventBroadcaster.emit('facebookPoster:leadsFound', payload);
     emitControlEvent('leads.found', buildLeadsFound(payload));
 }
@@ -288,6 +288,7 @@ function getCollector(): CommentCollector {
                 else if (type === 'comments.collectProgress') EventBroadcaster.emit('facebookPoster:commentCollectProgress', payload);
                 else if (type === 'comments.collectFinished') {
                     EventBroadcaster.emit('facebookPoster:commentCollectFinished', payload);
+                    safely('controlCollectFinished', () => emitControlEvent('comments.collectFinished', buildCollectFinished(payload as any)));
                     safely('onRunFinished', () => scheduler?.onRunFinished()); // lịch đăng đã xếp hàng chạy khi khe rảnh
                 }
             },

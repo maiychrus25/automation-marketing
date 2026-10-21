@@ -142,6 +142,11 @@ export class ControlStore {
             .map((r) => ({ seq: r.seq, type: r.type, payload: JSON.parse(r.payload), createdAt: r.created_at }));
     }
 
+    /** `seq` lớn nhất hiện có; 0 khi chưa có sự kiện nào. */
+    lastEventSeq(): number {
+        return this.db.queryOne<any>('SELECT MAX(seq) AS seq FROM control_events')?.seq ?? 0;
+    }
+
     getIdempotent(keyId: string, idem: string): { result: string; createdAt: number; method: string } | null {
         const row = this.db.queryOne<any>('SELECT result, created_at, method FROM control_idempotency WHERE key_id = ? AND idem_key = ?', [keyId, idem]);
         return row ? { result: row.result, createdAt: row.created_at, method: row.method ?? '' } : null;

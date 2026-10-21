@@ -52,6 +52,13 @@ describe('ControlStore audit/events/idempotency', () => {
     expect(store.listEventsAfter(a, 10)).toEqual([{ seq: b, type: 'y', payload: { n: 2 }, createdAt: expect.any(Number) }]);
     expect(store.listEventsAfter(0, 1)).toHaveLength(1);
   });
+  it('lastEventSeq is 0 when empty and the newest seq afterwards', () => {
+    const { store } = make();
+    expect(store.lastEventSeq()).toBe(0);
+    store.addEvent('x', {}); store.addEvent('y', {});
+    const last = store.addEvent('z', {});
+    expect(store.lastEventSeq()).toBe(last);
+  });
   it('idempotency get/put', () => {
     const { store } = make();
     expect(store.getIdempotent('k', 'i')).toBeNull();

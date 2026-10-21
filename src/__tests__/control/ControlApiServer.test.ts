@@ -47,7 +47,7 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
     checkLogins: (ids) => ({ checkId: 'c1', profileIds: ids ?? [] }),
     systemStatus: () => ({}),
     resolveMedia: (ids) => ids,
-    events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, s) => notifier.waitForEvent(a, t, s), workspaceId: () => 'ws-test' },
+    events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, s) => notifier.waitForEvent(a, t, s), workspaceId: () => 'ws-test', lastSeq: () => store.lastEventSeq() },
   });
   const saved: any[] = [];
   const saveMedia = opts.saveMedia ?? (async (name: string, contentType: string, stream: Readable) => {

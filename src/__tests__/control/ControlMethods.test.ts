@@ -22,6 +22,7 @@ function makeDeps() {
         listEventsAfter: jest.fn((_seq: number, _limit: number): any[] => []),
         waitForEvent: jest.fn(async (_seq: number, _ms: number) => undefined),
         workspaceId: jest.fn((): string | null => 'ws1'),
+        lastSeq: jest.fn((): number => 42),
     };
     const deps = {
         poster, events,
@@ -46,7 +47,14 @@ const allDepFns = (d: ReturnType<typeof makeDeps>) =>
 describe('createControlMethods', () => {
     it('maps read methods to deps', async () => {
         const { deps, call } = setup();
-        expect(await call('system.status')).toEqual({ version: '1' });
+        const before = Date.now();
+        const status: any = await call('system.status');
+        const after = Date.now();
+        expect(status).toMatchObject({ version: '1', lastEventSeq: 42, utcOffsetMin: -new Date().getTimezoneOffset() });
+        expect(typeof status.timezone).toBe('string');
+        expect(status.timezone).not.toBe('');
+        expect(status.serverNowMs).toBeGreaterThanOrEqual(before);
+        expect(status.serverNowMs).toBeLessThanOrEqual(after);
         expect(await call('profiles.list')).toEqual({ profiles: [{ id: 'p1' }] });
         await call('profiles.groups', { profileIds: ['p1'] });
         expect(deps.poster.listGroups).toHaveBeenCalledWith({ profileIds: ['p1'] });
@@ -251,7 +259,7 @@ describe('describe', () => {
             'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.cancel',
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
-            'comments.collect', 'comments.list', 'leads.list', 'leads.update', 'leads.config',
+            'comments.collect', 'comments.collectStatus', 'comments.collectCancel', 'comments.list', 'leads.list', 'leads.update', 'leads.config',
             'videos.templates', 'videos.render', 'videos.status', 'videos.list', 'videos.cancel',
         ]);
         for (const m of d.methods) {
@@ -597,6 +605,8 @@ describe('lead and comment methods', () => {
             setConfig: jest.fn((_p: any): any => ({ config: { autoCollect: false } })),
             collect: jest.fn((_p?: any): any => ({ jobId: 'j1', posts: 2 })),
             comments: jest.fn((_p?: any): any => ({ total: 0, comments: [] })),
+            collectStatus: jest.fn((): any => ({ running: false, jobId: null, progress: { done: 0, total: 0 }, last: null })),
+            collectCancel: jest.fn((): any => ({ cancelled: true })),
         };
         const methods = createControlMethods({ ...makeDeps(), leads } as unknown as ControlMethodDeps);
         const call = (name: string, params: any = {}) => methods.find((m) => m.name === name)!.run(params, {});
@@ -638,12 +648,32 @@ describe('lead and comment methods', () => {
         expect(await call('leads.list', { status: 'x' }).catch((e) => e)).toMatchObject({ code: 'INVALID_PARAMS' });
     });
 
-    it('describes the five methods as non-destructive', () => {
+    it('comments.collectStatus caps last.errors at 10 rows and keeps the rest', async () => {
+        const { leads, call } = setupLeads();
+        const errors = Array.from({ length: 12 }, (_v, i) => ({ postUrl: `u${i}`, profileId: 'p1', error: `e${i}`, extra: 1 }));
+        leads.collectStatus.mockReturnValueOnce({ running: false, jobId: null, progress: { done: 1, total: 1 }, last: { jobId: 'j1', cancelled: true, posts: 2, errors } });
+        const out: any = await call('comments.collectStatus');
+        expect(out.last.errors).toHaveLength(10);
+        expect(out.last.errors[9]).toEqual({ postUrl: 'u9', profileId: 'p1', error: 'e9' });
+        expect(out.last).toMatchObject({ jobId: 'j1', cancelled: true, posts: 2 });
+        expect(out.progress).toEqual({ done: 1, total: 1 });
+        leads.collectStatus.mockReturnValueOnce({ running: true, jobId: 'j2', progress: { done: 0, total: 3 }, last: null });
+        expect(await call('comments.collectStatus')).toEqual({ running: true, jobId: 'j2', progress: { done: 0, total: 3 }, last: null });
+    });
+
+    it('comments.collectCancel calls the port once', async () => {
+        const { leads, call } = setupLeads();
+        expect(await call('comments.collectCancel')).toEqual({ cancelled: true });
+        expect(leads.collectCancel).toHaveBeenCalledTimes(1);
+    });
+
+    it('describes the seven methods as non-destructive', () => {
         const { methods } = setupLeads();
         const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('leads.') || m.name.startsWith('comments.')) as any[];
-        expect(found).toHaveLength(5);
+        expect(found).toHaveLength(7);
         for (const m of found) expect(m.destructive).toBe(false);
         expect(found.find((m) => m.name === 'comments.collect').description).toMatch(/leads\.found/);
+        expect(found.find((m) => m.name === 'comments.collect').description).toMatch(/comments\.collectFinished/);
     });
 });
 

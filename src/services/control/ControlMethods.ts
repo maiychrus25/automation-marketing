@@ -131,6 +131,8 @@ export interface LeadPort {
     getConfig(): any;
     setConfig(params: any): any;
     collect(params?: any): any;
+    collectStatus(): any;
+    collectCancel(): any;
     comments(params?: any): any;
 }
 
@@ -154,6 +156,8 @@ export interface ControlMethodDeps {
         waitForEvent(afterSeq: number, timeoutMs: number, signal?: AbortSignal): Promise<void>;
         /** Workspace đang mở: `seq` là của DB workspace nên bot phải về `after = 0` khi giá trị này đổi. */
         workspaceId(): string | null;
+        /** `seq` sự kiện mới nhất của workspace đang mở (0 nếu chưa có); bot dùng làm mốc `after`. */
+        lastSeq(): number;
     };
 }
 
@@ -247,7 +251,13 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
         {
             name: 'system.status', description: 'Tình trạng app: phiên bản, workspace, nhân trình duyệt, scheduler, việc đang chạy.',
             destructive: false, paramsSchema: noParams, resultSchema: anyResult,
-            run: async () => deps.systemStatus(),
+            run: async () => ({
+                ...(await deps.systemStatus() as object),
+                serverNowMs: Date.now(),
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+                utcOffsetMin: -new Date().getTimezoneOffset(),
+                lastEventSeq: deps.events.lastSeq(),
+            }),
         },
         {
             name: 'profiles.list', description: 'Danh sách profile: mã, tên, nhóm, trạng thái mở, ngày quét nhóm gần nhất, trạng thái đăng nhập Facebook đã lưu (loginState, loginCheckedAt, loginError).',
@@ -678,11 +688,37 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
         },
         {
             name: 'comments.collect',
-            description: 'Thu bình luận của các bài đã đăng (chỉ đọc, không bình luận hay nhắn tin). Chạy nền, trả jobId ngay; bình luận mới khớp từ khoá thành khách và phát sự kiện leads.found. postUrls bỏ trống = các bài đến hạn thu. BUSY nếu đang đăng, kiểm tra đăng nhập hoặc đang thu.',
+            description: 'Thu bình luận của các bài đã đăng (chỉ đọc, không bình luận hay nhắn tin). Chạy nền, trả jobId ngay; bình luận mới khớp từ khoá thành khách và phát sự kiện leads.found. postUrls bỏ trống = các bài đến hạn thu. BUSY nếu đang đăng, kiểm tra đăng nhập hoặc đang thu. Xong có sự kiện comments.collectFinished (lọc theo jobId).',
             destructive: false,
             paramsSchema: obj({ postUrls: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: 50, description: 'Chỉ các bài này (1–50 link; mỗi lượt xử lý tối đa 10 bài)' } }),
             resultSchema: obj({ jobId: str('Mã lượt thu'), posts: int('Số bài sẽ thu') }, ['jobId', 'posts']),
             run: async (p) => deps.leads.collect(pick(p, ['postUrls'])),
+        },
+        {
+            name: 'comments.collectStatus',
+            description: 'Trạng thái lượt thu bình luận đang chạy và lượt gần nhất (đã huỷ chưa, số bài, số bình luận, số khách, lỗi).',
+            destructive: false,
+            paramsSchema: obj({}),
+            resultSchema: obj({
+                running: { type: 'boolean', description: 'Đang có lượt thu' },
+                jobId: { type: ['string', 'null'], description: 'Mã lượt đang chạy' },
+                progress: obj({ done: int('Số bài đã xử lý'), total: int('Tổng số bài') }, ['done', 'total']),
+                last: { type: ['object', 'null'], description: 'Lượt gần nhất: jobId, auto, finishedAt, cancelled, posts, collected, leads, errors (tối đa 10 dòng postUrl / profileId / error)' },
+            }, ['running', 'jobId', 'progress', 'last']),
+            run: async () => {
+                const status = deps.leads.collectStatus();
+                const last = status?.last;
+                if (!last || !Array.isArray(last.errors)) return status;
+                return { ...status, last: { ...last, errors: last.errors.slice(0, 10).map((e: any) => ({ postUrl: e.postUrl, profileId: e.profileId, error: e.error })) } };
+            },
+        },
+        {
+            name: 'comments.collectCancel',
+            description: 'Huỷ lượt thu bình luận đang chạy (nếu có); dừng sau bài đang đọc.',
+            destructive: false,
+            paramsSchema: obj({}),
+            resultSchema: obj({ cancelled: { type: 'boolean', description: 'true nếu có lượt bị huỷ' } }, ['cancelled']),
+            run: async () => deps.leads.collectCancel(),
         },
         {
             name: 'comments.list',

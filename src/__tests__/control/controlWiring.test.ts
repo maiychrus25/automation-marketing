@@ -7,7 +7,7 @@ import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
 import { ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
-import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, buildLeadsFound, buildVideoFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
+import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildVideoFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 import { createCertificate } from '../../services/control/certificate';
 import { parseBotIp, withStoredPublicHost } from '../../services/control/controlConfig';
 
@@ -176,7 +176,7 @@ describe('toSafeProfiles login fields', () => {
 describe('control events', () => {
   test('run.finished counts outcomes; draft.approved payload', () => {
     expect(buildRunFinished({ id: 'r', kind: 'post', status: 'done', scheduleId: 's' }, [{ outcome: 'posted' }, { outcome: 'posted' }, { outcome: 'failed' }, { outcome: 'skipped' }]))
-      .toEqual({ runId: 'r', kind: 'post', status: 'done', scheduleId: 's', scheduleName: null, posted: 2, failed: 1, skipped: 1 });
+      .toEqual({ runId: 'r', kind: 'post', status: 'done', scheduleId: 's', scheduleName: null, campaignId: null, posted: 2, failed: 1, skipped: 1 });
     expect(buildDraftApproved({ id: 's', name: 'n', kind: 'once', nextRunAt: 5 }, 'now')).toMatchObject({ scheduleId: 's', when: 'now' });
   });
   test('run.finished carries scheduleName', () => {
@@ -302,9 +302,28 @@ describe('control events: leads', () => {
         const sample = (i: number) => ({ authorName: `A${i}`, text: `t${i}`, postUrl: `u${i}`, authorUrl: 'x' });
         const out = buildLeadsFound({ count: 5, samples: [1, 2, 3, 4].map(sample), auto: true, extra: 1 } as any);
         expect(out).toEqual({
-            count: 5, auto: true,
+            count: 5, auto: true, leadIds: [], campaignIds: [],
             samples: [1, 2, 3].map((i) => ({ authorName: `A${i}`, text: `t${i}`, postUrl: `u${i}` })),
         });
+    });
+});
+
+describe('control events: leads ids', () => {
+    it('buildLeadsFound keeps leadIds / campaignIds and defaults them to []', () => {
+        expect(buildLeadsFound({ count: 2, samples: [], auto: false, leadIds: [5, 4], campaignIds: ['c1'] })).toMatchObject({ leadIds: [5, 4], campaignIds: ['c1'] });
+        expect(buildLeadsFound({ count: 2, samples: [], auto: false })).toMatchObject({ leadIds: [], campaignIds: [] });
+    });
+    it('buildRunFinished carries campaignId or null', () => {
+        const run = { id: 'r', kind: 'post' as const, status: 'done' as const, scheduleId: 's' };
+        expect(buildRunFinished({ ...run, campaignId: 'c9' }, [])).toMatchObject({ campaignId: 'c9' });
+        expect(buildRunFinished(run, [])).toMatchObject({ campaignId: null });
+    });
+});
+
+describe('control events: comment collection', () => {
+    it('buildCollectFinished keeps only documented fields', () => {
+        const input = { jobId: 'j1', auto: false, cancelled: true, posts: 3, collected: 20, leads: 2, errors: 1, extra: 'x' };
+        expect(buildCollectFinished(input)).toEqual({ jobId: 'j1', auto: false, cancelled: true, posts: 3, collected: 20, leads: 2, errors: 1 });
     });
 });
 

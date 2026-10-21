@@ -68,7 +68,7 @@ jest.mock('../../../electron/ipc/researchIpc', () => ({ getResearchStore: () => 
 jest.mock('../../../electron/ipc/workspaceIpc', () => ({ isWorkspaceSwitchInProgress: () => false }));
 jest.mock('../../services/control/controlEvents', () => ({
     emitControlEvent: jest.fn(), hasControlEventSink: () => false, buildRunStarted: jest.fn(), buildRunFinished: jest.fn(), buildScheduleMissed: jest.fn(),
-    buildDraftApproved: jest.fn(), buildLoginProblem: jest.fn(), buildCheckFinished: jest.fn(), buildTrackFinished: jest.fn(), buildLeadsFound: jest.fn((p: unknown) => p),
+    buildDraftApproved: jest.fn(), buildLoginProblem: jest.fn(), buildCheckFinished: jest.fn(), buildTrackFinished: jest.fn(), buildLeadsFound: jest.fn((p: unknown) => p), buildCollectFinished: jest.fn((p: unknown) => p),
 }));
 
 import { startFacebookPosterScheduler, stopFacebookPosterScheduler, posterOperations, campaignOperations, trackingOperations, leadOperations, isFacebookPosterBusy } from '../../../electron/ipc/facebookPosterIpc';
@@ -257,6 +257,8 @@ describe('facebookPosterIpc wiring', () => {
         const status = leadOperations.collectStatus();
         expect(status.running).toBe(false);
         expect(status.last).toMatchObject({ auto: true, posts: 0, cancelled: false });
+        const controlEmit = require('../../services/control/controlEvents').emitControlEvent as jest.Mock;
+        expect(controlEmit).toHaveBeenCalledWith('comments.collectFinished', expect.objectContaining({ auto: true, posts: 0, cancelled: false }));
         expect(leadOperations.collectCancel()).toEqual({ cancelled: false });
         expect(leadOperations.collect({}).posts).toBe(0); // thu tay không có bài đến hạn
     });

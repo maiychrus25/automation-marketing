@@ -156,6 +156,8 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             getConfig: leadOperations.getConfig,
             setConfig: leadOperations.setConfig,
             collect: leadOperations.collect,
+            collectStatus: leadOperations.collectStatus,
+            collectCancel: leadOperations.collectCancel,
             comments: leadOperations.comments,
         },
         videos: {
@@ -183,7 +185,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             };
         },
         resolveMedia: (ids) => mediaStore.resolve(ids),
-        events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, sig) => notifier.waitForEvent(a, t, sig), workspaceId: () => WorkspaceManager.getInstance().getActiveWorkspace()?.id ?? null },
+        events: { listEventsAfter: (s, l) => store.listEventsAfter(s, l), waitForEvent: (a, t, sig) => notifier.waitForEvent(a, t, sig), workspaceId: () => WorkspaceManager.getInstance().getActiveWorkspace()?.id ?? null, lastSeq: () => store.lastEventSeq() },
     });
     loadBridge();
     const tls = await certStoreOf().ensure();

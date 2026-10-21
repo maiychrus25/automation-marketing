@@ -184,7 +184,7 @@ export class CommentCollector {
             this.deps.slot.release();
             // Một sự kiện khách mới cho cả lượt (không phải mỗi bài).
             if (totals.found.length > 0) this.emit('leads.found', buildLeadsFoundPayload(totals.found, auto));
-            this.emit('comments.collectFinished', { jobId, auto, posts: rows.length, ...summary, errors: errors.length });
+            this.emit('comments.collectFinished', { jobId, auto, cancelled, posts: rows.length, ...summary, errors: errors.length });
         }
     }
 

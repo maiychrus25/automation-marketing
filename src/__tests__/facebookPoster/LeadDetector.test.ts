@@ -123,6 +123,15 @@ describe('LeadDetector', () => {
     expect(payload.samples.map((x) => x.authorName)).toEqual(['Khách 4', 'Khách 3', 'Khách 2']);
   });
 
+  test('buildLeadsFoundPayload gives leadIds newest first (max 20) and distinct non-null campaignIds', () => {
+    const campaigns = ['c1', null, 'c2', 'c1'];
+    const leads = Array.from({ length: 25 }, (_v, i) => ({ id: i + 1, campaignId: campaigns[i % 4], authorName: `A${i}`, text: 't', postUrl: 'u' })) as any[];
+    const payload = buildLeadsFoundPayload(leads, false);
+    expect(payload.leadIds).toEqual([25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6]);
+    expect(payload.campaignIds).toEqual(['c1', 'c2']);
+    expect(payload.count).toBe(25);
+  });
+
   test('a shared aiState skips the AI after the first failure across calls, with one warning', async () => {
     const classify = jest.fn(async () => { throw new Error('timeout'); });
     const { detector, logs } = setup({ aiEnabled: true }, classify);

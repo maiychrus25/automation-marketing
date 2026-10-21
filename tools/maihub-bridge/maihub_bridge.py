@@ -37,6 +37,8 @@ MCP_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18"]
 DEFAULT_TIMEOUT = 30
 UPLOAD_TOOL = "maihub_upload_media"
 DOWNLOAD_TOOL = "maihub_download_video"
+GUIDE_TOOL = "maihub_guide"
+WAIT_TOOL = "maihub_wait_for"
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}\Z")
 VIDEO_KINDS = {"video": "mp4", "thumb": "jpg"}  # kind -> đuôi tệp
 DOWNLOAD_CHUNK = 65536
@@ -50,6 +52,68 @@ MEDIA_TYPES = {
 }
 CONFIRM_GUIDANCE = "Hãy hỏi người dùng xác nhận rồi gọi lại với confirm: true"
 DESTRUCTIVE_NOTE = "Cần confirm: true (hỏi người dùng trước)"
+# Gợi ý xử lý theo mã lỗi của MaiHub (CONFIRMATION_REQUIRED dùng CONFIRM_GUIDANCE ở trên).
+ERROR_HINTS = {
+    "BUSY": "MaiHub đang chạy việc khác (đăng bài, kiểm tra đăng nhập, thu bình luận…). Chờ 1–2 phút rồi thử lại, hoặc lấy after = system.status.lastEventSeq (kèm workspaceId = workspace.id) rồi gọi maihub_wait_for với after đó để chờ việc đang chạy kết thúc.",
+    "RATE_LIMITED": "Quá 60 lời gọi/phút. Chờ khoảng 1 phút; dùng maihub_wait_for thay vì gọi lặp.",
+    "NOT_FOUND": "Mã không tồn tại hoặc đã bị xoá. Lấy lại mã bằng thao tác …list tương ứng.",
+    "INVALID_PARAMS": "Sửa đúng trường trong details.field rồi gọi lại. mediaId hết hạn sau 24 giờ: tải tệp lên lại.",
+    "LIMIT_REACHED": "Đã chạm giới hạn (số lịch, hộp thư tệp hoặc máy chủ render). Xoá bớt hoặc chờ rồi thử lại.",
+    "CONFIRMATION_REQUIRED": CONFIRM_GUIDANCE,
+    "ENGINE_MISSING": "Báo người dùng: máy MaiHub chưa cài nhân trình duyệt.",
+    "UNAUTHORIZED": "Báo người dùng: cần ghép nối lại bot với MaiHub.",
+    "PIN_MISMATCH": "Báo người dùng: cần ghép nối lại bot với MaiHub.",
+    "UNREACHABLE": "MaiHub không phản hồi: thử lại sau ít phút; nếu vẫn lỗi thì báo người dùng.",
+}
+# Hướng dẫn vòng làm việc cho bot AI: gửi trong initialize (instructions) và trả lại qua tool maihub_guide.
+# Tên tool = maihub_ + tên thao tác, dấu chấm đổi thành gạch dưới.
+GUIDE = "\n".join([
+    "MaiHub điều khiển Facebook Poster qua các tool maihub_<thao tác> (dấu chấm đổi thành gạch dưới, ví dụ maihub_drafts_create).",
+    "",
+    "1. Vòng làm việc",
+    "- Nghiên cứu: maihub_research_search hoặc maihub_research_scanGroupFeeds trả scanId; chờ sự kiện research.finished rồi maihub_research_get.",
+    "- Nội dung: viết bài; tải ảnh/video có sẵn bằng maihub_upload_media, hoặc render bằng maihub_videos_render (chờ videos.finished, lấy tệp bằng maihub_download_video).",
+    "- Nháp: maihub_drafts_create (gắn campaignId, variants). Hỏi người dùng rồi mới maihub_drafts_approve.",
+    "- Đăng: có sự kiện run.finished thì đọc kết quả bằng maihub_runs_get.",
+    "- Đo: maihub_posts_stats, maihub_posts_groupScores, maihub_posts_bestTimes.",
+    "- Thu khách: maihub_comments_collect, chờ comments.collectFinished (lọc theo jobId), rồi maihub_leads_list. Xem tiến độ bằng maihub_comments_collectStatus, dừng bằng maihub_comments_collectCancel.",
+    "",
+    "2. Quan hệ giữa các mã",
+    "- mediaId sống 24 giờ, hết hạn thì tải lên lại.",
+    "- drafts.approve giữ nguyên mã: mã nháp trở thành scheduleId.",
+    "- runId có trong run.started và run.finished.",
+    "- videos.finished trả videoId và mediaId; mediaId dùng ngay trong drafts.create.",
+    "",
+    "3. Thời gian",
+    "- Mọi mốc thời gian là mili giây epoch.",
+    "- Giờ trong ngày (time, bestTimes) là giờ của máy MaiHub; xem system.status.timezone và utcOffsetMin.",
+    "- runAt phải sau hiện tại ít nhất 1 phút, tính theo system.status.serverNowMs (không dùng đồng hồ máy bot).",
+    "",
+    "4. Chờ việc",
+    "- Dùng maihub_wait_for với types và match (ví dụ {\"jobId\": \"...\"}), không gọi events.wait lặp.",
+    "- Tool chờ tối đa maxSec (mặc định 50). Hết giờ trả timedOut kèm after: gọi lại với đúng after đó để không bỏ sót sự kiện.",
+    "- Trả workspaceChanged nghĩa là MaiHub đổi workspace: kiểm tra lại mã đang giữ.",
+    "- Sau workspaceChanged, gọi lại không kèm after.",
+    "- Không có match theo mã việc riêng (jobId, videoId, scanId, runId) thì luôn truyền after lấy từ kết quả trước, kèm workspaceId của kết quả đó, nếu không wait_for có thể trả lại sự kiện cũ.",
+    "- Giữ maxSec ≤ 50 trừ khi client cho tool chạy lâu hơn.",
+    "",
+    "5. Lệnh ghi",
+    "- Luôn gửi idempotencyKey (chuỗi tự đặt, tối đa 64 ký tự) để gọi lại sau lỗi mạng không tạo trùng.",
+    "- Thao tác nguy hiểm: hỏi người dùng, được đồng ý mới gửi confirm: true.",
+    "",
+    "Giới hạn cần nhớ",
+    "- Tối đa 60 lời gọi mỗi phút.",
+    "- Mỗi lúc MaiHub chỉ chạy một việc dùng trình duyệt Facebook (đăng bài, quét nhóm, thu bình luận, theo dõi bài, kiểm tra đăng nhập); việc thứ hai nhận BUSY. Nghiên cứu có lượt quét riêng (BUSY nếu đang có lượt quét khác), render video có hàng chờ riêng (LIMIT_REACHED khi đầy).",
+    "- Quét nghiên cứu, thu bình luận và render video chạy nền: gọi xong lấy mã việc (scanId, jobId, videoId) rồi chờ sự kiện, đừng hỏi lại liên tục.",
+    "- Khi lỗi có dòng Gợi ý, làm theo gợi ý trước khi báo người dùng.",
+    "",
+    "6. Mã lỗi khi đăng (maihub_runs_get)",
+    "- uncertain_after_submit: có thể bài đã đăng; phải kiểm tra trước khi đăng lại.",
+    "- not_logged_in: báo người dùng đăng nhập lại profile.",
+    "- Các mã khác là lỗi xảy ra trước khi bấm Đăng (bài chưa lên). MaiHub đã tự thử lại những lỗi thử lại được; đăng lại đích đó chỉ sau khi xử lý nguyên nhân (profile, nhóm, nội dung).",
+    "",
+    "Cần MaiHub từ 26.27.0 cho: comments.collectFinished, maihub_comments_collectStatus, maihub_comments_collectCancel và các trường system.status serverNowMs, timezone, utcOffsetMin, lastEventSeq. Bản cũ hơn không có các mục này (maihub_wait_for vẫn chạy, nhưng chờ comments.collectFinished sẽ hết giờ).",
+])
 
 PAIR_PREFIX = "mhp1."
 PAIR_TICKET_RE = re.compile(r"^[A-Za-z0-9_-]{43}\Z")
@@ -82,6 +146,9 @@ LEAD_TEXT_CHARS = 80
 VIDEO_ERROR_CHARS = 120
 MAX_MESSAGE_CHARS = 3500
 MAX_ERROR_LINES = 3
+WAIT_DEFAULT_SEC = 50  # một số client MCP cắt tool sau 60 giây
+WAIT_MAX_SEC = 600
+WAIT_POLL_SEC = 25
 KIND_LABELS = {"join": "Tham gia nhóm", "scan_groups": "Quét nhóm", "collect_comments": "Thu bình luận"}
 
 EXIT_SERVER_ERROR = 1
@@ -406,6 +473,17 @@ def tool_name(method_name):
     return "maihub_" + method_name.replace(".", "_")
 
 
+def format_tool_error(err):
+    """Văn bản lỗi cho tool: `MÃ: thông báo`, rồi `Chi tiết:` (nếu có details) và `Gợi ý:` (nếu có gợi ý cho mã)."""
+    lines = ["%s: %s" % (err.code, err.message)]
+    if err.details:
+        lines.append("Chi tiết: " + json.dumps(err.details, ensure_ascii=False, separators=(",", ":")))
+    hint = ERROR_HINTS.get(err.code)
+    if hint:
+        lines.append("Gợi ý: " + hint)
+    return "\n".join(lines)
+
+
 def build_tools(describe_result):
     tools = []
     for m in describe_result.get("methods", []):
@@ -433,12 +511,34 @@ def build_tools(describe_result):
         }, "required": ["videoId"]},
         "_method": None,
     })
+    tools.append({
+        "name": WAIT_TOOL,
+        "description": "Chờ một sự kiện MaiHub khớp điều kiện (ví dụ run.finished, videos.finished theo videoId, comments.collectFinished theo jobId) trong một lần gọi. Trả {event, after} khi có, {timedOut: true, after} khi hết giờ (gọi lại với đúng after đó để không bỏ sót), hoặc {workspaceChanged: true}. Bỏ trống after thì xét các sự kiện từ lúc phiên MCP bắt đầu. Khi truyền after, truyền kèm workspaceId lấy cùng kết quả trước (hoặc workspace.id của system.status khi lấy lastEventSeq).",
+        "inputSchema": {"type": "object", "properties": {
+            "types": {"type": "array", "items": {"type": "string"}, "description": "Chỉ nhận các loại sự kiện này (bỏ trống = mọi loại)"},
+            "match": {"type": "object", "description": "Mọi cặp trường: giá trị phải bằng đúng trong payload, ví dụ {\"videoId\": \"...\"}; giá trị là chuỗi, số hoặc boolean"},
+            "after": {"type": "integer", "minimum": 0, "description": "Chỉ xét sự kiện có seq lớn hơn số này (mặc định: mốc của phiên)"},
+            "workspaceId": {"type": "string", "description": "Workspace mà after thuộc về (lấy cùng kết quả trước); khác workspace hiện tại thì trả workspaceChanged. Chỉ dùng kèm after"},
+            "maxSec": {"type": "integer", "minimum": 1, "maximum": WAIT_MAX_SEC, "description": "Chờ tối đa bao nhiêu giây (mặc định %d)" % WAIT_DEFAULT_SEC},
+        }},
+        "_method": None,
+    })
+    tools.append({
+        "name": GUIDE_TOOL,
+        "description": "Đọc lại hướng dẫn vòng làm việc với MaiHub (nghiên cứu, nháp, đăng, đo, thu khách), quan hệ giữa các mã, thời gian, cách chờ việc và xử lý lỗi.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_method": None,
+    })
     return tools
 
 
 class McpServer(object):
-    def __init__(self, client, stdin=None, stdout=None, stderr=None):
+    def __init__(self, client, stdin=None, stdout=None, stderr=None, clock=time.monotonic, sleep=time.sleep):
         self.client = client
+        self.clock = clock
+        self.sleep = sleep
+        self.session_workspace = None  # workspace lúc đặt mốc; đổi workspace thì mốc cũ vô nghĩa
+        self.session_after = None  # seq cuối lúc phiên bắt đầu; None = chưa biết, wait_for tự tính ở lần đầu
         self.stdin = stdin or sys.stdin
         self.stdout = stdout or sys.stdout
         self.stderr = stderr or sys.stderr
@@ -490,7 +590,11 @@ class McpServer(object):
                 "protocolVersion": wanted if wanted in MCP_VERSIONS else MCP_VERSIONS[0],
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "maihub", "version": VERSION},
+                "instructions": GUIDE,
             })
+            # Trả lời trước để MaiHub chậm / không phản hồi không làm client MCP chờ; tin nhắn xử lý tuần tự
+            # nên mốc phiên vẫn có trước lời gọi tool đầu tiên.
+            self._mark_session()
         elif method == "ping":
             self.reply(msg, {})
         elif method == "tools/list":
@@ -509,6 +613,115 @@ class McpServer(object):
             self.send({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "Method not found: %s" % method}})
         # thông báo (không có id), gồm notifications/initialized: bỏ qua
 
+    def _mark_session(self):
+        """Ghi mốc sự kiện của phiên từ system.status.lastEventSeq; MaiHub cũ hoặc lỗi thì để None (tính sau, không làm hỏng initialize)."""
+        try:
+            status = self.client.call("system.status", {}) or {}
+            seq, workspace = status.get("lastEventSeq"), status.get("workspace")
+        except Exception:
+            return
+        if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0:
+            self.session_after = seq
+            workspace_id = workspace.get("id") if isinstance(workspace, dict) else None
+            self.session_workspace = workspace_id if isinstance(workspace_id, str) and workspace_id else None
+
+    def _events_page(self, after, timeout_sec):
+        result = self.client.call("events.wait", {"after": after, "timeoutSec": timeout_sec})
+        events = result.get("events") if isinstance(result, dict) else None
+        if not isinstance(events, list) or any(
+                not isinstance(e, dict) or not isinstance(e.get("seq"), int) or isinstance(e.get("seq"), bool) for e in events):
+            raise BridgeError("BAD_RESPONSE", "events.wait trả về sự kiện sai định dạng")
+        return events, result.get("workspaceId")
+
+    def _scan_latest(self):
+        """Trả (seq lớn nhất hiện có, workspaceId): ưu tiên system.status.lastEventSeq (1 lời gọi), MaiHub cũ thì duyệt các trang (timeoutSec=0) tới trang rỗng."""
+        try:
+            status = self.client.call("system.status", {}) or {}
+            last, current = status.get("lastEventSeq"), status.get("workspace")
+            if isinstance(last, int) and not isinstance(last, bool) and last >= 0:
+                workspace_id = current.get("id") if isinstance(current, dict) else None
+                return last, workspace_id if isinstance(workspace_id, str) and workspace_id else None
+        except Exception:
+            pass
+        seq, workspace = 0, None
+        while True:
+            events, current = self._events_page(seq, 0)
+            workspace = current if current is not None else workspace
+            top = max([e["seq"] for e in events] or [seq])
+            if top <= seq:
+                return seq, workspace
+            seq = top
+
+    @staticmethod
+    def _wait_args(args):
+        types, match, after, max_sec = args.get("types"), args.get("match"), args.get("after"), args.get("maxSec")
+        workspace_id = args.get("workspaceId")
+        if workspace_id is not None and (not isinstance(workspace_id, str) or not workspace_id):
+            raise BridgeError("INVALID_PARAMS", "workspaceId phải là chuỗi không rỗng", {"field": "workspaceId"})
+        if types is not None and not (isinstance(types, list) and all(isinstance(t, str) for t in types)):
+            raise BridgeError("INVALID_PARAMS", "types phải là mảng chuỗi", {"field": "types"})
+        if match is not None and not (isinstance(match, dict) and all(
+                isinstance(v, (str, int, float, bool)) for v in match.values())):
+            raise BridgeError("INVALID_PARAMS", "match phải là đối tượng có giá trị chuỗi, số hoặc boolean", {"field": "match"})
+        if after is not None and (not isinstance(after, int) or isinstance(after, bool) or after < 0):
+            raise BridgeError("INVALID_PARAMS", "after phải là số nguyên ≥ 0", {"field": "after"})
+        if max_sec is None:
+            max_sec = WAIT_DEFAULT_SEC
+        if not isinstance(max_sec, int) or isinstance(max_sec, bool) or not 1 <= max_sec <= WAIT_MAX_SEC:
+            raise BridgeError("INVALID_PARAMS", "maxSec phải là số nguyên từ 1 đến %d" % WAIT_MAX_SEC, {"field": "maxSec"})
+        return types or [], match or {}, after, max_sec, workspace_id if after is not None else None
+
+    @staticmethod
+    def _event_matches(event, types, match):
+        if types and event.get("type") not in types:
+            return False
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        # bool là con của int trong Python: True == 1, nên so thêm kiểu bool
+        return all(k in payload and payload[k] == v and isinstance(payload[k], bool) == isinstance(v, bool) for k, v in match.items())
+
+    @staticmethod
+    def _cursor_result(result, cursor, workspace):
+        """Kết quả có after thì kèm workspaceId của con trỏ đó (bỏ khi chưa biết) để lần gọi sau truyền lại."""
+        result["after"] = cursor
+        if workspace is not None:
+            result["workspaceId"] = workspace
+        return result
+
+    def wait_for(self, args):
+        """Chờ sự kiện khớp types/match. Trả {event, after} | {timedOut, after} | {workspaceChanged}; lỗi MaiHub thì ném BridgeError."""
+        types, match, after, max_sec, given_workspace = self._wait_args(args)
+        if after is None:
+            if self.session_after is None:
+                self.session_after, self.session_workspace = self._scan_latest()
+            after = self.session_after  # mốc phiên không tự tiến: các lần chờ nối tiếp không làm mất sự kiện của nhau
+        # workspace gốc để so: workspaceId bot truyền kèm after, rồi workspace của phiên; chưa biết thì lấy workspace thấy đầu tiên trong lời gọi
+        workspace = given_workspace or self.session_workspace
+        cursor = after
+        deadline = self.clock() + max_sec
+        while True:
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                return self._cursor_result({"timedOut": True}, cursor, workspace)
+            started = self.clock()
+            events, current = self._events_page(cursor, min(WAIT_POLL_SEC, max(1, int(-(-remaining // 1)))))
+            if current is not None:
+                if workspace is not None and current != workspace:
+                    # Lấy mốc của workspace mới ngay lúc phát hiện, để sự kiện xảy ra trước lần chờ kế tiếp không bị bỏ lỡ.
+                    try:
+                        self.session_after, self.session_workspace = self._scan_latest()
+                    except BridgeError:
+                        self.session_after = self.session_workspace = None  # lần sau tính lại
+                    return {"workspaceChanged": True}
+                workspace = current
+            for event in sorted(events, key=lambda e: e["seq"]):
+                if event["seq"] <= cursor:
+                    continue
+                cursor = event["seq"]
+                if self._event_matches(event, types, match):
+                    return self._cursor_result({"event": event}, cursor, workspace)
+            if not events and self.clock() - started < 1:
+                self.sleep(1)  # trả rỗng ngay: tránh vòng lặp nóng
+
     @staticmethod
     def _text(text, is_error=False):
         result = {"content": [{"type": "text", "text": text}]}
@@ -518,6 +731,8 @@ class McpServer(object):
 
     def call_tool(self, name, arguments):
         args = dict(arguments) if isinstance(arguments, dict) else {}
+        if name != GUIDE_TOOL and self.session_after is None:
+            self._mark_session()  # initialize không lấy được mốc: lấy trước khi bot khởi chạy việc
         try:
             if name == UPLOAD_TOOL:
                 path = args.get("path")
@@ -526,6 +741,10 @@ class McpServer(object):
                 if not os.path.isfile(path):
                     raise BridgeError("INVALID_PARAMS", "Không thấy tệp: %s" % path)
                 result = self.client.upload(path)
+            elif name == WAIT_TOOL:
+                result = self.wait_for(args)
+            elif name == GUIDE_TOOL:
+                return self._text(GUIDE)
             elif name == DOWNLOAD_TOOL:
                 kind = args.get("kind") or "video"
                 if kind not in VIDEO_KINDS:
@@ -544,12 +763,9 @@ class McpServer(object):
                 if idem is not None and (not isinstance(idem, str) or not idem or len(idem) > 64):
                     raise BridgeError("INVALID_PARAMS", "idempotencyKey phải là chuỗi 1-64 ký tự")
                 result = self.client.call(tool["_method"], args, idem)
-            return self._text(json.dumps(result, ensure_ascii=False, indent=2))
+            return self._text(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         except BridgeError as err:
-            text = "%s: %s" % (err.code, err.message)
-            if err.code == "CONFIRMATION_REQUIRED":
-                text += "\n" + CONFIRM_GUIDANCE
-            return self._text(text, True)
+            return self._text(format_tool_error(err), True)
 
 
 # ---------------------------------------------------------------- CLI
@@ -1228,8 +1444,10 @@ def format_event(event, fetch_run):
             lines = ["⚠️ %s: xong %d/%d, lỗi %d" % (label, posted, total, failed)] + _failure_lines(payload.get("runId"), fetch_run)
         elif status == "failed":  # lỗi cấp lượt chạy, không có đích nào ghi lỗi
             lines = ["⚠️ %s: xong %d/%d, lượt chạy bị lỗi" % (label, posted, total)] + _failure_lines(payload.get("runId"), fetch_run)
-        elif status == "done":
+        elif status == "done" and payload.get("kind") not in KIND_LABELS:  # việc phụ (tham gia nhóm, quét nhóm, thu bình luận) xong không lỗi thì im
             lines = ["✅ %s: xong %d/%d" % (label, posted, total)] if total else ["✅ %s: xong" % label]
+    elif etype == "comments.collectFinished":
+        lines = None  # khách mới đã có tin 🎯 từ leads.found
     elif etype == "schedule.missed":
         lines = ["⏰ Lỡ lịch \"%s\": %s" % (clip(payload.get("name") or "", MAX_FIELD_CHARS), clip(payload.get("reason") or "", MAX_FIELD_CHARS))]
     elif etype == "profile.loginProblem":

@@ -87,7 +87,7 @@ describe('CommentCollector', () => {
         expect(h.processed.map((p) => p.auto)).toEqual([true, true, true]);
         const ev = finished(h.events);
         expect(ev).toHaveLength(1);
-        expect(ev[0].payload).toEqual({ jobId: 'job1', auto: true, posts: 3, collected: 3, leads: 3, errors: 0 });
+        expect(ev[0].payload).toEqual({ jobId: 'job1', auto: true, cancelled: false, posts: 3, collected: 3, leads: 3, errors: 0 });
         // đăng lúc NOW-3h: mốc 120m đã quá hạn → xong; mốc kế là 1440m
         for (const id of [a, b, c]) {
             expect(rowOf(h.store, id)).toMatchObject({ commentsDone: ['120m'], nextCommentAt: NOW - 3 * HOUR + 1440 * MIN });
@@ -166,6 +166,7 @@ describe('CommentCollector', () => {
         expect(rowOf(h.store, a).commentsDone).toEqual(['120m']);
         expect(rowOf(h.store, b)).toMatchObject({ commentsDone: [], nextCommentAt: NOW - 3 * HOUR + 120 * MIN });
         expect(h.collector.status().last?.cancelled).toBe(true);
+        expect(finished(h.events)[0].payload).toMatchObject({ jobId: 'job1', cancelled: true });
         expect(h.slot.release).toHaveBeenCalledTimes(1);
         expect(h.collector.cancel()).toBe(false);
     });

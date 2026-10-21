@@ -2,17 +2,17 @@ import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import type { FbPosterResult, FbPosterRun, FbPosterSchedule, LoginCheckOutcome, LoginCheckSource, LoginState } from '../../models/facebookPoster';
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished';
 
 export function buildRunStarted(run: { runId: string; kind: string; scheduleId: string | null }) {
     return { runId: run.runId, kind: run.kind, scheduleId: run.scheduleId };
 }
 
 /** `status` là trạng thái cuối của run; posted/failed/skipped đếm theo `outcome` của từng kết quả. */
-export function buildRunFinished(run: Pick<FbPosterRun, 'id' | 'kind' | 'status' | 'scheduleId'>, results: Pick<FbPosterResult, 'outcome'>[], scheduleName: string | null = null) {
+export function buildRunFinished(run: Pick<FbPosterRun, 'id' | 'kind' | 'status' | 'scheduleId'> & Partial<Pick<FbPosterRun, 'campaignId'>>, results: Pick<FbPosterResult, 'outcome'>[], scheduleName: string | null = null) {
     const count = (outcome: string) => results.filter((r) => r.outcome === outcome).length;
     return {
-        runId: run.id, kind: run.kind, status: run.status, scheduleId: run.scheduleId, scheduleName,
+        runId: run.id, kind: run.kind, status: run.status, scheduleId: run.scheduleId, scheduleName, campaignId: run.campaignId ?? null,
         posted: count('posted'), failed: count('failed'), skipped: count('skipped'),
     };
 }
@@ -58,11 +58,16 @@ export function buildTrackFinished(e: {
 }
 
 /** Có khách tiềm năng mới; chỉ giữ các trường đã công bố, tối đa 3 mẫu. */
-export function buildLeadsFound(e: { count: number; auto: boolean; samples: { authorName: string; text: string; postUrl: string }[] }) {
+export function buildLeadsFound(e: { count: number; auto: boolean; samples: { authorName: string; text: string; postUrl: string }[]; leadIds?: number[]; campaignIds?: string[] }) {
     return {
-        count: e.count, auto: e.auto,
+        count: e.count, auto: e.auto, leadIds: e.leadIds ?? [], campaignIds: e.campaignIds ?? [],
         samples: e.samples.slice(0, 3).map((s) => ({ authorName: s.authorName, text: s.text, postUrl: s.postUrl })),
     };
+}
+
+/** Lượt thu bình luận kết thúc (kể cả bị huỷ); `errors` là số lỗi. Bot lọc theo `jobId`. */
+export function buildCollectFinished(e: { jobId: string; auto: boolean; cancelled: boolean; posts: number; collected: number; leads: number; errors: number }) {
+    return { jobId: e.jobId, auto: e.auto, cancelled: e.cancelled, posts: e.posts, collected: e.collected, leads: e.leads, errors: e.errors };
 }
 
 /** Video render xong, lỗi hoặc bị huỷ (`cancelled: true`, kèm `ok: false`); `error` chỉ khi lỗi/huỷ, `mediaId` chỉ với video do bot tạo. */
