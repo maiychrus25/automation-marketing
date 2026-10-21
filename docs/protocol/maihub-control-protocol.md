@@ -258,10 +258,12 @@ Mã lỗi `errorCode` trong kết quả của `runs.get` (chỉ-thêm, bot cũ b
 | `navigation_failed`, `composer_not_found`, `media_failed`, `editor_not_focusable`, `submit_not_ready`, `submit_not_found`, `unexpected_error` | Lỗi **trước** cú bấm Đăng (tải trang, hộp soạn thảo, ảnh/video, ô nhập, nút Đăng, lỗi bất ngờ) | Có, tối đa 3 lần (`attempts` ≤ 3), chờ 10–30 giây |
 | `uncertain_after_submit` | Đã bấm Đăng nhưng không xác nhận được, hoặc trình duyệt bị đóng cưỡng bức: **có thể bài đã lên**, kiểm tra trước khi đăng lại | Không |
 | `draft_conflict` | Lần thử lại thấy bản nháp cũ không xoá được | Không |
-| `not_logged_in` | Profile chưa đăng nhập Facebook | Không |
+| `not_logged_in` | Profile chưa đăng nhập Facebook, hoặc bị chuyển sang trang đăng nhập giữa lượt (từ 26.28.0 dừng profile, các đích còn lại cùng mã) | Không |
 | `launch_failed` | Không mở được trình duyệt/profile | Không |
 | `stopped` | Bị bỏ qua vì Huỷ (`outcome = skipped`) | Không |
 | `unknown` | Không xác định | Không |
+| `checkpoint` | Từ 26.28.0. Facebook bắt xác minh tài khoản (trang `/checkpoint`, `/two_step_verification`, `/auth_platform`); MaiHub dừng profile đó, các đích còn lại cùng mã, và phát `profile.loginProblem` | Không |
+| `browser_closed` | Từ 26.28.0. Trình duyệt của profile đóng giữa chừng **trước** cú bấm Đăng (bài chưa lên); các đích còn lại cùng mã | Không |
 
 ## 10. Luồng mẫu: ý tưởng → ảnh → nháp → duyệt → chờ kết quả
 

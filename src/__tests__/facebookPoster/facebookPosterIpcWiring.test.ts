@@ -71,7 +71,7 @@ jest.mock('../../services/control/controlEvents', () => ({
     buildDraftApproved: jest.fn(), buildLoginProblem: jest.fn(), buildCheckFinished: jest.fn(), buildTrackFinished: jest.fn(), buildLeadsFound: jest.fn((p: unknown) => p), buildCollectFinished: jest.fn((p: unknown) => p),
 }));
 
-import { startFacebookPosterScheduler, stopFacebookPosterScheduler, posterOperations, campaignOperations, trackingOperations, leadOperations, isFacebookPosterBusy } from '../../../electron/ipc/facebookPosterIpc';
+import { startFacebookPosterScheduler, stopFacebookPosterScheduler, posterOperations, campaignOperations, trackingOperations, leadOperations, isFacebookPosterBusy, scheduleWantsSlot, makeYieldingBusy } from '../../../electron/ipc/facebookPosterIpc';
 
 const NOW = Date.now();
 const schedule = (campaignId: string | null, params: Record<string, unknown> = {}) => ({
@@ -246,6 +246,8 @@ describe('facebookPosterIpc wiring', () => {
     });
 
     test('bộ hẹn giờ thu bình luận nhận isBusy gồm khe việc chung; runCollect thu với auto = true', async () => {
+        // Các test trên để lại lịch đến hạn trong DB; lịch sắp tới làm việc phụ nhường khe nên xoá chúng để thử riêng khe việc chung.
+        mockDb.run('DELETE FROM fb_poster_schedules');
         expect(mockCommentSchedulerDeps.isBusy()).toBe(false);
         mockServiceInstance.acquireExclusive();
         expect(mockCommentSchedulerDeps.isBusy()).toBe(true);
@@ -274,5 +276,69 @@ describe('facebookPosterIpc wiring', () => {
             const cutoff = spy.mock.calls[0][0] as number;
             expect(Math.abs(Date.now() - cutoff - 180 * 24 * 60 * 60 * 1000)).toBeLessThan(60_000);
         });
+    });
+});
+
+describe('scheduleWantsSlot', () => {
+    const MIN = 60_000;
+    const deps = (queued: number, nextAt: number | null | Error) => ({
+        queued: () => queued,
+        nextAt: () => { if (nextAt instanceof Error) throw nextAt; return nextAt; },
+    });
+
+    test('a queued scheduled run wants the slot', () => {
+        expect(scheduleWantsSlot(NOW, deps(1, null))).toBe(true);
+    });
+    test('next schedule in 9 minutes wants the slot, in 11 minutes does not', () => {
+        expect(scheduleWantsSlot(NOW, deps(0, NOW + 9 * MIN))).toBe(true);
+        expect(scheduleWantsSlot(NOW, deps(0, NOW + 11 * MIN))).toBe(false);
+    });
+    test('an overdue schedule wants the slot', () => {
+        expect(scheduleWantsSlot(NOW, deps(0, NOW - MIN))).toBe(true);
+    });
+    test('no schedule at all does not', () => {
+        expect(scheduleWantsSlot(NOW, deps(0, null))).toBe(false);
+    });
+    test('a store read error never blocks side jobs', () => {
+        expect(scheduleWantsSlot(NOW, deps(0, new Error('db locked')))).toBe(false);
+    });
+});
+
+describe('makeYieldingBusy', () => {
+    const MIN = 60_000;
+    function setup(base = false) {
+        const state = { now: 1_000_000, wants: true, base };
+        const busy = makeYieldingBusy(() => state.base, () => state.now, () => state.wants);
+        return { state, busy };
+    }
+
+    test('yields at t=0 and t=59min, stops at t=61min', () => {
+        const { state, busy } = setup();
+        expect(busy()).toBe(true);
+        state.now += 59 * MIN;
+        expect(busy()).toBe(true);
+        state.now += 2 * MIN;
+        expect(busy()).toBe(false);
+    });
+
+    test('resets once the slot is free, then yields again', () => {
+        const { state, busy } = setup();
+        busy();
+        state.now += 61 * MIN;
+        expect(busy()).toBe(false);
+        state.wants = false;
+        expect(busy()).toBe(false);
+        state.wants = true;
+        state.now += MIN;
+        expect(busy()).toBe(true);
+    });
+
+    test('base busy always wins and does not start the yielding clock', () => {
+        const { state, busy } = setup(true);
+        expect(busy()).toBe(true);
+        state.now += 120 * MIN;
+        expect(busy()).toBe(true);
+        state.base = false;
+        expect(busy()).toBe(true); // clock starts only now
     });
 });

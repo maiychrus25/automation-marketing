@@ -110,6 +110,8 @@ GUIDE = "\n".join([
     "6. Mã lỗi khi đăng (maihub_runs_get)",
     "- uncertain_after_submit: có thể bài đã đăng; phải kiểm tra trước khi đăng lại.",
     "- not_logged_in: báo người dùng đăng nhập lại profile.",
+    "- checkpoint (MaiHub từ 26.28.0): Facebook bắt xác minh tài khoản; MaiHub đã dừng profile đó. Báo người dùng mở profile để xác minh, đừng đăng lại bằng profile này.",
+    "- browser_closed (MaiHub từ 26.28.0): trình duyệt của profile đóng giữa chừng (bài chưa lên); có thể đăng lại các đích đó sau.",
     "- Các mã khác là lỗi xảy ra trước khi bấm Đăng (bài chưa lên). MaiHub đã tự thử lại những lỗi thử lại được; đăng lại đích đó chỉ sau khi xử lý nguyên nhân (profile, nhóm, nội dung).",
     "",
     "Cần MaiHub từ 26.27.0 cho: comments.collectFinished, maihub_comments_collectStatus, maihub_comments_collectCancel và các trường system.status serverNowMs, timezone, utcOffsetMin, lastEventSeq. Bản cũ hơn không có các mục này (maihub_wait_for vẫn chạy, nhưng chờ comments.collectFinished sẽ hết giờ).",

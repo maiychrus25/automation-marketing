@@ -1,6 +1,10 @@
 import Database from 'better-sqlite3';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { FacebookPosterService, type StartParams, type FacebookPosterServiceDeps } from '../../services/facebookPoster/FacebookPosterService';
 import { FacebookPosterStore, type SqlDatabase } from '../../services/facebookPoster/FacebookPosterStore';
+import { BrowserClosedError, LoginProblemError } from '../../services/facebookPoster/postToTargets';
 import { DEFAULT_LEAD_CONFIG } from '../../services/facebookPoster/leadRules';
 
 const NOT_LOGGED_IN = 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập';
@@ -19,6 +23,9 @@ function memoryDb(): SqlDatabase {
     queryOne: (sql, p = []) => db.prepare(sql).get(...p) as any,
   };
 }
+
+const diagDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbp-svc-diag-'));
+afterAll(() => { fs.rmSync(diagDir, { recursive: true, force: true }); });
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -1297,6 +1304,142 @@ describe('FacebookPosterService error codes', () => {
     expect(codes(rows)).toEqual([['failed', 'uncertain_after_submit', 1], ['skipped', 'stopped', 1]]);
     expect(rows[0].error).toContain('có thể bài đã lên, kiểm tra trước khi đăng lại');
   });
+
+  test('LoginProblemError(checkpoint): every remaining target failed + checkpoint, observer told', async () => {
+    const observed: any[] = [];
+    const h = harness({
+      postToTargets: jest.fn(async (_input: any, deps: any) => {
+        await deps.launch();
+        throw new LoginProblemError('checkpoint', 'Facebook yêu cầu xác minh tài khoản (checkpoint). Mở profile để xác minh rồi đăng lại.');
+      }),
+    }, { onLoginObserved: (id, st) => { observed.push([id, st]); } });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(codes(h.results(runId))).toEqual([['failed', 'checkpoint', 1], ['failed', 'checkpoint', 1]]);
+    expect(observed).toEqual([['p1', 'checkpoint']]);
+  });
+
+  test('BrowserClosedError: every remaining target failed + browser_closed', async () => {
+    const h = harness({
+      postToTargets: jest.fn(async (_input: any, deps: any) => { await deps.launch(); throw new BrowserClosedError('Trình duyệt của profile đã đóng giữa chừng'); }),
+    });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(codes(h.results(runId))).toEqual([['failed', 'browser_closed', 1], ['failed', 'browser_closed', 1]]);
+  });
+
+  test('BrowserClosedError after enterCritical stays uncertain_after_submit', async () => {
+    const h = harness({
+      postToTargets: jest.fn(async (_input: any, deps: any) => { await deps.launch(); deps.enterCritical(); throw new BrowserClosedError('x'); }),
+    });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(codes(h.results(runId))).toEqual([['failed', 'uncertain_after_submit', 1], ['skipped', 'stopped', 1]]);
+  });
+
+  test('transient open failure is retried once after 10 s', async () => {
+    const slept: number[] = [];
+    const h: Harness = harness({ postToTargets: postAll() }, { sleep: async (ms) => { slept.push(ms); h.openFail.delete('p1'); } });
+    h.openFail.set('p1', new Error('proxy refused'));
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(slept).toContain(10000);
+    expect(h.opened).toEqual(['p1', 'p1']);
+    expect(h.results(runId).every((r) => r.outcome === 'posted')).toBe(true);
+  });
+
+  test('a second open failure keeps launch_failed after one retry only', async () => {
+    const h = harness({ postToTargets: postAll() });
+    h.openFail.set('p1', new Error('proxy refused'));
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(h.opened).toEqual(['p1', 'p1']);
+    expect(h.sleeps).toContain(10000);
+    expect(codes(h.results(runId))).toEqual([['failed', 'launch_failed', 1], ['failed', 'launch_failed', 1]]);
+  });
+
+  test.each(['Profile đang mở. Đóng profile trước khi chạy tự động', 'Không tìm thấy profile'])('open failure "%s" is not retried', async (message) => {
+    const h = harness({ postToTargets: postAll() });
+    h.openFail.set('p1', new Error(message));
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(h.opened).toEqual(['p1']);
+    expect(h.sleeps).not.toContain(10000);
+    expect(codes(h.results(runId))[0]).toEqual(['failed', 'launch_failed', 1]);
+  });
+
+  test('open failure while cancelling is not retried', async () => {
+    const opened: string[] = [];
+    const h: Harness = harness({ postToTargets: postAll() }, {
+      openForAutomation: async (id) => { opened.push(id); h.service.cancel(); throw new Error('proxy refused'); },
+    });
+    h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(opened).toEqual(['p1']);
+  });
+
+  test('diagnosticsDir given: saveDiagnostic is passed to the post task and writes under <dir>/<runId>', async () => {
+    const saved: any[] = [];
+    let passed: any = null;
+    const h = harness({
+      postToTargets: jest.fn(async (_input: any, deps: any) => {
+        await deps.launch();
+        passed = deps.saveDiagnostic;
+        if (passed) saved.push(await passed({ screenshot: async () => Buffer.from([1]), url: () => 'u', title: async () => 't' }, { targetUrl: 'https://www.facebook.com/groups/1/', attempt: 2, errorCode: 'composer_not_found' }));
+      }),
+    }, { diagnosticsDir: () => diagDir });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(typeof passed).toBe('function');
+    expect(saved).toEqual(['p1-1-l2.jpg']);
+    expect(fs.existsSync(path.join(diagDir, runId, 'p1-1-l2.jpg'))).toBe(true);
+    expect(fs.existsSync(path.join(diagDir, runId, 'p1-1-l2.txt'))).toBe(true);
+  });
+
+  test('no diagnosticsDir (or null): saveDiagnostic is not passed', async () => {
+    for (const over of [{}, { diagnosticsDir: () => null }]) {
+      let passed: any = 'unset';
+      const h = harness({ postToTargets: jest.fn(async (_i: any, deps: any) => { await deps.launch(); passed = deps.saveDiagnostic; }) }, over);
+      h.service.start(postParams());
+      await h.service.whenIdle();
+      expect(passed).toBeUndefined();
+    }
+  });
+
+  test('target 1 posted then checkpoint on target 2: observer gets checkpoint and is NOT then told ok', async () => {
+    const observed: any[] = [];
+    const h = harness({
+      postToTargets: jest.fn(async (_input: any, deps: any) => {
+        await deps.launch();
+        deps.onResult({ url: 'https://www.facebook.com/groups/1/', ok: true, error: null, postUrl: 'https://www.facebook.com/groups/1/posts/1/', commentStatus: 'posted', identity: 'Me' });
+        throw new LoginProblemError('checkpoint', 'Facebook yêu cầu xác minh tài khoản (checkpoint). Mở profile để xác minh rồi đăng lại.');
+      }),
+    }, { onLoginObserved: (id, st) => { observed.push([id, st]); } });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(codes(h.results(runId))).toEqual([['posted', '', 1], ['failed', 'checkpoint', 1]]);
+    expect(observed).toEqual([['p1', 'checkpoint']]);
+  });
+
+  test('engine-missing message from BrowserProfileService (different wording) is not retried', async () => {
+    const h = harness({ postToTargets: postAll() });
+    h.openFail.set('p1', new Error('Chưa cài trình duyệt. Hãy tải trình duyệt trước.'));
+    h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(h.opened).toEqual(['p1']);
+    expect(h.sleeps).not.toContain(10000);
+  });
+
+  test('LoginProblemError(logged_out) maps to not_logged_in', async () => {
+    const observed: any[] = [];
+    const h = harness({
+      postToTargets: jest.fn(async (_input: any, deps: any) => { await deps.launch(); throw new LoginProblemError('logged_out', NOT_LOGGED_IN); }),
+    }, { onLoginObserved: (id, st) => { observed.push([id, st]); } });
+    const { runId } = h.service.start(postParams());
+    await h.service.whenIdle();
+    expect(codes(h.results(runId))).toEqual([['failed', 'not_logged_in', 1], ['failed', 'not_logged_in', 1]]);
+    expect(observed).toEqual([['p1', 'logged_out']]);
+  });
 });
 
 
@@ -1519,4 +1662,5 @@ describe('FacebookPosterService campaigns and variants', () => {
       expect(cb).not.toHaveBeenCalled();
     });
   });
+
 });

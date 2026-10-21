@@ -6,8 +6,11 @@ import type { LaunchedPage, LogLevel, TaskDeps } from './types';
 import { collectComments } from './collectComments';
 import { DEFAULT_LEAD_CONFIG, computeNextCommentAt, type LeadConfig } from './leadRules';
 import { searchAndJoinGroups } from './joinGroups';
-import { isLoggedIn, FB_HOME } from './loginState';
-import { postToTargets } from './postToTargets';
+import * as path from 'path';
+import { diagnosticFileBase, saveDiagnosticFiles } from './diagnostics';
+import { isLoggedIn, FB_HOME, NOT_LOGGED_IN_ERROR } from './loginState';
+import { PROFILE_OPEN_PREFIX } from './loginCheck';
+import { BrowserClosedError, LoginProblemError, postToTargets } from './postToTargets';
 import { assignVariants, variantKey, variantText, VARIANT_LABELS } from './variants';
 import { scanGroups } from './scanGroups';
 import { normalizeTarget } from './targets';
@@ -38,15 +41,20 @@ export interface FacebookPosterServiceDeps {
     /** Cấu hình khách tiềm năng (mốc thu bình luận); mặc định DEFAULT_LEAD_CONFIG. */
     readLeadConfig?: () => LeadConfig;
     /** Báo trạng thái đăng nhập quan sát được trong lượt đăng (lỗi của hàm này bị bỏ qua). */
-    onLoginObserved?: (profileId: string, state: 'ok' | 'logged_out') => void;
+    onLoginObserved?: (profileId: string, state: 'ok' | 'logged_out' | 'checkpoint') => void;
+    /** Thư mục gốc lưu ảnh chẩn đoán lượt đăng (null/thiếu = không lưu). Ảnh nằm ở <thư mục>/<runId>/. */
+    diagnosticsDir?: () => string | null;
     /** Gọi sau khi lưu bình luận mới (chỉ các dòng thật sự mới); lỗi của hàm này chỉ được ghi log. */
     onCommentsSaved?: (rows: FbPosterComment[]) => void | Promise<void>;
     tasks?: Partial<{ postToTargets: typeof postToTargets; scanGroups: typeof scanGroups; searchAndJoinGroups: typeof searchAndJoinGroups; collectComments: typeof collectComments }>;
 }
 
 export const BUSY_ERROR = 'Đang có việc chạy';
+/** Đầu thông báo thiếu trình duyệt; BrowserProfileService dùng đuôi khác ENGINE_MISSING_ERROR nên so theo đầu câu. */
+const ENGINE_MISSING_PREFIX = 'Chưa cài trình duyệt';
 export const ENGINE_MISSING_ERROR = 'Chưa cài trình duyệt. Hãy tải trình duyệt ở màn hình Trình duyệt.';
-const NOT_LOGGED_IN_ERROR = 'Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập';
+/** Chờ trước khi mở lại trình duyệt một lần khi lỗi mở có vẻ thoáng qua. */
+export const LAUNCH_RETRY_DELAY_MS = 10000;
 const STOPPED_REASON = 'Đã dừng';
 const FORCED_CLOSE_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra bài trên Facebook';
 const FORCED_CLOSE_JOIN_ERROR = 'Đã đóng khi đang chờ kết quả — kiểm tra yêu cầu vào nhóm trên Facebook';
@@ -175,7 +183,7 @@ export class FacebookPosterService {
         return this.active !== null || this.exclusive;
     }
 
-    private observeLogin(profileId: string, state: 'ok' | 'logged_out'): void {
+    private observeLogin(profileId: string, state: 'ok' | 'logged_out' | 'checkpoint'): void {
         try { this.deps.onLoginObserved?.(profileId, state); } catch { /* quan sát không được làm hỏng lượt đăng */ }
     }
 
@@ -335,7 +343,7 @@ export class FacebookPosterService {
             try {
                 // A profile deleted after a schedule was saved fails only its own targets.
                 if (!this.deps.getProfile(profileId)) throw new Error('Không tìm thấy profile');
-                const session = await this.deps.openForAutomation(profileId);
+                const session = await this.openWithRetry(profileId);
                 plan.sessions.push(session);
                 if (this.stopping) {
                     // Cancel came while the browser was still opening: nothing was started, so close it and stop.
@@ -366,8 +374,16 @@ export class FacebookPosterService {
             leaveCritical: () => { plan.critical = false; },
             clearReachedCritical: () => { plan.reachedCritical = false; },
         };
+        const diagnosticsDir = params.kind === 'post' ? this.deps.diagnosticsDir?.() ?? null : null;
+        if (diagnosticsDir) {
+            taskDeps.saveDiagnostic = (page, info) => {
+                const index = plan.targets.findIndex((t) => normalizedUrl(t.url) === info.targetUrl) + 1;
+                return saveDiagnosticFiles(path.join(diagnosticsDir, run.id), diagnosticFileBase(profileId, index, info.attempt), page, { ...info, at: this.now() });
+            };
+        }
 
         let failed = false;
+        let loginProblemSeen = false;
         try {
             await this.runTask(active, plan, taskDeps);
             if (params.kind !== 'join') this.skipRemaining(active, plan);
@@ -375,13 +391,20 @@ export class FacebookPosterService {
             failed = true;
             const wasCritical = plan.critical || plan.reachedCritical;
             const message = errorMessage(err);
-            if (params.kind === 'join') {
+            if (err instanceof LoginProblemError && params.kind === 'post') {
+                // Checkpoint / đăng xuất biết chắc trước cú bấm Đăng: mọi đích còn lại đều thất bại cùng mã.
+                loginProblemSeen = true;
+                this.observeLogin(profileId, err.state);
+                this.failRemaining(active, plan, err.message, true, err.state === 'checkpoint' ? 'checkpoint' : 'not_logged_in');
+            } else if (params.kind === 'join') {
                 this.record(active, plan, { url: '', name: '', outcome: 'failed', error: message, errorCode: err === launchError ? launchErrorCode(message) : '' });
             } else {
                 // Open/login errors hit every target alike; a mid-run error (window closed) fails only the one in progress.
                 if (err !== launchError && params.kind === 'post' && wasCritical) {
                     // Closed after the Post click: the post may be live, so it is never a plain failure.
                     this.failRemaining(active, plan, `${message}${UNCERTAIN_SUFFIX}`, false, 'uncertain_after_submit');
+                } else if (err instanceof BrowserClosedError && params.kind === 'post') {
+                    this.failRemaining(active, plan, message, true, 'browser_closed');
                 } else {
                     this.failRemaining(active, plan, message, err === launchError, err === launchError ? launchErrorCode(message) : 'unknown');
                 }
@@ -389,12 +412,26 @@ export class FacebookPosterService {
         } finally {
             await Promise.allSettled(plan.sessions.map((session) => session.close()));
         }
-        if (plan.posted) this.observeLogin(profileId, 'ok');
+        // Đã báo checkpoint / đăng xuất thì không được ghi đè về 'ok' chỉ vì nhóm trước đó đăng được.
+        if (plan.posted && !loginProblemSeen) this.observeLogin(profileId, 'ok');
         // A failure caused by our own cancel is not a profile failure (a forced close still is).
         plan.progress.state = failed && !(this.stopping && !this.forced) ? 'failed' : this.stopping ? 'cancelled' : 'done';
         // The join total was only a cap (`limit`); settle it to what was actually reported.
         if (params.kind === 'join') plan.progress.total = plan.progress.done;
         this.emitProgress(active);
+    }
+
+    /** Mở trình duyệt; lỗi thoáng qua (proxy, khởi động chậm) thì thử lại đúng một lần. */
+    private async openWithRetry(profileId: string): Promise<AutomationSession> {
+        try {
+            return await this.deps.openForAutomation(profileId);
+        } catch (err) {
+            const message = errorMessage(err);
+            if (this.stopping || message === 'Không tìm thấy profile' || message.startsWith(ENGINE_MISSING_PREFIX) || message.startsWith(PROFILE_OPEN_PREFIX)) throw err;
+            await this.sleep(LAUNCH_RETRY_DELAY_MS, () => this.stopping);
+            if (this.stopping) throw err;
+            return this.deps.openForAutomation(profileId);
+        }
     }
 
     private async runTask(active: ActiveRun, plan: ProfilePlan, deps: TaskDeps): Promise<void> {

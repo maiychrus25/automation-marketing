@@ -13,6 +13,7 @@ import { buildRunCsv } from '../../src/services/facebookPoster/runCsv';
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from '../../src/services/facebookPoster/mediaRules';
 import { validateStartParams, type StartParamsEnv } from '../../src/services/facebookPoster/validateStartParams';
 import { FacebookPosterScheduler, type MissedNotice } from '../../src/services/facebookPoster/FacebookPosterScheduler';
+import { pruneDiagnostics } from '../../src/services/facebookPoster/diagnostics';
 import { LoginChecker } from '../../src/services/facebookPoster/loginCheck';
 import {
     LoginCheckScheduler, LOGIN_CHECK_SETTING_KEY, parseLoginCheckConfig, validateLoginCheckConfig,
@@ -132,6 +133,7 @@ function getService(): FacebookPosterService {
                     scheduler?.onRunFinished();
                 }
             },
+            diagnosticsDir: () => diagnosticsDir(),
             onLoginObserved: (profileId, state) => safely('onLoginObserved', () => getChecker().observe(profileId, state, 'run')),
             readTrackingConfig: readTrackingConfig,
             readLeadConfig,
@@ -337,6 +339,14 @@ function recordRunFinished(data: unknown): void {
 /** Starts a run and records the control API event run.started. Used by manual starts and the scheduler. */
 function startRun(params: Parameters<FacebookPosterService['start']>[0], scheduleId?: string): { runId: string } {
     const started = getService().start(params, scheduleId);
+    if (params.kind === 'post') {
+        // Sau khi start thành công (BUSY thì không dọn) và giữ thư mục của chính lượt vừa bắt đầu.
+        try {
+            pruneDiagnostics(diagnosticsDir(), Date.now(), undefined, new Set([started.runId]));
+        } catch (err) {
+            Logger.warn(`[facebookPosterIpc] dọn ảnh chẩn đoán lỗi: ${(err as Error).message}`);
+        }
+    }
     emitControlEvent('run.started', buildRunStarted({ runId: started.runId, kind: params.kind, scheduleId: scheduleId ?? null }));
     return started;
 }
@@ -407,6 +417,55 @@ function scheduleBaseDir(): string {
     return path.dirname(db().getDbPath());
 }
 
+/** Ảnh chẩn đoán lượt đăng lỗi, cạnh DB của workspace. */
+function diagnosticsDir(): string {
+    return path.join(scheduleBaseDir(), 'fb-poster-diagnostics');
+}
+
+/** Việc phụ (theo dõi bài, thu bình luận, kiểm tra đăng nhập) nhường khe khi lịch đăng sắp tới trong chừng này. */
+const SIDE_JOB_YIELD_MS = 10 * 60_000;
+const SIDE_JOB_MAX_YIELD_MS = 60 * 60_000;
+
+/**
+ * Lịch đăng đang chờ khe hoặc sắp tới giờ trong SIDE_JOB_YIELD_MS thì việc phụ tự chạy phải nhường.
+ * Lỗi đọc store trả false: lỗi đọc không được chặn việc phụ.
+ */
+export function scheduleWantsSlot(now: number, deps: { queued: () => number; nextAt: () => number | null } = {
+    queued: () => scheduler?.queuedIds().length ?? 0,
+    nextAt: () => store().nextScheduledAt(),
+}): boolean {
+    try {
+        if (deps.queued() > 0) return true;
+        const next = deps.nextAt();
+        return next !== null && next <= now + SIDE_JOB_YIELD_MS;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * isBusy cho một việc phụ: bận khi `base()` bận, hoặc khi lịch đăng cần khe (scheduleWantsSlot) —
+ * nhưng chỉ nhường liên tục tối đa SIDE_JOB_MAX_YIELD_MS. Hết hạn thì chỉ theo `base()` cho tới khi lịch hết cần khe.
+ * Mỗi việc phụ một thể hiện riêng (có đồng hồ riêng).
+ */
+export function makeYieldingBusy(
+    base: () => boolean,
+    now: () => number = Date.now,
+    wantsSlot: () => boolean = () => scheduleWantsSlot(now()),
+): () => boolean {
+    let yieldingSince: number | null = null;
+    return () => {
+        if (base()) return true;
+        if (!wantsSlot()) {
+            yieldingSince = null;
+            return false;
+        }
+        const t = now();
+        yieldingSince ??= t;
+        return t - yieldingSince < SIDE_JOB_MAX_YIELD_MS;
+    };
+}
+
 /** Starts the scheduler for the active workspace DB. No-op in employee mode or when one already runs for this DB. */
 export function startFacebookPosterScheduler(): void {
     if (AppModeManager.getInstance().isEmployeeMode()) return;
@@ -461,7 +520,7 @@ export function startFacebookPosterScheduler(): void {
         },
         clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
         readConfig: () => parseLoginCheckConfig(db().getSetting(LOGIN_CHECK_SETTING_KEY)),
-        isBusy: () => isFacebookPosterBusy(),
+        isBusy: makeYieldingBusy(() => isFacebookPosterBusy()),
         runCheck: () => { checkFacebookLogins(null, 'daily'); },
         log: (msg) => Logger.warn(msg),
     });
@@ -475,7 +534,7 @@ export function startFacebookPosterScheduler(): void {
         },
         clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
         readConfig: readTrackingConfig,
-        isBusy: () => isWorkspaceSwitchInProgress() || isFacebookPosterBusy(),
+        isBusy: makeYieldingBusy(() => isWorkspaceSwitchInProgress() || isFacebookPosterBusy()),
         duePairs: (now, limit) => store().listDuePairs(now, limit),
         runTrack: (pairs, auto) => { getTracker().track({ pairs, auto }); },
         log: (msg) => Logger.warn(msg),
@@ -490,7 +549,7 @@ export function startFacebookPosterScheduler(): void {
         },
         clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
         readConfig: readLeadConfig,
-        isBusy: () => isWorkspaceSwitchInProgress() || isFacebookPosterBusy(),
+        isBusy: makeYieldingBusy(() => isWorkspaceSwitchInProgress() || isFacebookPosterBusy()),
         blockedUntil: () => collector?.blockedUntil ?? 0,
         duePosts: (now, limit) => store().listDueCommentPosts(now, limit),
         runCollect: () => { getCollector().collect({ auto: true }); },

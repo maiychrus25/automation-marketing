@@ -4,7 +4,8 @@ import type { BrowserContext, Page, Response } from 'playwright-core';
 import type { TaskDeps } from './types';
 import { delayRandom, humanClick, sleepStoppable } from './humanize';
 import { normalizeTarget, pickDelaySeconds } from './targets';
-import { FB_HOME, isLoggedIn } from './loginState';
+import { CHECKPOINT_MESSAGE, FB_HOME, isLoggedIn, NOT_LOGGED_IN_ERROR } from './loginState';
+import { loginProblemAt } from './loginCheck';
 import { postFirstComment, PENDING_APPROVAL_MARKERS, type CommentStatus } from './firstComment';
 
 export const PUBLISH_LABELS = ['Đăng', 'Post', 'Chia sẻ', 'Share', 'Đăng ngay', 'Publish'];
@@ -410,7 +411,45 @@ function publishLabelShownInDialogsInPage(labels: string[]): boolean {
 export type PostErrorCode =
   | 'navigation_failed' | 'composer_not_found' | 'media_failed' | 'editor_not_focusable'
   | 'submit_not_ready' | 'submit_not_found' | 'unexpected_error' | 'uncertain_after_submit'
-  | 'draft_conflict' | 'not_logged_in' | 'launch_failed' | 'stopped' | 'unknown';
+  | 'draft_conflict' | 'not_logged_in' | 'launch_failed' | 'stopped' | 'unknown'
+  | 'checkpoint' | 'browser_closed';
+
+/** Profile bị yêu cầu xác minh hoặc bị đá ra đăng nhập: dừng cả profile, không thử lại. */
+export class LoginProblemError extends Error {
+  constructor(readonly state: 'checkpoint' | 'logged_out', message: string) {
+    super(message);
+    this.name = 'LoginProblemError';
+  }
+}
+
+/** Trình duyệt/trang đã đóng giữa lượt (không do Huỷ): dừng cả profile. */
+export class BrowserClosedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BrowserClosedError';
+  }
+}
+
+const BROWSER_CLOSED_MESSAGE = 'Trình duyệt của profile đã đóng giữa chừng';
+
+/** Trang giả/đã đóng không có isClosed thì coi như chưa đóng. */
+function pageIsClosed(page: Page): boolean {
+  try {
+    return (page as { isClosed?: () => unknown }).isClosed?.() === true;
+  } catch {
+    return false;
+  }
+}
+
+/** URL hiện tại của trang; '' nếu trang giả/đã đóng không đọc được. */
+export function currentUrl(page: Page): string {
+  try {
+    const url = (page as { url?: () => unknown }).url?.();
+    return typeof url === 'string' ? url : '';
+  } catch {
+    return '';
+  }
+}
 
 /** Lỗi xảy ra trước cú bấm Đăng nên thử lại không gây đăng trùng. */
 export const RETRYABLE_POST_ERRORS: ReadonlySet<PostErrorCode> = new Set<PostErrorCode>([
@@ -418,11 +457,45 @@ export const RETRYABLE_POST_ERRORS: ReadonlySet<PostErrorCode> = new Set<PostErr
   'submit_not_ready', 'submit_not_found', 'unexpected_error',
 ]);
 
+/** Nghỉ ngắn (giây) sau nhóm lỗi mà chưa đăng được gì; không bao giờ dài hơn khoảng nghỉ của người dùng. */
+export const SHORT_GAP_MIN_SEC = 20;
+export const SHORT_GAP_MAX_SEC = 60;
+/** Chờ tối đa (ms) cho phản hồi GraphQL mang id bài sau khi đăng xong; kiểm mỗi LINK_CAPTURE_POLL_MS. */
+export const LINK_CAPTURE_MAX_WAIT_MS = 8000;
+const LINK_CAPTURE_POLL_MS = 250;
+
 /** Số lần thử tối đa cho mỗi đích (lần đầu + 2 lần thử lại). */
 export const MAX_POST_ATTEMPTS = 3;
 /** Giây chờ ngẫu nhiên giữa hai lần thử. */
 export const RETRY_DELAY_MIN_SEC = 10;
 export const RETRY_DELAY_MAX_SEC = 30;
+/** Chụp ảnh chẩn đoán tối đa chừng này ms (Playwright tự hết giờ ở 5000; đây là chặn cứng cho hàm treo). */
+const DIAGNOSTIC_HARD_TIMEOUT_MS = 6000;
+
+/**
+ * Lưu ảnh chẩn đoán cho một lần thử lỗi. KHÔNG bao giờ ném và không chờ quá
+ * DIAGNOSTIC_HARD_TIMEOUT_MS: chụp hỏng (trang đang điều hướng) chỉ bỏ ảnh, lượt đăng vẫn chạy tiếp.
+ */
+async function captureDiagnostic(
+  deps: Pick<TaskDeps, 'saveDiagnostic' | 'sendLog'>,
+  page: Page,
+  info: { targetUrl: string; attempt: number; errorCode: string },
+): Promise<void> {
+  if (!deps.saveDiagnostic) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const name = await Promise.race([
+      deps.saveDiagnostic(page, info),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), DIAGNOSTIC_HARD_TIMEOUT_MS); }),
+    ]);
+    if (name) deps.sendLog(`Đã lưu ảnh chẩn đoán: ${name}`, 'info');
+  } catch (err) {
+    deps.sendLog(`Không lưu được ảnh chẩn đoán: ${clip((err as Error).message)}`, 'warning');
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Nhãn nút "bỏ bản nháp" khi Facebook hỏi lúc đóng hộp soạn thảo. */
 export const DISCARD_LABELS = ['Bỏ', 'Bỏ bài viết', 'Discard', 'Discard post', 'Rời khỏi', 'Leave'];
 
@@ -445,6 +518,8 @@ interface SingleTargetOutcome {
   identity: string;
   /** Thời gian đã chờ trước khi bình luận (ms), để trừ vào khoảng nghỉ kế tiếp. */
   waitedMs?: number;
+  /** Sau khi vào nhóm, trang đang ở màn xác minh / đăng nhập: dừng cả profile. */
+  loginProblem?: 'checkpoint' | 'logged_out';
 }
 
 /**
@@ -501,6 +576,14 @@ async function postToSingleTarget(
     return failed('navigation_failed', `Không tải được trang nhóm: ${clip((e as Error).message)}`);
   } finally {
     deps.onNavigated?.();
+  }
+  const problem = loginProblemAt(currentUrl(page));
+  if (problem) {
+    sendLog(`[${kind}] [ERROR] ${problem === 'checkpoint' ? 'Facebook đang yêu cầu xác minh' : 'Bị chuyển sang trang đăng nhập'}: ${url}`, 'error');
+    return {
+      ...failed(problem === 'checkpoint' ? 'checkpoint' : 'not_logged_in', problem === 'checkpoint' ? CHECKPOINT_MESSAGE : NOT_LOGGED_IN_ERROR),
+      loginProblem: problem,
+    };
   }
   await delayRandom(1000, 2000);
   if (getIsStopping()) return stopped();
@@ -796,16 +879,18 @@ async function postToSingleTarget(
       sendLog(`[${kind}] [ERROR] ${reason}: ${url}`, 'error');
       return failed('uncertain_after_submit', reason + UNCERTAIN_SUFFIX, true);
     }
+
+    sendLog(`[${kind}] [SUCCESS] Đã đăng thành công: ${url}`, 'success');
+
+    // Chờ phản hồi GraphQL mang id bài theo điều kiện: có là đi tiếp ngay, quá
+    // LINK_CAPTURE_MAX_WAIT_MS thì dùng đường dự phòng. Listener vẫn gắn trong
+    // lúc chờ và được gỡ ở finally (mọi đường thoát).
+    for (let waited = 0; !capturedId && waited < LINK_CAPTURE_MAX_WAIT_MS && !getIsStopping(); waited += LINK_CAPTURE_POLL_MS) {
+      await delayRandom(LINK_CAPTURE_POLL_MS, LINK_CAPTURE_POLL_MS);
+    }
   } finally {
     page.off('response', listenToResponse);
   }
-
-  sendLog(`[${kind}] [SUCCESS] Đã đăng thành công: ${url}`, 'success');
-
-  // Nghỉ để các phản hồi GraphQL đang bay về kịp settle qua response.text() —
-  // không đón được phản hồi đến muộn hơn khoảng nghỉ này, vì listener đã bị
-  // gỡ (page.off) ở nhánh finally phía trên trước khi tới đây.
-  await delayRandom(1500, 2500);
 
   let postUrl = buildPostUrl({ url }, capturedId, capturedOwner);
   if (!postUrl) {
@@ -919,9 +1004,9 @@ export async function postToTargets(
     sendLog('Đang mở Facebook và kiểm tra phiên đăng nhập...', 'info');
     await page.goto(FB_HOME, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
-    if (!(await isLoggedIn(ctx))) {
-      throw new Error('Profile chưa đăng nhập Facebook. Mở profile ở màn hình Trình duyệt để đăng nhập');
-    }
+    const homeProblem = loginProblemAt(currentUrl(page));
+    if (homeProblem === 'checkpoint') throw new LoginProblemError('checkpoint', CHECKPOINT_MESSAGE);
+    if (homeProblem === 'logged_out' || !(await isLoggedIn(ctx))) throw new LoginProblemError('logged_out', NOT_LOGGED_IN_ERROR);
 
     let chooserShortfall = false;
     if (files.length) {
@@ -965,6 +1050,10 @@ export async function postToTargets(
       let errorCode: PostErrorCode | '' = '';
       let pendingApproval = false;
       let attempts = 0;
+      let loginProblem: 'checkpoint' | 'logged_out' | null = null;
+      let browserClosed = false;
+      // Lần thử cuối đã qua cú bấm Đăng chưa (quyết định khoảng nghỉ kế tiếp).
+      let lastAfterSubmit = false;
       try {
         for (let attempt = 1; ; attempt++) {
           attempts = attempt;
@@ -1000,6 +1089,7 @@ export async function postToTargets(
               afterSubmit = !!single.afterSubmit;
             }
             if (single.commentStatus) commentStatus = single.commentStatus;
+            loginProblem = single.loginProblem ?? null;
           } catch (err) {
             const message = clip((err as Error).message);
             afterSubmit = enteredCritical;
@@ -1010,8 +1100,23 @@ export async function postToTargets(
             dropDialogHandler();
           }
 
+          lastAfterSubmit = afterSubmit;
+
+          // Ảnh chẩn đoán lúc màn hình còn nguyên: trước khi bỏ bản nháp / tải lại trang.
+          if (!ok && errorCode && errorCode !== 'stopped' && !getIsStopping() && !pageIsClosed(page)) {
+            await captureDiagnostic(deps, page, { targetUrl: target.url, attempt, errorCode });
+          }
+
+          // Trang đã đóng mà không phải do Huỷ: dừng profile. Chỉ khi chắc chắn CHƯA bấm Đăng —
+          // sau cú bấm vẫn giữ uncertain_after_submit để nơi gọi báo "có thể bài đã lên".
+          if (!ok && !afterSubmit && !loginProblem && errorCode !== 'uncertain_after_submit' && errorCode !== 'stopped' &&
+              !getIsStopping() && pageIsClosed(page)) {
+            errorCode = 'browser_closed'; error = BROWSER_CLOSED_MESSAGE; browserClosed = true;
+            break;
+          }
+
           // Chỉ thử lại lỗi xảy ra TRƯỚC cú bấm Đăng; sau đó thì có thể bài đã lên.
-          if (ok || afterSubmit || !errorCode || !RETRYABLE_POST_ERRORS.has(errorCode) ||
+          if (ok || loginProblem || afterSubmit || !errorCode || !RETRYABLE_POST_ERRORS.has(errorCode) ||
               getIsStopping() || attempt >= MAX_POST_ATTEMPTS) break;
 
           // Thả đoạn không-quay-lại (submit_not_found đã enterCritical) để Hủy đóng được trình duyệt khi chờ.
@@ -1044,6 +1149,9 @@ export async function postToTargets(
           // Lỗi ở nơi nhận kết quả (ghi lịch sử...) không được làm dừng các đích còn lại.
           sendLog(`Lỗi khi báo kết quả ${target.url}: ${(err as Error).message}`, 'warning');
         }
+        // Đã ghi kết quả nhóm này: dừng cả profile, các nhóm sau do nơi gọi ghi lỗi.
+        if (loginProblem) throw new LoginProblemError(loginProblem, error ?? NOT_LOGGED_IN_ERROR);
+        if (browserClosed) throw new BrowserClosedError(BROWSER_CLOSED_MESSAGE);
       } finally {
         // Idempotent ở phía service: gọi cả khi chưa vào đoạn.
         deps.leaveCritical?.();
@@ -1051,8 +1159,17 @@ export async function postToTargets(
 
       if (current < normalized.length && !getIsStopping()) {
         // Thời gian đã chờ để bình luận tính luôn vào khoảng nghỉ.
-        const secs = Math.max(0, pickDelaySeconds(minDelay, maxDelay) - Math.round(waitedMs / 1000));
-        sendLog(`Nghỉ ${secs} giây trước bài viết tiếp theo...`, 'info');
+        let secs = Math.max(0, pickDelaySeconds(minDelay, maxDelay) - Math.round(waitedMs / 1000));
+        // Nhóm lỗi mà chưa bấm Đăng thì chưa có gì để "giữ nhịp": nghỉ ngắn, nhưng không dài hơn khoảng của người dùng.
+        const shortSecs = !ok && !lastAfterSubmit && errorCode && errorCode !== 'stopped'
+          ? pickDelaySeconds(SHORT_GAP_MIN_SEC, SHORT_GAP_MAX_SEC)
+          : null;
+        if (shortSecs !== null && shortSecs < secs) {
+          secs = shortSecs;
+          sendLog(`Nghỉ ngắn ${secs} giây (chưa đăng được bài ở nhóm trước)`, 'info');
+        } else {
+          sendLog(`Nghỉ ${secs} giây trước bài viết tiếp theo...`, 'info');
+        }
         await sleepStoppable(secs * 1000, getIsStopping);
       }
     }

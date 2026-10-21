@@ -15,4 +15,6 @@ export interface TaskDeps {
     leaveCritical?: () => void;
     /** Chỉ gọi khi chắc chắn chưa có cú bấm nào (lần thử lỗi trước khi bấm Đăng, sắp thử lại). */
     clearReachedCritical?: () => void;
+    /** Lưu ảnh + ghi chú sau mỗi lần đăng thất bại; trả tên tệp (không kèm đường dẫn) hoặc null. Lỗi của hàm này không được làm hỏng lượt đăng. */
+    saveDiagnostic?: (page: Page, info: { targetUrl: string; attempt: number; errorCode: string }) => Promise<string | null>;
 }

@@ -1,4 +1,4 @@
-import { classifyLogin, LoginChecker, type LoginCheckerDeps } from '../../services/facebookPoster/loginCheck';
+import { classifyLogin, loginProblemAt, LoginChecker, type LoginCheckerDeps } from '../../services/facebookPoster/loginCheck';
 import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
 import { BUSY_ERROR } from '../../services/facebookPoster/FacebookPosterService';
 import { memoryDb } from './helpers';
@@ -17,6 +17,19 @@ function fakeSession(opts: { cookiesSeq: boolean[]; url?: string; gotoError?: Er
   };
   return { context: context as any, goto };
 }
+
+describe('loginProblemAt', () => {
+  test.each([
+    ['https://www.facebook.com/checkpoint/123', 'checkpoint'],
+    ['https://www.facebook.com/two_step_verification/x', 'checkpoint'],
+    ['https://www.facebook.com/auth_platform/', 'checkpoint'],
+    ['https://www.facebook.com/login/?next=', 'logged_out'],
+    ['https://www.facebook.com/groups/1', null],
+    ['not a url', null],
+  ])('%s → %s', (url, expected) => {
+    expect(loginProblemAt(url)).toBe(expected);
+  });
+});
 
 describe('classifyLogin', () => {
   test('no c_user → logged_out without navigation', async () => {

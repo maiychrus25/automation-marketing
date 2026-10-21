@@ -12,6 +12,11 @@ import {
   DISCARD_LABELS,
   MAX_POST_ATTEMPTS,
   postToTargets,
+  LoginProblemError,
+  BrowserClosedError,
+  SHORT_GAP_MAX_SEC,
+  SHORT_GAP_MIN_SEC,
+  LINK_CAPTURE_MAX_WAIT_MS,
   type PostTargetResult,
 } from '../../services/facebookPoster/postToTargets';
 import { fakeLocators, runWithFakeTimers } from './helpers';
@@ -1925,4 +1930,327 @@ test('without textFor every target types text', async () => {
   (page as any).keyboard.type = async (c: string) => { typed.push(c); };
   await runRetry(page);
   assert.strictEqual(typed.join(''), 'hi');
+});
+
+// ---- Phát hiện checkpoint / đăng xuất (Task 1) ----
+
+const CHECKPOINT_URL = 'https://www.facebook.com/checkpoint/1501/';
+
+/** Trang giả theo dõi URL: `urlAfter(goto url, số lần goto tới đích)` trả URL hiện tại. */
+function urlTrackingPage(urlAfter: (u: string, groupGotos: number) => string, opts: { answersFor?: (attempt: number) => Record<string, unknown>; gotos?: string[] } = {}) {
+  const page = retryPage({ answersFor: opts.answersFor, gotos: opts.gotos }) as any;
+  const baseGoto = page.goto;
+  let current = 'https://www.facebook.com/';
+  let groupGotos = 0;
+  page.goto = async (u: string) => {
+    if (u.includes('/groups/')) groupGotos++;
+    await baseGoto(u);
+    current = urlAfter(u, groupGotos);
+  };
+  page.url = () => current;
+  return page as FakePage;
+}
+
+test('checkpoint ngay sau FB_HOME: ném LoginProblemError(checkpoint), không mở nhóm nào', async () => {
+  const gotos: string[] = [];
+  const page = urlTrackingPage((u) => (u === 'https://www.facebook.com/' ? CHECKPOINT_URL : u), { gotos });
+  await assert.rejects(
+    runRetry(page, { targets: ['https://www.facebook.com/groups/1/'] }),
+    (e: unknown) => e instanceof LoginProblemError && e.state === 'checkpoint',
+  );
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 0);
+});
+
+test('mất c_user sau FB_HOME: ném LoginProblemError(logged_out)', async () => {
+  const ctx = { cookies: async () => [], close: async () => {} };
+  await assert.rejects(
+    postToTargets({ text: 'hi', targets: ['123'], minDelay: 0, maxDelay: 0 }, makeDeps(ctx, { goto: async () => {} })),
+    (e: unknown) => e instanceof LoginProblemError && e.state === 'logged_out',
+  );
+});
+
+test('nhóm 2 bị chuyển sang checkpoint: nhóm 1 giữ kết quả, nhóm 2 checkpoint không thử lại, nhóm 3-4 không mở', async () => {
+  const gotos: string[] = [];
+  const seen: PostTargetResult[] = [];
+  const page = urlTrackingPage((u) => (u.includes('/groups/2') ? CHECKPOINT_URL : u), { gotos });
+  await assert.rejects(
+    runRetry(page, {
+      targets: [1, 2, 3, 4].map(n => `https://www.facebook.com/groups/${n}/`),
+      onResult: r => seen.push(r),
+    }),
+    (e: unknown) => e instanceof LoginProblemError && e.state === 'checkpoint',
+  );
+  assert.deepStrictEqual(seen.map(r => [r.ok, r.errorCode, r.attempts]), [[true, '', 1], [false, 'checkpoint', 1]]);
+  assert.deepStrictEqual(gotos.filter(u => u.includes('/groups/')).map(u => u.match(/groups\/(\d)/)![1]), ['1', '2']);
+});
+
+test('chuyển sang /login giữa lượt: not_logged_in rồi ném LoginProblemError(logged_out)', async () => {
+  const seen: PostTargetResult[] = [];
+  const page = urlTrackingPage((u) => (u.includes('/groups/2') ? 'https://www.facebook.com/login/?next=x' : u));
+  await assert.rejects(
+    runRetry(page, { targets: [1, 2, 3].map(n => `https://www.facebook.com/groups/${n}/`), onResult: r => seen.push(r) }),
+    (e: unknown) => e instanceof LoginProblemError && e.state === 'logged_out',
+  );
+  assert.deepStrictEqual(seen.map(r => r.errorCode), ['', 'not_logged_in']);
+});
+
+test('checkpoint ở lần thử thứ 2: attempts = 2, không có lần 3', async () => {
+  const gotos: string[] = [];
+  const seen: PostTargetResult[] = [];
+  const page = urlTrackingPage((u, n) => (u.includes('/groups/') && n === 2 ? CHECKPOINT_URL : u), {
+    gotos,
+    answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}),
+  });
+  await assert.rejects(
+    runRetry(page, { targets: ['https://www.facebook.com/groups/1/', 'https://www.facebook.com/groups/2/'], onResult: r => seen.push(r) }),
+    LoginProblemError,
+  );
+  assert.deepStrictEqual(seen.map(r => [r.errorCode, r.attempts]), [['checkpoint', 2]]);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 2);
+});
+
+// ---- Trình duyệt chết giữa lượt (Task 2) ----
+
+test('trang đóng giữa lượt (không Huỷ): ghi browser_closed, không thử lại, ném BrowserClosedError', async () => {
+  const gotos: string[] = [];
+  const seen: PostTargetResult[] = [];
+  const page = retryPage({ gotos }) as any;
+  page.evaluate = async () => { throw new Error('Target page, context or browser has been closed'); };
+  page.isClosed = () => true;
+  await assert.rejects(
+    runRetry(page, { targets: ['https://www.facebook.com/groups/1/', 'https://www.facebook.com/groups/2/'], onResult: r => seen.push(r) }),
+    BrowserClosedError,
+  );
+  assert.deepStrictEqual(seen.map(r => [r.errorCode, r.attempts, r.error]), [['browser_closed', 1, 'Trình duyệt của profile đã đóng giữa chừng']]);
+  assert.strictEqual(gotos.filter(u => u.includes('/groups/')).length, 1);
+});
+
+test('trang đóng nhưng đang Huỷ: vẫn là stopped, không ném BrowserClosedError', async () => {
+  const seen: PostTargetResult[] = [];
+  const page = retryPage() as any;
+  page.isClosed = () => true;
+  const getIsStopping = (() => { let n = 0; return () => ++n > 1; })();
+  const r = await runRetry(page, { getIsStopping, onResult: x => seen.push(x) });
+  assert.strictEqual(r.results[0].errorCode, 'stopped');
+});
+
+test('trang đóng sau cú bấm Đăng (dialog không đóng): vẫn uncertain_after_submit, không ném BrowserClosedError', async () => {
+  const page = retryPage() as any;
+  page.waitForSelector = async () => { throw new Error('Target closed'); };
+  page.isClosed = () => true;
+  const r = (await runRetry(page)).results[0];
+  assert.strictEqual(r.errorCode, 'uncertain_after_submit');
+  assert.strictEqual(r.attempts, 1);
+});
+
+test('enterCritical rồi trang đóng làm evaluate ném: uncertain_after_submit, không ném BrowserClosedError', async () => {
+  const page = retryPage() as any;
+  const baseEvaluate = page.evaluate;
+  page.evaluate = async (fn: AnyFn, ...rest: unknown[]) => {
+    if (fn.name === 'dismissInterstitialInDialog') { page.isClosed = () => true; throw new Error('Target closed'); }
+    return baseEvaluate(fn, ...rest);
+  };
+  const critical: string[] = [];
+  const r = (await runRetry(page, { enterCritical: () => { critical.push('enter'); } })).results[0];
+  assert.deepStrictEqual(critical, ['enter']);
+  assert.strictEqual(r.errorCode, 'uncertain_after_submit');
+});
+
+// ---- Nghỉ ngắn sau lỗi chưa đăng, lấy link theo điều kiện (Task 3) ----
+
+const GROUP_PAIR = ['https://www.facebook.com/groups/1/', 'https://www.facebook.com/groups/2/'];
+const restLines = (logs: string[]) => logs.filter(m => /^Nghỉ/.test(m));
+const restSeconds = (line: string) => Number(/^Nghỉ(?: ngắn)? (\d+) giây/.exec(line)![1]);
+
+test('hằng số nghỉ ngắn và chờ link đúng spec', () => {
+  assert.deepStrictEqual([SHORT_GAP_MIN_SEC, SHORT_GAP_MAX_SEC, LINK_CAPTURE_MAX_WAIT_MS], [20, 60, 8000]);
+});
+
+test('nhóm 1 lỗi đủ 3 lần (chưa bấm Đăng): nghỉ ngắn 20-60 giây dù minDelay/maxDelay là 300-900', async () => {
+  const logs: string[] = [];
+  const page = retryPage({ answersFor: a => (a <= 3 ? { composerIsOpenInPage: false } : {}) });
+  await runRetry(page, { targets: GROUP_PAIR, minDelay: 300, maxDelay: 900, sendLog: (m: string) => logs.push(m) });
+  const rest = restLines(logs);
+  assert.strictEqual(rest.length, 1, logs.join('\n'));
+  assert.match(rest[0], /^Nghỉ ngắn \d+ giây \(chưa đăng được bài ở nhóm trước\)$/);
+  assert.ok(restSeconds(rest[0]) >= 20 && restSeconds(rest[0]) <= 60, rest[0]);
+});
+
+test('nhóm 1 thành công: nghỉ theo minDelay/maxDelay', async () => {
+  const logs: string[] = [];
+  await runRetry(retryPage(), { targets: GROUP_PAIR, minDelay: 300, maxDelay: 900, sendLog: (m: string) => logs.push(m) });
+  const rest = restLines(logs);
+  assert.strictEqual(rest.length, 1);
+  assert.ok(!rest[0].startsWith('Nghỉ ngắn'));
+  assert.ok(restSeconds(rest[0]) >= 300 && restSeconds(rest[0]) <= 900, rest[0]);
+});
+
+test('nhóm 1 uncertain_after_submit: nghỉ theo minDelay/maxDelay, không nghỉ ngắn', async () => {
+  const logs: string[] = [];
+  const page = retryPage() as any;
+  page.waitForSelector = async () => { throw new Error('x'); };
+  const r = await runRetry(page, { targets: GROUP_PAIR, minDelay: 300, maxDelay: 900, sendLog: (m: string) => logs.push(m) });
+  assert.strictEqual(r.results[0].errorCode, 'uncertain_after_submit');
+  const rest = restLines(logs);
+  assert.ok(!rest[0].startsWith('Nghỉ ngắn'), rest[0]);
+  assert.ok(restSeconds(rest[0]) >= 300 && restSeconds(rest[0]) <= 900, rest[0]);
+});
+
+test('khoảng của người dùng 5-10 giây: sau lỗi vẫn nghỉ theo khoảng đó, không kéo lên 20 giây', async () => {
+  const logs: string[] = [];
+  const page = retryPage({ answersFor: a => (a <= 3 ? { composerIsOpenInPage: false } : {}) });
+  await runRetry(page, { targets: GROUP_PAIR, minDelay: 5, maxDelay: 10, sendLog: (m: string) => logs.push(m) });
+  const rest = restLines(logs);
+  assert.strictEqual(rest.length, 1);
+  assert.ok(restSeconds(rest[0]) <= 10, rest[0]);
+});
+
+/** Trang thành công có phản hồi GraphQL đến sau `emitAfterMs` kể từ lúc kiểm dialog đóng (null = không bao giờ đến). */
+function lateLinkPage(emitAfterMs: number | null) {
+  const page = pageSuccessful() as any;
+  const responseListeners: ((r: unknown) => void)[] = [];
+  const stats = { off: 0, fallbackCalls: 0 };
+  page.on = (n: string, f: (r: unknown) => void) => { if (n === 'response') responseListeners.push(f); };
+  page.off = (n: string, f: unknown) => {
+    if (n !== 'response') return;
+    stats.off++;
+    const i = responseListeners.indexOf(f as never);
+    if (i >= 0) responseListeners.splice(i, 1);
+  };
+  const baseEvaluate = page.evaluate;
+  page.evaluate = async (fn: AnyFn, ...rest: unknown[]) => {
+    if (fn.name === 'findOwnPostLinkInPage') stats.fallbackCalls++;
+    return baseEvaluate(fn, ...rest);
+  };
+  page.waitForSelector = async () => {
+    if (emitAfterMs !== null) {
+      setTimeout(() => {
+        for (const l of [...responseListeners]) {
+          l({ url: () => 'https://www.facebook.com/api/graphql/', text: async () => '{"data":{"story_create":{"story":{"post_id":"555"}}}}' });
+        }
+      }, emitAfterMs);
+    }
+    return true;
+  };
+  return { page, stats };
+}
+
+test('link GraphQL đến sau khi dialog đóng 5 giây: có postUrl, không gọi tìm link dự phòng, gỡ listener 1 lần', async () => {
+  const { page, stats } = lateLinkPage(5000);
+  const r = await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', targets: ['https://www.facebook.com/groups/9/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page),
+  ));
+  assert.strictEqual(r.results[0].postUrl, 'https://www.facebook.com/groups/9/posts/555/');
+  assert.strictEqual(stats.fallbackCalls, 0);
+  assert.strictEqual(stats.off, 1);
+});
+
+test('không có phản hồi nào: sau 8 giây gọi tìm link dự phòng như cũ, gỡ listener 1 lần', async () => {
+  const { page, stats } = lateLinkPage(null);
+  const r = await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', targets: ['https://www.facebook.com/groups/9/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page),
+  ));
+  assert.strictEqual(r.results[0].ok, true);
+  assert.strictEqual(r.results[0].postUrl, null);
+  assert.strictEqual(stats.fallbackCalls, 1);
+  assert.strictEqual(stats.off, 1);
+});
+
+test('uncertain_after_submit cũng gỡ listener đúng 1 lần', async () => {
+  const { page, stats } = lateLinkPage(null);
+  page.waitForSelector = async () => { throw new Error('x'); };
+  const r = await runWithFakeTimers(() => postToTargets(
+    { text: 'hi', targets: ['https://www.facebook.com/groups/9/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page),
+  ));
+  assert.strictEqual(r.results[0].errorCode, 'uncertain_after_submit');
+  assert.strictEqual(stats.off, 1);
+});
+
+// ---- Ảnh chẩn đoán (Task 4) ----
+
+type DiagCall = { targetUrl: string; attempt: number; errorCode: string };
+
+test('nhóm lỗi 3 lần: saveDiagnostic gọi 3 lần với attempt 1..3 và mã lỗi, ghi log tên tệp', async () => {
+  const calls: DiagCall[] = [];
+  const logs: string[] = [];
+  const page = retryPage({ answersFor: () => ({ composerIsOpenInPage: false }) });
+  await runRetry(page, {
+    sendLog: (m: string) => logs.push(m),
+    saveDiagnostic: async (_p, info) => { calls.push(info); return `f${info.attempt}.jpg`; },
+  });
+  assert.deepStrictEqual(calls, [1, 2, 3].map(attempt => ({ targetUrl: 'https://www.facebook.com/groups/1/', attempt, errorCode: 'composer_not_found' })));
+  assert.ok(logs.includes('Đã lưu ảnh chẩn đoán: f2.jpg'), logs.join('\n'));
+});
+
+test('nhóm thành công: không gọi saveDiagnostic', async () => {
+  let n = 0;
+  await runRetry(retryPage(), { saveDiagnostic: async () => { n++; return null; } });
+  assert.strictEqual(n, 0);
+});
+
+test('Huỷ (stopped): không gọi saveDiagnostic', async () => {
+  let n = 0;
+  const page = retryPage();
+  const getIsStopping = (() => { let c = 0; return () => ++c > 1; })();
+  const r = await runRetry(page, { getIsStopping, saveDiagnostic: async () => { n++; return null; } });
+  assert.strictEqual(r.results[0].errorCode, 'stopped');
+  assert.strictEqual(n, 0);
+});
+
+test('trang đã đóng: không gọi saveDiagnostic', async () => {
+  let n = 0;
+  const page = retryPage() as any;
+  page.evaluate = async () => { throw new Error('closed'); };
+  page.isClosed = () => true;
+  await assert.rejects(runRetry(page, { saveDiagnostic: async () => { n++; return null; } }), BrowserClosedError);
+  assert.strictEqual(n, 0);
+});
+
+test('uncertain_after_submit cũng được chụp', async () => {
+  const calls: DiagCall[] = [];
+  const page = retryPage() as any;
+  page.waitForSelector = async () => { throw new Error('x'); };
+  await runRetry(page, { saveDiagnostic: async (_p, info) => { calls.push(info); return null; } });
+  assert.deepStrictEqual(calls.map(c => c.errorCode), ['uncertain_after_submit']);
+});
+
+test('saveDiagnostic ném lỗi: ghi cảnh báo, nhóm sau vẫn được đăng', async () => {
+  const logs: string[] = [];
+  const page = retryPage({ answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}) });
+  const r = await runRetry(page, {
+    targets: GROUP_PAIR,
+    sendLog: (m: string) => logs.push(m),
+    saveDiagnostic: async () => { throw new Error('màn hình đang điều hướng'); },
+  });
+  assert.deepStrictEqual(r.results.map(x => x.ok), [true, true]);
+  assert.ok(logs.some(m => m.includes('Không lưu được ảnh chẩn đoán') && m.includes('màn hình đang điều hướng')), logs.join('\n'));
+});
+
+test('saveDiagnostic treo: bỏ qua sau tối đa 5-6 giây, lượt đăng vẫn chạy tiếp', async () => {
+  const page = retryPage({ answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}) });
+  const r = await runRetry(page, { saveDiagnostic: () => new Promise<string | null>(() => {}) });
+  assert.strictEqual(r.results[0].ok, true);
+  assert.strictEqual(r.results[0].attempts, 2);
+});
+
+test('saveDiagnostic chạy trước discardDraft (trước Escape) của lần thử lại', async () => {
+  const events: string[] = [];
+  const page = retryPage({ events, answersFor: a => (a === 1 ? { composerIsOpenInPage: false } : {}) });
+  await runRetry(page, { saveDiagnostic: async () => { events.push('diagnostic'); return null; } });
+  assert.ok(events.indexOf('diagnostic') >= 0);
+  assert.ok(events.indexOf('diagnostic') < events.indexOf('press:Escape'), events.join(','));
+});
+
+test('đang Huỷ mà trang còn mở: không gọi saveDiagnostic', async () => {
+  let n = 0;
+  let stopping = false;
+  const page = retryPage() as any;
+  // Huỷ đến đúng lúc lần thử ném lỗi (mã unexpected_error, không phải stopped), trang vẫn mở.
+  page.evaluate = async () => { stopping = true; throw new Error('mất kết nối giữa chừng'); };
+  const r = await runRetry(page, { getIsStopping: () => stopping, saveDiagnostic: async () => { n++; return null; } });
+  assert.strictEqual(r.results[0].errorCode, 'unexpected_error');
+  assert.strictEqual(n, 0);
 });

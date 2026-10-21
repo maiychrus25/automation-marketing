@@ -10,15 +10,24 @@ export const PROFILE_OPEN_PREFIX = 'Profile đang mở';
 /** Các luồng xác minh của Facebook (checkpoint cũ và xác minh hai bước / auth_platform mới). */
 export const CHECKPOINT_PATHS = ['/checkpoint', '/two_step_verification', '/auth_platform'];
 
+/** Đường dẫn của URL cho biết profile đang bị xác minh hay bị đá ra đăng nhập; URL hỏng hoặc bình thường thì null. */
+export function loginProblemAt(url: string): 'checkpoint' | 'logged_out' | null {
+    let path: string;
+    try { path = new URL(url).pathname; } catch { return null; }
+    if (CHECKPOINT_PATHS.some((prefix) => path.startsWith(prefix))) return 'checkpoint';
+    if (path.startsWith('/login')) return 'logged_out';
+    return null;
+}
+
 /** Tải đúng một trang chủ Facebook rồi xem đường dẫn; không bấm, không gõ, không cuộn. Lỗi điều hướng thì ném. */
 export async function classifyLogin(session: Pick<AutomationSession, 'context'>, timeoutMs = GOTO_TIMEOUT_MS): Promise<LoginState> {
     const ctx = session.context;
     if (!(await isLoggedIn(ctx))) return 'logged_out';
     const page = ctx.pages()[0] ?? await ctx.newPage();
     await page.goto(FB_HOME, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-    const path = new URL(page.url()).pathname;
-    if (CHECKPOINT_PATHS.some((prefix) => path.startsWith(prefix))) return 'checkpoint';
-    if (path.startsWith('/login') || !(await isLoggedIn(ctx))) return 'logged_out';
+    const problem = loginProblemAt(page.url());
+    if (problem) return problem;
+    if (!(await isLoggedIn(ctx))) return 'logged_out';
     return 'ok';
 }
 
