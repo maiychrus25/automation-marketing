@@ -116,7 +116,7 @@ GUIDE = "\n".join([
     "",
     "7. Video HTML tự viết (maihub_videos_render với html)",
     "- Máy chủ tua video theo timeline GSAP: animation/transition CSS và setTimeout KHÔNG chạy (cảnh đứng yên). Máy chủ kiểm bằng lint, sai quy ước thì videos.finished báo lỗi kèm mã.",
-    "- Bắt buộc: phần tử gốc có data-composition-id, data-width, data-height, data-start=\"0\", data-duration; mỗi cảnh có id, class=\"clip\", data-start, data-duration, data-track-index; một gsap.timeline({ paused: true }) gán vào window.__timelines[<data-composition-id>]. gsap.min.js có sẵn, không cần tải lên.",
+    "- Bắt buộc: phần tử gốc có data-composition-id, data-width, data-height, data-start=\"0\", data-duration; mỗi cảnh có id, class=\"clip\", data-start, data-duration, data-track-index; một gsap.timeline({ paused: true }) gán vào window.__timelines[<data-composition-id>]. gsap.min.js có sẵn, không cần tải lên. Máy render KHÔNG có mạng: không gọi script/ảnh/phông từ CDN (GSAP lõi từ CDN được tự đổi sang bản có sẵn; script mạng khác bị báo lỗi). Thử trên máy có mạng chạy được chưa chắc chạy được trên máy render.",
     "- Khung mẫu (1080x1080, 6 giây, 2 cảnh):",
     "<!doctype html><html><head><meta charset=\"utf-8\"><script src=\"gsap.min.js\"></script>",
     "<style>html,body{margin:0;width:1080px;height:1080px;overflow:hidden;background:#0b1b2b;color:#fff}.clip{position:absolute;inset:0;padding:80px}</style></head>",

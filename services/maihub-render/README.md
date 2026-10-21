@@ -127,7 +127,7 @@ Nghi lộ khoá: xoá cặp đó ngay rồi khởi động lại.
 
 ## 5. An toàn
 
-**HTML tự viết.** Thư mục render của việc HTML được cấp sẵn `gsap.min.js` (bản đã ghim của mẫu đầu tiên có tệp này), vì `worker` không có mạng. Trước khi render, `worker` chạy `hyperframes lint <dir> --json` (`lintHtml` ở `src/renderRunner.ts`): có lỗi mức `error` thì việc thất bại ngay với "HTML chưa đúng quy ước HyperFrames: <mã> (<thông báo>); …" (tối đa 3 lỗi), để bot sửa thay vì nhận video đứng yên; lint không chạy được hoặc đầu ra hỏng thì vẫn render. Mẫu có sẵn không qua lint (còn các ô `{{…}}` chưa điền).
+**HTML tự viết.** Thư mục render của việc HTML được cấp sẵn `gsap.min.js` (bản đã ghim của mẫu đầu tiên có tệp này), vì `worker` không có mạng. Trước khi render, `worker` chạy `hyperframes lint <dir> --json` (`lintHtml` ở `src/renderRunner.ts`): có lỗi mức `error` thì việc thất bại ngay với "HTML chưa đúng quy ước HyperFrames: <mã> (<thông báo>); …" (tối đa 3 lỗi), để bot sửa thay vì nhận video đứng yên; lint không chạy được hoặc đầu ra hỏng thì vẫn render. Mẫu có sẵn không qua lint (còn các ô `{{…}}` chưa điền). Trước lint, `localizeRemoteScripts` (`src/buildWorkdir.ts`) đổi `<script src>` trỏ tới GSAP lõi trên CDN (`…/gsap.min.js`, `…/gsap.js`) sang `gsap.min.js` có sẵn; script nào khác gọi từ mạng (`http(s)://`, `//`) thì việc thất bại ngay với "HTML gọi script từ mạng nhưng máy render không có mạng: …", vì nếu cứ render thì HyperFrames chụp xong mọi khung rồi mới chặn do timeline lỗi. Lượt render bị chặn vì "correctness warning" báo kèm các dòng `- <mã>: …` chi tiết.
 
 **Cách ly.** HTML do bot viết là mã không tin cậy, chạy trong `worker`:
 

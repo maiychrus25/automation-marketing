@@ -20,6 +20,13 @@ if (argv[0] === 'lint') {
 const p = (code, pct) => process.stdout.write(`  ███░░░  ${pct}%  x\r@hf-progress ${JSON.stringify({ code, pct })}\n`);
 if (mode === 'fail') { process.stderr.write('Boom: composition invalid\n'); process.exit(3); }
 // Giống HyperFrames 0.8.181 thật: lỗi nằm ở dòng tiến độ "Failed: …", cuối cùng là một dòng gợi ý chung.
+// Giống HyperFrames 0.8.181: lượt render bị chặn vì cảnh báo đúng-sai, chi tiết nằm ở các dòng "- …" theo sau.
+if (mode === 'fail-blocked') {
+  process.stdout.write('  ██████████████████████░░░  90%  Failed: Render blocked by 1 correctness warning:\n');
+  process.stdout.write('- sub_timeline_script_failure: A sub-composition timeline script failed to load (https://cdn.example/gsap.min.js)\n');
+  process.stdout.write('@hf-diagnostic {"version":1}\n\u2717  Render failed\n   Render blocked by 1 correctness warning:\n   - sub_timeline_script_failure: A sub-composition timeline script failed to load (https://cdn.example/gsap.min.js)\n   Try --docker for containerized rendering\n');
+  process.exit(1);
+}
 if (mode === 'fail-hint') {
   process.stdout.write('  ██████░░░░░░░░░░░░░░░░░░░  25%  Failed: Disk capture may need ~1990.7 MB of temporary frame storage, but only 2146.8 MB is free\n');
   process.stdout.write('[INFO] [Render] Failure summary {"failedStage":"Checking browser GPU"}\n\n');

@@ -83,9 +83,33 @@ function buildFromHtml(dir: string, opts: WorkdirOptions): void {
   // Worker không có mạng: cấp sẵn đúng bản GSAP đã ghim của các mẫu để HTML gọi `<script src="gsap.min.js">`.
   const gsap = findPinnedGsap(opts.templatesDir);
   if (gsap && !fs.existsSync(path.join(dir, GSAP_FILE))) fs.copyFileSync(gsap, path.join(dir, GSAP_FILE));
+  const index = path.join(dir, 'index.html');
+  if (fs.existsSync(index)) fs.writeFileSync(index, localizeRemoteScripts(fs.readFileSync(index, 'utf8')));
 }
 
 const GSAP_FILE = 'gsap.min.js';
+const SCRIPT_SRC_RE = /(<script\b[^>]*?\bsrc\s*=\s*)(["'])([^"']*)\2/gi;
+const REMOTE_RE = /^(?:https?:)?\/\//i;
+/** Tệp GSAP lõi trên CDN (không phải plugin): .../gsap.min.js hoặc .../gsap.js. */
+const GSAP_CORE_RE = /\/gsap(?:\.min)?\.js(?:[?#].*)?$/i;
+
+/**
+ * Script gọi từ mạng không bao giờ tải được trong worker. GSAP lõi từ CDN đổi sang bản có sẵn để trang của bot
+ * vẫn chạy; script mạng khác thì ném lỗi rõ ràng trước khi render (thay vì render xong rồi bị chặn vì timeline lỗi).
+ */
+export function localizeRemoteScripts(html: string): string {
+  const remote: string[] = [];
+  const out = html.replace(SCRIPT_SRC_RE, (whole, head: string, quote: string, src: string) => {
+    if (!REMOTE_RE.test(src.trim())) return whole;
+    if (GSAP_CORE_RE.test(src.trim())) return `${head}${quote}${GSAP_FILE}${quote}`;
+    remote.push(src.trim());
+    return whole;
+  });
+  if (remote.length) {
+    throw new Error(`HTML gọi script từ mạng nhưng máy render không có mạng: ${remote.slice(0, 3).join(', ')}. Tải tệp lên bằng assetIds hoặc bỏ đi; GSAP có sẵn: <script src="gsap.min.js">.`);
+  }
+  return out;
+}
 
 /** `gsap.min.js` của mẫu đầu tiên (theo tên) có tệp này; không có thì null. */
 function findPinnedGsap(templatesDir: string): string | null {

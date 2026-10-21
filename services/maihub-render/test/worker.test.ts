@@ -89,6 +89,25 @@ describe('buildWorkdir', () => {
     expect(fs.readFileSync(path.join(r.dir, 'gsap.min.js'), 'utf8')).toBe('/* gsap */');
   });
 
+  it('HTML: GSAP lõi gọi từ CDN được đổi sang gsap.min.js có sẵn (máy render không có mạng)', async () => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.input, 'index.html'),
+      '<head><script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>'
+      + "<script src='https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js' defer></script><script src=\"local.js\"></script></head>");
+    const spec = { ...baseSpec, kind: 'html' as const, html: '', durationSec: 3, width: 1080, height: 1080 };
+    const r = await buildWorkdir({ id: 'j6', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp });
+    const html = fs.readFileSync(path.join(r.dir, 'index.html'), 'utf8');
+    expect(html).toBe('<head><script src="gsap.min.js"></script>' + "<script src='gsap.min.js' defer></script><script src=\"local.js\"></script></head>");
+  });
+
+  it('HTML: script khác gọi từ mạng thì báo lỗi rõ ràng trước khi render', async () => {
+    const d = dirs();
+    fs.writeFileSync(path.join(d.input, 'index.html'), '<script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/ScrollTrigger.min.js"></script><script src="//unpkg.com/lottie-web"></script>');
+    const spec = { ...baseSpec, kind: 'html' as const, html: '', durationSec: 3, width: 1080, height: 1080 };
+    await expect(buildWorkdir({ id: 'j7', spec }, { templatesDir, musicDir: d.music, inputDir: d.input, tmpDir: d.tmp }))
+      .rejects.toThrow('HTML gọi script từ mạng nhưng máy render không có mạng: https://cdn.jsdelivr.net/npm/gsap@3/dist/ScrollTrigger.min.js, //unpkg.com/lottie-web. Tải tệp lên bằng assetIds hoặc bỏ đi; GSAP có sẵn: <script src="gsap.min.js">.');
+  });
+
   maybe('mẫu có nhạc gửi kèm: tạo assets/music.m4a', async () => {
     const d = dirs();
     fs.writeFileSync(path.join(d.input, 'img1.jpg'), 'a');
@@ -168,6 +187,12 @@ describe('runRender', () => {
     expect(r.status).toBe('failed');
     expect(r.error).toBe('Render thất bại (mã 1): Disk capture may need ~1990.7 MB of temporary frame storage, but only 2146.8 MB is free');
     expect(r.error).not.toContain('Try --docker');
+  });
+
+  it('bị chặn vì cảnh báo đúng-sai: kèm luôn các dòng "- …" chi tiết', async () => {
+    const { opts } = base({ env: { FAKE_MODE: 'fail-blocked' } });
+    const r = await runRender(opts);
+    expect(r.error).toBe('Render thất bại (mã 1): Render blocked by 1 correctness warning: - sub_timeline_script_failure: A sub-composition timeline script failed to load (https://cdn.example/gsap.min.js)');
   });
 
   it('quá hạn -> timeout, tiến trình bị dừng', async () => {

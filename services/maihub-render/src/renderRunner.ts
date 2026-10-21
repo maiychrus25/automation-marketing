@@ -43,6 +43,7 @@ export function runRender(opts: RunRenderOptions): Promise<RenderOutcome> {
     let lastLine = '';
     // HyperFrames in lỗi thật ở dòng tiến độ "Failed: …"; dòng cuối thường chỉ là gợi ý chung ("Try --docker …").
     let failedLine = '';
+    let detailOpen = false;
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
 
@@ -85,7 +86,15 @@ export function runRender(opts: RunRenderOptions): Promise<RenderOutcome> {
         } catch { /* dòng dở dang */ }
       }
       const failed = /^[\s█░▓▒]*\d+%\s+Failed:\s*(.+)$/.exec(text);
-      if (failed) failedLine = failed[1].slice(0, 300);
+      if (failed) {
+        failedLine = failed[1].slice(0, 300);
+        // "Render blocked by N correctness warning:" — chi tiết nằm ở các dòng "- …" ngay sau.
+        detailOpen = failedLine.endsWith(':');
+      } else if (detailOpen && text.startsWith('- ')) {
+        failedLine = `${failedLine} ${text}`.slice(0, 300);
+      } else {
+        detailOpen = false;
+      }
       if (!text.includes('@hf-progress') && !/^[\s█░▓▒]*\d+%/.test(text) && !/^Try --docker\b/.test(text)) lastLine = text.slice(0, 300);
     };
     child.stdout!.on('data', onData);
