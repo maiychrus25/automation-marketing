@@ -146,8 +146,9 @@ describe('DailyBriefStore', () => {
         const now = at('26T07:00:00');
         store.saveBrief('p1', {}, now);
         for (let failures = 0; failures < 3; failures++) {
-            expect(store.claimDue(now, eligible)).toEqual([expect.objectContaining({ attempts: failures })]);
-            expect(store.finishBrief('p1', false, now + 1)).toMatchObject({
+            const claims = store.claimDue(now, eligible);
+            expect(claims).toEqual([expect.objectContaining({ attempts: failures })]);
+            expect(store.finishBrief('p1', false, now + 1, claims[0].claimedAt!)).toMatchObject({
                 status: 'idle', attempts: failures + 1, attemptDate: '2026-10-26', lastRunDate: null, updatedAt: now + 1,
             });
         }
@@ -187,8 +188,8 @@ describe('DailyBriefStore', () => {
         const now = at('26T23:50:00');
         store.saveBrief('p1', {}, now);
         for (let failures = 0; failures < 2; failures++) {
-            store.claimDue(now, eligible);
-            store.finishBrief('p1', false, now);
+            const [claimed] = store.claimDue(now, eligible);
+            store.finishBrief('p1', false, now, claimed.claimedAt!);
         }
         store.claimDue(now, eligible);
         expect(store.claimDue(at('27T07:00:00'), eligible)).toEqual([
@@ -207,16 +208,16 @@ describe('DailyBriefStore', () => {
         const { store } = setup();
         const now = at('26T07:00:00');
         store.saveBrief('p1', {}, now);
-        store.claimDue(now, eligible);
-        expect(store.finishBrief('p1', true, now + 1)).toMatchObject({ status: 'idle', lastRunDate: '2026-10-26', attempts: 0, updatedAt: now + 1 });
+        const [claimed] = store.claimDue(now, eligible);
+        expect(store.finishBrief('p1', true, now + 1, claimed.claimedAt!)).toMatchObject({ status: 'idle', lastRunDate: '2026-10-26', attempts: 0, updatedAt: now + 1 });
         expect(store.claimDue(at('26T18:00:00'), eligible)).toEqual([]);
     });
 
     it('finishes after midnight for the claimed day and still claims the next morning', () => {
         const { store } = setup();
         store.saveBrief('p1', {}, at('26T23:50:00'));
-        store.claimDue(at('26T23:50:00'), eligible);
-        expect(store.finishBrief('p1', true, at('27T00:10:00')).lastRunDate).toBe('2026-10-26');
+        const [claimed] = store.claimDue(at('26T23:50:00'), eligible);
+        expect(store.finishBrief('p1', true, at('27T00:10:00'), claimed.claimedAt!).lastRunDate).toBe('2026-10-26');
         expect(store.claimDue(at('27T07:00:00'), eligible)).toEqual([
             expect.objectContaining({ profileId: 'p1', claimedDate: '2026-10-27', attempts: 0 }),
         ]);
@@ -225,9 +226,27 @@ describe('DailyBriefStore', () => {
     it('attributes a failed finish after midnight to the claimed day', () => {
         const { store } = setup();
         store.saveBrief('p1', {}, at('26T23:50:00'));
-        store.claimDue(at('26T23:50:00'), eligible);
-        expect(store.finishBrief('p1', false, at('27T00:10:00'))).toMatchObject({ attempts: 1, attemptDate: '2026-10-26', status: 'idle' });
+        const [claimed] = store.claimDue(at('26T23:50:00'), eligible);
+        expect(store.finishBrief('p1', false, at('27T00:10:00'), claimed.claimedAt!)).toMatchObject({ attempts: 1, attemptDate: '2026-10-26', status: 'idle' });
         expect(store.claimDue(at('27T07:00:00'), eligible)[0].attempts).toBe(0);
+    });
+
+    it('rejects completion of claim A after stale reclaim B without closing B', () => {
+        const { store } = setup();
+        store.saveBrief('p1', {}, at('26T23:50:00'));
+        const [claimA] = store.claimDue(at('26T23:50:00'), eligible);
+        const [claimB] = store.claimDue(at('27T07:00:00'), eligible);
+        expect(claimA).toMatchObject({ claimedAt: at('26T23:50:00'), claimedDate: '2026-10-26' });
+        expect(claimB).toMatchObject({ status: 'running', claimedAt: at('27T07:00:00'), claimedDate: '2026-10-27' });
+        expect(() => store.finishBrief('p1', true, at('27T07:01:00'), claimA.claimedAt!))
+            .toThrow(new Error(BRIEF_NOT_RUNNING_ERROR));
+        expect(store.getBrief('p1')).toEqual(claimB);
+        expect(() => store.finishBrief('p1', false, at('27T07:02:00'), claimA.claimedAt!))
+            .toThrow(new Error(BRIEF_NOT_RUNNING_ERROR));
+        expect(store.getBrief('p1')).toEqual(claimB);
+        const finished = store.finishBrief('p1', true, at('27T07:03:00'), claimB.claimedAt!);
+        expect(finished).toMatchObject({ status: 'idle', lastRunDate: '2026-10-27', claimedAt: claimB.claimedAt });
+        expect(store.getBrief('p1')).toEqual(finished);
     });
 
     it('leaves ineligible profiles idle', () => {
@@ -249,8 +268,8 @@ describe('DailyBriefStore', () => {
     it.each([true, false])('rejects finishing idle or missing briefs (ok=%s)', (ok) => {
         const { store } = setup();
         const saved = store.saveBrief('p1', {}, 1);
-        expect(() => store.finishBrief('p1', ok, 2)).toThrow(new Error(BRIEF_NOT_RUNNING_ERROR));
-        expect(() => store.finishBrief('missing', ok, 2)).toThrow(new Error(BRIEF_NOT_RUNNING_ERROR));
+        expect(() => store.finishBrief('p1', ok, 2, 0)).toThrow(new Error(BRIEF_NOT_RUNNING_ERROR));
+        expect(() => store.finishBrief('missing', ok, 2, 0)).toThrow(new Error(BRIEF_NOT_RUNNING_ERROR));
         expect(store.getBrief('p1')).toEqual(saved);
     });
 

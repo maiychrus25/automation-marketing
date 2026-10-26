@@ -89,10 +89,10 @@ Chạy trong một giao dịch SQLite, nên hai lời gọi liên tiếp không 
 
 Dòng đến lượt được đổi sang `status = 'running'`, `claimed_at = now`, `claimed_date = today`.
 
-Kết quả trả về: `{ briefs: [{ profileId, pageName, niche, keywords, groupIds, tone, notes, draftsPerDay }] }`.
+Kết quả trả về: `{ briefs: [{ profileId, pageName, niche, keywords, groupIds, tone, notes, draftsPerDay, claimedAt }] }`.
 
-`briefs.finish {profileId, ok, draftIds?, error?}`:
-- yêu cầu `status = 'running'`, nếu không trả `INVALID_PARAMS`;
+`briefs.finish {profileId, claimedAt, ok, draftIds?, error?}`:
+- yêu cầu `status = 'running'` và `claimed_at = claimedAt`, với `claimedAt` là mốc nhận lượt do `briefs.claimDue` trả về; nếu không trả `INVALID_PARAMS` và giữ nguyên lượt hiện tại. Khi lượt treo được nhận lại, completion của lượt cũ bị từ chối, không kết thúc lượt mới;
 - `ok = true` → `last_run_date = claimed_date` (ngày nhận lượt, kể cả khi xong sau nửa đêm);
 - `ok = false` → `attempts + 1`, `attempt_date = claimed_date`;
 - luôn đặt `status = 'idle'` và phát `briefs.finished`.

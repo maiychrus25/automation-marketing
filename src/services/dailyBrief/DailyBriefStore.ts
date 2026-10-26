@@ -167,9 +167,9 @@ export class DailyBriefStore {
         });
     }
 
-    finishBrief(profileId: string, ok: boolean, now: number): DailyBrief {
+    finishBrief(profileId: string, ok: boolean, now: number, claimedAt: number): DailyBrief {
         const brief = this.getBrief(profileId);
-        if (!brief || brief.status !== 'running') throw new Error(BRIEF_NOT_RUNNING_ERROR);
+        if (!brief || brief.status !== 'running' || brief.claimedAt !== claimedAt) throw new Error(BRIEF_NOT_RUNNING_ERROR);
         this.db.run(
             `UPDATE daily_briefs SET status = 'idle', last_run_date = ?, attempt_date = ?, attempts = ?, updated_at = ?
              WHERE profile_id = ?`,
