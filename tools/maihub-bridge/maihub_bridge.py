@@ -1311,19 +1311,28 @@ def install_brief(env_file, user, name, state_dir, run, systemd_dir, getpwnam, a
             raise BridgeError("CONFIG", "MAIHUB_AGENT_CMD không được chứa ký tự xuống dòng")
         agent_command({"MAIHUB_AGENT_CMD": agent_cmd})
 
-    os.makedirs(state_dir, exist_ok=True)
-    os.chown(state_dir, account.pw_uid, account.pw_gid)
-    os.chmod(state_dir, 0o700)
-    if agent_cmd is not None:
-        write_env_file(env_file, {"MAIHUB_AGENT_CMD": agent_cmd}, uid=account.pw_uid, gid=account.pw_gid)
-    dry = ["sudo", "-u", user, "-H", "python3", "-I", bridge, "brief-tick",
-           "--env-file", env_file, "--state", os.path.join(state_dir, "brief-state.json"), "--dry-run"]
-    result = run(dry, cwd=account.pw_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                 universal_newlines=True, timeout=RUN_TIMEOUT)
+    with tempfile.TemporaryDirectory(prefix="maihub-brief-") as candidate_dir:
+        dry_env = env_file
+        if agent_cmd is not None:
+            dry_env = os.path.join(candidate_dir, ".env")
+            with open(dry_env, "x", encoding="utf-8") as handle:
+                handle.write("\n".join(_merged_env_lines(env_file, {"MAIHUB_AGENT_CMD": agent_cmd})) + "\n")
+            os.chmod(dry_env, 0o600)
+            os.chown(dry_env, account.pw_uid, account.pw_gid)
+            os.chown(candidate_dir, account.pw_uid, account.pw_gid)
+        dry = ["sudo", "-u", user, "-H", "python3", "-I", bridge, "brief-tick",
+               "--env-file", dry_env, "--state", os.path.join(state_dir, "brief-state.json"), "--dry-run"]
+        result = run(dry, cwd=account.pw_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                     universal_newlines=True, timeout=RUN_TIMEOUT)
     if result.returncode != 0:
         detail = getattr(result, "stderr", "")
         raise BridgeError("CONFIG", "brief-tick --dry-run dưới quyền %s thất bại (mã %s)%s" % (
             user, result.returncode, ": " + detail.strip() if isinstance(detail, str) and detail.strip() else ""))
+    if agent_cmd is not None:
+        write_env_file(env_file, {"MAIHUB_AGENT_CMD": agent_cmd}, uid=account.pw_uid, gid=account.pw_gid)
+    os.makedirs(state_dir, exist_ok=True)
+    os.chown(state_dir, account.pw_uid, account.pw_gid)
+    os.chmod(state_dir, 0o700)
     _write_unit_atomic(service_path, service_text)
     _write_unit_atomic(timer_path, timer_text)
     for cmd in (["systemctl", "daemon-reload"], ["systemctl", "enable", "--now", timer_name]):

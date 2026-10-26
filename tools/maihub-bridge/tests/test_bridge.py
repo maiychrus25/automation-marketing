@@ -2040,6 +2040,7 @@ class InstallBriefTests(InstallFixture):
         def checked_run(cmd, **kwargs):
             if "--dry-run" in cmd:
                 self.assertEqual(os.listdir(self.systemd), [])
+                self.assertFalse(os.path.exists(os.path.join(self.env_dir, "state")))
             else:
                 self.assertTrue(os.path.isfile(self.unit_path()))
                 self.assertTrue(os.path.isfile(self.unit_path("timer")))
@@ -2146,6 +2147,54 @@ class InstallBriefTests(InstallFixture):
                 self.assertEqual(handle.read(), "existing " + suffix)
         self.assertEqual(len(run.calls), 1)
 
+    def test_failed_agent_override_preserves_existing_env_and_state(self):
+        with open(self.env_file, "ab") as handle:
+            handle.write(b"MAIHUB_AGENT_CMD=old\r\n# Preserve exact bytes")
+        with open(self.env_file, "rb") as handle:
+            original = handle.read()
+        state = os.path.join(self.env_dir, "state")
+        os.mkdir(state, 0o750)
+        state_file = os.path.join(state, "brief-state.json")
+        with open(state_file, "wb") as handle:
+            handle.write(b'{"lastOnboardAt":123}')
+        before = os.stat(state)
+        run = FakeRun(fail_on="--dry-run")
+        code, _, _ = self.install_brief(run, agent_cmd="new")
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        with self.subTest(resource="env"), open(self.env_file, "rb") as handle:
+            self.assertEqual(handle.read(), original)
+        with self.subTest(resource="state"):
+            after = os.stat(state)
+            self.assertEqual((after.st_mode, after.st_uid, after.st_gid, after.st_ino, after.st_mtime_ns),
+                             (before.st_mode, before.st_uid, before.st_gid, before.st_ino, before.st_mtime_ns))
+            self.assertFalse(any(call[0][0] == state for call in self.chown.call_args_list))
+            with open(state_file, "rb") as handle:
+                self.assertEqual(handle.read(), b'{"lastOnboardAt":123}')
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(os.listdir(self.systemd), [])
+        candidate = run.calls[0][0][run.calls[0][0].index("--env-file") + 1]
+        self.assertNotEqual(candidate, self.env_file)
+        self.assertFalse(os.path.exists(os.path.dirname(candidate)))
+
+    def test_failed_or_timed_out_override_does_not_create_state(self):
+        with open(self.env_file, "ab") as handle:
+            handle.write(b"MAIHUB_AGENT_CMD=old\n")
+        with open(self.env_file, "rb") as handle:
+            original = handle.read()
+        for run, expected in ((FakeRun(fail_on="--dry-run"), bridge.EXIT_CONFIG),
+                              (FakeRun(timeout_on="--dry-run"), bridge.EXIT_NETWORK)):
+            with self.subTest(expected=expected):
+                code, _, _ = self.install_brief(run, agent_cmd="new")
+                self.assertEqual(code, expected)
+                self.assertFalse(os.path.exists(os.path.join(self.env_dir, "state")))
+                with open(self.env_file, "rb") as handle:
+                    self.assertEqual(handle.read(), original)
+                self.assertEqual(len(run.calls), 1)
+                self.assertEqual(os.listdir(self.systemd), [])
+                candidate = run.calls[0][0][run.calls[0][0].index("--env-file") + 1]
+                self.assertNotEqual(candidate, self.env_file)
+                self.assertFalse(os.path.exists(os.path.dirname(candidate)))
+
     def test_dry_run_timeout_aborts_before_writing_units(self):
         run = FakeRun(timeout_on="--dry-run")
         code, _, _ = self.install_brief(run)
@@ -2161,20 +2210,32 @@ class InstallBriefTests(InstallFixture):
             self.assertIn(step, err)
             self.assertEqual(len(run.calls), count)
 
-    def test_agent_override_written_before_probe_keeps_other_env_keys(self):
+    def test_agent_override_probed_before_writing_keeps_other_env_keys(self):
         with open(self.env_file, "a") as handle:
             handle.write("MAIHUB_AGENT_CMD=old -p\nMAIHUB_AGENT_TIMEOUT_SEC=123\n")
         run = FakeRun()
 
         def checked_run(cmd, **kwargs):
             if "--dry-run" in cmd:
-                self.assertEqual(bridge.parse_env_file(self.env_file)["MAIHUB_AGENT_CMD"], "codex exec -")
+                self.assertEqual(bridge.parse_env_file(self.env_file)["MAIHUB_AGENT_CMD"], "old -p")
+                self.assertFalse(os.path.exists(os.path.join(self.env_dir, "state")))
+                candidate = cmd[cmd.index("--env-file") + 1]
+                self.assertNotEqual(candidate, self.env_file)
+                values = bridge.parse_env_file(candidate)
+                self.assertEqual(values["MAIHUB_AGENT_CMD"], "codex exec -")
+                self.assertEqual(values["MAIHUB_API_KEY"], API_KEY)
+                self.assertEqual(values["MAIHUB_AGENT_TIMEOUT_SEC"], "123")
+                self.assertEqual(os.stat(candidate).st_mode & 0o777, 0o600)
+                self.assertEqual(os.stat(os.path.dirname(candidate)).st_mode & 0o777, 0o700)
             return run(cmd, **kwargs)
 
         with mock.patch.object(bridge, "write_env_file", wraps=bridge.write_env_file) as writer:
             code, out, err = self.install_brief(checked_run, agent_cmd="codex exec -")
         self.assertEqual(code, 0, out + err)
         writer.assert_called_once_with(self.env_file, {"MAIHUB_AGENT_CMD": "codex exec -"}, uid=1234, gid=5678)
+        candidate = run.calls[0][0][run.calls[0][0].index("--env-file") + 1]
+        self.chown.assert_any_call(os.path.dirname(candidate), 1234, 5678)
+        self.assertFalse(os.path.exists(os.path.dirname(candidate)))
         values = bridge.parse_env_file(self.env_file)
         self.assertEqual(values["MAIHUB_API_KEY"], API_KEY)
         self.assertEqual(values["TELEGRAM_PROXY"], "http://proxy:8080")
