@@ -191,6 +191,28 @@ describe('ResearchStore', () => {
             }]);
         });
 
+        it.each([
+            ['CHĂM SÓC Da ', 'chăm sóc da'],
+            ['chăm', 'chăm'.normalize('NFD')],
+            ['chăm'.normalize('NFD'), 'CHĂM'],
+        ])('matches Vietnamese queries after NFC normalization and case folding: %s / %s', (storedQuery, query) => {
+            const { store } = setup();
+            store.createScan({ ...scan('match'), query: storedQuery });
+            store.addItems('match', [post('matching-post')], 'p1', 1200);
+            store.finishScan('match', 'done', '', '', {}, 1500);
+            expect(store.trendingRows({ queries: [query], groupIds: [], since: 1000 }).map((item) => item.fbId))
+                .toEqual(['matching-post']);
+        });
+
+        it('does not match a different Vietnamese word or remove accents', () => {
+            const { store } = setup();
+            store.createScan({ ...scan('other'), query: 'CHĂM SÓC Da ' });
+            store.addItems('other', [post('unrelated-post')], 'p1', 1200);
+            store.finishScan('other', 'done', '', '', {}, 1500);
+            expect(store.trendingRows({ queries: ['trang điểm'], groupIds: [], since: 1000 })).toEqual([]);
+            expect(store.trendingRows({ queries: ['cham soc da'], groupIds: [], since: 1000 })).toEqual([]);
+        });
+
         it('matches group_feed posts by place_id independently of the query', () => {
             const { store } = setup();
             store.createScan(scan('feed', 'group_feed'));

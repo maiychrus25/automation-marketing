@@ -186,8 +186,16 @@ export class ResearchStore {
         const filters: string[] = [];
         const params: any[] = [opts.since];
         if (opts.queries.length) {
-            filters.push(`(s.source = 'posts' AND lower(trim(s.query)) IN (${opts.queries.map(() => '?').join(',')}))`);
-            params.push(...opts.queries.map((q) => q.trim().toLowerCase()));
+            const normalizeQuery = (query: string) => query.normalize('NFC').trim().toLocaleLowerCase('vi');
+            const queries = new Set(opts.queries.map(normalizeQuery));
+            const scanIds = this.db.query<{ id: string; query: string }>(
+                "SELECT id, query FROM research_scans WHERE source = 'posts' AND status = 'done' AND started_at >= ?",
+                [opts.since],
+            ).filter((scan) => queries.has(normalizeQuery(scan.query))).map((scan) => scan.id);
+            if (scanIds.length) {
+                filters.push(`(s.source = 'posts' AND s.id IN (${scanIds.map(() => '?').join(',')}))`);
+                params.push(...scanIds);
+            }
         }
         if (opts.groupIds.length) {
             filters.push(`(s.source = 'group_feed' AND i.place_id IN (${opts.groupIds.map(() => '?').join(',')}))`);
