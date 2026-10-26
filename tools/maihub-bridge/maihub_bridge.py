@@ -150,7 +150,7 @@ SUGGEST_PROMPT_TEMPLATE = "\n".join([
     "3. Chọn chủ đề hợp niche và notes, viết draftsPerDay bài theo tone của Page. Không chép nguyên văn bài nguồn.",
     "4. Tạo từng nháp bằng maihub_drafts_create với mode = 'page', profiles gồm profileId của brief, text và plannedAt theo giờ tốt nhất tiếp theo từ maihub_posts_bestTimes, dùng giờ máy MaiHub. Có thể render video trước nếu chủ đề hợp.",
     "Không gọi maihub_drafts_approve. Chỉ tạo nháp để khách duyệt, không tự đăng bài.",
-    "5. Thành công: gọi maihub_briefs_finish với profileId của brief, ok = true và draftIds của các nháp vừa tạo. Nếu lỗi: gọi maihub_briefs_finish với profileId, ok = false và error mô tả lỗi.",
+    "5. Thành công: gọi maihub_briefs_finish với profileId và đúng claimedAt trong JSON brief, ok = true và draftIds của các nháp vừa tạo. Nếu lỗi: gọi maihub_briefs_finish với profileId và đúng claimedAt trong JSON brief, ok = false và error mô tả lỗi.",
     "Lệnh cuối cùng phải là maihub_briefs_finish",
 ])
 
@@ -1852,6 +1852,7 @@ def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
             return result
         for brief in briefs:
             profile_id = brief["profileId"]
+            claimed_at = brief["claimedAt"]
             prompt = SUGGEST_PROMPT_TEMPLATE.format(brief_json=json.dumps(brief, ensure_ascii=False, indent=2))
             code, timed_out = None, False
             try:
@@ -1862,8 +1863,12 @@ def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
             try:
                 current = client.call("briefs.get", {"profileId": profile_id})["brief"]
                 if current["status"] == "running":
+                    if current.get("claimedAt") != claimed_at:
+                        result["warnings"].append("%s: claimedAt đã đổi; bỏ qua kết thúc claim cũ" % profile_id)
+                        continue
                     error = "agent quá giờ" if timed_out else "agent thoát mã %s" % code
-                    client.call("briefs.finish", {"profileId": profile_id, "ok": False, "error": error},
+                    client.call("briefs.finish", {"profileId": profile_id, "claimedAt": claimed_at,
+                                                  "ok": False, "error": error},
                                 idempotency_key=str(uuid.uuid4()))
             except BridgeError as err:
                 result["warnings"].append("%s: %s" % (profile_id, err))

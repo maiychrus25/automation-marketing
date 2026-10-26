@@ -2501,7 +2501,7 @@ class BriefTickTests(unittest.TestCase):
         self.identities = [{"profileId": "p1", "kind": "page", "pageName": "Học lái xe",
                             "learnedAt": int(self.clock() * 1000)}]
         self.due = []
-        self.briefs = {"p1": {"profileId": "p1", "status": "idle", "attempts": 0}}
+        self.briefs = {"p1": {"profileId": "p1", "status": "idle", "attempts": 0, "claimedAt": None}}
         self.errors = {}
         self.agent_result = (0, False)
         self.client = mock.Mock(call=self.call)
@@ -2522,7 +2522,10 @@ class BriefTickTests(unittest.TestCase):
                 raise bridge.BridgeError("NOT_FOUND", "Chưa có brief")
             return {"brief": self.briefs[profile_id]}
         if method == "briefs.finish":
-            self.briefs[params["profileId"]]["status"] = "idle"
+            current = self.briefs[params["profileId"]]
+            if current["status"] != "running" or params.get("claimedAt") != current["claimedAt"]:
+                raise bridge.BridgeError("INVALID_PARAMS", "Claim không khớp")
+            current["status"] = "idle"
             return {}
         raise AssertionError("Unexpected method: %s" % method)
 
@@ -2539,7 +2542,8 @@ class BriefTickTests(unittest.TestCase):
     def set_due(self, count=1, status="idle"):
         self.due = [{"profileId": "p%d" % i, "pageName": "Page %d" % i, "niche": "Dạy lái xe",
                      "keywords": ["lái xe", "an toàn"], "groupIds": ["g1"], "tone": "Thân thiện",
-                     "notes": "Không quảng cáo", "draftsPerDay": 1} for i in range(1, count + 1)]
+                     "notes": "Không quảng cáo", "draftsPerDay": 1, "claimedAt": 1800000000000 + i}
+                    for i in range(1, count + 1)]
         for brief in self.due:
             self.briefs[brief["profileId"]] = dict(brief, status=status, attempts=0)
 
@@ -2639,18 +2643,36 @@ class BriefTickTests(unittest.TestCase):
         self.set_due(status="running")
         self.agent_result = (1, False)
         self.tick()
-        self.assertEqual(self.finishes(), [{"profileId": "p1", "ok": False, "error": "agent thoát mã 1"}])
+        self.assertEqual(self.finishes(), [{"profileId": "p1", "claimedAt": 1800000000001,
+                                           "ok": False, "error": "agent thoát mã 1"}])
 
     def test_agent_exit_zero_without_finish_is_failure(self):
         self.set_due(status="running")
         self.tick()
-        self.assertEqual(self.finishes(), [{"profileId": "p1", "ok": False, "error": "agent thoát mã 0"}])
+        self.assertEqual(self.finishes(), [{"profileId": "p1", "claimedAt": 1800000000001,
+                                           "ok": False, "error": "agent thoát mã 0"}])
 
     def test_timeout_releases_running_brief(self):
         self.set_due(status="running")
         self.agent_result = (None, True)
         self.tick()
-        self.assertEqual(self.finishes(), [{"profileId": "p1", "ok": False, "error": "agent quá giờ"}])
+        self.assertEqual(self.finishes(), [{"profileId": "p1", "claimedAt": 1800000000001,
+                                           "ok": False, "error": "agent quá giờ"}])
+
+    def test_replaced_running_claim_warns_without_finishing(self):
+        self.set_due(status="running")
+        self.briefs["p1"]["claimedAt"] = 1800003600002
+        for agent_result in ((1, False), (None, True)):
+            with self.subTest(agent_result=agent_result):
+                self.agent_result = agent_result
+                result = self.tick()
+                self.assertEqual(result["ran"], ["p1"])
+                self.assertEqual(self.finishes(), [])
+                self.assertEqual(len(result["warnings"]), 1)
+                self.assertIn("p1", result["warnings"][0])
+                self.assertIn("claimedAt", result["warnings"][0])
+                self.assertEqual(self.briefs["p1"]["status"], "running")
+                self.assertEqual(self.briefs["p1"]["claimedAt"], 1800003600002)
 
     def test_already_finished_brief_is_not_finished_twice(self):
         self.set_due()
@@ -2666,6 +2688,7 @@ class BriefTickTests(unittest.TestCase):
         self.assertEqual(result["ran"], ["p1", "p2"])
         self.assertEqual(len(self.agent_calls), 2)
         self.assertEqual([p["profileId"] for p in self.finishes()], ["p1", "p2"])
+        self.assertEqual([p["claimedAt"] for p in self.finishes()], [1800000000001, 1800000000002])
         self.assertTrue(any("INVALID_PARAMS" in w for w in result["warnings"]))
 
     def test_get_failure_warns_and_runs_next_brief(self):
@@ -2742,6 +2765,10 @@ class BriefTickTests(unittest.TestCase):
                      "Không gọi maihub_drafts_approve", "Không chép nguyên văn bài nguồn"):
             self.assertIn(text, prompt)
         self.assertTrue(prompt.rstrip().endswith("maihub_briefs_finish"))
+        finish_step = next(line for line in prompt.splitlines() if line.startswith("5."))
+        for outcome in finish_step.split("Nếu lỗi:"):
+            self.assertIn("profileId", outcome)
+            self.assertIn("claimedAt", outcome)
 
     def test_run_agent_sends_prompt_only_via_stdin_in_new_session(self):
         self.assertTrue(callable(getattr(bridge, "run_agent", None)), "run_agent chưa được triển khai")
