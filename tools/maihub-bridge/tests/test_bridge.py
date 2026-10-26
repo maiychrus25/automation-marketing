@@ -1019,10 +1019,12 @@ class FakeClock(object):
 class FakeWatchClient(object):
     """events.wait theo kịch bản: phần tử là dict kết quả hoặc Exception."""
 
-    def __init__(self, script, runs=None):
+    def __init__(self, script, runs=None, drafts=None, briefs=None):
         self.script = list(script)
         self.calls = []
         self.runs = runs or {}
+        self.drafts = drafts or {}
+        self.briefs = briefs or {}
         self.status = {"workspace": None}  # trả lời system.status (không lấy từ script events.wait)
 
     def call(self, method, params=None, idempotency_key=None):
@@ -1033,6 +1035,11 @@ class FakeWatchClient(object):
             return self.status
         if method == "runs.get":
             item = self.runs.get(params["runId"])
+            if isinstance(item, Exception):
+                raise item
+            return item
+        if method in ("drafts.get", "briefs.get"):
+            item = self.drafts[params["id"]] if method == "drafts.get" else self.briefs[params["profileId"]]
             if isinstance(item, Exception):
                 raise item
             return item
@@ -1402,6 +1409,119 @@ class FormatEventTests(unittest.TestCase):
         self.assertEqual(len(bridge.clip("y" * 5000, 3500)), 3500)
 
 
+class FormatBriefTests(unittest.TestCase):
+    def setUp(self):
+        self.event = {"seq": 7, "type": "briefs.finished", "createdAt": 1, "payload": {
+            "profileId": "p1", "pageName": "Mai Shop", "ok": True, "draftIds": ["draft-ab12", "draft-cd34"]}}
+        self.drafts = {
+            "draft-ab12": {"draft": {"id": "draft-ab12", "name": "Bài sáng", "params": {"text": "Bài thứ nhất"}}, "media": []},
+            "draft-cd34": {"draft": {"id": "draft-cd34", "name": "Bài tối", "params": {"text": "Bài thứ hai"}}, "media": []}}
+        self.brief = {"brief": {"profileId": "p1", "attempts": 0, "status": "idle", "claimedAt": None}}
+        self.draft_calls = []
+        self.brief_calls = []
+
+    def fetch_draft(self, draft_id):
+        self.draft_calls.append(draft_id)
+        item = self.drafts[draft_id]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def fetch_brief(self, profile_id):
+        self.brief_calls.append(profile_id)
+        if isinstance(self.brief, Exception):
+            raise self.brief
+        return self.brief
+
+    def fmt(self):
+        formatter = getattr(bridge, "format_brief_messages", None)
+        self.assertTrue(callable(formatter), "format_brief_messages is missing")
+        return formatter(self.event, self.fetch_draft, self.fetch_brief)
+
+    def test_two_drafts_have_separate_messages_and_reply_codes(self):
+        self.assertEqual(self.fmt(), [
+            "📝 Mai Shop — bài 1/2 · mã #ab12\nBài thứ nhất\nNhắn: đăng #ab12 · sửa #ab12 … · bỏ #ab12",
+            "📝 Mai Shop — bài 2/2 · mã #cd34\nBài thứ hai\nNhắn: đăng #cd34 · sửa #cd34 … · bỏ #cd34"])
+        self.assertEqual(self.draft_calls, ["draft-ab12", "draft-cd34"])
+        self.assertEqual(self.brief_calls, [])
+
+    def test_text_is_clipped_to_800_characters(self):
+        self.drafts["draft-ab12"]["draft"]["params"]["text"] = "x" * 1000
+        self.assertEqual(self.fmt()[0].split("\n")[1], "x" * 799 + "…")
+
+    def test_video_extensions_have_video_label(self):
+        for path in ("a.mp4", "a.mov", "a.webm", "A.MP4"):
+            with self.subTest(path=path):
+                self.drafts["draft-ab12"]["media"] = [{"path": path}]
+                self.assertEqual(self.fmt()[0].split("\n")[2], "🎬 kèm video")
+
+    def test_images_have_count_label(self):
+        self.drafts["draft-ab12"]["media"] = [{"path": p} for p in ("a.jpg", "b.png", "c.webp")]
+        self.assertEqual(self.fmt()[0].split("\n")[2], "🖼 kèm 3 ảnh")
+
+    def test_failed_draft_fetch_has_fallback_and_keeps_next_draft(self):
+        self.drafts["draft-ab12"] = bridge.BridgeError("NOT_FOUND", "Đã xoá")
+        messages = self.fmt()
+        self.assertEqual(messages[0], "📝 Mai Shop — bài 1/2 · mã #ab12\n"
+                         "(không đọc được nội dung, mở MaiHub để xem)\nNhắn: đăng #ab12 · sửa #ab12 … · bỏ #ab12")
+        self.assertIn("Bài thứ hai", messages[1])
+
+    def test_failure_before_three_attempts_is_silent(self):
+        self.event["payload"].update(ok=False, error="Lỗi nghiên cứu")
+        for attempts in (0, 1, 2):
+            with self.subTest(attempts=attempts):
+                self.brief["brief"]["attempts"] = attempts
+                self.assertEqual(self.fmt(), [])
+        self.assertEqual(self.draft_calls, [])
+        self.assertEqual(self.brief_calls, ["p1", "p1", "p1"])
+
+    def test_failure_at_or_after_three_attempts_warns(self):
+        self.event["payload"].update(ok=False, error="Lỗi nghiên cứu")
+        for attempts in (3, 4):
+            with self.subTest(attempts=attempts):
+                self.brief["brief"]["attempts"] = attempts
+                self.assertEqual(self.fmt(), ["⚠️ Mai Shop: hôm nay chưa tạo được bài đề xuất — Lỗi nghiên cứu"])
+        self.assertEqual(self.draft_calls, [])
+
+    def test_failure_error_is_clipped_to_200_characters(self):
+        self.event["payload"].update(ok=False, error="e" * 1000)
+        self.brief["brief"]["attempts"] = 3
+        self.assertEqual(self.fmt(), ["⚠️ Mai Shop: hôm nay chưa tạo được bài đề xuất — " + "e" * 199 + "…"])
+
+    def test_failed_brief_fetch_is_silent(self):
+        self.event["payload"].update(ok=False, error="Lỗi nghiên cứu")
+        self.brief = bridge.BridgeError("UNREACHABLE", "Mất mạng")
+        self.assertEqual(self.fmt(), [])
+        self.assertEqual(self.brief_calls, ["p1"])
+        self.assertEqual(self.draft_calls, [])
+
+    def test_empty_draft_ids_are_silent(self):
+        self.event["payload"]["draftIds"] = []
+        self.assertEqual(self.fmt(), [])
+        self.assertEqual(self.draft_calls, [])
+        self.assertEqual(self.brief_calls, [])
+
+    def test_page_name_stays_on_one_line_and_is_bounded(self):
+        self.event["payload"]["pageName"] = "  Mai\n\tShop " + "p" * 500
+        header = self.fmt()[0].split("\n")[0]
+        self.assertEqual(header, "📝 " + "Mai Shop " + "p" * 190 + "… — bài 1/2 · mã #ab12")
+
+    def test_single_message_formatter_is_silent_for_daily_events(self):
+        for event_type in ("briefs.finished", "pages.learnFinished"):
+            with self.subTest(event_type=event_type):
+                self.assertIsNone(bridge.format_event({"type": event_type, "payload": self.event["payload"]},
+                                                      lambda run_id: self.fail("must not fetch runs")))
+
+    def test_guide_covers_daily_reply_actions_and_safeguards(self):
+        for text in ("8. Đề xuất hằng ngày", "đăng #", "đăng luôn", "sửa #", "bỏ #",
+                     "maihub_drafts_approve", "plannedAt", "maihub_drafts_update", "maihub_drafts_delete",
+                     "maihub_briefs_save", "notes", "enabled", "maihub_pages_learn", "force", "true",
+                     "maihub_drafts_list", "24 giờ", "Không bao giờ tự duyệt",
+                     "Cần MaiHub từ 26.31.0 cho pages.*, briefs.*, research.trending"):
+            with self.subTest(text=text):
+                self.assertIn(text, bridge.GUIDE)
+
+
 class FormatDoneWithoutCountsTests(unittest.TestCase):
     def test_done_with_zero_total_has_no_counts(self):
         text = bridge.format_event(finished(1, posted=0, failed=0, skipped=0), lambda r: None)
@@ -1614,8 +1734,8 @@ class WatcherTests(unittest.TestCase):
         self.clock = FakeClock()
         self.sender = FakeSender()
 
-    def watcher(self, script, runs=None, sender=None):
-        self.client = FakeWatchClient(script, runs)
+    def watcher(self, script, runs=None, sender=None, drafts=None, briefs=None):
+        self.client = FakeWatchClient(script, runs, drafts, briefs)
         return bridge.Watcher(self.client, sender or self.sender, self.state_path, clock=self.clock, sleep=self.clock.sleep)
 
     def state(self):
@@ -1640,6 +1760,38 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.state()["cursor"], 2)
         self.assertEqual(self.client.calls[-1][1], {"after": 0, "timeoutSec": 25})
         self.assertEqual(os.listdir(os.path.dirname(self.state_path)), ["watch-state.json"])
+
+    def test_briefs_finished_sends_each_draft_then_advances_cursor(self):
+        event = {"seq": 7, "type": "briefs.finished", "createdAt": 1, "payload": {
+            "profileId": "p1", "pageName": "Mai Shop", "ok": True, "draftIds": ["draft-ab12", "draft-cd34"]}}
+        drafts = {
+            "draft-ab12": {"draft": {"id": "draft-ab12", "name": "Bài sáng", "params": {"text": "Bài thứ nhất"}}, "media": []},
+            "draft-cd34": {"draft": {"id": "draft-cd34", "name": "Bài tối", "params": {"text": "Bài thứ hai"}}, "media": [{"path": "a.mp4"}]}}
+        w = self.watcher([page([]), page([event])], drafts=drafts)
+        w.step()
+        w.step()
+        self.assertEqual(self.sender.sent, [
+            "📝 Mai Shop — bài 1/2 · mã #ab12\nBài thứ nhất\nNhắn: đăng #ab12 · sửa #ab12 … · bỏ #ab12",
+            "📝 Mai Shop — bài 2/2 · mã #cd34\nBài thứ hai\n🎬 kèm video\nNhắn: đăng #cd34 · sửa #cd34 … · bỏ #cd34"])
+        self.assertEqual(self.state()["cursor"], 7)
+        self.assertEqual(self.state()["workspaceId"], "ws1")
+        self.assertEqual(self.client.calls[-2:], [("drafts.get", {"id": "draft-ab12"}), ("drafts.get", {"id": "draft-cd34"})])
+
+    def test_briefs_finished_failure_uses_brief_attempts_and_advances_cursor(self):
+        event = {"seq": 7, "type": "briefs.finished", "createdAt": 1, "payload": {
+            "profileId": "p1", "pageName": "Mai Shop", "ok": False, "draftIds": [], "error": "Quá giờ"}}
+        for attempts in (1, 3):
+            with self.subTest(attempts=attempts):
+                self.sender.sent = []
+                w = self.watcher([page([event])], briefs={"p1": {"brief": {
+                    "profileId": "p1", "attempts": attempts, "status": "idle", "claimedAt": None}}})
+                w.state = {"cursor": 0, "workspaceId": "ws1"}
+                w.step()
+                expected = [] if attempts == 1 else ["⚠️ Mai Shop: hôm nay chưa tạo được bài đề xuất — Quá giờ"]
+                self.assertEqual(self.sender.sent, expected)
+                self.assertEqual(self.state()["cursor"], 7)
+                self.assertEqual(self.client.calls, [("events.wait", {"after": 0, "timeoutSec": 25}),
+                                                     ("briefs.get", {"profileId": "p1"})])
 
     def test_crash_between_send_and_save_resends(self):
         w = self.watcher([page([]), page([finished(1), finished(2)])], sender=FakeSender(fail_after=1))

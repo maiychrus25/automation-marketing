@@ -130,7 +130,20 @@ GUIDE = "\n".join([
     "window.__timelines = window.__timelines || {}; window.__timelines['main'] = tl;</script></body></html>",
     "- width/height trong tham số phải khớp data-width/data-height; data-duration của gốc là độ dài video (giây). Ảnh/nhạc tải lên gọi theo tên asset1.<đuôi>, asset2.<đuôi>…",
     "",
+    "8. Đề xuất hằng ngày",
+    "- Mỗi bài đề xuất có mã #xxxx là 4 ký tự cuối id nháp. Dùng maihub_drafts_list để tìm id đầy đủ khớp mã; nếu có nhiều nháp trùng mã thì hỏi lại, không đoán.",
+    "- Khách nhắn 'đăng #xxxx': gọi maihub_drafts_approve với when = {kind: 'once', runAt: plannedAt}; nếu plannedAt không còn hợp lệ thì chọn giờ tốt nhất kế tiếp từ maihub_posts_bestTimes theo giờ máy MaiHub.",
+    "- Khách nhắn 'đăng luôn #xxxx': gọi maihub_drafts_approve với when = 'now', confirm: true (lời khách là sự đồng ý đăng ngay).",
+    "- Khách nhắn 'sửa #xxxx …': gọi maihub_drafts_update với id và text đã sửa rồi gửi lại nội dung cho khách.",
+    "- Khách nhắn 'bỏ #xxxx': gọi maihub_drafts_delete với id, confirm: true (lời khách là sự đồng ý).",
+    "- Lời dặn về Page: gọi maihub_briefs_save với profileId và notes để lưu lời dặn.",
+    "- 'tạm dừng' / 'chạy lại': gọi maihub_briefs_save với profileId và enabled = false / true tương ứng.",
+    "- 'có page mới': gọi maihub_pages_learn với force: true, chờ pages.learnFinished rồi làm như lượt làm quen: đọc maihub_pages_list và maihub_posts_bestTimes, kiểm tra maihub_briefs_get; chỉ tạo brief cho Page chưa có, giữ brief và lời dặn đã có, rồi nhắn giới thiệu cho khách.",
+    "- Không ghi mã thì tìm nháp đang chờ bằng maihub_drafts_list; có từ 2 nháp trở lên thì hỏi lại.",
+    "- Nháp quá 24 giờ chưa duyệt thì nhắc khách một lần trong lượt đề xuất sau. Không bao giờ tự duyệt.",
+    "",
     "Cần MaiHub từ 26.27.0 cho: comments.collectFinished, maihub_comments_collectStatus, maihub_comments_collectCancel và các trường system.status serverNowMs, timezone, utcOffsetMin, lastEventSeq. Bản cũ hơn không có các mục này (maihub_wait_for vẫn chạy, nhưng chờ comments.collectFinished sẽ hết giờ).",
+    "Cần MaiHub từ 26.31.0 cho pages.*, briefs.*, research.trending",
 ])
 
 ONBOARD_MIN_INTERVAL_SEC = 21600
@@ -1634,6 +1647,43 @@ def format_event(event, fetch_run):
     return clip("\n".join(lines), MAX_MESSAGE_CHARS) if lines else None
 
 
+def format_brief_messages(event, fetch_draft, fetch_brief):
+    """Một tin cho mỗi nháp; lỗi chỉ báo khi brief đã thử ít nhất ba lần."""
+    payload = event.get("payload") or {}
+    name = clip(_one_line(payload.get("pageName")), MAX_FIELD_CHARS)
+    if payload.get("ok") is not True:
+        try:
+            brief = (fetch_brief(payload.get("profileId")) or {}).get("brief") or {}
+            if (brief.get("attempts") or 0) < 3:
+                return []
+        except Exception:
+            return []
+        error = clip(_one_line(payload.get("error")) or "lỗi không rõ", MAX_FIELD_CHARS)
+        return ["⚠️ %s: hôm nay chưa tạo được bài đề xuất — %s" % (name, error)]
+
+    messages = []
+    draft_ids = payload.get("draftIds") or []
+    for index, draft_id in enumerate(draft_ids, 1):
+        code = draft_id[-4:]
+        media_note = None
+        try:
+            result = fetch_draft(draft_id) or {}
+            draft = result.get("draft") or {}
+            text = clip((draft.get("params") or {}).get("text") or "", 800)
+            media = result.get("media") or []
+            if media:
+                has_video = any(os.path.splitext(item.get("path") or "")[1].lower() in (".mp4", ".mov", ".webm") for item in media)
+                media_note = "🎬 kèm video" if has_video else "🖼 kèm %d ảnh" % len(media)
+        except Exception:
+            text = "(không đọc được nội dung, mở MaiHub để xem)"
+        lines = ["📝 %s — bài %d/%d · mã #%s" % (name, index, len(draft_ids), code), text]
+        if media_note:
+            lines.append(media_note)
+        lines.append("Nhắn: đăng #%s · sửa #%s … · bỏ #%s" % (code, code, code))
+        messages.append("\n".join(lines))
+    return messages
+
+
 class Watcher(object):
     """Long-poll events.wait và gửi tin; trạng thái {cursor, workspaceId, downSince, downAlerted, authAlerted} lưu nguyên tử."""
 
@@ -1813,9 +1863,16 @@ class Watcher(object):
             if not result.get("events") and self.clock() - started < WATCH_MIN_POLL_SEC:
                 self.sleep(WATCH_MIN_POLL_SEC)  # trả rỗng ngay: tránh vòng lặp nóng
             for event in result.get("events") or []:
-                text = format_event(event, lambda run_id: self.client.call("runs.get", {"runId": run_id}))
-                if text and not self._send_video(event, text):
-                    self.sender.send(text)
+                if event.get("type") == "briefs.finished":
+                    messages = format_brief_messages(event,
+                                                     lambda draft_id: self.client.call("drafts.get", {"id": draft_id}),
+                                                     lambda profile_id: self.client.call("briefs.get", {"profileId": profile_id}))
+                    for message in messages:
+                        self.sender.send(message)
+                else:
+                    text = format_event(event, lambda run_id: self.client.call("runs.get", {"runId": run_id}))
+                    if text and not self._send_video(event, text):
+                        self.sender.send(text)
                 self.state["cursor"] = event["seq"]
                 self._save()
         except BridgeError as err:
