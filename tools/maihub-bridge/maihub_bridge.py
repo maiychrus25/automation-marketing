@@ -135,6 +135,7 @@ GUIDE = "\n".join([
 
 ONBOARD_MIN_INTERVAL_SEC = 21600
 AGENT_TIMEOUT_DEFAULT_SEC = 2700
+AGENT_TERM_GRACE_SEC = 10
 ONBOARD_PROMPT = "\n".join([
     "Làm quen các Page của khách qua MaiHub, chỉ tạo trí nhớ cho Page, không tự đăng bài.",
     "1. Gọi maihub_pages_learn, lấy jobId rồi dùng maihub_wait_for chờ pages.learnFinished khớp jobId. Hết giờ chờ thì tiếp tục với after được trả về.",
@@ -1756,7 +1757,7 @@ def agent_command(env):
     return command
 
 
-def run_agent(cmd, prompt, timeout_sec, popen=subprocess.Popen):
+def run_agent(cmd, prompt, timeout_sec, popen=subprocess.Popen, term_grace_sec=AGENT_TERM_GRACE_SEC):
     """Chạy một lượt agent; khi quá giờ dừng cả nhóm tiến trình, không chỉ CLI cha."""
     process = popen(cmd, stdin=subprocess.PIPE, stdout=sys.stderr, start_new_session=True)
     try:
@@ -1764,16 +1765,26 @@ def run_agent(cmd, prompt, timeout_sec, popen=subprocess.Popen):
         return process.returncode, False
     except subprocess.TimeoutExpired:
         try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+            deadline = time.monotonic() + term_grace_sec
+            while True:
+                process.poll()  # thu hồi cha đã thoát để zombie không giữ group sống giả
+                try:
+                    os.killpg(process.pid, 0)
+                except ProcessLookupError:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    break
+                time.sleep(min(0.1, remaining))
+        finally:
             process.communicate()
         return process.returncode, True
 

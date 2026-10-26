@@ -2785,14 +2785,78 @@ class BriefTickTests(unittest.TestCase):
     def test_run_agent_escalates_to_sigkill_after_ten_seconds(self):
         self.assertTrue(callable(getattr(bridge, "run_agent", None)), "run_agent chưa được triển khai")
         process = mock.Mock(pid=87654321, returncode=-signal.SIGKILL)
-        process.communicate.side_effect = [subprocess.TimeoutExpired("fake", 1),
-                                           subprocess.TimeoutExpired("fake", 10), (None, None)]
-        with mock.patch.object(os, "killpg") as killpg:
+        process.communicate.side_effect = [subprocess.TimeoutExpired("fake", 1), (None, None)]
+        clock = FakeClock(now=0)
+        with mock.patch.object(os, "killpg") as killpg, \
+                mock.patch.object(time, "monotonic", clock), mock.patch.object(time, "sleep", clock.sleep):
             self.assertEqual(bridge.run_agent(["fake"], "prompt", 1, popen=lambda *a, **k: process),
                              (-signal.SIGKILL, True))
-        self.assertEqual(killpg.call_args_list, [mock.call(87654321, signal.SIGTERM),
-                                               mock.call(87654321, signal.SIGKILL)])
-        self.assertEqual(process.communicate.call_args_list[1], mock.call(timeout=10))
+        self.assertEqual(killpg.call_args_list[0], mock.call(87654321, signal.SIGTERM))
+        self.assertIn(mock.call(87654321, 0), killpg.call_args_list)
+        self.assertEqual(killpg.call_args_list[-1], mock.call(87654321, signal.SIGKILL))
+        self.assertAlmostEqual(clock(), 10)
+        self.assertEqual(process.communicate.call_count, 2)  # vẫn thu hồi cha sau khi dọn group
+
+    def test_run_agent_kills_resistant_child_after_parent_exits(self):
+        processes = []
+
+        def cleanup():
+            for process in processes:
+                try:
+                    deadline = time.monotonic() + 5
+                    while True:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                            break
+                        except ProcessLookupError:
+                            break
+                        except PermissionError:
+                            if time.monotonic() >= deadline:
+                                raise
+                            time.sleep(0.01)
+                finally:
+                    process.kill()
+                    process.communicate(timeout=5)
+
+        self.addCleanup(cleanup)  # đăng ký trước khi sinh group, kể cả khi test thất bại
+        try:
+            with subprocess.Popen(["/bin/sleep", "30"], start_new_session=True) as probe:
+                try:
+                    os.killpg(probe.pid, signal.SIGTERM)
+                finally:
+                    probe.kill()
+        except PermissionError as err:
+            self.skipTest("Sandbox blocks process groups: %s" % err)
+        ready_path = os.path.join(self.tmp.name, "agent-ready")
+
+        def popen(*args, **kwargs):
+            self.assertTrue(kwargs.get("start_new_session"))
+            process = subprocess.Popen(*args, **kwargs)
+            processes.append(process)
+            deadline = time.monotonic() + 5
+            while not os.path.exists(ready_path):
+                self.assertLess(time.monotonic(), deadline, "Child did not install SIGTERM trap")
+                time.sleep(0.01)
+            return process
+
+        cmd = ["/bin/sh", "-c", '(trap "" TERM; : > "$1"; exec sleep 30) & wait', "agent", ready_path]
+        started = time.monotonic()
+        _, timed_out = bridge.run_agent(cmd, "", 0.1, popen=popen, term_grace_sec=0.1)
+        self.assertTrue(timed_out)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertIsNotNone(processes[0].returncode)
+        # SIGKILL bất đồng bộ: cho init thu hồi tiến trình con đã dừng.
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(processes[0].pid, 0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                pass  # Darwin có thể trả EPERM trong lúc group vừa SIGKILL đang được thu hồi.
+            time.sleep(0.01)
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(processes[0].pid, 0)
 
     def test_run_agent_timeout_kills_real_process_group(self):
         self.assertTrue(callable(getattr(bridge, "run_agent", None)), "run_agent chưa được triển khai")
