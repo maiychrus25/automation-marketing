@@ -256,7 +256,7 @@ describe('describe', () => {
             'drafts.list', 'drafts.get', 'drafts.create', 'drafts.update', 'drafts.delete', 'drafts.approve',
             'schedules.list', 'schedules.update', 'schedules.delete',
             'runs.current', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
-            'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.cancel',
+            'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.trending', 'research.cancel',
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
             'comments.collect', 'comments.collectStatus', 'comments.collectCancel', 'comments.list', 'leads.list', 'leads.update', 'leads.config',
@@ -334,6 +334,7 @@ describe('research methods', () => {
             scanGroupFeeds: jest.fn((_p: any): any => ({ scanId: 's2' })),
             list: jest.fn((_p?: any): any => ({ total: 0, scans: [] })),
             get: jest.fn((_p: any): any => ({ scan: { id: 's1' }, total: 0, items: [] })),
+            trending: jest.fn((_p: any): any => ({ items: [{ fbId: 'hot', score: 100 }] })),
             cancel: jest.fn((): any => ({ cancelled: true })),
         };
         const deps = { ...makeDeps(), research };
@@ -354,6 +355,9 @@ describe('research methods', () => {
         expect(research.list).toHaveBeenCalledWith({ limit: 5, source: 'groups' });
         await call('research.get', { scanId: 's1', sort: 'recent' });
         expect(research.get).toHaveBeenCalledWith({ scanId: 's1', sort: 'recent' });
+        const trending = { queries: ['Serum'], groupIds: ['g1'], sinceHours: 72, limit: 20 };
+        expect(await call('research.trending', trending)).toEqual({ items: [{ fbId: 'hot', score: 100 }] });
+        expect(research.trending).toHaveBeenCalledWith(trending);
         expect(await call('research.cancel')).toEqual({ cancelled: true });
     });
 
@@ -369,13 +373,27 @@ describe('research methods', () => {
         expect(await call('research.scanGroupFeeds', {}).catch((e) => e)).toMatchObject({ code: 'BUSY' });
     });
 
-    it('describes the five methods as non-destructive with rotation notes', () => {
+    it('describes the six methods as non-destructive with rotation notes', () => {
         const { methods } = setupResearch();
         const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('research.')) as any[];
-        expect(found).toHaveLength(5);
+        expect(found).toHaveLength(6);
         for (const m of found) expect(m.destructive).toBe(false);
         expect(found[0].description).toMatch(/research\.finished/);
         expect(found[0].paramsSchema.properties.profileIds.maxItems).toBe(50);
+    });
+
+    it('describes trending parameter limits and the items result', () => {
+        const { methods } = setupResearch();
+        const method = describeMethods(methods).methods.find((m) => m.name === 'research.trending')!;
+        expect(method.paramsSchema).toMatchObject({ type: 'object', properties: {
+            queries: { type: 'array', maxItems: 10, items: { type: 'string', maxLength: 80 } },
+            groupIds: { type: 'array', maxItems: 20, items: { type: 'string' } },
+            sinceHours: { type: 'integer', minimum: 1, maximum: 168 },
+            limit: { type: 'integer', minimum: 1, maximum: 100 },
+        } });
+        expect(method.resultSchema).toMatchObject({ type: 'object', required: ['items'], properties: {
+            items: { type: 'array', items: { type: 'object' } },
+        } });
     });
 });
 

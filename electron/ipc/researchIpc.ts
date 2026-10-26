@@ -7,6 +7,7 @@ import Logger from '../../src/utils/Logger';
 import { FacebookPosterStore } from '../../src/services/facebookPoster/FacebookPosterStore';
 import { ResearchService } from '../../src/services/research/ResearchService';
 import { MAX_LIMIT, ResearchStore } from '../../src/services/research/ResearchStore';
+import { parseTrendingParams, rankTrending } from '../../src/services/research/trending';
 import { GraphqlSession } from '../../src/services/research/graphqlSession';
 import {
     RESEARCH_CONFIG_SETTING_KEY, parseResearchConfig, validateResearchConfig,
@@ -168,6 +169,13 @@ export const researchOperations = {
         if (!scan) throw new Error(SCAN_NOT_FOUND_ERROR);
         const { total, items } = s.listItems(opts.scanId, opts);
         return { scan, total, items };
+    },
+
+    trending: (p: any) => {
+        const { queries, groupIds, sinceHours, limit } = parseTrendingParams(p);
+        const now = Date.now();
+        const rows = store().trendingRows({ queries, groupIds, since: now - sinceHours * 3600000 });
+        return { items: rankTrending(rows, now, limit) };
     },
 
     cancel: () => ({ cancelled: service?.cancel() ?? false }),

@@ -90,6 +90,7 @@ export interface ResearchPort {
     scanGroupFeeds(params: any): any;
     list(params?: any): any;
     get(params: any): any;
+    trending(params: any): any;
     cancel(): any;
 }
 
@@ -520,6 +521,19 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             }, ['scanId']),
             resultSchema: obj({ scan: { type: 'object', description: 'Thông tin lượt quét' }, total: int('Tổng số mục'), items: { type: 'array', items: { type: 'object' }, description: 'Các mục trong trang' } }, ['scan', 'total', 'items']),
             run: async (p) => deps.research.get(pick(p, ['scanId', 'sort', 'limit', 'offset'])),
+        },
+        {
+            name: 'research.trending',
+            description: 'Xếp bài đang tăng tương tác nhanh từ các lượt quét đã lưu, không mở Facebook. Cần ít nhất một từ khoá hoặc mã nhóm. Chỉ dùng lượt quét done; loại bài không biết thời gian đăng hoặc cũ hơn 7 ngày.',
+            destructive: false,
+            paramsSchema: obj({
+                queries: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 80 }, maxItems: 10, description: 'Từ khoá khớp lượt quét posts, bỏ khoảng trắng đầu cuối và không phân biệt hoa thường' },
+                groupIds: { type: 'array', items: { type: 'string', minLength: 1 }, maxItems: 20, description: 'Mã nhóm khớp bài của lượt quét group_feed' },
+                sinceHours: int('Lượt quét trong bấy nhiêu giờ gần nhất (mặc định 72)', { minimum: 1, maximum: 168 }),
+                limit: int('Tối đa bao nhiêu bài (mặc định 20)', { minimum: 1, maximum: 100 }),
+            }),
+            resultSchema: obj({ items: { type: 'array', items: { type: 'object' }, description: 'Bài xếp theo score giảm dần; basis là growth hoặc age' } }, ['items']),
+            run: async (p) => deps.research.trending(pick(p, ['queries', 'groupIds', 'sinceHours', 'limit'])),
         },
         {
             name: 'research.cancel',

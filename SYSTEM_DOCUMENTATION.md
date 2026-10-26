@@ -443,6 +443,14 @@ Tạo video bán hàng (trình chiếu sản phẩm, flash sale, nổi bật m�
 
 Nguồn: `src/services/video/`, `electron/ipc/videoIpc.ts`, `electron/ipc/inboxMedia.ts`, `services/maihub-render/`, `docs/specs/2026-10-20-video-studio.md`.
 
+### 4.15 Đề xuất bài hằng ngày
+
+**Bài đang hot (`research.trending`).** Thao tác Control API chỉ đọc các lượt quét đã lưu trong SQLite của workspace hiện tại, không mở Facebook. `queries` tối đa 10 từ khoá, mỗi từ khoá tối đa 80 ký tự sau trim, giữ nguyên chữ hoa/thường khi kiểm tham số; `groupIds` tối đa 20 mã nhóm. Phải có ít nhất một từ khoá hoặc mã nhóm, nếu không trả `INVALID_PARAMS`. `sinceHours` là số nguyên 1–168 (mặc định 72), `limit` 1–100 (mặc định 20).
+
+`ResearchStore.trendingRows` JOIN `research_items` với `research_scans`: chỉ mục `post` của lượt `done` có `started_at >= now - sinceHours * 3600000`; nguồn `posts` khớp từ khoá bằng `lower(trim(query))`, hoặc nguồn `group_feed` có `place_id` trong `groupIds`. Không có lượt quét phù hợp thì trả `{ items: [] }`. `parseTrendingParams` và hàm thuần `rankTrending` nằm trong `src/services/research/trending.ts`; `researchOperations.trending` dùng chung thân thao tác và được nối qua `ResearchPort.trending` trong Control API.
+
+Gom theo `fbId`, lấy quan sát đầu/cuối theo `capturedAt`; tương tác là tổng `reactions + comments + shares` (NULL tính 0). Hai mốc cách nhau ít nhất 1 giờ: `score = (e_last - e_first) / số giờ`, `basis = 'growth'`. Một mốc hoặc hai mốc cách nhau dưới 1 giờ: dùng lần cuối, `score = e_last / max(1, tuổi bài lúc quét tính bằng giờ)`, `basis = 'age'`. Bỏ bài có `postedAt` cuối là NULL hoặc cũ hơn 7 ngày tính tới hiện tại; giữ đúng ranh giới 7 ngày. <!-- docs-check: src/services/research/trending.ts#TRENDING_MAX_AGE_MS = 604800000 --> Kết quả xếp `score` giảm dần rồi cắt `limit`: `{ items: [{ fbId, url, text, placeName, placeId, engagement, score, basis, seen, postedAt }] }`; `text` lấy `title` cuối cắt 500 ký tự, `engagement` lấy lần cuối, `seen` là tổng số quan sát phù hợp.
+
 ## 5. Mô hình dữ liệu theo nhóm
 
 SQLite được bật WAL trong `DatabaseService`. Thay vì liệt kê mọi cột, bảng dưới nhóm các aggregate chính và quan hệ nghiệp vụ.

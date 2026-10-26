@@ -130,6 +130,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             scanGroupFeeds: (p) => researchOperations.scanGroupFeeds(p, 'api'),
             list: researchOperations.list,
             get: researchOperations.get,
+            trending: researchOperations.trending,
             cancel: researchOperations.cancel,
         },
         tracking: {

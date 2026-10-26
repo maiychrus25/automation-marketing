@@ -1,4 +1,5 @@
 import { RESEARCH_SCHEMA_SQL } from './schema';
+import type { TrendingRow } from './trending';
 import type { SqlDatabase } from '../facebookPoster/FacebookPosterStore';
 import type {
     ResearchErrorCode, ResearchItem, ResearchItemInput, ResearchOrigin, ResearchQuery,
@@ -179,6 +180,28 @@ export class ResearchStore {
             [scanId, clampLimit(opts.limit), clampOffset(opts.offset)],
         );
         return { total, items: rows.map(mapItem) };
+    }
+
+    trendingRows(opts: { queries: string[]; groupIds: string[]; since: number }): TrendingRow[] {
+        const filters: string[] = [];
+        const params: any[] = [opts.since];
+        if (opts.queries.length) {
+            filters.push(`(s.source = 'posts' AND lower(trim(s.query)) IN (${opts.queries.map(() => '?').join(',')}))`);
+            params.push(...opts.queries.map((q) => q.trim().toLowerCase()));
+        }
+        if (opts.groupIds.length) {
+            filters.push(`(s.source = 'group_feed' AND i.place_id IN (${opts.groupIds.map(() => '?').join(',')}))`);
+            params.push(...opts.groupIds);
+        }
+        if (!filters.length) return [];
+        return this.db.query<TrendingRow>(
+            `SELECT i.fb_id AS fbId, i.url, i.title, i.place_name AS placeName, i.place_id AS placeId,
+                    i.reactions, i.comments, i.shares, i.posted_at AS postedAt, i.captured_at AS capturedAt
+             FROM research_items i JOIN research_scans s ON s.id = i.scan_id
+             WHERE i.kind = 'post' AND s.status = 'done' AND s.started_at >= ?
+                   AND (${filters.join(' OR ')})`,
+            params,
+        );
     }
 
     /** Số mục profile đã thu từ mốc `sinceMs` (ms epoch) đến nay. */

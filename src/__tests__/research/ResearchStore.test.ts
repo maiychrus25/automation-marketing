@@ -175,4 +175,66 @@ describe('ResearchStore', () => {
         expect(store.countScans()).toBe(2);
         expect(store.countScans('groups')).toBe(1);
     });
+
+    describe('trendingRows', () => {
+        it('matches trimmed queries case-insensitively and returns only posts from posts scans', () => {
+            const { store } = setup();
+            for (const [id, source, query] of [['match', 'posts', 'serum '], ['other', 'posts', 'cream'], ['groups', 'groups', 'serum']]) {
+                store.createScan({ ...scan(id, source, 1000), query });
+                store.addItems(id, [post(id, { placeName: 'Group', placeId: 'g1', reactions: 10, comments: 2, shares: 1, postedAt: 500 }),
+                    { kind: 'group', fbId: `${id}-group`, title: 'Group', url: '' }], 'p1', 1200);
+                store.finishScan(id, 'done', '', '', {}, 1500);
+            }
+            expect(store.trendingRows({ queries: [' Serum '], groupIds: [], since: 1000 })).toEqual([{
+                fbId: 'match', url: 'https://fb.test/match', title: 'tmatch', placeName: 'Group', placeId: 'g1',
+                reactions: 10, comments: 2, shares: 1, postedAt: 500, capturedAt: 1200,
+            }]);
+        });
+
+        it('matches group_feed posts by place_id independently of the query', () => {
+            const { store } = setup();
+            store.createScan(scan('feed', 'group_feed'));
+            store.addItems('feed', [post('yes', { placeId: 'g1' }), post('no', { placeId: 'g2' })], 'p1', 1200);
+            store.finishScan('feed', 'done', '', '', {}, 1500);
+            store.createScan(scan('posts'));
+            store.addItems('posts', [post('wrong-source', { placeId: 'g1' })], 'p1', 1200);
+            store.finishScan('posts', 'done', '', '', {}, 1500);
+            expect(store.trendingRows({ queries: [], groupIds: ['g1'], since: 1000 })).toEqual([{
+                fbId: 'yes', url: 'https://fb.test/yes', title: 'tyes', placeName: '', placeId: 'g1',
+                reactions: null, comments: null, shares: null, postedAt: null, capturedAt: 1200,
+            }]);
+            expect(store.trendingRows({ queries: ['q'], groupIds: ['g1'], since: 1000 }).map((i) => i.fbId).sort())
+                .toEqual(['wrong-source', 'yes']);
+        });
+
+        it('excludes failed, running, cancelled and old scans even if captured or finished recently', () => {
+            const { store } = setup();
+            for (const status of ['done', 'failed', 'running', 'cancelled'] as const) {
+                store.createScan(scan(status, 'posts', 1000));
+                store.addItems(status, [post(status)], 'p1', 1200);
+                if (status !== 'running') store.finishScan(status, status, '', '', {}, 1500);
+            }
+            store.createScan(scan('old', 'posts', 999));
+            store.addItems('old', [post('old')], 'p1', 1200);
+            store.finishScan('old', 'done', '', '', {}, 1500);
+            expect(store.trendingRows({ queries: ['q'], groupIds: [], since: 1000 }).map((i) => i.fbId)).toEqual(['done']);
+        });
+
+        it('returns an empty list for a keyword without any completed scan', () => {
+            const { store } = setup();
+            store.createScan(scan('running'));
+            store.addItems('running', [post('a')], 'p1', 1200);
+            expect(store.trendingRows({ queries: ['q'], groupIds: [], since: 0 })).toEqual([]);
+            expect(store.trendingRows({ queries: ['unknown'], groupIds: [], since: 0 })).toEqual([]);
+        });
+
+        it('uses bound query and group ID values and returns no rows for empty filters', () => {
+            const { store } = setup();
+            store.createScan(scan('done'));
+            store.addItems('done', [post('a')], 'p1', 1200);
+            store.finishScan('done', 'done', '', '', {}, 1500);
+            expect(store.trendingRows({ queries: ["q') OR 1=1 --"], groupIds: ["g') OR 1=1 --"], since: 0 })).toEqual([]);
+            expect(store.trendingRows({ queries: [], groupIds: [], since: 0 })).toEqual([]);
+        });
+    });
 });
