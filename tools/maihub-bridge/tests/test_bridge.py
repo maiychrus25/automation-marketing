@@ -3350,20 +3350,18 @@ class BriefTickTests(unittest.TestCase):
 
     def test_run_agent_timeout_kills_real_process_group(self):
         self.assertTrue(callable(getattr(bridge, "run_agent", None)), "run_agent chưa được triển khai")
-        # Thử quyền killpg với một tiến trình không có con trước khi sinh hai sleep.
-        try:
-            probe = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
-        except PermissionError as err:
-            self.skipTest("Sandbox blocks new sessions: %s" % err)
-        try:
-            try:
-                os.killpg(probe.pid, signal.SIGTERM)
-            except PermissionError as err:
-                self.skipTest("Sandbox blocks process groups: %s" % err)
-        finally:
-            probe.kill()
-            probe.wait(timeout=5)
         processes = []
+
+        def cleanup():
+            for process in processes:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                finally:
+                    process.wait(timeout=5)
+
+        self.addCleanup(cleanup)  # đăng ký trước khi sinh group, kể cả khi test thất bại
 
         def popen(*args, **kwargs):
             # Không sinh sleep nếu code làm mất session riêng (sẽ không dọn được bằng pid).
@@ -3374,10 +3372,7 @@ class BriefTickTests(unittest.TestCase):
 
         started = time.monotonic()
         try:
-            try:
-                _, timed_out = bridge.run_agent(["/bin/sh", "-c", "sleep 30 & sleep 30"], "", 1, popen=popen)
-            except PermissionError as err:
-                self.skipTest("Sandbox blocks process groups: %s" % err)
+            _, timed_out = bridge.run_agent(["/bin/sh", "-c", "sleep 30 & sleep 30"], "", 1, popen=popen)
             self.assertTrue(timed_out)
             # Cho init thời gian thu hồi các tiến trình con vừa bị dừng.
             while time.monotonic() - started < 14:
@@ -3389,14 +3384,8 @@ class BriefTickTests(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 15)
             with self.assertRaises(ProcessLookupError):
                 os.killpg(processes[0].pid, 0)
-        finally:
-            for process in processes:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                finally:
-                    process.wait(timeout=5)
+        except PermissionError as err:
+            self.fail("Cannot create or signal the real agent process group: %s" % err)
 
     def test_cli_dispatch_loads_env_command_timeout_and_state(self):
         self.set_due()
