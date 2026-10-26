@@ -118,6 +118,29 @@ sudo python3 maihub_bridge.py install-watch --env-file <.env MaiHub> --notify-en
 
 `pair --install` tự gọi lệnh này; hai bot cài từ trước (`/opt/bot/maihub/.env`) thì chạy tay. Bắt buộc root. Thứ tự: kiểm tra đầu vào (tệp tồn tại, user có thật, tên service chỉ gồm `A-Za-z0-9@._-`, đường dẫn không có khoảng trắng) → tạo `--state-dir` (mặc định `state/` cạnh `--env-file`, `<user>:<user>` 700) → chạy thử `watch --dry-run` dưới quyền user khoảng 5 giây (chỉ chứng minh hai tệp `.env` đọc được và có chat nhận tin; không chứng minh MaiHub hoặc Telegram với tới được; thoát lỗi sớm thì dừng, chưa ghi gì) → chạy `watch --check-telegram` dưới quyền user (gọi Telegram `getMe`; lỗi thì dừng, chưa ghi unit; bỏ qua bằng `--skip-telegram-check`) → ghi `/etc/systemd/system/maihub-watch-<tên-service>.service` (0644, ghi nguyên tử) → `systemctl daemon-reload` → `systemctl enable` rồi `systemctl restart` (chạy lại lệnh sẽ áp dụng unit, bridge hoặc khoá mới cho service đang chạy). Unit chạy `python3 -I <bridge> watch ...` với `Restart=always`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ReadWritePaths=<state-dir>`, `PrivateTmp=yes`. Bridge dùng bản nằm cạnh `--env-file` nếu có, không thì chính tệp đang chạy.
 
+### Cài đề xuất bài mỗi 15 phút (`install-brief`)
+
+```bash
+sudo python3 maihub_bridge.py install-brief --env-file <.env MaiHub> --user <user> --name <tên-service-bot> [--state-dir <thư mục>] [--agent-cmd 'codex exec -']
+```
+
+Bắt buộc root, chạy riêng cho từng bot đã ghép nối. Thứ tự: kiểm tra đầu vào (tệp tồn tại, user có thật, tên service chỉ gồm `A-Za-z0-9@._-`, đường dẫn không có khoảng trắng; từ chối thư mục `.env` hoặc trạng thái là symlink và thư mục cha trạng thái không đáng tin như `install-watch`) → tạo `--state-dir` (mặc định `state/` cạnh `--env-file`, `<user>:<user>` 700) → nếu có `--agent-cmd`, ghi `MAIHUB_AGENT_CMD` vào `.env` bằng cách gộp, giữ các khoá khác (quyền 600, thuộc user bot) → chạy `brief-tick --dry-run` dưới quyền user → ghi nguyên tử `/etc/systemd/system/maihub-brief-<tên-service>.service` và `.timer` (0644) → `systemctl daemon-reload` → `systemctl enable --now maihub-brief-<tên-service>.timer`. Dry-run lỗi thì dừng trước khi ghi unit hoặc gọi `systemctl`; thư mục trạng thái và lệnh agent đã ghi không tự hoàn tác.
+
+Service là `Type=oneshot`, chạy `python3 -I <bridge> brief-tick --env-file <.env MaiHub> --state <state-dir>/brief-state.json` với `User=<user>`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ReadWritePaths=<state-dir>`, `PrivateTmp=yes`, `TimeoutStartSec=3600`. Bridge dùng bản nằm cạnh `--env-file` nếu có, không thì chính tệp đang chạy. Timer có `OnCalendar=*:0/15`, `Persistent=true`, `WantedBy=timers.target`, gọi service mỗi 15 phút và chạy bù một lượt khi máy bật lại. `brief-tick` giữ khoá tệp để tránh chạy chồng; bot chỉ tạo nháp để khách duyệt, không tự đăng.
+
+Trong `.env` MaiHub:
+
+- `MAIHUB_AGENT_CMD`: mặc định `claude -p --allowedTools mcp__maihub`; đổi bằng `--agent-cmd` hoặc sửa khoá này. Lệnh được tách thành argv, không chạy qua shell; lời nhắc truyền qua stdin.
+- `MAIHUB_AGENT_TIMEOUT_SEC`: số nguyên dương, mặc định `2700` giây cho mỗi lượt agent. Service có giới hạn tổng thời gian `3600` giây.
+
+Kiểm tra riêng trước khi cài:
+
+```bash
+sudo -u <user> -H python3 -I <bridge> brief-tick --env-file <.env MaiHub> --dry-run
+```
+
+Dry-run gọi `system.status`, kiểm phần tử đầu của lệnh agent có trong `PATH` bằng `shutil.which`, rồi thoát (mã 0 = được). Không gọi Claude, không nhận brief, không tạo nháp và không ghi trạng thái. CLI agent cần có trong `PATH` của user bot khi chạy dưới `sudo` và systemd, không chỉ trong shell tương tác. Theo dõi bằng `systemctl status maihub-brief-<tên-service>.timer` và `journalctl -u maihub-brief-<tên-service>.service`; dừng lịch bằng `sudo systemctl disable --now maihub-brief-<tên-service>.timer`.
+
 ## Bảo mật
 
 - Ghim chứng chỉ: bridge không kiểm CA hay tên miền, mà so SHA-256 chứng chỉ đầu cuối với `MAIHUB_CERT_SHA256` bằng so sánh hằng thời gian. Bắt tay TLS xong và khớp ghim thì mới gửi yêu cầu; lệch thì dừng, khoá API không rời máy.

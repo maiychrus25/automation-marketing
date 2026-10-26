@@ -1151,6 +1151,45 @@ def render_watch_unit(name, user, bridge, env_file, notify_env, state_dir):
     ])
 
 
+def render_brief_units(name, user, bridge, env_file, state_dir):
+    """Nội dung service và timer đề xuất bài; không hỗ trợ đường dẫn có khoảng trắng."""
+    for value in (bridge, env_file, state_dir):
+        if re.search(r"\s", value):
+            raise BridgeError("CONFIG", "Đường dẫn không được chứa khoảng trắng: %s" % value)
+    service = "\n".join([
+        "[Unit]",
+        "Description=MaiHub đề xuất bài cho %s.service" % name,
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "",
+        "[Service]",
+        "Type=oneshot",
+        "User=%s" % user,
+        "ExecStart=/usr/bin/python3 -I %s brief-tick --env-file %s --state %s" % (
+            bridge, env_file, os.path.join(state_dir, "brief-state.json")),
+        "NoNewPrivileges=yes",
+        "ProtectSystem=strict",
+        "ReadWritePaths=%s" % state_dir,
+        "PrivateTmp=yes",
+        "TimeoutStartSec=3600",
+        "",
+    ])
+    timer = "\n".join([
+        "[Unit]",
+        "Description=MaiHub đề xuất bài mỗi 15 phút cho %s.service" % name,
+        "",
+        "[Timer]",
+        "OnCalendar=*:0/15",
+        "Persistent=true",
+        "Unit=maihub-brief-%s.service" % name,
+        "",
+        "[Install]",
+        "WantedBy=timers.target",
+        "",
+    ])
+    return service, timer
+
+
 def _write_unit_atomic(unit_path, text):
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(unit_path), prefix=".maihub-watch-")
     try:
@@ -1233,6 +1272,74 @@ def cmd_install_watch(args, run=subprocess.run, geteuid=os.geteuid, systemd_dir=
             raise BridgeError("CONFIG", "Cần chạy bằng root")
         install_watch(args.env_file, args.notify_env, args.user, args.name, args.state_dir, run, systemd_dir, getpwnam,
                       skip_telegram_check=args.skip_telegram_check)
+    except BridgeError as err:
+        sys.stderr.write("%s\n" % err.message)
+        return exit_code_for(err)
+    except (IOError, OSError) as err:
+        sys.stderr.write("%s\n" % err)
+        return EXIT_CONFIG
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("Lệnh chạy quá %d giây\n" % RUN_TIMEOUT)
+        return EXIT_NETWORK
+    return 0
+
+
+def install_brief(env_file, user, name, state_dir, run, systemd_dir, getpwnam, agent_cmd=None):
+    """Kiểm tra, chạy thử brief-tick dưới quyền user, ghi hai unit rồi bật timer. Trả đường dẫn hai unit."""
+    env_file = os.path.abspath(env_file)
+    if not os.path.isfile(env_file):
+        raise BridgeError("CONFIG", "Không thấy tệp %s" % env_file)
+    if not SERVICE_NAME_RE.match(name):
+        raise BridgeError("CONFIG", "Tên service không hợp lệ: %s" % name)
+    try:
+        account = getpwnam(user)
+    except KeyError:
+        raise BridgeError("CONFIG", "Không có user %s trên máy" % user)
+    env_dir = os.path.dirname(env_file)
+    local_bridge = os.path.join(env_dir, BRIDGE_NAME)
+    bridge = local_bridge if os.path.isfile(local_bridge) else os.path.abspath(__file__)
+    state_dir = os.path.abspath(state_dir or os.path.join(env_dir, "state"))
+    service_name = "maihub-brief-%s.service" % name
+    timer_name = "maihub-brief-%s.timer" % name
+    service_path = os.path.join(systemd_dir, service_name)
+    timer_path = os.path.join(systemd_dir, timer_name)
+    service_text, timer_text = render_brief_units(name, user, bridge, env_file, state_dir)
+    _require_safe_dir(env_dir, check_parent=False)
+    _require_safe_dir(state_dir)
+    if agent_cmd is not None:
+        if "\n" in agent_cmd or "\r" in agent_cmd:
+            raise BridgeError("CONFIG", "MAIHUB_AGENT_CMD không được chứa ký tự xuống dòng")
+        agent_command({"MAIHUB_AGENT_CMD": agent_cmd})
+
+    os.makedirs(state_dir, exist_ok=True)
+    os.chown(state_dir, account.pw_uid, account.pw_gid)
+    os.chmod(state_dir, 0o700)
+    if agent_cmd is not None:
+        write_env_file(env_file, {"MAIHUB_AGENT_CMD": agent_cmd}, uid=account.pw_uid, gid=account.pw_gid)
+    dry = ["sudo", "-u", user, "-H", "python3", "-I", bridge, "brief-tick",
+           "--env-file", env_file, "--state", os.path.join(state_dir, "brief-state.json"), "--dry-run"]
+    result = run(dry, cwd=account.pw_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                 universal_newlines=True, timeout=RUN_TIMEOUT)
+    if result.returncode != 0:
+        detail = getattr(result, "stderr", "")
+        raise BridgeError("CONFIG", "brief-tick --dry-run dưới quyền %s thất bại (mã %s)%s" % (
+            user, result.returncode, ": " + detail.strip() if isinstance(detail, str) and detail.strip() else ""))
+    _write_unit_atomic(service_path, service_text)
+    _write_unit_atomic(timer_path, timer_text)
+    for cmd in (["systemctl", "daemon-reload"], ["systemctl", "enable", "--now", timer_name]):
+        result = run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=RUN_TIMEOUT)
+        if result.returncode != 0:
+            raise BridgeError("CONFIG", "%s thất bại (mã %s)" % (" ".join(cmd), result.returncode))
+    print("Đã cài timer %s (đề xuất bài mỗi 15 phút)." % timer_name)
+    return service_path, timer_path
+
+
+def cmd_install_brief(args, run=subprocess.run, geteuid=os.geteuid, systemd_dir=SYSTEMD_DIR, getpwnam=pwd.getpwnam):
+    try:
+        if geteuid() != 0:
+            raise BridgeError("CONFIG", "Cần chạy bằng root")
+        install_brief(args.env_file, args.user, args.name, args.state_dir, run, systemd_dir, getpwnam,
+                      agent_cmd=args.agent_cmd)
     except BridgeError as err:
         sys.stderr.write("%s\n" % err.message)
         return exit_code_for(err)
@@ -1894,12 +2001,21 @@ def cmd_brief_tick(args):
         if args.env_file:
             env.update(parse_env_file(args.env_file))
         client = MaiHubClient(Config.load(environ=env))
+        if args.dry_run:
+            client.call("system.status")
+            command = agent_command(env)
+            if not shutil.which(command[0]):
+                raise BridgeError("CONFIG", "Không tìm thấy lệnh agent trong PATH: %s" % command[0])
+            print_json({"ok": True})
+            return 0
         state_path = args.state or os.path.join(os.path.dirname(os.path.abspath(args.env_file)), "state", "brief-state.json")
         result = brief_tick(client, env, state_path, run_agent=run_agent)
         for warning in result.get("warnings", []):
             print(warning, file=sys.stderr)
         print_json(result)
     except BridgeError as err:
+        if args.dry_run:
+            print("%s: %s" % (err.code, err.message), file=sys.stderr)
         return exit_code_for(err)
     except OSError as err:
         print("CONFIG: %s" % err, file=sys.stderr)
@@ -1948,6 +2064,7 @@ def build_parser():
     p_watch.add_argument("--check-telegram", action="store_true", help="Gọi Telegram getMe một lần qua tuyến đã chọn rồi thoát (0 = được)")
     p_brief = sub.add_parser("brief-tick", parents=[shared], help="Tạo nháp đề xuất cho các Page đến lượt")
     p_brief.add_argument("--state", help="Tệp trạng thái (mặc định: state/brief-state.json cạnh --env-file)")
+    p_brief.add_argument("--dry-run", action="store_true", help="Kiểm tra kết nối MaiHub và lệnh agent trong PATH rồi thoát, không gọi AI")
     p_iw = sub.add_parser("install-watch", help="Cài watch thành service systemd (cần root)")
     p_iw.add_argument("--env-file", required=True, help=".env MaiHub")
     p_iw.add_argument("--notify-env", required=True, help=".env của bot (TG_TOKEN, ALLOWED_CHAT_ID, ...)")
@@ -1955,6 +2072,12 @@ def build_parser():
     p_iw.add_argument("--name", required=True, help="Tên service của bot (đặt tên maihub-watch-<name>.service)")
     p_iw.add_argument("--skip-telegram-check", action="store_true", help="Bỏ qua bước kiểm tra Telegram getMe")
     p_iw.add_argument("--state-dir", default=None, help="Thư mục trạng thái (mặc định: state/ cạnh --env-file)")
+    p_ib = sub.add_parser("install-brief", help="Cài timer đề xuất bài mỗi 15 phút (cần root)")
+    p_ib.add_argument("--env-file", required=True, help=".env MaiHub")
+    p_ib.add_argument("--user", required=True, help="User chạy service (thường là user của bot)")
+    p_ib.add_argument("--name", required=True, help="Tên service của bot (đặt tên maihub-brief-<name>.service và .timer)")
+    p_ib.add_argument("--state-dir", default=None, help="Thư mục trạng thái (mặc định: state/ cạnh --env-file)")
+    p_ib.add_argument("--agent-cmd", help="Lệnh agent ghi vào MAIHUB_AGENT_CMD trong .env MaiHub")
     return parser
 
 
@@ -1976,6 +2099,8 @@ def main(argv=None):
         return cmd_brief_tick(args)
     if args.command == "install-watch":
         return cmd_install_watch(args)
+    if args.command == "install-brief":
+        return cmd_install_brief(args)
     try:
         client = MaiHubClient(loader())
         if args.command == "describe":

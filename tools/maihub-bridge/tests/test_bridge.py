@@ -1965,6 +1965,283 @@ class WatchCommandTests(BridgeTestCase):
         self.assertNotIn(TG_TOKEN, err.getvalue())
 
 
+class InstallBriefTests(InstallFixture):
+    def setUp(self):
+        # Cài unit chỉ dùng FakeRun, không cần HTTP server của fixture cha.
+        with mock.patch.object(BridgeTestCase, "setUp"):
+            InstallFixture.setUp(self)
+        self.env_dir = os.path.join(self.tmp.name, "maihub")
+        os.mkdir(self.env_dir)
+        self.env_file = os.path.join(self.env_dir, ".env")
+        with open(self.env_file, "w") as handle:
+            handle.write("# Keep configuration\nMAIHUB_URL=https://hub:7443\nMAIHUB_API_KEY=" + API_KEY +
+                         "\nMAIHUB_CERT_SHA256=" + PIN + "\nTELEGRAM_PROXY=http://proxy:8080\n")
+
+    def brief_args(self, **over):
+        ns = dict(env_file=self.env_file, user="claudeproxy", state_dir=None, agent_cmd=None)
+        ns.update(over)
+        service = ns.pop("name", "tg-bot")
+        args = mock.Mock(**ns)
+        args.name = service
+        return args
+
+    def install_brief(self, run, euid=0, **over):
+        self.assertTrue(callable(getattr(bridge, "cmd_install_brief", None)), "cmd_install_brief chưa được triển khai")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch("os.chown") as chown:
+            code = bridge.cmd_install_brief(self.brief_args(**over), run=run, geteuid=lambda: euid,
+                                            systemd_dir=self.systemd, getpwnam=self.pw)
+        self.chown = chown
+        return code, out.getvalue(), err.getvalue()
+
+    def unit_path(self, suffix="service"):
+        return os.path.join(self.systemd, "maihub-brief-tg-bot." + suffix)
+
+    def dry_run(self, client, which="/usr/bin/claude"):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(bridge, "MaiHubClient", return_value=client), \
+                mock.patch.object(bridge.shutil, "which", return_value=which) as lookup, \
+                mock.patch.object(bridge, "run_agent") as agent, \
+                mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch("sys.stdout", out), mock.patch("sys.stderr", err):
+            try:
+                code = bridge.main(["brief-tick", "--env-file", self.env_file, "--dry-run"])
+            except SystemExit as exc:
+                self.fail("brief-tick --dry-run chưa được đăng ký: %s" % exc)
+        agent.assert_not_called()
+        self.assertFalse(os.path.exists(os.path.join(self.env_dir, "state")))
+        return code, out.getvalue(), err.getvalue(), lookup
+
+    def test_unit_content(self):
+        self.assertTrue(callable(getattr(bridge, "render_brief_units", None)), "render_brief_units chưa được triển khai")
+        service, timer = bridge.render_brief_units("tg-bot", "claudeproxy", "/o/maihub_bridge.py", "/o/.env", "/o/state")
+        for line in ["After=network-online.target", "Wants=network-online.target", "Type=oneshot", "User=claudeproxy",
+                     "ExecStart=/usr/bin/python3 -I /o/maihub_bridge.py brief-tick --env-file /o/.env --state /o/state/brief-state.json",
+                     "NoNewPrivileges=yes", "ProtectSystem=strict", "ReadWritePaths=/o/state", "PrivateTmp=yes",
+                     "TimeoutStartSec=3600"]:
+            self.assertIn(line + "\n", service)
+        for line in ["[Timer]", "OnCalendar=*:0/15", "Persistent=true", "Unit=maihub-brief-tg-bot.service",
+                     "[Install]", "WantedBy=timers.target"]:
+            self.assertIn(line + "\n", timer)
+
+    def test_render_rejects_whitespace_in_each_path(self):
+        self.assertTrue(callable(getattr(bridge, "render_brief_units", None)), "render_brief_units chưa được triển khai")
+        for index in range(3):
+            for whitespace in (" ", "\t", "\n"):
+                paths = ["/o/bridge.py", "/o/.env", "/o/state"]
+                paths[index] += whitespace + "bad"
+                with self.subTest(index=index, whitespace=whitespace), self.assertRaises(bridge.BridgeError) as ctx:
+                    bridge.render_brief_units("bot", "user", *paths)
+                self.assertEqual(ctx.exception.code, "CONFIG")
+
+    def test_install_flow_checks_before_writing_and_enables_timer(self):
+        run = FakeRun()
+
+        def checked_run(cmd, **kwargs):
+            if "--dry-run" in cmd:
+                self.assertEqual(os.listdir(self.systemd), [])
+            else:
+                self.assertTrue(os.path.isfile(self.unit_path()))
+                self.assertTrue(os.path.isfile(self.unit_path("timer")))
+            return run(cmd, **kwargs)
+
+        code, out, err = self.install_brief(checked_run)
+        self.assertEqual(code, 0, out + err)
+        state = os.path.join(self.env_dir, "state")
+        self.assertEqual(os.stat(state).st_mode & 0o777, 0o700)
+        self.assertEqual(self.chown.call_args_list[0][0], (state, 1234, 5678))
+        self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "python3", "-I", os.path.abspath(bridge.__file__),
+                                           "brief-tick", "--env-file", self.env_file, "--state",
+                                           os.path.join(state, "brief-state.json"), "--dry-run"])
+        self.assertEqual(run.calls[0][1]["cwd"], self.home)
+        self.assertEqual([call[0] for call in run.calls[1:]], [["systemctl", "daemon-reload"],
+                         ["systemctl", "enable", "--now", "maihub-brief-tg-bot.timer"]])
+        for _, options in run.calls:
+            self.assertEqual(options["timeout"], bridge.RUN_TIMEOUT)
+        for suffix in ("service", "timer"):
+            self.assertEqual(os.stat(self.unit_path(suffix)).st_mode & 0o777, 0o644)
+        self.assertEqual(sorted(os.listdir(self.systemd)), ["maihub-brief-tg-bot.service", "maihub-brief-tg-bot.timer"])
+        self.assertNotIn(API_KEY, out + err)
+
+    def test_install_prefers_local_bridge_and_custom_state(self):
+        local = os.path.join(self.env_dir, "maihub_bridge.py")
+        open(local, "w").close()
+        state = os.path.join(self.tmp.name, "custom-state")
+        run = FakeRun()
+        code, out, err = self.install_brief(run, state_dir=state)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(local, run.calls[0][0])
+        self.assertIn(os.path.join(state, "brief-state.json"), run.calls[0][0])
+        with open(self.unit_path()) as handle:
+            text = handle.read()
+        self.assertIn("-I %s brief-tick" % local, text)
+        self.assertIn("ReadWritePaths=" + state + "\n", text)
+
+    def test_requires_root_without_side_effects(self):
+        run = FakeRun()
+        code, _, err = self.install_brief(run, euid=1000, agent_cmd="codex exec -")
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("root", err)
+        self.assertEqual(run.calls, [])
+        self.assertEqual(os.listdir(self.systemd), [])
+        self.assertNotIn("MAIHUB_AGENT_CMD", bridge.parse_env_file(self.env_file))
+
+    def test_invalid_inputs_have_no_side_effects(self):
+        for over in (dict(name="bad name"), dict(name="../escape"), dict(name="bot\n"), dict(user="ghost"),
+                     dict(env_file=os.path.join(self.tmp.name, "missing")), dict(state_dir=os.path.join(self.tmp.name, "bad path"))):
+            with self.subTest(over=over):
+                run = FakeRun()
+                code, _, _ = self.install_brief(run, **over)
+                self.assertEqual(code, bridge.EXIT_CONFIG)
+                self.assertEqual(run.calls, [])
+        self.assertEqual(os.listdir(self.systemd), [])
+        self.assertFalse(os.path.exists(os.path.join(self.env_dir, "state")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "bad path")))
+
+    def test_symlink_state_and_env_directory_rejected_before_changes(self):
+        state = os.path.join(self.env_dir, "state")
+        os.symlink(self.home, state)
+        run = FakeRun()
+        code, _, err = self.install_brief(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("symlink", err)
+        self.assertEqual(run.calls, [])
+        self.chown.assert_not_called()
+        os.unlink(state)
+        link = os.path.join(self.tmp.name, "link")
+        os.symlink(self.env_dir, link)
+        code, _, err = self.install_brief(run, env_file=os.path.join(link, ".env"))
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("symlink", err)
+        self.assertEqual(run.calls, [])
+        self.chown.assert_not_called()
+
+    def test_untrusted_state_parent_rejected_before_changes(self):
+        self.trusted.return_value = False
+        run = FakeRun()
+        code, _, _ = self.install_brief(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertEqual(run.calls, [])
+        self.chown.assert_not_called()
+        self.assertFalse(os.path.exists(os.path.join(self.env_dir, "state")))
+
+    def test_failed_dry_run_does_not_write_units_or_call_systemctl(self):
+        for exit_code in (1, 124):
+            run = FakeRun(fail_on="--dry-run", fail_code=exit_code)
+            code, _, err = self.install_brief(run)
+            self.assertEqual(code, bridge.EXIT_CONFIG)
+            self.assertIn("dry-run", err)
+            self.assertEqual(len(run.calls), 1)
+            self.assertEqual(os.listdir(self.systemd), [])
+
+    def test_failed_reinstall_keeps_existing_units(self):
+        for suffix in ("service", "timer"):
+            with open(self.unit_path(suffix), "w") as handle:
+                handle.write("existing " + suffix)
+        run = FakeRun(fail_on="--dry-run")
+        code, _, _ = self.install_brief(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        for suffix in ("service", "timer"):
+            with open(self.unit_path(suffix)) as handle:
+                self.assertEqual(handle.read(), "existing " + suffix)
+        self.assertEqual(len(run.calls), 1)
+
+    def test_dry_run_timeout_aborts_before_writing_units(self):
+        run = FakeRun(timeout_on="--dry-run")
+        code, _, _ = self.install_brief(run)
+        self.assertEqual(code, bridge.EXIT_NETWORK)
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(os.listdir(self.systemd), [])
+
+    def test_systemctl_failure_stops_installation(self):
+        for step, count in (("daemon-reload", 2), ("enable", 3)):
+            run = FakeRun(fail_on=step)
+            code, _, err = self.install_brief(run)
+            self.assertEqual(code, bridge.EXIT_CONFIG)
+            self.assertIn(step, err)
+            self.assertEqual(len(run.calls), count)
+
+    def test_agent_override_written_before_probe_keeps_other_env_keys(self):
+        with open(self.env_file, "a") as handle:
+            handle.write("MAIHUB_AGENT_CMD=old -p\nMAIHUB_AGENT_TIMEOUT_SEC=123\n")
+        run = FakeRun()
+
+        def checked_run(cmd, **kwargs):
+            if "--dry-run" in cmd:
+                self.assertEqual(bridge.parse_env_file(self.env_file)["MAIHUB_AGENT_CMD"], "codex exec -")
+            return run(cmd, **kwargs)
+
+        with mock.patch.object(bridge, "write_env_file", wraps=bridge.write_env_file) as writer:
+            code, out, err = self.install_brief(checked_run, agent_cmd="codex exec -")
+        self.assertEqual(code, 0, out + err)
+        writer.assert_called_once_with(self.env_file, {"MAIHUB_AGENT_CMD": "codex exec -"}, uid=1234, gid=5678)
+        values = bridge.parse_env_file(self.env_file)
+        self.assertEqual(values["MAIHUB_API_KEY"], API_KEY)
+        self.assertEqual(values["TELEGRAM_PROXY"], "http://proxy:8080")
+        self.assertEqual(values["MAIHUB_AGENT_TIMEOUT_SEC"], "123")
+        self.assertEqual(os.stat(self.env_file).st_mode & 0o777, 0o600)
+        with open(self.env_file) as handle:
+            self.assertIn("# Keep configuration\n", handle.read())
+
+    def test_no_override_preserves_env_file(self):
+        with open(self.env_file) as handle:
+            original = handle.read()
+        code, out, err = self.install_brief(FakeRun())
+        self.assertEqual(code, 0, out + err)
+        with open(self.env_file) as handle:
+            self.assertEqual(handle.read(), original)
+
+    def test_invalid_agent_override_rejected_before_changes(self):
+        for command in ("", "   ", "claude '\"", "claude\nOTHER=value", "claude\rOTHER=value"):
+            run = FakeRun()
+            code, _, _ = self.install_brief(run, agent_cmd=command)
+            self.assertEqual(code, bridge.EXIT_CONFIG)
+            self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(os.path.join(self.env_dir, "state")))
+        self.assertNotIn("MAIHUB_AGENT_CMD", bridge.parse_env_file(self.env_file))
+
+    def test_install_cli_dispatch(self):
+        self.assertTrue(callable(getattr(bridge, "cmd_install_brief", None)), "cmd_install_brief chưa được triển khai")
+        with mock.patch.object(bridge, "cmd_install_brief", return_value=0) as install:
+            code = bridge.main(["install-brief", "--env-file", self.env_file, "--user", "claudeproxy", "--name", "tg-bot",
+                                "--state-dir", "/custom/state", "--agent-cmd", "codex exec -"])
+        self.assertEqual(code, 0)
+        args = install.call_args[0][0]
+        self.assertEqual((args.env_file, args.user, args.name, args.state_dir, args.agent_cmd),
+                         (self.env_file, "claudeproxy", "tg-bot", "/custom/state", "codex exec -"))
+
+    def test_tick_dry_run_checks_status_and_default_agent_only(self):
+        client = mock.Mock()
+        code, out, err, lookup = self.dry_run(client)
+        self.assertEqual(code, 0, out + err)
+        client.call.assert_called_once_with("system.status")
+        lookup.assert_called_once_with("claude")
+
+    def test_tick_dry_run_respects_quoted_agent_command(self):
+        with open(self.env_file, "a") as handle:
+            handle.write('MAIHUB_AGENT_CMD="/opt/agent tools/cli" exec -\n')
+        client = mock.Mock()
+        code, out, err, lookup = self.dry_run(client, which="/opt/agent tools/cli")
+        self.assertEqual(code, 0, out + err)
+        lookup.assert_called_once_with("/opt/agent tools/cli")
+        client.call.assert_called_once_with("system.status")
+
+    def test_tick_dry_run_missing_agent_is_config_error(self):
+        client = mock.Mock()
+        code, _, err, _ = self.dry_run(client, which=None)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("claude", err)
+        client.call.assert_called_once_with("system.status")
+
+    def test_tick_dry_run_unreachable_is_failure(self):
+        client = mock.Mock()
+        client.call.side_effect = bridge.BridgeError("UNREACHABLE", "Không kết nối được MaiHub")
+        code, _, _, lookup = self.dry_run(client)
+        self.assertEqual(code, bridge.EXIT_NETWORK)
+        lookup.assert_not_called()
+        client.call.assert_called_once_with("system.status")
+
+
 class InstallWatchTests(InstallFixture):
     def setUp(self):
         InstallTests.setUp(self)
