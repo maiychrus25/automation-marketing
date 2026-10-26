@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 import base64
+import fcntl
 import hashlib
 import io
 import json
 import os
 import shutil
+import signal
 import ssl
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -2483,6 +2486,365 @@ class WatcherVideoTests(unittest.TestCase):
         self.run_events([video_event(1)], sender)
         self.assertEqual(sender.sent, [self.CAPTION])
         self.assertEqual(self.client.downloads, [])
+
+
+class BriefTickTests(unittest.TestCase):
+    """Không mở socket hay gọi AI; chỉ test timeout dùng process group thật."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state_path = os.path.join(self.tmp.name, "state", "brief-state.json")
+        self.clock = FakeClock(now=1800000000.0)
+        self.agent_calls = []
+        self.calls = []
+        self.identities = [{"profileId": "p1", "kind": "page", "pageName": "Học lái xe",
+                            "learnedAt": int(self.clock() * 1000)}]
+        self.due = []
+        self.briefs = {"p1": {"profileId": "p1", "status": "idle", "attempts": 0}}
+        self.errors = {}
+        self.agent_result = (0, False)
+        self.client = mock.Mock(call=self.call)
+
+    def call(self, method, params=None, idempotency_key=None):
+        self.calls.append((method, params))
+        if method in self.errors:
+            raise self.errors[method]
+        if method == "system.status":
+            return {"workspace": {"id": "ws1"}}
+        if method == "pages.list":
+            return {"identities": self.identities}
+        if method == "briefs.claimDue":
+            return {"briefs": self.due}
+        if method == "briefs.get":
+            profile_id = params["profileId"]
+            if profile_id not in self.briefs:
+                raise bridge.BridgeError("NOT_FOUND", "Chưa có brief")
+            return {"brief": self.briefs[profile_id]}
+        if method == "briefs.finish":
+            self.briefs[params["profileId"]]["status"] = "idle"
+            return {}
+        raise AssertionError("Unexpected method: %s" % method)
+
+    def run_agent(self, cmd, prompt, timeout_sec):
+        self.agent_calls.append((cmd, prompt, timeout_sec))
+        return self.agent_result
+
+    def tick(self, env=None, runner=None):
+        # Lỗi thiếu API phải hiện thành FAIL rõ ràng trong vòng RED.
+        self.assertTrue(callable(getattr(bridge, "brief_tick", None)), "brief_tick chưa được triển khai")
+        return bridge.brief_tick(self.client, env or {}, self.state_path,
+                                 run_agent=runner or self.run_agent, clock=self.clock)
+
+    def set_due(self, count=1, status="idle"):
+        self.due = [{"profileId": "p%d" % i, "pageName": "Page %d" % i, "niche": "Dạy lái xe",
+                     "keywords": ["lái xe", "an toàn"], "groupIds": ["g1"], "tone": "Thân thiện",
+                     "notes": "Không quảng cáo", "draftsPerDay": 1} for i in range(1, count + 1)]
+        for brief in self.due:
+            self.briefs[brief["profileId"]] = dict(brief, status=status, attempts=0)
+
+    def finishes(self):
+        return [params for method, params in self.calls if method == "briefs.finish"]
+
+    def test_connection_failure_returns_without_agent(self):
+        self.errors["system.status"] = bridge.BridgeError("UNREACHABLE", "offline")
+        result = self.tick()
+        self.assertEqual(result["ran"], [])
+        self.assertFalse(result["onboarded"])
+        self.assertEqual(self.agent_calls, [])
+        self.assertEqual([m for m, _ in self.calls], ["system.status"])
+
+    def test_nothing_due_uses_no_agent(self):
+        self.assertEqual(self.tick(), {"onboarded": False, "ran": [], "warnings": []})
+        self.assertEqual(self.agent_calls, [])
+        self.assertIn(("briefs.claimDue", None), self.calls)
+
+    def test_empty_pages_onboard_once_per_six_hours_and_save_ms(self):
+        self.identities = []
+        result = self.tick()
+        self.assertTrue(result["onboarded"])
+        self.assertEqual(len(self.agent_calls), 1)
+        self.assertEqual(self.agent_calls[0][1], bridge.ONBOARD_PROMPT)
+        with open(self.state_path) as handle:
+            self.assertEqual(json.load(handle), {"lastOnboardAt": 1800000000000})
+        self.clock.now += 21599
+        self.assertFalse(self.tick()["onboarded"])
+        self.assertEqual(len(self.agent_calls), 1)
+        self.clock.now += 1
+        self.assertTrue(self.tick()["onboarded"])
+        self.assertEqual(len(self.agent_calls), 2)
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.state_path))),
+                         ["brief-state.json", "brief-state.json.lock"])
+
+    def test_failed_onboarding_is_also_throttled(self):
+        self.identities = []
+        self.agent_result = (1, False)
+        self.tick()
+        self.tick()
+        self.assertEqual(len(self.agent_calls), 1)
+
+    def test_all_identities_older_than_seven_days_onboard(self):
+        self.identities[0]["learnedAt"] -= 7 * 86400 * 1000 + 1
+        self.assertTrue(self.tick()["onboarded"])
+
+    def test_one_recent_identity_prevents_age_only_onboarding(self):
+        self.identities.append({"profileId": "person1", "kind": "person", "pageName": "",
+                                "learnedAt": int((self.clock() - 8 * 86400) * 1000)})
+        self.assertFalse(self.tick()["onboarded"])
+        self.assertEqual(self.agent_calls, [])
+
+    def test_exactly_seven_days_is_not_older(self):
+        self.identities[0]["learnedAt"] -= 7 * 86400 * 1000
+        self.assertFalse(self.tick()["onboarded"])
+
+    def test_new_page_without_brief_onboards(self):
+        self.identities.append({"profileId": "p2", "kind": "page", "pageName": "Quần áo",
+                                "learnedAt": int(self.clock() * 1000)})
+        self.assertTrue(self.tick()["onboarded"])
+        self.assertIn(("briefs.get", {"profileId": "p2"}), self.calls)
+
+    def test_person_without_brief_does_not_onboard(self):
+        self.identities[0]["kind"] = "person"
+        self.briefs.clear()
+        self.assertFalse(self.tick()["onboarded"])
+        self.assertFalse(any(m == "briefs.get" for m, _ in self.calls))
+
+    def test_onboarding_then_claims_new_briefs(self):
+        self.identities = []
+
+        def onboard_and_suggest(cmd, prompt, timeout_sec):
+            if prompt == bridge.ONBOARD_PROMPT:
+                self.set_due()
+            return self.run_agent(cmd, prompt, timeout_sec)
+
+        result = self.tick(runner=onboard_and_suggest)
+        self.assertEqual(result, {"onboarded": True, "ran": ["p1"], "warnings": []})
+        self.assertEqual(len(self.agent_calls), 2)
+
+    def test_due_briefs_run_in_order_with_complete_json(self):
+        self.set_due(2)
+        result = self.tick()
+        self.assertEqual(result, {"onboarded": False, "ran": ["p1", "p2"], "warnings": []})
+        self.assertEqual(len(self.agent_calls), 2)
+        for brief, (cmd, prompt, timeout_sec) in zip(self.due, self.agent_calls):
+            start = prompt.index("{\n")
+            embedded, _ = json.JSONDecoder().raw_decode(prompt[start:])
+            self.assertEqual(embedded, brief)
+            self.assertIn(brief["profileId"], prompt)
+            self.assertEqual(cmd, ["claude", "-p", "--allowedTools", "mcp__maihub"])
+            self.assertEqual(timeout_sec, 2700)
+        self.assertEqual(self.finishes(), [])  # agent đã finish, không finish lần hai
+
+    def test_agent_exit_one_releases_running_brief(self):
+        self.set_due(status="running")
+        self.agent_result = (1, False)
+        self.tick()
+        self.assertEqual(self.finishes(), [{"profileId": "p1", "ok": False, "error": "agent thoát mã 1"}])
+
+    def test_agent_exit_zero_without_finish_is_failure(self):
+        self.set_due(status="running")
+        self.tick()
+        self.assertEqual(self.finishes(), [{"profileId": "p1", "ok": False, "error": "agent thoát mã 0"}])
+
+    def test_timeout_releases_running_brief(self):
+        self.set_due(status="running")
+        self.agent_result = (None, True)
+        self.tick()
+        self.assertEqual(self.finishes(), [{"profileId": "p1", "ok": False, "error": "agent quá giờ"}])
+
+    def test_already_finished_brief_is_not_finished_twice(self):
+        self.set_due()
+        self.agent_result = (1, False)
+        self.tick()
+        self.assertEqual(self.finishes(), [])
+
+    def test_invalid_params_from_finish_warns_and_runs_next_brief(self):
+        self.set_due(2, status="running")
+        self.agent_result = (1, False)
+        self.errors["briefs.finish"] = bridge.BridgeError("INVALID_PARAMS", "Đã kết thúc")
+        result = self.tick()
+        self.assertEqual(result["ran"], ["p1", "p2"])
+        self.assertEqual(len(self.agent_calls), 2)
+        self.assertEqual([p["profileId"] for p in self.finishes()], ["p1", "p2"])
+        self.assertTrue(any("INVALID_PARAMS" in w for w in result["warnings"]))
+
+    def test_get_failure_warns_and_runs_next_brief(self):
+        self.set_due(2)
+
+        def run_then_disconnect(cmd, prompt, timeout_sec):
+            self.errors["briefs.get"] = bridge.BridgeError("UNREACHABLE", "offline")
+            return self.run_agent(cmd, prompt, timeout_sec)
+
+        result = self.tick(runner=run_then_disconnect)
+        self.assertEqual(result["ran"], ["p1", "p2"])
+        self.assertEqual(len(self.agent_calls), 2)
+        self.assertEqual(len(result["warnings"]), 2)
+
+    def test_old_maihub_warns_once_without_agent(self):
+        self.errors["pages.list"] = bridge.BridgeError("UNKNOWN_METHOD", "pages.list")
+        self.assertEqual(self.tick(), {"onboarded": False, "ran": [], "warnings": ["MaiHub cần ≥ 26.31.0"]})
+        self.assertEqual(self.agent_calls, [])
+        self.assertEqual([m for m, _ in self.calls], ["system.status", "pages.list"])
+
+    def test_held_lock_skips_without_api_or_agent(self):
+        os.makedirs(os.path.dirname(self.state_path))
+        with open(self.state_path + ".lock", "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.tick(), {"skipped": "locked"})
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.agent_calls, [])
+        self.assertEqual(self.tick()["ran"], [])  # khoá được nhả
+
+    def test_lock_is_held_while_agent_runs(self):
+        self.set_due()
+
+        def check_lock(cmd, prompt, timeout_sec):
+            self.assertEqual(self.tick(), {"skipped": "locked"})
+            return self.run_agent(cmd, prompt, timeout_sec)
+
+        self.assertEqual(self.tick(runner=check_lock)["ran"], ["p1"])
+
+    def test_agent_command_default_and_shell_quoting(self):
+        self.assertTrue(callable(getattr(bridge, "agent_command", None)), "agent_command chưa được triển khai")
+        self.assertEqual(bridge.agent_command({}), ["claude", "-p", "--allowedTools", "mcp__maihub"])
+        self.assertEqual(bridge.agent_command({"MAIHUB_AGENT_CMD": "codex exec -"}), ["codex", "exec", "-"])
+        self.assertEqual(bridge.agent_command({"MAIHUB_AGENT_CMD": "'/opt/AI CLI/claude' -p"}),
+                         ["/opt/AI CLI/claude", "-p"])
+
+    def test_custom_command_and_timeout_reach_agent(self):
+        self.set_due()
+        self.tick({"MAIHUB_AGENT_CMD": "codex exec -", "MAIHUB_AGENT_TIMEOUT_SEC": "123"})
+        self.assertEqual(self.agent_calls[0][0], ["codex", "exec", "-"])
+        self.assertEqual(self.agent_calls[0][2], 123)
+
+    def test_invalid_agent_config_does_not_claim_work(self):
+        for env in ({"MAIHUB_AGENT_CMD": "   "}, {"MAIHUB_AGENT_CMD": "'unclosed"},
+                    {"MAIHUB_AGENT_TIMEOUT_SEC": "no"}, {"MAIHUB_AGENT_TIMEOUT_SEC": "0"},
+                    {"MAIHUB_AGENT_TIMEOUT_SEC": "-1"}):
+            with self.subTest(env=env):
+                self.assertTrue(callable(getattr(bridge, "brief_tick", None)), "brief_tick chưa được triển khai")
+                with self.assertRaises(bridge.BridgeError) as ctx:
+                    bridge.brief_tick(self.client, env, self.state_path, self.run_agent, self.clock)
+                self.assertEqual(ctx.exception.code, "CONFIG")
+                self.assertFalse(any(m == "briefs.claimDue" for m, _ in self.calls))
+
+    def test_prompts_include_required_steps_and_safety(self):
+        self.assertTrue(hasattr(bridge, "ONBOARD_PROMPT"), "ONBOARD_PROMPT chưa được triển khai")
+        for text in ("maihub_pages_learn", "pages.learnFinished", "maihub_wait_for", "maihub_pages_list",
+                     "maihub_posts_bestTimes", "maihub_briefs_save", "niche", "keywords", "tone", "07:00", "draftsPerDay"):
+            self.assertIn(text, bridge.ONBOARD_PROMPT)
+        self.set_due()
+        self.tick()
+        prompt = self.agent_calls[0][1]
+        for text in ("maihub_research_search", "30", "research.finished", "maihub_wait_for",
+                     "maihub_research_trending", "groupIds", "niche", "notes", "draftsPerDay",
+                     "maihub_drafts_create", "plannedAt", "maihub_briefs_finish", "draftIds",
+                     "Không gọi maihub_drafts_approve", "Không chép nguyên văn bài nguồn"):
+            self.assertIn(text, prompt)
+        self.assertTrue(prompt.rstrip().endswith("maihub_briefs_finish"))
+
+    def test_run_agent_sends_prompt_only_via_stdin_in_new_session(self):
+        self.assertTrue(callable(getattr(bridge, "run_agent", None)), "run_agent chưa được triển khai")
+        process = mock.Mock(returncode=0)
+        popen = mock.Mock(return_value=process)
+        result = bridge.run_agent(["claude", "-p"], "Lời nhắc bí mật", 123, popen=popen)
+        self.assertEqual(result, (0, False))
+        self.assertEqual(popen.call_args[0], (["claude", "-p"],))
+        self.assertEqual(popen.call_args[1]["stdin"], subprocess.PIPE)
+        self.assertTrue(popen.call_args[1]["start_new_session"])
+        self.assertEqual(process.communicate.call_args[1],
+                         {"input": "Lời nhắc bí mật".encode("utf-8"), "timeout": 123})
+
+    def test_run_agent_escalates_to_sigkill_after_ten_seconds(self):
+        self.assertTrue(callable(getattr(bridge, "run_agent", None)), "run_agent chưa được triển khai")
+        process = mock.Mock(pid=87654321, returncode=-signal.SIGKILL)
+        process.communicate.side_effect = [subprocess.TimeoutExpired("fake", 1),
+                                           subprocess.TimeoutExpired("fake", 10), (None, None)]
+        with mock.patch.object(os, "killpg") as killpg:
+            self.assertEqual(bridge.run_agent(["fake"], "prompt", 1, popen=lambda *a, **k: process),
+                             (-signal.SIGKILL, True))
+        self.assertEqual(killpg.call_args_list, [mock.call(87654321, signal.SIGTERM),
+                                               mock.call(87654321, signal.SIGKILL)])
+        self.assertEqual(process.communicate.call_args_list[1], mock.call(timeout=10))
+
+    def test_run_agent_timeout_kills_real_process_group(self):
+        self.assertTrue(callable(getattr(bridge, "run_agent", None)), "run_agent chưa được triển khai")
+        # Thử quyền killpg với một tiến trình không có con trước khi sinh hai sleep.
+        try:
+            probe = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
+        except PermissionError as err:
+            self.skipTest("Sandbox blocks new sessions: %s" % err)
+        try:
+            try:
+                os.killpg(probe.pid, signal.SIGTERM)
+            except PermissionError as err:
+                self.skipTest("Sandbox blocks process groups: %s" % err)
+        finally:
+            probe.kill()
+            probe.wait(timeout=5)
+        processes = []
+
+        def popen(*args, **kwargs):
+            # Không sinh sleep nếu code làm mất session riêng (sẽ không dọn được bằng pid).
+            self.assertTrue(kwargs.get("start_new_session"))
+            process = subprocess.Popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        started = time.monotonic()
+        try:
+            try:
+                _, timed_out = bridge.run_agent(["/bin/sh", "-c", "sleep 30 & sleep 30"], "", 1, popen=popen)
+            except PermissionError as err:
+                self.skipTest("Sandbox blocks process groups: %s" % err)
+            self.assertTrue(timed_out)
+            # Cho init thời gian thu hồi các tiến trình con vừa bị dừng.
+            while time.monotonic() - started < 14:
+                try:
+                    os.killpg(processes[0].pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            self.assertLess(time.monotonic() - started, 15)
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(processes[0].pid, 0)
+        finally:
+            for process in processes:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                finally:
+                    process.wait(timeout=5)
+
+    def test_cli_dispatch_loads_env_command_timeout_and_state(self):
+        self.set_due()
+        env_path = os.path.join(self.tmp.name, ".env")
+        with open(env_path, "w") as handle:
+            handle.write("MAIHUB_URL=https://hub:7443\nMAIHUB_API_KEY=test\nMAIHUB_CERT_SHA256=" + PIN +
+                         "\nMAIHUB_AGENT_CMD=codex exec -\nMAIHUB_AGENT_TIMEOUT_SEC=123\n")
+        output = io.StringIO()
+        with mock.patch.object(bridge, "MaiHubClient", return_value=self.client), \
+                mock.patch.object(bridge, "run_agent", self.run_agent, create=True), \
+                mock.patch.dict(os.environ, {}, clear=True), mock.patch("sys.stdout", output):
+            code = bridge.main(["brief-tick", "--env-file", env_path, "--state", self.state_path])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output.getvalue())["ran"], ["p1"])
+        self.assertEqual(self.agent_calls[0][0], ["codex", "exec", "-"])
+        self.assertEqual(self.agent_calls[0][2], 123)
+        self.assertTrue(os.path.isfile(self.state_path + ".lock"))
+
+    def test_cli_default_state_and_disconnected_exit_zero(self):
+        self.errors["system.status"] = bridge.BridgeError("UNREACHABLE", "offline")
+        env_path = os.path.join(self.tmp.name, ".env")
+        with open(env_path, "w") as handle:
+            handle.write("MAIHUB_URL=https://hub:7443\nMAIHUB_API_KEY=test\nMAIHUB_CERT_SHA256=" + PIN + "\n")
+        with mock.patch.object(bridge, "MaiHubClient", return_value=self.client), \
+                mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+            code = bridge.main(["--env-file", env_path, "brief-tick"])
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.isfile(self.state_path + ".lock"))
+        self.assertEqual(self.agent_calls, [])
 
 
 if __name__ == "__main__":
