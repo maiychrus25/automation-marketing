@@ -72,6 +72,7 @@ Không làm trong đợt này:
 | `status` | TEXT | `idle` \| `running` |
 | `attempt_date`, `attempts` | TEXT, INTEGER | số lượt lỗi trong ngày |
 | `claimed_at` | INTEGER | |
+| `claimed_date` | TEXT | `YYYY-MM-DD` theo giờ máy, ngày nhận lượt chạy |
 | `updated_at` | INTEGER | |
 
 Tối đa 10 dòng `daily_briefs` mỗi workspace.
@@ -86,14 +87,14 @@ Chạy trong một giao dịch SQLite, nên hai lời gọi liên tiếp không 
 4. `attempts < 3` khi `attempt_date = today` (khác ngày thì coi `attempts = 0`);
 5. `status = 'idle'`, **hoặc** `status = 'running'` và `claimed_at` cũ hơn 60 phút. Trường hợp này trước tiên được tính là một lượt lỗi (`attempts + 1`), sau đó mới xét lại điều kiện 4.
 
-Dòng đến lượt được đổi sang `status = 'running'`, `claimed_at = now`.
+Dòng đến lượt được đổi sang `status = 'running'`, `claimed_at = now`, `claimed_date = today`.
 
 Kết quả trả về: `{ briefs: [{ profileId, pageName, niche, keywords, groupIds, tone, notes, draftsPerDay }] }`.
 
 `briefs.finish {profileId, ok, draftIds?, error?}`:
 - yêu cầu `status = 'running'`, nếu không trả `INVALID_PARAMS`;
-- `ok = true` → `last_run_date = today`;
-- `ok = false` → `attempts + 1`;
+- `ok = true` → `last_run_date = claimed_date` (ngày nhận lượt, kể cả khi xong sau nửa đêm);
+- `ok = false` → `attempts + 1`, `attempt_date = claimed_date`;
 - luôn đặt `status = 'idle'` và phát `briefs.finished`.
 
 Hằng số (có dấu `docs-check`): `BRIEF_MAX_ATTEMPTS_PER_DAY = 3`, `BRIEF_STALE_MS = 3600000`, `BRIEF_MAX_ROWS = 10`.
