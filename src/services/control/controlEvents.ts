@@ -2,7 +2,15 @@ import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import type { FbPosterResult, FbPosterRun, FbPosterSchedule, LoginCheckOutcome, LoginCheckSource, LoginState } from '../../models/facebookPoster';
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'briefs.finished';
+
+/** Lượt đề xuất kết thúc; chỉ giữ các trường đã công bố. */
+export function buildBriefFinished(e: { profileId: string; pageName: string; ok: boolean; draftIds: string[]; error?: string }) {
+    return {
+        profileId: e.profileId, pageName: e.pageName, ok: e.ok, draftIds: e.draftIds,
+        ...(e.error !== undefined ? { error: e.error } : {}),
+    };
+}
 
 export function buildRunStarted(run: { runId: string; kind: string; scheduleId: string | null }) {
     return { runId: run.runId, kind: run.kind, scheduleId: run.scheduleId };

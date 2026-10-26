@@ -7,9 +7,10 @@ import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
 import { ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
-import { buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildVideoFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
+import { buildBriefFinished, buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildVideoFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 import { createCertificate } from '../../services/control/certificate';
 import { parseBotIp, withStoredPublicHost } from '../../services/control/controlConfig';
+import { memoryDb } from '../facebookPoster/helpers';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-')); });
@@ -174,6 +175,12 @@ describe('toSafeProfiles login fields', () => {
 });
 
 describe('control events', () => {
+  test('briefs.finished retains only documented fields and omits absent error', () => {
+    expect(buildBriefFinished({ profileId: 'p1', pageName: 'Page', ok: true, draftIds: ['d1'], claimedAt: 123, extra: 1 } as any))
+      .toEqual({ profileId: 'p1', pageName: 'Page', ok: true, draftIds: ['d1'] });
+    expect(buildBriefFinished({ profileId: 'p1', pageName: 'Page', ok: false, draftIds: [], error: 'Lỗi' }))
+      .toEqual({ profileId: 'p1', pageName: 'Page', ok: false, draftIds: [], error: 'Lỗi' });
+  });
   test('run.finished counts outcomes; draft.approved payload', () => {
     expect(buildRunFinished({ id: 'r', kind: 'post', status: 'done', scheduleId: 's' }, [{ outcome: 'posted' }, { outcome: 'posted' }, { outcome: 'failed' }, { outcome: 'skipped' }]))
       .toEqual({ runId: 'r', kind: 'post', status: 'done', scheduleId: 's', scheduleName: null, campaignId: null, posted: 2, failed: 1, skipped: 1 });
@@ -335,5 +342,76 @@ describe('control events: video', () => {
             .toEqual({ videoId: 'v2', name: 'M', ok: false, error: 'lỗi' });
         expect(buildVideoFinished({ videoId: 'v3', name: 'C', ok: false, error: 'Đã huỷ', cancelled: true }))
             .toEqual({ videoId: 'v3', name: 'C', ok: false, error: 'Đã huỷ', cancelled: true });
+    });
+});
+
+describe('daily brief IPC wiring', () => {
+    test('uses the current workspace, prepares each dbPath once, and emits briefs.finished', () => {
+        const first = { ...memoryDb(), getDbPath: () => '/brief-a', getBrowserProfileById: (id: string) => id === 'p1' ? { id } : undefined };
+        const second = { ...memoryDb(), getDbPath: () => '/brief-b', getBrowserProfileById: () => undefined };
+        let current = first;
+        const prepareFirst = jest.spyOn(first, 'exec');
+        const prepareSecond = jest.spyOn(second, 'exec');
+        jest.doMock('../../services/database/DatabaseService', () => ({ __esModule: true, default: { getInstance: () => current } }));
+        try {
+            jest.isolateModules(() => {
+                const { briefOperations: ops, getDailyBriefStore } = require('../../../electron/ipc/dailyBriefIpc');
+                const events = require('../../services/control/controlEvents');
+                const emitted = jest.fn();
+                events.setControlEventSink(emitted);
+                const store = getDailyBriefStore();
+                store.upsertIdentity({ profileId: 'p1', kind: 'page', pageId: '123', pageName: 'Page', category: '', about: '', recentPosts: [], learnedAt: 1, errorCode: '', error: '' });
+                ops.save({ profileId: 'p1', keywords: ['x'], time: '00:00' });
+                const claimed = ops.claimDue().briefs[0];
+                expect(claimed).toMatchObject({ profileId: 'p1', pageName: 'Page' });
+                ops.finish({ profileId: 'p1', claimedAt: claimed.claimedAt, ok: true, draftIds: ['d1'] });
+                expect(emitted).toHaveBeenCalledWith('briefs.finished', { profileId: 'p1', pageName: 'Page', ok: true, draftIds: ['d1'] });
+                current = second;
+                expect(ops.list()).toEqual({ briefs: [] });
+                expect(() => ops.save({ profileId: 'p1', keywords: ['x'] })).toThrow();
+                current = first;
+                expect(ops.get({ profileId: 'p1' }).brief.lastRunDate).not.toBeNull();
+                expect(prepareFirst).toHaveBeenCalledTimes(1);
+                expect(prepareSecond).toHaveBeenCalledTimes(1);
+                events.setControlEventSink(null);
+            });
+        } finally { jest.dontMock('../../services/database/DatabaseService'); }
+    });
+
+    test('connects ControlMethodDeps.briefs to the actual briefOperations export', async () => {
+        const mockedModules = [
+            '../../services/database/DatabaseService', '../../services/control/ControlEventRecorder',
+            '../../services/control/ControlMethods', '../../../electron/ipc/facebookPosterIpc',
+            '../../../electron/ipc/researchIpc', '../../../electron/ipc/videoIpc',
+            '../../../electron/ipc/inboxMedia', '../../../electron/ipc/browserProfileIpc',
+            '../../utils/Logger',
+        ];
+        let captured: any;
+        let api: any;
+        let expected: any;
+        jest.doMock(mockedModules[0], () => ({ __esModule: true, default: { getInstance: () => ({
+            getSetting: () => JSON.stringify({ enabled: true, port: 47321, allowList: ['127.0.0.1'] }),
+        }) } }));
+        jest.doMock(mockedModules[1], () => ({ ControlEventRecorder: class { sync() {} deactivate() {} } }));
+        jest.doMock(mockedModules[2], () => ({ createControlMethods: (deps: any) => { captured = deps; throw new Error('Captured before opening sockets'); } }));
+        jest.doMock(mockedModules[3], () => ({ isFacebookPosterEmployeeBlocked: () => false,
+            posterOperations: {}, trackingOperations: {}, campaignOperations: {}, leadOperations: {} }));
+        jest.doMock(mockedModules[4], () => ({ researchOperations: {} }));
+        jest.doMock(mockedModules[5], () => ({ videoOperations: {} }));
+        jest.doMock(mockedModules[6], () => ({ getInboxMediaStore: () => ({}) }));
+        jest.doMock(mockedModules[7], () => ({}));
+        jest.doMock(mockedModules[8], () => ({ __esModule: true, default: { error: jest.fn() } }));
+        try {
+            jest.isolateModules(() => {
+                expected = require('../../../electron/ipc/dailyBriefIpc').briefOperations;
+                api = require('../../../electron/ipc/controlApiIpc');
+            });
+            await api.restartControlApi();
+            expect(captured?.briefs).toBe(expected);
+            expect(captured?.briefs).toBeDefined();
+        } finally {
+            await api?.shutdownControlApi();
+            mockedModules.forEach((name) => jest.dontMock(name));
+        }
     });
 });

@@ -3,6 +3,7 @@ import { errorText } from './controlSecurity';
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../facebookPoster/FacebookPosterService';
 import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../research/researchOperationsLogic';
 import { RenderError } from '../video/RenderClient';
+import { BRIEF_NOT_FOUND_ERROR } from '../dailyBrief/briefOperations';
 
 /** Mã lỗi cố định của giao thức (spec §3.2). */
 export type ControlErrorCode =
@@ -18,7 +19,7 @@ export class ControlError extends Error {
 }
 
 const INTERNAL_MESSAGE = 'Lỗi nội bộ của MaiHub, thử lại sau';
-const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy', 'Không tìm thấy chiến dịch', 'Không tìm thấy khách', SCAN_NOT_FOUND_ERROR];
+const NOT_FOUND_MESSAGES = ['Không tìm thấy bản nháp', 'Không tìm thấy lịch', 'Không tìm thấy lần chạy', 'Không tìm thấy chiến dịch', 'Không tìm thấy khách', SCAN_NOT_FOUND_ERROR, BRIEF_NOT_FOUND_ERROR];
 
 /** Trùng `WORKSPACE_SWITCHING_ERROR` của facebookPosterIpc/researchIpc (có test đối chiếu); không import để tránh kéo Electron vào đây. */
 const WORKSPACE_SWITCHING_MESSAGE = 'Đang đổi workspace, thử lại sau';
@@ -48,7 +49,7 @@ export function toControlError(err: unknown): ControlError {
     const message = (err as Error).message;
     if (message.includes(BUSY_ERROR) || message === WORKSPACE_SWITCHING_MESSAGE) return new ControlError('BUSY', message);
     if (message === ENGINE_MISSING_ERROR) return new ControlError('ENGINE_MISSING', message);
-    if (/Tối đa \d+ lịch/.test(message)) return new ControlError('LIMIT_REACHED', message);
+    if (/Tối đa \d+ (lịch|kế hoạch Page)/.test(message)) return new ControlError('LIMIT_REACHED', message);
     if (NOT_FOUND_MESSAGES.includes(message)) return new ControlError('NOT_FOUND', message);
     return new ControlError('INVALID_PARAMS', message);
 }
@@ -92,6 +93,16 @@ export interface ResearchPort {
     get(params: any): any;
     trending(params: any): any;
     cancel(): any;
+}
+
+/** Trí nhớ và lượt đề xuất của từng Page (`briefOperations`). */
+export interface BriefPort {
+    list(): any;
+    get(params: any): any;
+    save(params: any): any;
+    delete(params: any): any;
+    claimDue(): any;
+    finish(params: any): any;
 }
 
 /** Các thao tác theo dõi bài đăng (`trackingOperations`); kiểm tra tham số nằm ở đó. */
@@ -146,6 +157,7 @@ export interface ControlMethodDeps {
     campaigns: CampaignPort;
     leads: LeadPort;
     videos: VideoPort;
+    briefs?: BriefPort;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
     checkLogins(profileIds: string[] | null): { checkId: string; profileIds: string[] };
@@ -247,6 +259,19 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
     const { poster } = deps;
     const noParams = obj({});
     const idOnly = obj({ id: str('Mã') }, ['id']);
+    const briefFields = {
+        profileId: str('Mã profile đã học là Page'),
+        niche: { type: 'string', maxLength: 300, description: 'Chủ đề Page' },
+        keywords: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', minLength: 1, maxLength: 80 } },
+        groupIds: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1 } },
+        tone: { type: 'string', maxLength: 500, description: 'Giọng văn' },
+        notes: { type: 'string', maxLength: 1000, description: 'Lời khách dặn' },
+        time: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$', description: 'Giờ máy MaiHub, HH:MM; mặc định 07:00' },
+        draftsPerDay: int('Số nháp mỗi ngày, mặc định 1', { minimum: 1, maximum: 5 }),
+        enabled: { type: 'boolean', description: 'Bật đề xuất, mặc định true' },
+    };
+    const briefResult = obj({ brief: { type: 'object', description: 'Kế hoạch Page kèm pageName và trạng thái lượt chạy' } }, ['brief']);
+    const briefProfile = obj({ profileId: briefFields.profileId }, ['profileId']);
 
     const methods: ControlMethod[] = [
         {
@@ -542,6 +567,46 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             paramsSchema: obj({}),
             resultSchema: obj({ cancelled: { type: 'boolean', description: 'true nếu có lượt quét bị huỷ' } }, ['cancelled']),
             run: async () => deps.research.cancel(),
+        },
+        {
+            name: 'briefs.list', description: 'Danh sách kế hoạch Page trong workspace, kèm pageName và trạng thái.',
+            destructive: false, paramsSchema: noParams,
+            resultSchema: obj({ briefs: { type: 'array', items: { type: 'object' } } }, ['briefs']),
+            run: async () => deps.briefs.list(),
+        },
+        {
+            name: 'briefs.get', description: 'Đọc kế hoạch của một Page, kèm pageName. Chưa có kế hoạch → NOT_FOUND.',
+            destructive: false, paramsSchema: briefProfile, resultSchema: briefResult,
+            run: async (p) => deps.briefs.get(pick(p, ['profileId'])),
+        },
+        {
+            name: 'briefs.save', description: 'Tạo hoặc sửa kế hoạch Page đã học. Tạo mới cần keywords; sửa chỉ đổi trường gửi lên, bỏ qua trường trạng thái. Tối đa 10 kế hoạch Page mỗi workspace.',
+            destructive: false, paramsSchema: obj(briefFields, ['profileId']), resultSchema: briefResult,
+            run: async (p) => deps.briefs.save(pick(p, Object.keys(briefFields))),
+        },
+        {
+            name: 'briefs.delete', description: 'Xoá kế hoạch Page. Chưa có kế hoạch → NOT_FOUND. Cần xác nhận.',
+            destructive: true, paramsSchema: obj({ profileId: briefFields.profileId, confirm: confirmProp }, ['profileId', 'confirm']),
+            resultSchema: obj({ deleted: { type: 'boolean' } }, ['deleted']),
+            run: async (p) => deps.briefs.delete(pick(p, ['profileId'])),
+        },
+        {
+            name: 'briefs.claimDue', description: 'Nhận các Page đến giờ theo giờ máy, còn tồn tại và còn là Page. Không nhận trùng; tối đa 3 lần lỗi/ngày, nhận lại lượt treo sau 60 phút và tính một lỗi. Giữ claimedAt để finish.',
+            destructive: false, paramsSchema: noParams,
+            resultSchema: obj({ briefs: { type: 'array', items: obj({
+                ...briefFields, pageName: str('Tên Page'), claimedAt: int('Mốc nhận lượt, mili giây epoch; truyền lại nguyên giá trị khi finish'),
+            }, ['profileId', 'pageName', 'claimedAt']) } }, ['briefs']),
+            run: async () => deps.briefs.claimDue(),
+        },
+        {
+            name: 'briefs.finish', description: 'Kết thúc đúng lượt running có claimedAt khớp, nếu sai trả INVALID_PARAMS và giữ lượt hiện tại. Thành công ghi ngày nhận lượt; lỗi tăng số lần thử. Phát briefs.finished; error cắt 500 ký tự.',
+            destructive: false,
+            paramsSchema: obj({
+                profileId: briefFields.profileId, claimedAt: int('Mốc nhận lượt từ briefs.claimDue (mili giây epoch)'),
+                ok: { type: 'boolean' }, draftIds: { type: 'array', items: { type: 'string' } }, error: str('Thông báo lỗi, cắt 500 ký tự'),
+            }, ['profileId', 'claimedAt', 'ok']),
+            resultSchema: briefResult,
+            run: async (p) => deps.briefs.finish(pick(p, ['profileId', 'claimedAt', 'ok', 'draftIds', 'error'])),
         },
         {
             name: 'posts.track',

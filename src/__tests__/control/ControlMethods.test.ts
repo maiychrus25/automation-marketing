@@ -2,6 +2,9 @@ import { ControlError, createControlMethods, describe as describeMethods, toCont
 import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../../services/research/researchOperationsLogic';
 import { RenderError } from '../../services/video/RenderClient';
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../../services/facebookPoster/FacebookPosterService';
+import { DailyBriefStore } from '../../services/dailyBrief/DailyBriefStore';
+import { createBriefOperations } from '../../services/dailyBrief/briefOperations';
+import { memoryDb } from '../facebookPoster/helpers';
 
 function makeDeps() {
     const poster = {
@@ -33,6 +36,86 @@ function makeDeps() {
     };
     return deps;
 }
+
+describe('briefs.*', () => {
+    function setupBriefs() {
+        const briefs = {
+            list: jest.fn(() => ({ briefs: [] })),
+            get: jest.fn((_p: any) => ({ brief: { profileId: 'p1' } })),
+            save: jest.fn((_p: any) => ({ brief: { profileId: 'p1' } })),
+            delete: jest.fn((_p: any) => ({ deleted: true })),
+            claimDue: jest.fn(() => ({ briefs: [{ profileId: 'p1', claimedAt: 123 }] })),
+            finish: jest.fn((_p: any) => ({ brief: { profileId: 'p1' } })),
+        };
+        const methods = createControlMethods({ ...makeDeps(), briefs } as unknown as ControlMethodDeps);
+        const call = (name: string, p: any = {}) => methods.find((m) => m.name === name)!.run(p, {});
+        return { briefs, methods, call };
+    }
+
+    it('forwards only documented params to all six operations', async () => {
+        const { briefs, call } = setupBriefs();
+        expect(await call('briefs.list', { junk: 1 })).toEqual({ briefs: [] });
+        await call('briefs.get', { profileId: 'p1', junk: 1 });
+        expect(briefs.get).toHaveBeenCalledWith({ profileId: 'p1' });
+        const patch = { profileId: 'p1', niche: '', keywords: ['x'], groupIds: [], tone: '', notes: 'n', time: '07:00', draftsPerDay: 1, enabled: false };
+        await call('briefs.save', { ...patch, status: 'running', attempts: 99, claimedAt: 1 });
+        expect(briefs.save).toHaveBeenCalledWith(patch);
+        expect(await call('briefs.claimDue')).toEqual({ briefs: [{ profileId: 'p1', claimedAt: 123 }] });
+        await call('briefs.finish', { profileId: 'p1', claimedAt: 123, ok: true, draftIds: ['d1'], error: '', junk: 1 });
+        expect(briefs.finish).toHaveBeenCalledWith({ profileId: 'p1', claimedAt: 123, ok: true, draftIds: ['d1'], error: '' });
+    });
+
+    it('requires confirmation only for delete and strips confirm from its port params', async () => {
+        const { briefs, call, methods } = setupBriefs();
+        await expect(call('briefs.delete', { profileId: 'p1' })).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+        expect(briefs.delete).not.toHaveBeenCalled();
+        expect(await call('briefs.delete', { profileId: 'p1', confirm: true })).toEqual({ deleted: true });
+        expect(briefs.delete).toHaveBeenCalledWith({ profileId: 'p1' });
+        expect(methods.filter((m) => m.name.startsWith('briefs.') && m.destructive !== false).map((m) => m.name)).toEqual(['briefs.delete']);
+    });
+
+    it('maps not-found and capacity errors without changing the schedule limit mapping', async () => {
+        const { briefs, call } = setupBriefs();
+        for (const method of ['get', 'delete'] as const) {
+            briefs[method].mockImplementationOnce(() => { throw new Error('Không tìm thấy kế hoạch Page'); });
+            await expect(call(`briefs.${method}`, { profileId: 'missing', confirm: true })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+        }
+        briefs.save.mockImplementationOnce(() => { throw new Error('Tối đa 10 kế hoạch Page'); });
+        await expect(call('briefs.save', { profileId: 'p1', keywords: ['x'] })).rejects.toMatchObject({ code: 'LIMIT_REACHED' });
+        expect(toControlError(new Error('Tối đa 200 lịch'))).toMatchObject({ code: 'LIMIT_REACHED' });
+    });
+
+    it('maps a wrong claimedAt from the real store to INVALID_PARAMS without completing the run', async () => {
+        const store = new DailyBriefStore(memoryDb());
+        store.ensureSchema();
+        const now = new Date(2026, 9, 26, 7).getTime();
+        store.saveBrief('p1', { keywords: ['x'] }, now);
+        store.claimDue(now, () => true);
+        const emitFinished = jest.fn();
+        const briefs = createBriefOperations({ store: () => store, now: () => now, profileExists: () => true, emitFinished });
+        const methods = createControlMethods({ ...makeDeps(), briefs } as unknown as ControlMethodDeps);
+        const finish = methods.find((m) => m.name === 'briefs.finish')!;
+        for (const claimedAt of [now - 1, undefined, 1.5, '123']) {
+            await expect(finish.run({ profileId: 'p1', claimedAt, ok: true }, {})).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+        }
+        expect(store.getBrief('p1')).toMatchObject({ status: 'running', claimedAt: now });
+        expect(emitFinished).not.toHaveBeenCalled();
+    });
+
+    it('describes six methods with the field limits and required integer claim identity', () => {
+        const { methods } = setupBriefs();
+        const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('briefs.')) as any[];
+        expect(found.map((m) => m.name).sort()).toEqual(['briefs.claimDue', 'briefs.delete', 'briefs.finish', 'briefs.get', 'briefs.list', 'briefs.save']);
+        const save = found.find((m) => m.name === 'briefs.save').paramsSchema;
+        expect(save.required).toEqual(['profileId']);
+        expect(save.properties).toMatchObject({ niche: { maxLength: 300 }, keywords: { minItems: 1, maxItems: 10, items: { type: 'string', maxLength: 80 } },
+            groupIds: { maxItems: 20 }, tone: { maxLength: 500 }, notes: { maxLength: 1000 }, draftsPerDay: { minimum: 1, maximum: 5 } });
+        const finish = found.find((m) => m.name === 'briefs.finish').paramsSchema;
+        expect(finish.required).toEqual(['profileId', 'claimedAt', 'ok']);
+        expect(finish.properties.claimedAt.type).toBe('integer');
+        expect(found.find((m) => m.name === 'briefs.claimDue').resultSchema.properties.briefs.items.properties.claimedAt.type).toBe('integer');
+    });
+});
 
 function setup() {
     const deps = makeDeps();
@@ -257,6 +340,7 @@ describe('describe', () => {
             'schedules.list', 'schedules.update', 'schedules.delete',
             'runs.current', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
             'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.trending', 'research.cancel',
+            'briefs.list', 'briefs.get', 'briefs.save', 'briefs.delete', 'briefs.claimDue', 'briefs.finish',
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
             'comments.collect', 'comments.collectStatus', 'comments.collectCancel', 'comments.list', 'leads.list', 'leads.update', 'leads.config',
