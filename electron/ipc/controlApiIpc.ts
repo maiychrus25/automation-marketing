@@ -167,6 +167,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
         videos: {
             templates: videoOperations.templates,
             render: (p) => videoOperations.render(p, 'bot'),
+            adCreate: (p) => videoOperations.adCreate(p, 'bot'),
             status: (p) => videoOperations.status(p, 'bot'),
             list: (p) => videoOperations.list(p, 'bot'),
             cancel: videoOperations.cancel,

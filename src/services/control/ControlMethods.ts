@@ -137,6 +137,7 @@ export interface CampaignPort {
 export interface VideoPort {
     templates(): any;
     render(params: any): any;
+    adCreate(params: any): any;
     status(params: any): any;
     list(params?: any): any;
     cancel(params: any): any;
@@ -923,8 +924,27 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             run: async (p) => deps.videos.render(pick(p, ['name', 'templateId', 'aspect', 'variables', 'imageIds', 'musicId', 'musicMediaId', 'html', 'width', 'height', 'assetIds', 'fps', 'quality'])),
         },
         {
+            name: 'videos.adCreate',
+            description: 'Tạo video quảng cáo AI nhiều cảnh (dọc 1080x1920) bằng AHV AI: gửi kịch bản 2–10 cảnh, giọng đọc, nhạc nền và thương hiệu, hệ tự vẽ ảnh, đọc lời, cho ảnh chuyển động, khớp môi người dẫn rồi dựng video. Cần name và scenes. Mỗi cảnh là một trong: {type:"ai", prompt} (AI vẽ ảnh rồi cho chuyển động), {type:"image", imageMediaId|imageUrl} (ảnh của bạn), {type:"presenter", line} (người dẫn nói, khớp môi — phải có presenter.imageMediaId/imageUrl hoặc presenter.prompt). Cảnh ai/image nhận thêm motion, voiceover (lời đọc nền, phủ tối đa 2 cảnh liền nhau), duration 2,0–4,3 giây. Giọng: bỏ trống = giọng mặc định; hoặc voice.name + voice.speed 0,7–1,3; hoặc voice.refAudioMediaId + voice.refText để nhân bản giọng. Nhạc: bỏ trống = không nhạc; music.mediaId/music.url (tệp nhạc) hoặc music.prompt (AI tạo nhạc), không dùng cả hai. brand.logoMediaId/logoUrl + website + endLine thêm khung cuối. Mọi tệp gửi bằng mã tệp /v1/media (ảnh jpg/png/webp, nhạc mp3/m4a/wav) hoặc link công khai. Chạy nền RẤT LÂU (thường 20–60 phút, tối đa 150 phút): trả videoId ngay, theo dõi bằng videos.status (progress 0–1 và stepText như "H3 3/7"), đừng hỏi dồn dập; xong có sự kiện videos.finished kèm mediaId để dùng trong drafts.create.mediaIds và warnings. warnings (stt_mismatch, fallback_still, cut_by_cost_cap, cut_by_time) nghĩa là video dùng được nhưng nên cho người xem lại trước khi đăng; riêng h3_8s_used chỉ để biết, không cần xem lại. videos.cancel chỉ dừng theo dõi ở MaiHub, KHÔNG dừng được việc phía AHV AI (vẫn tốn tiền máy). LIMIT_REACHED nếu hàng chờ đầy, hết lượt trong ngày hoặc tính năng đang tắt (chờ vài phút rồi gửi lại); INVALID_PARAMS nếu chưa cấu hình AHV AI, sai kịch bản, mediaId lạ hoặc hết hạn; INTERNAL nếu AHV AI lỗi (gửi job mới sau vài phút, tối đa 1–2 lần).',
+            destructive: false,
+            paramsSchema: obj({
+                name: { type: 'string', minLength: 1, maxLength: 100, description: 'Tên video (1–100 ký tự)' },
+                scenes: {
+                    type: 'array', minItems: 2, maxItems: 10, items: { type: 'object' },
+                    description: 'Danh sách 2–10 cảnh theo thứ tự phát; mỗi cảnh có type ai | image | presenter',
+                },
+                presenter: { type: 'object', description: 'Người dẫn: imageMediaId / imageUrl, hoặc prompt (mô tả, ≤ 500 ký tự). Bắt buộc nếu có cảnh presenter' },
+                voice: { type: 'object', description: 'Giọng đọc: name + speed (0,7–1,3), hoặc refAudioMediaId + refText' },
+                music: { type: 'object', description: 'Nhạc nền: mediaId / url, hoặc prompt. Bỏ trống = không nhạc' },
+                brand: { type: 'object', description: 'Thương hiệu: logoMediaId / logoUrl, website (≤ 100), endLine (≤ 300, được đọc lên)' },
+                language: { type: 'string', enum: ['vi', 'en'], description: 'Ngôn ngữ lời đọc (mặc định vi)' },
+            }, ['name', 'scenes']),
+            resultSchema: obj({ videoId: str('Mã video'), status: str('Trạng thái ban đầu (queued)') }, ['videoId', 'status']),
+            run: async (p) => deps.videos.adCreate(pick(p, ['name', 'scenes', 'presenter', 'voice', 'music', 'brand', 'language'])),
+        },
+        {
             name: 'videos.status',
-            description: 'Xem một video: trạng thái (queued / rendering / done / failed / cancelled), tiến độ 0–1, lỗi, thời lượng, dung lượng. NOT_FOUND nếu videoId lạ.',
+            description: 'Xem một video: trạng thái (queued / rendering / done / failed / cancelled), tiến độ 0–1, lỗi, thời lượng, dung lượng. Video quảng cáo AI (engine ahv_ad) có thêm stepText ("H3 3/7") và adResult (warnings, costUsd, scenes, sttText) khi xong. NOT_FOUND nếu videoId lạ.',
             destructive: false,
             paramsSchema: obj({ videoId: str('Mã video') }, ['videoId']),
             resultSchema: obj({ video: { type: 'object', description: 'Thông tin video (không có đường dẫn trên máy)' } }, ['video']),
@@ -944,7 +964,7 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
         },
         {
             name: 'videos.cancel',
-            description: 'Huỷ video đang chờ hoặc đang render. cancelled = false nếu video không còn ở trạng thái huỷ được. NOT_FOUND nếu videoId lạ.',
+            description: 'Huỷ video đang chờ hoặc đang render. cancelled = false nếu video không còn ở trạng thái huỷ được. Với video quảng cáo AI (engine ahv_ad) việc này chỉ dừng theo dõi ở MaiHub: job phía AHV AI vẫn chạy tới cùng và vẫn tốn tiền máy. NOT_FOUND nếu videoId lạ.',
             destructive: false,
             paramsSchema: obj({ videoId: str('Mã video') }, ['videoId']),
             resultSchema: obj({ cancelled: { type: 'boolean' } }, ['cancelled']),

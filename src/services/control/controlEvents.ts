@@ -91,8 +91,11 @@ export function buildCollectFinished(e: { jobId: string; auto: boolean; cancelle
     return { jobId: e.jobId, auto: e.auto, cancelled: e.cancelled, posts: e.posts, collected: e.collected, leads: e.leads, errors: e.errors };
 }
 
-/** Video render xong, lỗi hoặc bị huỷ (`cancelled: true`, kèm `ok: false`); `error` chỉ khi lỗi/huỷ, `mediaId` chỉ với video do bot tạo. */
-export function buildVideoFinished(e: { videoId: string; name: string; ok: boolean; cancelled?: boolean; error?: string; durationSec?: number; sizeBytes?: number; mediaId?: string }) {
+/**
+ * Video render xong, lỗi hoặc bị huỷ (`cancelled: true`, kèm `ok: false`); `error` chỉ khi lỗi/huỷ,
+ * `mediaId` chỉ với video do bot tạo, `warnings` chỉ với video quảng cáo AI có cảnh báo (bot nên cho người xem lại).
+ */
+export function buildVideoFinished(e: { videoId: string; name: string; ok: boolean; cancelled?: boolean; error?: string; durationSec?: number; sizeBytes?: number; mediaId?: string; warnings?: string[] }) {
     return {
         videoId: e.videoId, name: e.name, ok: e.ok,
         ...(e.error !== undefined ? { error: e.error } : {}),
@@ -100,6 +103,7 @@ export function buildVideoFinished(e: { videoId: string; name: string; ok: boole
         ...(e.durationSec !== undefined ? { durationSec: e.durationSec } : {}),
         ...(e.sizeBytes !== undefined ? { sizeBytes: e.sizeBytes } : {}),
         ...(e.mediaId !== undefined ? { mediaId: e.mediaId } : {}),
+        ...(Array.isArray(e.warnings) && e.warnings.length > 0 ? { warnings: e.warnings } : {}),
     };
 }
 

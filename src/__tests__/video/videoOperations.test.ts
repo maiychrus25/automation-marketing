@@ -12,8 +12,8 @@ let img2: string;
 let music: string;
 
 const job = (over: Partial<VideoJob> = {}): VideoJob => ({
-    id: 'v1', remoteId: 'r1', name: 'Video', source: 'bot', templateId: 'flash-sale', aspect: '9:16', specJson: '{}',
-    status: 'done', progress: 1, error: '', filePath: path.join(dir, 'out.mp4'), thumbPath: path.join(dir, 'out.jpg'),
+    id: 'v1', remoteId: 'r1', name: 'Video', source: 'bot', engine: 'hyperframes', templateId: 'flash-sale', aspect: '9:16', specJson: '{}',
+    status: 'done', progress: 1, error: '', stepText: '', resultJson: '', filePath: path.join(dir, 'out.mp4'), thumbPath: path.join(dir, 'out.jpg'),
     sizeBytes: 10, durationSec: 20, createdAt: 1, finishedAt: 2, ...over,
 });
 
@@ -21,6 +21,7 @@ function setup(over: Partial<VideoOperationsDeps> = {}) {
     const service = {
         templates: jest.fn(async () => ({ templates: [{ id: 'flash-sale' }], music: [] })),
         render: jest.fn(async (_input: any) => job({ status: 'queued' })),
+        adCreate: jest.fn(async (_input: any) => job({ id: 'ad1', engine: 'ahv_ad', templateId: null, status: 'queued' })),
         get: jest.fn((id: string): VideoJob | null => (id === 'v1' ? job() : null)),
         list: jest.fn((_opts: any) => ({ videos: [job()], total: 1 })),
         musicPreview: jest.fn(async (id: string) => path.join(dir, `${id}.mp3`)),
@@ -28,6 +29,11 @@ function setup(over: Partial<VideoOperationsDeps> = {}) {
         delete: jest.fn(async (_id: string) => undefined),
     };
     const store = { value: { url: 'https://r.example', apiKey: 'abcd1234' } };
+    const ahvStore = { value: { baseUrl: 'https://ai.ahvchat.com', apiKey: 'ahv-key-4321' } };
+    const adClient = {
+        health: jest.fn(async () => ({ ok: true })),
+        voices: jest.fn(async () => [{ id: 'hai_dang', name: 'Hải Đăng' }, { id: 'adam', name: 'Adam' }]),
+    };
     const deps: VideoOperationsDeps = {
         service: () => service as any,
         loadSettings: () => store.value,
@@ -36,11 +42,14 @@ function setup(over: Partial<VideoOperationsDeps> = {}) {
             health: async () => ({ ok: true, version: '1.2', hyperframes: '0.8.181', queue: { length: 0 } }),
             templates: async () => ({ templates: [{ id: 'a' }, { id: 'b' }], music: [] }),
         }) as any,
+        loadAhvSettings: () => ahvStore.value,
+        saveAhvSettings: jest.fn((input: any) => { ahvStore.value = { baseUrl: input.baseUrl, apiKey: input.apiKey || ahvStore.value.apiKey }; return ahvStore.value; }),
+        adClient: () => adClient as any,
         resolveMedia: jest.fn((ids: string[]) => ids.map((id) => (id === 'song' ? music : path.join(dir, `${id}.jpg`)))),
         pickSavePath: jest.fn(async (_name: string) => path.join(dir, 'saved.mp4')),
         ...over,
     };
-    return { ops: createVideoOperations(deps), service, deps };
+    return { ops: createVideoOperations(deps), service, deps, adClient, ahvStore };
 }
 
 beforeEach(() => {
@@ -307,4 +316,82 @@ describe('openFile', () => {
         service.get.mockReturnValueOnce(job({ filePath: link }));
         expect(await failure(ops.openFile({ videoId: 'v1' }))).toMatchObject({ code: 'not_found' });
     });
+});
+
+
+// --- engine ahv_ad (26.31) ---------------------------------------------------------------------
+
+const adParams = (over: Record<string, unknown> = {}) => ({
+    name: 'Quảng cáo tháng 10',
+    scenes: [{ type: 'presenter', line: 'Xin chào' }, { type: 'ai', prompt: 'cửa hàng sáng' }],
+    presenter: { imageUrl: 'https://x.example/nguoi.jpg' },
+    ...over,
+});
+
+test('cấu hình AHV: chỉ trả 4 ký tự cuối, lưu lại không kèm khoá thì giữ khoá cũ', () => {
+    const { ops } = setup();
+    expect(ops.ahvSettingsGet()).toEqual({ baseUrl: 'https://ai.ahvchat.com', apiKeyHint: '••••4321', configured: true });
+    expect(JSON.stringify(ops.ahvSettingsGet())).not.toContain('ahv-key-4321');
+    ops.ahvSettingsSet({ baseUrl: 'http://127.0.0.1:2023' });
+    expect(ops.ahvSettingsGet().baseUrl).toBe('http://127.0.0.1:2023');
+    expect(() => ops.ahvSettingsSet({ baseUrl: 123 as any })).toThrow(/Địa chỉ/);
+    expect(() => ops.ahvSettingsSet({ baseUrl: 'https://x', apiKey: 5 as any })).toThrow(/Khoá API/);
+});
+
+test('ahvTestConnection gọi healthz rồi danh sách giọng', async () => {
+    const { ops, adClient } = setup();
+    expect(await ops.ahvTestConnection()).toEqual({ voiceCount: 2 });
+    expect(adClient.health).toHaveBeenCalled();
+    expect(adClient.voices).toHaveBeenCalled();
+    expect(await ops.voices()).toEqual({ voices: [{ id: 'hai_dang', name: 'Hải Đăng' }, { id: 'adam', name: 'Adam' }] });
+});
+
+test('adCreate kiểm tên video và chuyển payload cho service', async () => {
+    const { ops, service } = setup();
+    expect(await ops.adCreate(adParams(), 'bot')).toEqual({ videoId: 'ad1', status: 'queued' });
+    const input = (service.adCreate as jest.Mock).mock.calls[0][0];
+    expect(input).toMatchObject({ name: 'Quảng cáo tháng 10', source: 'bot' });
+    expect(input.draft.payload.scenes).toHaveLength(2);
+    await expect(ops.adCreate(adParams({ name: '  ' }), 'app')).rejects.toMatchObject({ code: 'invalid' });
+    await expect(ops.adCreate(adParams({ name: 'x'.repeat(101) }), 'app')).rejects.toMatchObject({ code: 'invalid' });
+    await expect(ops.adCreate(adParams({ scenes: [{ type: 'ai', prompt: 'x' }] }), 'app')).rejects.toThrow(/2 đến 10 cảnh/);
+});
+
+test('adCreate: app gửi đường dẫn tuyệt đối, bot gửi mediaId; dùng sai nguồn thì lỗi', async () => {
+    const { ops, service, deps } = setup();
+    await ops.adCreate(adParams({ presenter: { imagePath: img1 } }), 'app');
+    expect((service.adCreate as jest.Mock).mock.calls[0][0].draft.uploads).toEqual([{ path: img1, name: path.basename(img1) }]);
+
+    await ops.adCreate(adParams({ presenter: { imageMediaId: 'm1' } }), 'bot');
+    expect(deps.resolveMedia).toHaveBeenCalledWith(['m1']);
+    expect((service.adCreate as jest.Mock).mock.calls[1][0].draft.uploads).toEqual([{ path: img1, name: 'm1.jpg' }]);
+    await expect(ops.adCreate(adParams({ presenter: { imageMediaId: 'het-han' } }), 'bot')).rejects.toThrow(/hết hạn/);
+
+    await expect(ops.adCreate(adParams({ presenter: { imageMediaId: 'm1' } }), 'app')).rejects.toThrow(/tệp trên máy hoặc link/);
+    await expect(ops.adCreate(adParams({ presenter: { imagePath: img1 } }), 'bot')).rejects.toThrow(/mã tệp đã tải lên hoặc link/);
+    await expect(ops.adCreate(adParams({ presenter: { imagePath: 'tuong-doi.jpg' } }), 'app')).rejects.toThrow(/tuyệt đối/);
+    await expect(ops.adCreate(adParams({ presenter: { imagePath: path.join(dir, 'khong-co.jpg') } }), 'app')).rejects.toThrow(/Không đọc được tệp/);
+});
+
+test('status và list của bot có engine, stepText, adResult và không có resultJson thô', () => {
+    const ad = job({ engine: 'ahv_ad', templateId: null, stepText: 'H3 3/7', resultJson: '{"warnings":["stt_mismatch"],"sttText":"xin chào"}' });
+    const { ops } = setup({ service: () => ({
+        get: () => ad, list: () => ({ videos: [ad], total: 1 }),
+    }) as any });
+    const view = ops.status({ videoId: 'v1' }, 'bot').video as any;
+    expect(view).toMatchObject({ engine: 'ahv_ad', stepText: 'H3 3/7', adResult: { warnings: ['stt_mismatch'], sttText: 'xin chào' } });
+    expect(view).not.toHaveProperty('resultJson');
+    expect(view).not.toHaveProperty('filePath');
+    expect(view).not.toHaveProperty('specJson');
+    expect((ops.list({}, 'bot').videos[0] as any).adResult.warnings).toEqual(['stt_mismatch']);
+    // ứng dụng vẫn thấy mọi trường như cũ
+    expect(ops.status({ videoId: 'v1' }, 'app').video).toEqual(ad);
+});
+
+test('resultJson hỏng hoặc rỗng thì adResult là null, không ném', () => {
+    const broken = job({ engine: 'ahv_ad', resultJson: '{khong-phai-json' });
+    const { ops } = setup({ service: () => ({ get: () => broken, list: () => ({ videos: [broken], total: 1 }) }) as any });
+    expect((ops.status({ videoId: 'v1' }, 'bot').video as any).adResult).toBeNull();
+    const { ops: ops2 } = setup();
+    expect((ops2.status({ videoId: 'v1' }, 'bot').video as any).adResult).toBeNull();
 });

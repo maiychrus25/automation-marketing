@@ -3,7 +3,10 @@ import type { Readable } from 'stream';
 import * as path from 'path';
 import { buildVideoFinished } from '../control/controlEvents';
 import { AUDIO_EXTENSIONS } from '../facebookPoster/mediaRules';
-import type { VideoJob, VideoStatus } from '../../models/video';
+import type { AdResult, VideoJob, VideoStatus } from '../../models/video';
+import { buildAdPayload, type AdAssetResolver } from './adVideoPayload';
+import type { AhvAdClient } from './AhvAdClient';
+import type { AhvSettings } from './ahvSettings';
 import { RenderError, type RenderClient } from './RenderClient';
 import { maskKey, type VideoSettings } from './videoSettings';
 import type { VideoRenderInput, VideoService } from './VideoService';
@@ -18,10 +21,14 @@ export type VideoOrigin = 'app' | 'bot';
 
 /** Phần phụ thuộc ngoài (Electron, DB, hộp thư) được tiêm vào để kiểm tra tham số chạy được trong Jest. */
 export interface VideoOperationsDeps {
-    service(): Pick<VideoService, 'templates' | 'musicPreview' | 'render' | 'get' | 'list' | 'cancel' | 'delete'>;
+    service(): Pick<VideoService, 'templates' | 'musicPreview' | 'render' | 'adCreate' | 'get' | 'list' | 'cancel' | 'delete'>;
     loadSettings(): VideoSettings;
     saveSettings(input: { url: string; apiKey?: string }): VideoSettings;
     client(): Pick<RenderClient, 'health' | 'templates'>;
+    /** Cấu hình API AHV AI cho engine `ad_video` (26.31). */
+    loadAhvSettings(): AhvSettings;
+    saveAhvSettings(input: { baseUrl: string; apiKey?: string }): AhvSettings;
+    adClient(): Pick<AhvAdClient, 'health' | 'voices'>;
     /** mediaId của hộp thư Control API -> đường dẫn tệp (ném lỗi nếu lạ hoặc hết hạn). */
     resolveMedia(mediaIds: string[]): string[];
     /** Hộp thoại lưu tệp; null = người dùng đóng hộp thoại. */
@@ -30,10 +37,21 @@ export interface VideoOperationsDeps {
 
 const bad = (message: string): never => { throw new RenderError('invalid', message); };
 
-/** Bot không được thấy đường dẫn trên máy chủ MaiHub (spec video §6.5). */
+/**
+ * Bot không được thấy đường dẫn trên máy chủ MaiHub (spec video §6.5). `resultJson` thô được
+ * thay bằng `adResult` đã phân tích (JSON hỏng -> null) để bot không phải tự parse.
+ */
 function publicView(job: VideoJob) {
-    const { filePath, thumbPath, specJson, ...rest } = job;
-    return rest;
+    const { filePath, thumbPath, specJson, resultJson, ...rest } = job;
+    return { ...rest, adResult: parseAdResult(resultJson) };
+}
+
+function parseAdResult(resultJson: string): AdResult | null {
+    if (!resultJson) return null;
+    try {
+        const parsed = JSON.parse(resultJson);
+        return parsed && typeof parsed === 'object' ? (parsed as AdResult) : null;
+    } catch { return null; }
 }
 
 function readVideoId(params: any): string {
@@ -73,6 +91,28 @@ export function createVideoOperations(deps: VideoOperationsDeps) {
         }
         return paths;
     }
+
+    const ahvView = () => {
+        const s = deps.loadAhvSettings();
+        return { baseUrl: s.baseUrl, apiKeyHint: maskKey(s.apiKey), configured: !!s.baseUrl && !!s.apiKey };
+    };
+
+    /** App chỉ được gửi đường dẫn tuyệt đối; bot chỉ được gửi mã tệp hộp thư. Tệp phải đọc được. */
+    const assetResolver = (origin: VideoOrigin): AdAssetResolver => ({ kind, value, field }) => {
+        if (origin === 'app' && kind !== 'path') bad(`${field}: ứng dụng phải gửi tệp trên máy hoặc link`);
+        if (origin === 'bot' && kind !== 'mediaId') bad(`${field}: bot phải gửi mã tệp đã tải lên hoặc link`);
+        let file: string;
+        if (kind === 'path') {
+            if (!path.isAbsolute(value)) bad(`${field} phải là đường dẫn tuyệt đối`);
+            file = value;
+        } else {
+            [file] = deps.resolveMedia([value]);
+        }
+        let ok = false;
+        try { ok = fs.statSync(file).isFile(); } catch { /* không đọc được */ }
+        if (!ok) bad(origin === 'app' ? `Không đọc được tệp ${path.basename(file)}` : 'Có mediaId không tồn tại hoặc đã hết hạn');
+        return { path: file, name: `${path.basename(file).replace(/[^\w.-]+/g, '_')}` };
+    };
 
     const extOf = (p: string) => path.extname(p).toLowerCase();
 
@@ -143,7 +183,7 @@ export function createVideoOperations(deps: VideoOperationsDeps) {
             return { videoId: job.id, status: job.status };
         },
 
-        status: (params: any, origin: VideoOrigin): { video: VideoJob | Omit<VideoJob, 'filePath' | 'thumbPath' | 'specJson'> } => {
+        status: (params: any, origin: VideoOrigin): { video: VideoJob | PublicVideoJob } => {
             const job = deps.service().get(readVideoId(params));
             if (!job) throw new RenderError('not_found', 'Không tìm thấy video');
             return { video: origin === 'bot' ? publicView(job) : job };
@@ -165,6 +205,43 @@ export function createVideoOperations(deps: VideoOperationsDeps) {
             const id = params?.musicId;
             if (typeof id !== 'string' || !id) bad('Thiếu tham số musicId');
             return { path: await deps.service().musicPreview(id) };
+        },
+
+        ahvSettingsGet: () => ahvView(),
+
+        ahvSettingsSet: (params: any) => {
+            if (typeof params?.baseUrl !== 'string') bad('Địa chỉ API AHV AI không hợp lệ');
+            if (params.apiKey !== undefined && typeof params.apiKey !== 'string') bad('Khoá API không hợp lệ');
+            deps.saveAhvSettings({ baseUrl: params.baseUrl, apiKey: params.apiKey });
+            return ahvView();
+        },
+
+        /**
+         * Kiểm tra kết nối: `/healthz` (máy chủ sống) rồi `/v1/audio/voices` (đọc được dữ liệu, và là
+         * danh sách form cần). Lưu ý: 27/10/2026 AHV chưa thật sự bắt buộc `X-API-Key` ở đường nào
+         * (`"/"` trong `ALLOW_PATHS` của họ cho qua mọi đường), nên phép thử này KHÔNG khẳng định khoá đúng.
+         */
+        ahvTestConnection: async () => {
+            const client = deps.adClient();
+            await client.health();
+            const voices = await client.voices();
+            return { voiceCount: voices.length };
+        },
+
+        /** Danh sách giọng đọc để form chọn; chỉ dùng trong app. */
+        voices: async () => ({ voices: await deps.adClient().voices() }),
+
+        /**
+         * Video quảng cáo AI nhiều cảnh (engine `ahv_ad`). App gửi đường dẫn tệp, bot gửi mã tệp hộp thư;
+         * cả hai đều được MaiHub tải lên AHV rồi thay bằng link trong payload.
+         */
+        adCreate: async (params: any, origin: VideoOrigin): Promise<{ videoId: string; status: VideoStatus }> => {
+            const p = params ?? {};
+            const name = typeof p.name === 'string' ? p.name.trim() : '';
+            if (!name || name.length > MAX_NAME_LENGTH) bad(`Tên video phải có 1–${MAX_NAME_LENGTH} ký tự`);
+            const draft = buildAdPayload(p, assetResolver(origin));
+            const job = await deps.service().adCreate({ name, source: origin, draft });
+            return { videoId: job.id, status: job.status };
         },
 
         cancel: async (params: any) => deps.service().cancel(readVideoId(params)),
@@ -215,6 +292,7 @@ export function createVideoOperations(deps: VideoOperationsDeps) {
 }
 
 export type VideoOperations = ReturnType<typeof createVideoOperations>;
+export type PublicVideoJob = ReturnType<typeof publicView>;
 
 /** Một chỗ chuyển sự kiện của VideoService: renderer nhận `video:changed`, Control API nhận `videos.finished` với đúng các trường đã công bố. */
 export function routeVideoEvent(

@@ -282,7 +282,8 @@ class McpTests(BridgeTestCase):
 
     def test_guide_mentions_real_tools_and_events(self):
         for word in ("maihub_wait_for", "maihub_upload_media", "maihub_download_video", "run.finished", "comments.collectFinished",
-                     "videos.finished", "idempotencyKey", "serverNowMs", "uncertain_after_submit"):
+                     "videos.finished", "idempotencyKey", "serverNowMs", "uncertain_after_submit",
+                     "maihub_videos_adCreate", "stt_mismatch", "fallback_still", "stepText"):
             self.assertIn(word, bridge.GUIDE)
 
     def test_success_result_is_compact_json(self):
@@ -1532,7 +1533,7 @@ class FormatBriefTests(unittest.TestCase):
                      "maihub_drafts_approve", "plannedAt", "maihub_drafts_update", "maihub_drafts_delete",
                      "maihub_briefs_save", "notes", "enabled", "maihub_pages_learn", "force", "true",
                      "maihub_drafts_list", "24 giờ", "Không bao giờ tự duyệt",
-                     "Cần MaiHub từ 26.31.0 cho pages.*, briefs.*, research.trending"):
+                     "Cần MaiHub từ 26.32.0 cho pages.*, briefs.*, research.trending"):
             with self.subTest(text=text):
                 self.assertIn(text, bridge.GUIDE)
 
@@ -3234,7 +3235,7 @@ class BriefTickTests(unittest.TestCase):
 
     def test_old_maihub_warns_once_without_agent(self):
         self.errors["pages.list"] = bridge.BridgeError("UNKNOWN_METHOD", "pages.list")
-        self.assertEqual(self.tick(), {"onboarded": False, "ran": [], "warnings": ["MaiHub cần ≥ 26.31.0"]})
+        self.assertEqual(self.tick(), {"onboarded": False, "ran": [], "warnings": ["MaiHub cần ≥ 26.32.0"]})
         self.assertEqual(self.agent_calls, [])
         self.assertEqual([m for m, _ in self.calls], ["system.status", "pages.list"])
 
@@ -3393,7 +3394,7 @@ class BriefTickTests(unittest.TestCase):
         self.errors['briefs.claimDue'] = bridge.BridgeError('UNKNOWN_METHOD', 'briefs.claimDue')
         result = self.tick()
         self.assertEqual(result['ran'], [])
-        self.assertEqual(result['warnings'], ['MaiHub cần ≥ 26.31.0'])
+        self.assertEqual(result['warnings'], ['MaiHub cần ≥ 26.32.0'])
         self.assertEqual(sum(m == 'briefs.claimDue' for m, _ in self.calls), 1)
         self.assertEqual(self.agent_calls, [])
 

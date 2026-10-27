@@ -3,10 +3,10 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 26/10/2026 |
-| Trạng thái | Đã triển khai và review local 26.31.0 (27/10/2026), chưa phát hành — Rulings 13, 17–19; kiểm chứng live/vận hành và duyệt phát hành còn chờ |
+| Trạng thái | Đã gộp bản video remote b07b4ea; chuẩn bị dev 26.32.0, chưa phát hành; kiểm thử tự động nhánh tích hợp đã chạy, live/vận hành và duyệt phát hành còn chờ |
 | Intent | `docs/intent/2026-10-26-facebook-growth-bot.md` (tính năng 1) |
 | Kế hoạch | `docs/plans/2026-10-26-daily-post-suggestions.md` |
-| Phiên bản dự kiến | 26.31.0 |
+| Phiên bản dự kiến | 26.32.0 |
 | Dùng lại | Control API (`ControlMethods.ts`, `controlEvents.ts`), Nghiên cứu chủ đề (`src/services/research/`, `graphqlSession.ts`), khoá việc của Đăng Facebook (`acquireExclusive`), `loginProblemAt`, `posts.bestTimes`, `drafts.*`, bridge `tools/maihub-bridge/maihub_bridge.py` (`watch`, `install-watch`, `GUIDE`) |
 
 ## 0. Bối cảnh đã chốt khi phỏng vấn (26/10/2026)
@@ -350,3 +350,9 @@ RED/GREEN từng finding, hai focused stress rounds, exact commands/output, actu
 Sau final fix và follow-up Ruling 19: **full Jest 107 suites/2309 tests ×2; full bridge 297 tests ×5, đều OK và không skip**. Hai tsc, docs-check, production Electron compile/strip-console và renderer build đều exit 0. Review các finding liên thông và fix EPERM đã approve. Race EPERM khi signal-0 gặp nhóm đang thoát trên Darwin được sửa bằng cách tiếp tục poll/reap dưới deadline cũ; không coi EPERM là biến mất và không nuốt lỗi TERM/KILL thật. Những lượt test đỏ trước sửa vẫn được giữ trong report, không lấy retry xanh để che lỗi.
 
 `make build/test/lint` không có target (exit 2); renderer vẫn có cảnh báo Vite. Chưa đóng gói installer/native/E2EE, chưa kiểm chứng live Facebook/person/pagination/Telegram/Claude/VPS hoặc manual compatibility. Không tag/push/deploy, không tuyên bố phát hành. Bằng chứng và các quyết định còn lại được giữ trong ledger của plan; không sửa lại các ghi chú lịch sử phía trên.
+
+### Đồng bộ bản video remote 27/10/2026
+
+Remote `origin/main` tại `b07b4ea` đã có tag `v26.31.0` cho video quảng cáo AI; số 26.31.0 dự kiến cho daily-brief trước đó không còn sử dụng được. Nhánh dev gộp cả hai tính năng dùng **26.32.0, chưa phát hành**. Giữ hướng dẫn daily-brief ở GUIDE mục 8, thêm hướng dẫn video mục 9; Control API có 59 thao tác, không bỏ API của bên nào. `SYSTEM_DOCUMENTATION.md` chuyển daily-brief từ mục 4.15 sang **4.16**, giữ video ở 4.15. Cảnh báo thiếu daily-brief yêu cầu ≥26.32.0; không đổi hợp đồng dry-run chỉ kiểm system.status/PATH. Các mốc 26.31.0 và số test phía trên là lịch sử trước gộp, không phải bằng chứng cho nhánh mới. Không thay đổi hoặc triển khai dịch vụ production/AHV.
+
+**Kiểm chứng nhánh tích hợp:** Jest111 suites/2376 tests ×2, bridge297 tests ×2 OK không skip; cả hai tsc/docs-check và production Electron/renderer build exit0. VideoTab với IPC giả đạt hai vòng desktop/mobile và light/dark, validation/sắp cảnh/submit/quay lại HyperFrames; không dùng DB người dùng hoặc gọi dịch vụ thật. Make targets chưa có, Vite warnings còn; full installer/live chưa kiểm chứng. Các giới hạn quyền duyệt của runner, metrics Page và video dài được ghi ở SYSTEM_DOCUMENTATION.md §4.16, không coi các test xanh là bằng chứng tự vận hành hoàn toàn.

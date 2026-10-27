@@ -50,6 +50,32 @@ args = ["/opt/bot/maihub/maihub_bridge.py", "mcp", "--env-file", "/opt/bot/maihu
 
 Danh sách tool sinh tự động từ `GET /v1/describe` (`maihub_<thao_tac>`, dấu chấm thành gạch dưới), cộng tool `maihub_upload_media` nhận `path` và tool `maihub_download_video` (`videoId`, `kind` = `video` / `thumb`, `path` tuỳ chọn) tải video đã render xong (hoặc ảnh bìa) về máy bot, mặc định `~/maihub-videos/<videoId>.mp4|.jpg`, trả `{ path, sizeBytes }` để bot gửi tệp hoặc xem ảnh bìa; tool `maihub_wait_for` (`types?`, `match?`, `after?`, `maxSec` 1–600 mặc định 50) chờ một sự kiện khớp trong một lần gọi; tool `maihub_guide` trả bản hướng dẫn vòng làm việc (cũng gửi trong `instructions` của `initialize`). Tool lỗi trả kèm `Chi tiết` (`details`) và `Gợi ý` cách xử lý theo mã lỗi; kết quả là JSON gọn. Chi tiết: `docs/protocol/maihub-control-protocol.md` mục 10. Mỗi tool có thêm tham số tuỳ chọn `idempotencyKey` để chống gọi trùng. Nếu MaiHub chưa với tới được lúc liệt kê tool, bridge trả lỗi và thử lại ở lần liệt kê kế tiếp.
 
+### Video quảng cáo AI nhiều cảnh (MaiHub từ 26.31.0)
+
+Tool `maihub_videos_adCreate` (sinh tự động từ `videos.adCreate`) dựng video dọc 1080x1920 từ một **kịch bản** nhờ AHV AI: AI vẽ ảnh, đọc lời tiếng Việt, cho ảnh chuyển động, khớp môi người dẫn, nhạc nền và khung cuối. Khác `maihub_videos_render` (mẫu HyperFrames trên máy chủ render của anh).
+
+Vòng gọi: `maihub_upload_media` (ảnh/nhạc có sẵn → `mediaId`) → `maihub_videos_adCreate` → `maihub_wait_for` (`types: ["videos.finished"]`, `match: {"videoId": "<videoId>"}`) → `drafts.create { mediaIds }` hoặc `maihub_download_video`.
+
+```bash
+python3 maihub_bridge.py --env-file .env call videos.adCreate '{
+  "name": "Khai truong",
+  "scenes": [
+    {"type": "presenter", "line": "Chào bạn, cửa hàng mới khai trương."},
+    {"type": "ai", "prompt": "bright clothing store, morning light", "motion": "slow dolly in", "voiceover": "Thiết kế tối giản, chất liệu thoáng mát."},
+    {"type": "image", "imageMediaId": "<mediaId>"}
+  ],
+  "presenter": {"imageMediaId": "<mediaId>"},
+  "voice": {"name": "hai_dang", "speed": 0.9},
+  "music": {"prompt": "nhạc quảng cáo tươi vui, không lời"},
+  "brand": {"website": "example.com", "endLine": "Ghé cửa hàng hôm nay."}
+}'
+```
+
+- Chạy nền **rất lâu**: thường 20–60 phút, tối đa 150 phút. Theo tiến độ bằng `maihub_videos_status` (`progress` 0–1, `stepText` như `H3 3/7`, `Khớp môi 1/2`) hoặc chờ sự kiện; đừng hỏi dồn dập.
+- `videos.finished` có thể kèm `warnings`: `stt_mismatch` (đọc sai chữ viết tắt/số/tên riêng), `fallback_still` (một cảnh thành ảnh tĩnh), `cut_by_cost_cap` / `cut_by_time`. Video dùng được nhưng nên cho người xem lại trước khi đăng.
+- `maihub_videos_cancel` chỉ dừng theo dõi ở MaiHub: **job phía AHV AI vẫn chạy và vẫn tốn tiền máy**.
+- Cần cấu hình AHV AI trong MaiHub (Cài đặt → Máy chủ render video → thẻ AHV AI); chưa cấu hình thì nhận `INVALID_PARAMS`.
+
 ## CLI
 
 ```bash

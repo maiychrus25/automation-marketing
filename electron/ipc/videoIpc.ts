@@ -4,6 +4,8 @@ import DatabaseService from '../../src/services/database/DatabaseService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import { emitControlEvent } from '../../src/services/control/controlEvents';
+import { AhvAdClient } from '../../src/services/video/AhvAdClient';
+import { loadAhvSettings, saveAhvSettings } from '../../src/services/video/ahvSettings';
 import { RenderClient } from '../../src/services/video/RenderClient';
 import { VideoService } from '../../src/services/video/VideoService';
 import { VideoStore } from '../../src/services/video/VideoStore';
@@ -22,6 +24,10 @@ const client = () => {
     const settings = loadVideoSettings(db(), crypto);
     return new RenderClient(settings.url, settings.apiKey);
 };
+const adClient = () => {
+    const settings = loadAhvSettings(db(), crypto);
+    return new AhvAdClient(settings.baseUrl, settings.apiKey);
+};
 
 /** Service gắn với DB workspace hiện tại: DB mới thì tạo schema và dựng service mới (service cũ dừng theo dõi). */
 function getVideoService(): VideoService {
@@ -31,7 +37,7 @@ function getVideoService(): VideoService {
         const store = new VideoStore(db());
         store.ensureSchema();
         service = new VideoService({
-            store, client, mediaInbox: getInboxMediaStore(),
+            store, client, adClient, mediaInbox: getInboxMediaStore(),
             emit: (type, payload) => routeVideoEvent({
                 broadcast: (channel) => EventBroadcaster.emit(channel, {}),
                 emitControl: emitControlEvent,
@@ -53,6 +59,9 @@ export const videoOperations = createVideoOperations({
     loadSettings: () => loadVideoSettings(db(), crypto),
     saveSettings: (input) => saveVideoSettings(db(), crypto, input),
     client,
+    loadAhvSettings: () => loadAhvSettings(db(), crypto),
+    saveAhvSettings: (input) => saveAhvSettings(db(), crypto, input),
+    adClient,
     resolveMedia: (ids) => getInboxMediaStore().resolve(ids),
     pickSavePath: async (defaultName) => {
         const result = await dialog.showSaveDialog({ defaultPath: defaultName, filters: [{ name: 'Video MP4', extensions: ['mp4'] }] });
@@ -96,6 +105,11 @@ export function registerVideoIpc(): void {
     handle('video:templates', videoOperations.templates);
     handle('video:musicPreview', videoOperations.musicPreview);
     handle('video:render', (p) => videoOperations.render(p, 'app'));
+    handle('video:ahvSettingsGet', videoOperations.ahvSettingsGet);
+    handle('video:ahvSettingsSet', videoOperations.ahvSettingsSet);
+    handle('video:ahvTestConnection', videoOperations.ahvTestConnection);
+    handle('video:voices', videoOperations.voices);
+    handle('video:adCreate', (p) => videoOperations.adCreate(p, 'app'));
     handle('video:status', (p) => videoOperations.status(p, 'app'));
     handle('video:list', (p) => videoOperations.list(p, 'app'));
     handle('video:cancel', videoOperations.cancel);

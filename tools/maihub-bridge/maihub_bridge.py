@@ -141,9 +141,19 @@ GUIDE = "\n".join([
     "- 'có page mới': gọi maihub_pages_learn với force: true, chờ pages.learnFinished rồi làm như lượt làm quen: đọc maihub_pages_list và maihub_posts_bestTimes, kiểm tra maihub_briefs_get; chỉ tạo brief cho Page chưa có, giữ brief và lời dặn đã có, rồi nhắn giới thiệu cho khách.",
     "- Không ghi mã thì tìm nháp đang chờ bằng maihub_drafts_list; có từ 2 nháp trở lên thì hỏi lại.",
     "- Nháp quá 24 giờ chưa duyệt thì nhắc khách một lần trong lượt đề xuất sau. Không bao giờ tự duyệt.",
+    "9. Video quảng cáo AI nhiều cảnh (maihub_videos_adCreate, MaiHub từ 26.31.0)",
+    "- Khác maihub_videos_render: video dọc 1080x1920 do AHV AI dựng từ KỊCH BẢN (AI vẽ ảnh, đọc lời tiếng Việt, cho ảnh chuyển động, khớp môi người dẫn, nhạc nền, khung cuối). Bot viết kịch bản, hệ không tự viết lại lời và không tự thêm/bớt cảnh.",
+    "- Thứ tự: maihub_upload_media cho ảnh/nhạc có sẵn (lấy mediaId) -> maihub_videos_adCreate -> maihub_wait_for với types [\"videos.finished\"] và match {\"videoId\": \"<videoId>\"} -> drafts.create {mediaIds:[mediaId]} hoặc maihub_download_video.",
+    "- Cảnh: {type:\"ai\", prompt} AI vẽ ảnh rồi cho chuyển động; {type:\"image\", imageMediaId} ảnh của bạn; {type:\"presenter\", line} người dẫn nói (khớp môi), cần presenter.imageMediaId hoặc presenter.prompt. 2–10 cảnh. Cảnh ai/image có thêm motion, voiceover (lời đọc nền), duration 2,0–4,3 giây.",
+    "- Ví dụ: maihub_videos_adCreate {\"name\":\"Khai truong\",\"scenes\":[{\"type\":\"presenter\",\"line\":\"Chao ban, cua hang moi khai truong.\"},{\"type\":\"ai\",\"prompt\":\"bright clothing store, morning light\",\"motion\":\"slow dolly in\",\"voiceover\":\"Thiet ke toi gian, chat lieu thoang mat.\"},{\"type\":\"image\",\"imageMediaId\":\"<mediaId>\"}],\"presenter\":{\"imageMediaId\":\"<mediaId>\"},\"voice\":{\"name\":\"hai_dang\",\"speed\":0.9},\"music\":{\"prompt\":\"nhac quang cao tuoi vui, khong loi\"},\"brand\":{\"website\":\"example.com\",\"endLine\":\"Ghe cua hang hom nay.\"}}",
+    "- RẤT LÂU: thường 20–60 phút, tối đa 150 phút. Gọi maihub_wait_for nhiều lượt (mỗi lượt tối đa 25 giây, truyền lại đúng after) chứ đừng hỏi maihub_videos_status dồn dập; muốn báo tiến độ thì đọc progress (0–1) và stepText (\"H3 3/7\", \"Khớp môi 1/2\") của maihub_videos_status.",
+    "- videos.finished có thể kèm warnings: stt_mismatch (đọc sai chữ viết tắt/số/tên riêng), fallback_still (một cảnh thành ảnh tĩnh), cut_by_cost_cap / cut_by_time (bị cắt vì chạm trần tiền/giờ). Video vẫn dùng được nhưng PHẢI cho người xem lại trước khi đăng: tạo nháp và nói rõ cảnh báo, đừng tự đăng.",
+    "- maihub_videos_cancel chỉ dừng theo dõi ở MaiHub: job phía AHV AI vẫn chạy tới cùng và vẫn tốn tiền máy. Chỉ huỷ khi người dùng yêu cầu, và nói rõ điều này.",
+    "- Lỗi: LIMIT_REACHED (hàng chờ đầy, hết lượt trong ngày, hoặc tính năng đang tắt) thì chờ vài phút rồi gửi lại cùng kịch bản, tối đa vài lần. INVALID_PARAMS là sai kịch bản hoặc chưa cấu hình AHV AI trong MaiHub: sửa rồi gửi, đừng thử lại y nguyên. INTERNAL là AHV AI lỗi: gửi job mới sau vài phút, tối đa 1–2 lần, rồi báo người dùng.",
+    "- Mỗi lúc chỉ nên để một video quảng cáo đang mở cho mỗi khoá; xong mới gửi cái kế.",
     "",
     "Cần MaiHub từ 26.27.0 cho: comments.collectFinished, maihub_comments_collectStatus, maihub_comments_collectCancel và các trường system.status serverNowMs, timezone, utcOffsetMin, lastEventSeq. Bản cũ hơn không có các mục này (maihub_wait_for vẫn chạy, nhưng chờ comments.collectFinished sẽ hết giờ).",
-    "Cần MaiHub từ 26.31.0 cho pages.*, briefs.*, research.trending",
+    "Cần MaiHub từ 26.32.0 cho pages.*, briefs.*, research.trending",
 ])
 
 ONBOARD_MIN_INTERVAL_SEC = 21600
@@ -1991,7 +2001,7 @@ def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
             client.call("system.status")
             identities = client.call("pages.list")["identities"]
         except BridgeError as err:
-            result["warnings"].append("MaiHub cần ≥ 26.31.0" if err.code == "UNKNOWN_METHOD" else str(err))
+            result["warnings"].append("MaiHub cần ≥ 26.32.0" if err.code == "UNKNOWN_METHOD" else str(err))
             return result
 
         command = agent_command(env)
@@ -2057,7 +2067,7 @@ def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
         try:
             candidates = client.call("briefs.list")["briefs"]
         except BridgeError as err:
-            result["warnings"].append("MaiHub cần ≥ 26.31.0" if err.code == "UNKNOWN_METHOD" else str(err))
+            result["warnings"].append("MaiHub cần ≥ 26.32.0" if err.code == "UNKNOWN_METHOD" else str(err))
             return result
         attempted = set()
         for candidate in candidates:
@@ -2080,7 +2090,7 @@ def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
                     result["warnings"].append("%s: status/claimedAt đã đổi; bỏ qua claim cũ" % profile_id)
                     continue
             except BridgeError as err:
-                result["warnings"].append("MaiHub cần ≥ 26.31.0" if err.code == "UNKNOWN_METHOD" else "%s: %s" % (profile_id, err))
+                result["warnings"].append("MaiHub cần ≥ 26.32.0" if err.code == "UNKNOWN_METHOD" else "%s: %s" % (profile_id, err))
                 if err.code == "UNKNOWN_METHOD":
                     break
                 continue

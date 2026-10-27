@@ -3,12 +3,16 @@ import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import { showConfirm } from '@/components/common/ConfirmDialog';
+import AdVideoForm from './AdVideoForm';
 import VideoLibrary from './VideoLibrary';
 import VideoTemplateForm, { type MusicTrack, type VideoRenderRequest } from './VideoTemplateForm';
 import type { VideoTemplate } from './videoFormat';
-import type { VideoJob } from '../../../models/video';
+import type { AdVideoRequest, AdVoiceOption, VideoJob } from '../../../models/video';
 
 const LIST_LIMIT = 100;
+
+/** Hai máy dựng video: mẫu HyperFrames (máy chủ render riêng) và video quảng cáo AI (AHV AI). */
+type Mode = 'hyperframes' | 'ahv_ad';
 
 export default function VideoTab() {
   const showNotification = useAppStore((s) => s.showNotification);
@@ -28,6 +32,11 @@ export default function VideoTab() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [playing, setPlaying] = useState<VideoJob | null>(null);
   const [settingsError, setSettingsError] = useState('');
+  const [mode, setMode] = useState<Mode>('hyperframes');
+  const [adConfigured, setAdConfigured] = useState<boolean | null>(null);
+  const [adOpen, setAdOpen] = useState(false);
+  const [adError, setAdError] = useState('');
+  const [voices, setVoices] = useState<AdVoiceOption[]>([]);
   // Chỉ phản hồi của lần gọi mới nhất được ghi vào state; mọi lần gọi bị bỏ khi tab đã gỡ.
   const listSeq = useRef(0);
   const templatesSeq = useRef(0);
@@ -63,6 +72,23 @@ export default function VideoTab() {
     finally { if (seq === templatesSeq.current && alive.current) setTemplatesLoading(false); }
   }, []);
 
+  /** Cấu hình AHV AI đọc riêng: chưa cấu hình thì chế độ quảng cáo AI chỉ hiện hướng dẫn. */
+  const loadAdSettings = useCallback(async () => {
+    try {
+      const res = await ipc.video?.ahvSettingsGet();
+      if (!alive.current) return;
+      setAdConfigured(!!res?.success && !!res.configured);
+    } catch { if (alive.current) setAdConfigured(false); }
+  }, []);
+
+  const loadVoices = useCallback(async () => {
+    try {
+      const res = await ipc.video?.voices();
+      if (!alive.current || !res?.success) return;
+      setVoices(res.voices ?? []);
+    } catch { /* không có danh sách giọng thì vẫn dùng được giọng mặc định */ }
+  }, []);
+
   const loadSettings = useCallback(async () => {
     try {
       const res = await ipc.video?.settingsGet();
@@ -74,11 +100,26 @@ export default function VideoTab() {
     } catch (err) { if (alive.current) { setSettingsError(err instanceof Error ? err.message : 'Không đọc được cài đặt máy chủ render'); setConfigured(false); } }
   }, [loadTemplates]);
 
-  useEffect(() => { loadSettings(); loadList(); }, [loadSettings, loadList]);
+  useEffect(() => { loadSettings(); loadAdSettings(); loadList(); }, [loadSettings, loadAdSettings, loadList]);
+  useEffect(() => { if (mode === 'ahv_ad' && adConfigured && voices.length === 0) loadVoices(); }, [mode, adConfigured, voices.length, loadVoices]);
   useEffect(() => {
     const off = ipc.on?.('video:changed', () => { loadList(); });
     return () => { off?.(); };
   }, [loadList]);
+
+  const createAd = async (request: AdVideoRequest) => {
+    setSubmitting(true);
+    setAdError('');
+    try {
+      const res = await ipc.video?.adCreate(request);
+      if (!alive.current) return;
+      if (!res?.success) { setAdError(res?.error || 'Không tạo được video quảng cáo'); return; }
+      showNotification('Đã gửi kịch bản sang AHV AI, theo dõi tiến độ trong thư viện', 'success');
+      setAdOpen(false);
+      loadList();
+    } catch (err) { if (alive.current) setAdError(err instanceof Error && err.message ? err.message : 'Không tạo được video quảng cáo'); }
+    finally { if (alive.current) setSubmitting(false); }
+  };
 
   const openSettings = () => {
     window.dispatchEvent(new CustomEvent('nav:view', { detail: { view: 'settings' } }));
@@ -109,7 +150,18 @@ export default function VideoTab() {
     finally { if (alive.current) setBusyId(null); loadList(); }
   };
 
-  const cancel = (video: VideoJob) => run(video, () => ipc.video!.cancel(video.id), 'Không huỷ được video');
+  const cancel = async (video: VideoJob) => {
+    // Video quảng cáo AI: AHV không có đường huỷ, job bên đó vẫn chạy và vẫn tốn tiền máy.
+    if (video.engine === 'ahv_ad') {
+      const ok = await showConfirm({
+        title: 'Bỏ theo dõi video quảng cáo?',
+        message: `MaiHub sẽ ngừng theo dõi "${video.name}", nhưng AHV AI vẫn dựng tiếp video này và vẫn tính tiền máy. Không lấy lại được kết quả sau khi bỏ theo dõi.`,
+        confirmText: 'Bỏ theo dõi', variant: 'danger',
+      });
+      if (!ok) return;
+    }
+    await run(video, () => ipc.video!.cancel(video.id), 'Không huỷ được video');
+  };
   const exportFile = (video: VideoJob) => run(video, () => ipc.video!.exportFile(video.id), 'Không tải được video',
     (res) => { if (res.saved) showNotification('Đã lưu video', 'success'); });
   const remove = async (video: VideoJob) => {
@@ -124,8 +176,34 @@ export default function VideoTab() {
   return (
     <div className="space-y-8 min-w-0">
       <section aria-label="Tạo video" className="space-y-3 min-w-0">
-        <h2 className="text-base font-semibold">Tạo video</h2>
-        {configured === null ? <div className="flex justify-center py-6" role="status" aria-label="Đang tải"><Spinner size={5} /></div>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-base font-semibold">Tạo video</h2>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Chọn cách tạo video">
+            <button type="button" className={mode === 'hyperframes' ? 'poster-primary' : 'poster-button'}
+              aria-pressed={mode === 'hyperframes'} onClick={() => { setMode('hyperframes'); setAdOpen(false); }}>Mẫu HyperFrames</button>
+            <button type="button" className={mode === 'ahv_ad' ? 'poster-primary' : 'poster-button'}
+              aria-pressed={mode === 'ahv_ad'} onClick={() => { setMode('ahv_ad'); setSelected(null); }}>Video quảng cáo AI</button>
+          </div>
+        </div>
+        {mode === 'ahv_ad' ? (
+          adConfigured === null ? <div className="flex justify-center py-6" role="status" aria-label="Đang tải"><Spinner size={5} /></div>
+          : !adConfigured ? (
+            <div className="rounded-lg border border-gray-700 p-4 space-y-2" role="region" aria-label="Chưa cấu hình AHV AI">
+              <p className="text-sm font-medium">Chưa cấu hình AHV AI</p>
+              <p className="poster-muted text-xs">Video quảng cáo nhiều cảnh được dựng trên AHV AI. Vào Cài đặt → Máy chủ render video, nhập địa chỉ và khoá API của AHV AI rồi bấm Kiểm tra kết nối.</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className="poster-primary" onClick={openSettings}>Mở cài đặt</button>
+                <button type="button" className="poster-button" onClick={loadAdSettings}>Kiểm tra lại</button>
+              </div>
+            </div>)
+          : adOpen ? <AdVideoForm voices={voices} submitting={submitting} error={adError} onSubmit={createAd} onCancel={() => { setAdOpen(false); setAdError(''); }} />
+          : (
+            <div className="rounded-lg border border-gray-700 p-4 space-y-2" role="region" aria-label="Video quảng cáo AI">
+              <p className="text-sm font-medium">Video quảng cáo AI nhiều cảnh</p>
+              <p className="poster-muted text-xs break-words">Kịch bản 2–10 cảnh, có người dẫn nói tiếng Việt, giọng đọc, nhạc nền và khung cuối. Video dọc 1080×1920, mất khoảng 20–60 phút.</p>
+              <button type="button" className="poster-primary" onClick={() => { setAdError(''); setAdOpen(true); }}>Viết kịch bản mới</button>
+            </div>)
+        ) : configured === null ? <div className="flex justify-center py-6" role="status" aria-label="Đang tải"><Spinner size={5} /></div>
           : !configured ? (
             <div className="rounded-lg border border-gray-700 p-4 space-y-2" role="region" aria-label="Chưa cấu hình máy chủ render">
               <p className="text-sm font-medium">Chưa cấu hình máy chủ render video</p>
