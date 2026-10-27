@@ -88,3 +88,77 @@ export class FakeRenderServer {
 }
 
 export { MP4, JPG, MP3 };
+
+export const AHV_KEY = 'ahv-test-key-9999';
+
+export interface FakeAhvJob { status: string; progress: number; step?: unknown; result?: unknown; error?: unknown }
+
+/**
+ * Máy chủ AHV AI giả: một phần nhỏ của hợp đồng (`/healthz`, `/upload`, `POST /v1/jobs` task ad_video,
+ * `GET /v1/jobs/{id}`, `/v1/audio/voices`) cùng các tệp kết quả. Không ra mạng ngoài.
+ */
+export class FakeAhvServer {
+    jobs = new Map<string, FakeAhvJob>();
+    creates: { body: any; key: string | undefined }[] = [];
+    uploads: { filename: string; bytes: number }[] = [];
+    /** Ép mọi POST /v1/jobs trả [mã, thân]. */
+    failCreate: [number, unknown] | null = null;
+    /** Ép /upload trả [mã, thân]. */
+    failUpload: [number, unknown] | null = null;
+    /** Cắt kết nối giữa lúc tải tệp kết quả. */
+    cutDownload = false;
+    private server!: http.Server;
+    url = '';
+
+    async start(): Promise<void> {
+        this.server = http.createServer((req, res) => void this.handle(req, res));
+        await new Promise<void>((r) => this.server.listen(0, '127.0.0.1', r));
+        this.url = `http://127.0.0.1:${(this.server.address() as AddressInfo).port}`;
+    }
+
+    async stop(): Promise<void> {
+        this.server.closeAllConnections();
+        await new Promise((r) => this.server.close(r));
+    }
+
+    private send(res: http.ServerResponse, status: number, body: unknown, type = 'application/json'): void {
+        const data = Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
+        res.writeHead(status, { 'Content-Type': type, 'Content-Length': data.length });
+        res.end(data);
+    }
+
+    private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const chunks: Buffer[] = [];
+        for await (const c of req) chunks.push(c as Buffer);
+        const raw = Buffer.concat(chunks);
+        const p = (req.url ?? '').split('?')[0];
+        const key = req.headers['x-api-key'] as string | undefined;
+        if (p === '/healthz') return this.send(res, 200, { ok: true });
+        if (p === '/upload') { // như AHV: /upload không đòi khoá
+            if (this.failUpload) return this.send(res, this.failUpload[0], this.failUpload[1]);
+            const text = raw.toString('latin1');
+            const filename = /name="file"; filename="([^"]*)"/.exec(text)?.[1] ?? '';
+            this.uploads.push({ filename, bytes: raw.length });
+            return this.send(res, 200, { ok: true, url: `${this.url}/public/uploads/u${this.uploads.length}${filename.slice(filename.lastIndexOf('.'))}`, filename, size: raw.length });
+        }
+        if (p.startsWith('/public/')) {
+            if (p.includes('hethan')) return this.send(res, 404, { detail: 'not found' }); // link kết quả quá 7 ngày
+            if (this.cutDownload) { res.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': 999 }); res.write('abc'); res.destroy(); return; }
+            return this.send(res, 200, p.endsWith('.jpg') ? JPG : MP4, p.endsWith('.jpg') ? 'image/jpeg' : 'video/mp4');
+        }
+        if (key !== AHV_KEY) return this.send(res, 401, { ok: false, error: `unauthorized (${key})` });
+        if (p === '/v1/audio/voices') return this.send(res, 200, { object: 'list', data: [{ id: 'hai_dang', name: 'Hải Đăng', gender: 'male', region: 'bac' }] });
+        if (req.method === 'POST' && p === '/v1/jobs') {
+            if (this.failCreate) return this.send(res, this.failCreate[0], this.failCreate[1]);
+            const body = JSON.parse(raw.toString('utf8'));
+            this.creates.push({ body, key });
+            const jobId = `ad-${this.creates.length}`;
+            this.jobs.set(jobId, { status: 'queued', progress: 0 });
+            return this.send(res, 200, { ok: true, job_id: jobId, status: 'queued', predict_time: 780 });
+        }
+        const m = /^\/v1\/jobs\/([^/]+)$/.exec(p);
+        const job = m ? this.jobs.get(m[1]) : undefined;
+        if (!m || !job) return this.send(res, 404, { detail: 'job not found' });
+        return this.send(res, 200, { ok: true, job_id: m[1], ...job });
+    }
+}

@@ -260,7 +260,7 @@ describe('describe', () => {
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
             'comments.collect', 'comments.collectStatus', 'comments.collectCancel', 'comments.list', 'leads.list', 'leads.update', 'leads.config',
-            'videos.templates', 'videos.render', 'videos.status', 'videos.list', 'videos.cancel',
+            'videos.templates', 'videos.render', 'videos.adCreate', 'videos.status', 'videos.list', 'videos.cancel',
         ]);
         for (const m of d.methods) {
             expect(m.description).toMatch(/\S/);
@@ -681,6 +681,7 @@ describe('videos.*', () => {
     const videos = () => ({
         templates: jest.fn(async () => ({ templates: [], music: [] })),
         render: jest.fn(async (_p: any) => ({ videoId: 'v1', status: 'queued' })),
+        adCreate: jest.fn(async (_p: any) => ({ videoId: 'ad1', status: 'queued' })),
         status: jest.fn((_p: any) => ({ video: { id: 'v1' } })),
         list: jest.fn((_p: any) => ({ videos: [], total: 0 })),
         cancel: jest.fn(async (_p: any) => ({ cancelled: true })),
@@ -705,6 +706,18 @@ describe('videos.*', () => {
         expect(v.list).toHaveBeenCalledWith({ status: 'done', limit: 5, offset: 1 });
         expect(await call('videos.cancel', { videoId: 'v1' })).toEqual({ cancelled: true });
         expect(v.cancel).toHaveBeenCalledWith({ videoId: 'v1' });
+    });
+
+    it('videos.adCreate chỉ truyền các khoá đã công bố', async () => {
+        const { v, call } = setupVideos();
+        const params = {
+            name: 'Quảng cáo', scenes: [{ type: 'presenter', line: 'a' }, { type: 'ai', prompt: 'b' }],
+            presenter: { imageMediaId: 'm' }, voice: { name: 'hai_dang' }, music: { prompt: 'vui' },
+            brand: { website: 'x.vn' }, language: 'vi', junk: 1,
+        };
+        expect(await call('videos.adCreate', params)).toEqual({ videoId: 'ad1', status: 'queued' });
+        const { junk, ...documented } = params;
+        expect(v.adCreate).toHaveBeenCalledWith(documented);
     });
 
     it('does not require confirmation for any videos method', () => {

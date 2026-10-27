@@ -24,18 +24,29 @@ CREATE TABLE IF NOT EXISTS video_jobs (
 CREATE INDEX IF NOT EXISTS idx_video_jobs_status ON video_jobs(status);
 `;
 
+// Chạy sau VIDEO_SCHEMA_SQL, từng câu trong try/catch (cột đã có thì ALTER ném lỗi, bỏ qua) — như FB_POSTER_MIGRATIONS.
+// 26.31: engine thứ hai (ad_video của AHV AI); DB cũ đọc ra engine 'hyperframes' nên đi đúng nhánh cũ.
+export const VIDEO_MIGRATIONS: string[] = [
+    "ALTER TABLE video_jobs ADD COLUMN engine TEXT NOT NULL DEFAULT 'hyperframes'",
+    "ALTER TABLE video_jobs ADD COLUMN step_text TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE video_jobs ADD COLUMN result_json TEXT NOT NULL DEFAULT ''",
+];
+
 const ACTIVE: VideoStatus[] = ['uploading', 'queued', 'rendering'];
 
 const COLUMNS: Record<keyof Omit<VideoJob, 'id'>, string> = {
-    remoteId: 'remote_id', name: 'name', source: 'source', templateId: 'template_id', aspect: 'aspect',
-    specJson: 'spec_json', status: 'status', progress: 'progress', error: 'error', filePath: 'file_path',
+    remoteId: 'remote_id', name: 'name', source: 'source', engine: 'engine', templateId: 'template_id', aspect: 'aspect',
+    specJson: 'spec_json', status: 'status', progress: 'progress', error: 'error', stepText: 'step_text',
+    resultJson: 'result_json', filePath: 'file_path',
     thumbPath: 'thumb_path', sizeBytes: 'size_bytes', durationSec: 'duration_sec', createdAt: 'created_at', finishedAt: 'finished_at',
 };
 
 function mapJob(row: any): VideoJob {
     return {
-        id: row.id, remoteId: row.remote_id ?? null, name: row.name, source: row.source, templateId: row.template_id ?? null,
+        id: row.id, remoteId: row.remote_id ?? null, name: row.name, source: row.source,
+        engine: row.engine ?? 'hyperframes', templateId: row.template_id ?? null,
         aspect: row.aspect, specJson: row.spec_json, status: row.status, progress: row.progress, error: row.error,
+        stepText: row.step_text ?? '', resultJson: row.result_json ?? '',
         filePath: row.file_path ?? null, thumbPath: row.thumb_path ?? null, sizeBytes: row.size_bytes ?? null,
         durationSec: row.duration_sec ?? null, createdAt: row.created_at, finishedAt: row.finished_at ?? null,
     };
@@ -46,6 +57,9 @@ export class VideoStore {
 
     ensureSchema(): void {
         this.db.exec(VIDEO_SCHEMA_SQL);
+        for (const sql of VIDEO_MIGRATIONS) {
+            try { this.db.exec(sql); } catch { /* cột đã có */ }
+        }
     }
 
     create(job: VideoJob): void {

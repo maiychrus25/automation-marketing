@@ -336,4 +336,11 @@ describe('control events: video', () => {
         expect(buildVideoFinished({ videoId: 'v3', name: 'C', ok: false, error: 'Đã huỷ', cancelled: true }))
             .toEqual({ videoId: 'v3', name: 'C', ok: false, error: 'Đã huỷ', cancelled: true });
     });
+
+    it('buildVideoFinished thêm warnings của video quảng cáo AI, bỏ khi mảng rỗng', () => {
+        expect(buildVideoFinished({ videoId: 'a1', name: 'QC', ok: true, durationSec: 16.3, sizeBytes: 9, mediaId: 'm', warnings: ['stt_mismatch', 'fallback_still'] }))
+            .toEqual({ videoId: 'a1', name: 'QC', ok: true, durationSec: 16.3, sizeBytes: 9, mediaId: 'm', warnings: ['stt_mismatch', 'fallback_still'] });
+        expect(buildVideoFinished({ videoId: 'a2', name: 'QC', ok: true, warnings: [] }))
+            .toEqual({ videoId: 'a2', name: 'QC', ok: true });
+    });
 });

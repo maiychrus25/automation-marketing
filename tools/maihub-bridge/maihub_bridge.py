@@ -128,6 +128,17 @@ GUIDE = "\n".join([
     "window.__timelines = window.__timelines || {}; window.__timelines['main'] = tl;</script></body></html>",
     "- width/height trong tham số phải khớp data-width/data-height; data-duration của gốc là độ dài video (giây). Ảnh/nhạc tải lên gọi theo tên asset1.<đuôi>, asset2.<đuôi>…",
     "",
+    "8. Video quảng cáo AI nhiều cảnh (maihub_videos_adCreate, MaiHub từ 26.31.0)",
+    "- Khác maihub_videos_render: video dọc 1080x1920 do AHV AI dựng từ KỊCH BẢN (AI vẽ ảnh, đọc lời tiếng Việt, cho ảnh chuyển động, khớp môi người dẫn, nhạc nền, khung cuối). Bot viết kịch bản, hệ không tự viết lại lời và không tự thêm/bớt cảnh.",
+    "- Thứ tự: maihub_upload_media cho ảnh/nhạc có sẵn (lấy mediaId) -> maihub_videos_adCreate -> maihub_wait_for với types [\"videos.finished\"] và match {\"videoId\": \"<videoId>\"} -> drafts.create {mediaIds:[mediaId]} hoặc maihub_download_video.",
+    "- Cảnh: {type:\"ai\", prompt} AI vẽ ảnh rồi cho chuyển động; {type:\"image\", imageMediaId} ảnh của bạn; {type:\"presenter\", line} người dẫn nói (khớp môi), cần presenter.imageMediaId hoặc presenter.prompt. 2–10 cảnh. Cảnh ai/image có thêm motion, voiceover (lời đọc nền), duration 2,0–4,3 giây.",
+    "- Ví dụ: maihub_videos_adCreate {\"name\":\"Khai truong\",\"scenes\":[{\"type\":\"presenter\",\"line\":\"Chao ban, cua hang moi khai truong.\"},{\"type\":\"ai\",\"prompt\":\"bright clothing store, morning light\",\"motion\":\"slow dolly in\",\"voiceover\":\"Thiet ke toi gian, chat lieu thoang mat.\"},{\"type\":\"image\",\"imageMediaId\":\"<mediaId>\"}],\"presenter\":{\"imageMediaId\":\"<mediaId>\"},\"voice\":{\"name\":\"hai_dang\",\"speed\":0.9},\"music\":{\"prompt\":\"nhac quang cao tuoi vui, khong loi\"},\"brand\":{\"website\":\"example.com\",\"endLine\":\"Ghe cua hang hom nay.\"}}",
+    "- RẤT LÂU: thường 20–60 phút, tối đa 150 phút. Gọi maihub_wait_for nhiều lượt (mỗi lượt tối đa 25 giây, truyền lại đúng after) chứ đừng hỏi maihub_videos_status dồn dập; muốn báo tiến độ thì đọc progress (0–1) và stepText (\"H3 3/7\", \"Khớp môi 1/2\") của maihub_videos_status.",
+    "- videos.finished có thể kèm warnings: stt_mismatch (đọc sai chữ viết tắt/số/tên riêng), fallback_still (một cảnh thành ảnh tĩnh), cut_by_cost_cap / cut_by_time (bị cắt vì chạm trần tiền/giờ). Video vẫn dùng được nhưng PHẢI cho người xem lại trước khi đăng: tạo nháp và nói rõ cảnh báo, đừng tự đăng.",
+    "- maihub_videos_cancel chỉ dừng theo dõi ở MaiHub: job phía AHV AI vẫn chạy tới cùng và vẫn tốn tiền máy. Chỉ huỷ khi người dùng yêu cầu, và nói rõ điều này.",
+    "- Lỗi: LIMIT_REACHED (hàng chờ đầy, hết lượt trong ngày, hoặc tính năng đang tắt) thì chờ vài phút rồi gửi lại cùng kịch bản, tối đa vài lần. INVALID_PARAMS là sai kịch bản hoặc chưa cấu hình AHV AI trong MaiHub: sửa rồi gửi, đừng thử lại y nguyên. INTERNAL là AHV AI lỗi: gửi job mới sau vài phút, tối đa 1–2 lần, rồi báo người dùng.",
+    "- Mỗi lúc chỉ nên để một video quảng cáo đang mở cho mỗi khoá; xong mới gửi cái kế.",
+    "",
     "Cần MaiHub từ 26.27.0 cho: comments.collectFinished, maihub_comments_collectStatus, maihub_comments_collectCancel và các trường system.status serverNowMs, timezone, utcOffsetMin, lastEventSeq. Bản cũ hơn không có các mục này (maihub_wait_for vẫn chạy, nhưng chờ comments.collectFinished sẽ hết giờ).",
 ])
 

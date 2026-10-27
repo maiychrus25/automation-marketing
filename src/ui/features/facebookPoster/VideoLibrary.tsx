@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { toLocalMediaUrl } from '@/lib/localMedia';
-import type { VideoJob } from '../../../models/video';
+import type { AdResult, VideoJob } from '../../../models/video';
+import { engineLabel, warningLabel } from './adVideoFormat';
 import { formatBytes, formatDuration, isActiveStatus, videoStatusChip, VIDEO_TONE_CLASS } from './videoFormat';
 
 interface Props {
@@ -15,6 +16,15 @@ interface Props {
 }
 
 const BTN = 'poster-button';
+
+/** Cảnh báo của video quảng cáo AI (JSON hỏng thì coi như không có). */
+function adWarnings(video: VideoJob): string[] {
+    if (!video.resultJson) return [];
+    try {
+        const parsed = JSON.parse(video.resultJson) as AdResult;
+        return Array.isArray(parsed?.warnings) ? parsed.warnings : [];
+    } catch { return []; }
+}
 
 function PlayerDialog({ video, onClose }: { video: VideoJob; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -73,6 +83,7 @@ export default function VideoLibrary({ videos, busyId, playing, onPlay, onUse, o
           const busy = busyId === v.id;
           const percent = Math.round(Math.min(1, Math.max(0, v.progress || 0)) * 100);
           const playable = v.status === 'done' && !!v.filePath;
+          const warnings = adWarnings(v);
           return (
             <li key={v.id} className="rounded-lg border border-gray-700 overflow-hidden min-w-0 flex flex-col">
               <div className="aspect-video bg-gray-800 flex items-center justify-center overflow-hidden">
@@ -89,10 +100,18 @@ export default function VideoLibrary({ videos, busyId, playing, onPlay, onUse, o
                     <div role="progressbar" aria-label={`Tiến độ ${v.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="h-1.5 rounded bg-gray-700 overflow-hidden">
                       <div className="h-full bg-blue-500 transition-[width]" style={{ width: `${percent}%` }} />
                     </div>
-                    <p className="poster-muted text-xs">{percent}%</p>
+                    <p className="poster-muted text-xs break-words">{percent}%{v.stepText ? ` · ${v.stepText}` : ''}</p>
                   </div>
                 )}
                 {v.status === 'done' && <p className="poster-muted text-xs">{formatDuration(v.durationSec)} · {formatBytes(v.sizeBytes)} · {v.aspect}</p>}
+                {v.engine === 'ahv_ad' && <p className="poster-muted text-xs">{engineLabel(v.engine)}</p>}
+                {warnings.length > 0 && (
+                  <ul className="space-y-0.5" aria-label={`Cảnh báo của ${v.name}`}>
+                    {warnings.map((code) => (
+                      <li key={code} className="text-xs text-orange-400 break-words">⚠ {warningLabel(code)}</li>
+                    ))}
+                  </ul>
+                )}
                 {v.status === 'failed' && v.error && <p className="text-xs text-red-400 break-words line-clamp-3" title={v.error}>{v.error}</p>}
                 <div className="flex flex-wrap gap-2">
                   {playable && <>

@@ -279,7 +279,8 @@ class McpTests(BridgeTestCase):
 
     def test_guide_mentions_real_tools_and_events(self):
         for word in ("maihub_wait_for", "maihub_upload_media", "maihub_download_video", "run.finished", "comments.collectFinished",
-                     "videos.finished", "idempotencyKey", "serverNowMs", "uncertain_after_submit"):
+                     "videos.finished", "idempotencyKey", "serverNowMs", "uncertain_after_submit",
+                     "maihub_videos_adCreate", "stt_mismatch", "fallback_still", "stepText"):
             self.assertIn(word, bridge.GUIDE)
 
     def test_success_result_is_compact_json(self):

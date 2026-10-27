@@ -5,11 +5,13 @@ import Logger from '../../utils/Logger';
 import { memoryDb } from '../facebookPoster/helpers';
 import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { RenderClient } from '../../services/video/RenderClient';
-import { LOST_CONTACT_MS, VideoService } from '../../services/video/VideoService';
+import { AhvAdClient } from '../../services/video/AhvAdClient';
+import { AD_MAX_RUN_MS, LOST_CONTACT_MS, VideoService } from '../../services/video/VideoService';
 import { VideoStore } from '../../services/video/VideoStore';
-import { FakeRenderServer, TEST_KEY } from './helpers';
+import { AHV_KEY, FakeAhvServer, FakeRenderServer, TEST_KEY } from './helpers';
 
 const server = new FakeRenderServer();
+const ahv = new FakeAhvServer();
 let dir: string;
 let clock: number;
 let timers: (() => void)[];
@@ -18,8 +20,8 @@ let db: ReturnType<typeof memoryDb>;
 let inbox: InboxMediaStore;
 let img: string;
 
-beforeAll(() => server.start());
-afterAll(() => server.stop());
+beforeAll(async () => { await server.start(); await ahv.start(); });
+afterAll(async () => { await server.stop(); await ahv.stop(); });
 beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-'));
     clock = 1_000_000;
@@ -34,13 +36,20 @@ beforeEach(() => {
     server.uploads = [];
     server.downloads = [];
     server.failWith = null;
+    ahv.jobs.clear();
+    ahv.creates = [];
+    ahv.uploads = [];
+    ahv.failCreate = null;
+    ahv.failUpload = null;
+    ahv.cutDownload = false;
     jest.spyOn(Logger, 'warn').mockImplementation(() => undefined);
 });
 afterEach(() => { jest.restoreAllMocks(); fs.rmSync(dir, { recursive: true, force: true }); });
 
-function makeService(url = server.url): VideoService {
+function makeService(url = server.url, ahvUrl = ahv.url): VideoService {
     return new VideoService({
-        store: new VideoStore(db), client: () => new RenderClient(url, TEST_KEY), mediaInbox: inbox,
+        store: new VideoStore(db), client: () => new RenderClient(url, TEST_KEY),
+        adClient: () => new AhvAdClient(ahvUrl, AHV_KEY), mediaInbox: inbox,
         emit: (type, payload) => events.push({ type, payload }), now: () => clock,
         setTimer: (fn) => { timers.push(fn); return timers.length; }, clearTimer: () => { timers.pop(); },
         videosDir: path.join(dir, 'videos'),
@@ -283,4 +292,242 @@ test('musicPreview tải một lần vào music-cache rồi dùng lại; mã l�
     await expect(svc.musicPreview('../x')).rejects.toMatchObject({ code: 'not_found' });
     await expect(svc.musicPreview('..%2f..')).rejects.toMatchObject({ code: 'not_found' }); // id không an toàn bị chặn trước khi ghép đường dẫn
     expect(fs.readdirSync(path.join(dir, 'videos', 'music-cache'))).toEqual(['m1.mp3']);
+});
+
+
+// --- engine ahv_ad (video quảng cáo AI, 26.31) -------------------------------------------------
+
+const adInput = (over: Record<string, unknown> = {}) => ({
+    name: 'Quảng cáo 1', source: 'app' as const,
+    draft: {
+        payload: {
+            language: 'vi',
+            presenter: { image_url: { __adUpload: 0 } },
+            scenes: [{ type: 'presenter', line: 'Xin chào' }, { type: 'image', image_url: { __adUpload: 1 } }],
+        },
+        uploads: [{ path: img, name: 'nguoi-dan.jpg' }, { path: img, name: 'canh.jpg' }],
+        ...over,
+    },
+});
+const adResultBody = (over: Record<string, unknown> = {}) => ({
+    url: `${ahv.url}/public/ad/abc/video.mp4`, thumb_url: `${ahv.url}/public/ad/abc/thumb.jpg`,
+    grid_url: `${ahv.url}/public/ad/abc/grid.jpg`, expires_at: '2026-11-03T16:20:00+07:00',
+    duration: 16.34, width: 1080, height: 1920, cost_usd: { h3: 0.21, lipsync: 0.08, total: 0.29 },
+    scenes: [{ index: 0, type: 'presenter', status: 'ok', start: 0, end: 4.3 }],
+    stt_text: 'Xin chào', warnings: [{ code: 'stt_mismatch', line: 'line:0', heard: 'Xin chao' }],
+    ...over,
+});
+
+test('adCreate tải tệp lên AHV, gửi payload có link và lưu dòng engine ahv_ad', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    expect(job).toMatchObject({ engine: 'ahv_ad', status: 'queued', remoteId: 'ad-1', templateId: null, name: 'Quảng cáo 1' });
+    expect(ahv.uploads.map((u) => u.filename)).toEqual(['nguoi-dan.jpg', 'canh.jpg']);
+    const sent = ahv.creates[0].body;
+    expect(sent.task).toBe('ad_video');
+    expect(sent.payload.presenter.image_url).toContain('/public/uploads/');
+    expect(sent.payload.scenes[1].image_url).toContain('/public/uploads/');
+    expect(JSON.stringify(sent)).not.toContain('__adUpload');
+    expect(job.specJson).not.toContain(dir); // không chứa đường dẫn máy
+    expect(job.specJson).not.toContain(AHV_KEY);
+    expect(events.map((e) => e.type)).toContain('video:changed');
+    expect(timers).toHaveLength(1);
+});
+
+test('adCreate: tải tệp lên lỗi thì không để lại dòng nào và không phát sự kiện', async () => {
+    const svc = makeService();
+    ahv.failUpload = [400, { ok: false, error: 'File type .exe not allowed' }];
+    await expect(svc.adCreate(adInput())).rejects.toMatchObject({ code: 'invalid' });
+    expect(svc.list().total).toBe(0);
+    expect(events).toHaveLength(0);
+    expect(ahv.creates).toHaveLength(0);
+});
+
+test('adCreate: AHV từ chối job (429) thì không để lại dòng nào', async () => {
+    const svc = makeService();
+    ahv.failCreate = [429, { ok: false, error: { code: 429, reason: 'AD_DAILY_CAP', message: 'Đã hết lượt trong ngày' } }];
+    await expect(svc.adCreate(adInput())).rejects.toMatchObject({ code: 'limit', message: 'Đã hết lượt trong ngày' });
+    expect(svc.list().total).toBe(0);
+});
+
+test('adCreate: chưa cấu hình AHV thì báo unconfigured, không tải gì lên', async () => {
+    const svc = makeService(server.url, '');
+    await expect(svc.adCreate(adInput())).rejects.toMatchObject({ code: 'unconfigured' });
+    expect(ahv.uploads).toHaveLength(0);
+});
+
+test('theo dõi ad: progress 0–100 đổi về 0–1, stepText hiện bước', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'running', progress: 40, step: { name: 'h3', k: 3, n: 7 } });
+    await svc.tick();
+    expect(svc.get(job.id)).toMatchObject({ status: 'rendering', progress: 0.4, stepText: 'H3 3/7' });
+    const before = events.length;
+    await svc.tick();
+    expect(events).toHaveLength(before); // không đổi thì không phát thêm
+    ahv.jobs.set('ad-1', { status: 'running', progress: 90 });
+    await svc.tick();
+    expect(svc.get(job.id)?.stepText).toBe('Đang dựng video');
+});
+
+test('ad xong: tải mp4 + bìa một lần, ghi resultJson, phát videos.finished kèm warnings', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'succeeded', progress: 100, result: adResultBody() });
+    await svc.tick();
+    await svc.tick();
+    const done = svc.get(job.id)!;
+    expect(done).toMatchObject({ status: 'done', progress: 1, durationSec: 16.34, stepText: '' });
+    expect(fs.existsSync(done.filePath!)).toBe(true);
+    expect(fs.existsSync(done.thumbPath!)).toBe(true);
+    expect(done.sizeBytes).toBe(fs.statSync(done.filePath!).size);
+    expect(JSON.parse(done.resultJson)).toMatchObject({
+        warnings: ['stt_mismatch'], sttText: 'Xin chào', expiresAt: '2026-11-03T16:20:00+07:00',
+        costUsd: { total: 0.29 }, scenes: [{ index: 0, status: 'ok' }],
+    });
+    expect(finished()).toHaveLength(1);
+    expect(finished()[0].payload).toEqual({
+        videoId: job.id, name: 'Quảng cáo 1', ok: true, durationSec: 16.34, sizeBytes: done.sizeBytes, warnings: ['stt_mismatch'],
+    });
+});
+
+test('ad xong không có bìa hay cảnh báo: vẫn done, không có warnings trong sự kiện', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'succeeded', progress: 100, result: adResultBody({ thumb_url: undefined, warnings: [] }) });
+    await svc.tick();
+    expect(svc.get(job.id)).toMatchObject({ status: 'done', thumbPath: null });
+    expect(finished()[0].payload.warnings).toBeUndefined();
+});
+
+test('ad xong nhưng thiếu link mp4 thì failed, không treo', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'succeeded', progress: 100, result: adResultBody({ url: undefined }) });
+    await svc.tick();
+    expect(svc.get(job.id)?.status).toBe('failed');
+    expect(finished()[0].payload.ok).toBe(false);
+});
+
+test('ad failed: lấy thông báo của AHV, thiếu reason vẫn failed', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'failed', progress: 30, error: { code: 502, reason: 'AD_IMAGE_FAILED', message: 'Tạo ảnh cảnh thất bại' } });
+    await svc.tick();
+    expect(svc.get(job.id)).toMatchObject({ status: 'failed', error: 'Tạo ảnh cảnh thất bại' });
+
+    const job2 = await svc.adCreate(adInput());
+    ahv.jobs.set('ad-2', { status: 'failed', progress: 50, error: { code: 502, message: 'Job exceeded max runtime (9000s), force-failed by watchdog' } });
+    await svc.tick();
+    expect(svc.get(job2.id)).toMatchObject({ status: 'failed', error: 'Job exceeded max runtime (9000s), force-failed by watchdog' });
+});
+
+test('ad: việc của bot được chép vào hộp thư và có mediaId', async () => {
+    const svc = makeService();
+    await svc.adCreate({ ...adInput(), source: 'bot' });
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'succeeded', progress: 100, result: adResultBody() });
+    await svc.tick();
+    for (let i = 0; i < 100 && finished().length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    const payload = finished()[0].payload;
+    expect(payload.ok).toBe(true);
+    expect(inbox.resolve([payload.mediaId])).toHaveLength(1);
+});
+
+test('ad: mất liên lạc 30 phút thì failed, lỗi mạng ngắn thì giữ nguyên', async () => {
+    const live = makeService();
+    const job = await live.adCreate(adInput());
+    const lost = makeService(server.url, 'http://127.0.0.1:1');
+    lost.startPolling();
+    await lost.tick();
+    clock += LOST_CONTACT_MS - 1000;
+    await lost.tick();
+    expect(lost.get(job.id)?.status).toBe('queued');
+    clock += 2000;
+    await lost.tick();
+    expect(lost.get(job.id)).toMatchObject({ status: 'failed', error: 'Mất liên lạc với AHV AI' });
+});
+
+test('ad: quá 160 phút kể từ khi running thì failed; xếp hàng lâu thì không', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'queued', progress: 0 });
+    await svc.tick();
+    clock += AD_MAX_RUN_MS * 2; // xếp hàng rất lâu: không tính vào trần
+    await svc.tick();
+    expect(svc.get(job.id)?.status).toBe('queued');
+    ahv.jobs.set('ad-1', { status: 'running', progress: 20 });
+    await svc.tick();
+    expect(svc.get(job.id)?.status).toBe('rendering');
+    clock += AD_MAX_RUN_MS + 1000;
+    await svc.tick();
+    expect(svc.get(job.id)).toMatchObject({ status: 'failed' });
+    expect(svc.get(job.id)!.error).toMatch(/Quá thời gian/);
+});
+
+test('ad: AHV không còn việc (404) thì failed ngay', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    ahv.jobs.clear();
+    svc.startPolling();
+    await svc.tick();
+    expect(svc.get(job.id)?.status).toBe('failed');
+});
+
+test('ad: huỷ chỉ dừng theo dõi ở MaiHub, không gọi máy chủ render', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    const renderCalls = server.jobs.size;
+    await expect(svc.cancel(job.id)).resolves.toEqual({ cancelled: true });
+    expect(svc.get(job.id)).toMatchObject({ status: 'cancelled', error: 'Đã huỷ' });
+    expect(finished()[0].payload).toEqual({ videoId: job.id, name: 'Quảng cáo 1', ok: false, error: 'Đã huỷ', cancelled: true });
+    expect(server.jobs.size).toBe(renderCalls);
+    await expect(svc.cancel(job.id)).resolves.toEqual({ cancelled: false });
+});
+
+test('ad: xoá trong lúc tick đang tải thì không để lại tệp và không phát sự kiện', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'succeeded', progress: 100, result: adResultBody() });
+    const ticking = svc.tick();
+    await svc.delete(job.id);
+    await ticking;
+    expect(svc.get(job.id)).toBeNull();
+    expect(finished()).toHaveLength(0);
+    const videosDir = path.join(dir, 'videos');
+    expect(fs.existsSync(videosDir) ? fs.readdirSync(videosDir) : []).toEqual([]);
+});
+
+test('ad: khoá AHV không xuất hiện trong log, sự kiện hay dòng DB', async () => {
+    const logs: string[] = [];
+    for (const level of ['info', 'warn', 'error', 'debug'] as const) {
+        jest.spyOn(Logger, level).mockImplementation(((...a: unknown[]) => { logs.push(a.join(' ')); }) as any);
+    }
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    const lost = makeService(server.url, 'http://127.0.0.1:1');
+    lost.startPolling();
+    await lost.tick();
+    clock += LOST_CONTACT_MS + 1;
+    await lost.tick();
+    expect(JSON.stringify([logs, events, svc.get(job.id)])).not.toContain(AHV_KEY);
+});
+
+test('hai engine chạy chung một vòng theo dõi, không lẫn nhau', async () => {
+    const svc = makeService();
+    const hf = await svc.render(tplInput());
+    const ad = await svc.adCreate(adInput());
+    svc.startPolling();
+    server.jobs.set('remote-1', { status: 'done', progress: 1, durationSec: 12, sizeBytes: 14 });
+    ahv.jobs.set('ad-1', { status: 'running', progress: 55, step: { name: 'khop_moi', k: 1, n: 2 } });
+    await svc.tick();
+    expect(svc.get(hf.id)).toMatchObject({ status: 'done', engine: 'hyperframes', stepText: '' });
+    expect(svc.get(ad.id)).toMatchObject({ status: 'rendering', engine: 'ahv_ad', stepText: 'Khớp môi 1/2' });
 });
