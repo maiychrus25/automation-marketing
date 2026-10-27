@@ -88,7 +88,7 @@ export default function AdVideoForm({ voices, submitting, error, onSubmit, onCan
       </p>
 
       <label className="block text-xs text-gray-400">Tên video
-        <input className={FIELD} value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={120} autoComplete="off" aria-invalid={!!(touched && errors.name)} />
+        <input className={FIELD} value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={100} autoComplete="off" aria-invalid={!!(touched && errors.name)} />
       </label>
       {show('name')}
 

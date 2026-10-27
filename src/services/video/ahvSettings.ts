@@ -17,7 +17,7 @@ export function loadAhvSettings(db: SettingsStore, crypto: KeyCrypto): AhvSettin
     }
 }
 
-/** `apiKey` bỏ trống/undefined = giữ khoá cũ; `baseUrl` bỏ trống = về mặc định. */
+/** `apiKey` bỏ trống, chỉ khoảng trắng hoặc undefined = giữ khoá cũ; `baseUrl` bỏ trống = về mặc định. */
 export function saveAhvSettings(db: SettingsStore, crypto: KeyCrypto, input: { baseUrl: string; apiKey?: string }): AhvSettings {
     const trimmed = input.baseUrl.trim().replace(/\/+$/, '');
     const baseUrl = trimmed || AHV_DEFAULT_BASE_URL;
@@ -26,7 +26,7 @@ export function saveAhvSettings(db: SettingsStore, crypto: KeyCrypto, input: { b
     // http chỉ cho máy nội bộ (thử với staging qua tunnel): khoá không được đi qua mạng dạng chữ thường
     const local = parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
     if (parsed.protocol !== 'https:' && !local) throw new Error('Địa chỉ API AHV AI phải bắt đầu bằng https://');
-    const apiKey = input.apiKey ? input.apiKey.trim() : loadAhvSettings(db, crypto).apiKey;
+    const apiKey = input.apiKey?.trim() || loadAhvSettings(db, crypto).apiKey;
     db.setSetting(AHV_SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey: crypto.encrypt(apiKey) }));
     return { baseUrl, apiKey };
 }

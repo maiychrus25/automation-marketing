@@ -107,6 +107,8 @@ export class FakeAhvServer {
     failUpload: [number, unknown] | null = null;
     /** Cắt kết nối giữa lúc tải tệp kết quả. */
     cutDownload = false;
+    /** Ép mọi tệp kết quả trả mã này (link chết nhưng không phải 404). */
+    failResult: number | null = null;
     private server!: http.Server;
     url = '';
 
@@ -143,10 +145,11 @@ export class FakeAhvServer {
         }
         if (p.startsWith('/public/')) {
             if (p.includes('hethan')) return this.send(res, 404, { detail: 'not found' }); // link kết quả quá 7 ngày
+            if (this.failResult) return this.send(res, this.failResult, { detail: 'khong tai duoc' });
             if (this.cutDownload) { res.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': 999 }); res.write('abc'); res.destroy(); return; }
             return this.send(res, 200, p.endsWith('.jpg') ? JPG : MP4, p.endsWith('.jpg') ? 'image/jpeg' : 'video/mp4');
         }
-        if (key !== AHV_KEY) return this.send(res, 401, { ok: false, error: `unauthorized (${key})` });
+        if (key !== AHV_KEY) return this.send(res, 401, { ok: false, error: 'unauthorized' }); // đúng thân thật của AHV
         if (p === '/v1/audio/voices') return this.send(res, 200, { object: 'list', data: [{ id: 'hai_dang', name: 'Hải Đăng', gender: 'male', region: 'bac' }] });
         if (req.method === 'POST' && p === '/v1/jobs') {
             if (this.failCreate) return this.send(res, this.failCreate[0], this.failCreate[1]);

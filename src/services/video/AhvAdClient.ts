@@ -33,6 +33,11 @@ export interface AdVoice { id: string; name: string; gender?: string; region?: s
 
 const META_TIMEOUT_MS = 30_000;
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
+/**
+ * Trần tải mp4/bìa kết quả. Ngắn hơn trần tải lên vì việc này chạy trong vòng theo dõi chung:
+ * một lần tải treo sẽ làm mọi video khác không được hỏi trạng thái trong suốt thời gian đó.
+ */
+const RESULT_TIMEOUT_MS = 3 * 60_000;
 
 /** Lỗi lúc chạy (5xx) là lỗi máy chủ; 400/401 là lỗi đầu vào; 429 và 503 là "chờ rồi gửi lại". */
 function classify(status: number): RenderErrorCode {
@@ -115,7 +120,7 @@ export class AhvAdClient {
 
     /** Tải tệp kết quả về `dest` qua tệp tạm rồi đổi tên: không bao giờ để lại tệp dở ở `dest`. */
     async download(url: string, dest: string): Promise<void> {
-        const res = await this.requestUrl('GET', url, undefined, false, TRANSFER_TIMEOUT_MS);
+        const res = await this.requestUrl('GET', url, undefined, false, RESULT_TIMEOUT_MS);
         if (!res.body) throw new RenderError('server', 'AHV AI trả về tệp rỗng');
         const part = `${dest}.part`;
         try {
@@ -147,15 +152,18 @@ export class AhvAdClient {
         throw new RenderError(classify(res.status), this.redact(await this.messageOf(res)));
     }
 
-    /** Thông báo của AHV: `error.message` (dạng AD_*), `error` chuỗi, `detail` (lỗi toàn cục), hoặc câu mặc định. */
+    /**
+     * Thông báo của AHV: `error.message` (dạng AD_*), `error` chuỗi, `detail` (lỗi toàn cục), hoặc câu mặc định.
+     * 401 luôn nói bằng câu của mình: thân thật của AHV chỉ có chữ `unauthorized`, không giúp gì người dùng.
+     */
     private async messageOf(res: Response): Promise<string> {
+        if (res.status === 401) return 'Khoá API AHV AI không đúng';
         let body: any = null;
         try { body = await res.json(); } catch { /* thân không phải JSON */ }
         const text = typeof body?.error === 'object' && body?.error
             ? String(body.error.message ?? body.error.reason ?? '')
             : String(body?.error ?? body?.detail ?? '');
         if (text) return text;
-        if (res.status === 401) return 'Khoá API AHV AI không đúng';
         if (res.status === 404) return 'AHV AI không còn việc này';
         return `AHV AI trả lỗi ${res.status}`;
     }

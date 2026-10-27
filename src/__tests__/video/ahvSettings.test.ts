@@ -28,6 +28,13 @@ test('lưu lại không kèm khoá thì giữ khoá cũ', () => {
     expect(loadAhvSettings(db, rot)).toEqual({ baseUrl: 'http://127.0.0.1:2023', apiKey: 'key-one-1111' });
 });
 
+test('khoá chỉ có khoảng trắng không xoá khoá cũ', () => {
+    const db = memorySettings();
+    saveAhvSettings(db, rot, { baseUrl: 'https://ai.ahvchat.com', apiKey: 'key-giu-lai' });
+    saveAhvSettings(db, rot, { baseUrl: 'https://ai.ahvchat.com', apiKey: '   ' });
+    expect(loadAhvSettings(db, rot).apiKey).toBe('key-giu-lai');
+});
+
 test('địa chỉ phải https, chỉ http cho máy nội bộ; để trống thì về mặc định', () => {
     const db = memorySettings();
     expect(() => saveAhvSettings(db, rot, { baseUrl: 'not a url' })).toThrow();

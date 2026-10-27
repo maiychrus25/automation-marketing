@@ -6,7 +6,7 @@ import { memoryDb } from '../facebookPoster/helpers';
 import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { RenderClient } from '../../services/video/RenderClient';
 import { AhvAdClient } from '../../services/video/AhvAdClient';
-import { AD_MAX_RUN_MS, LOST_CONTACT_MS, VideoService } from '../../services/video/VideoService';
+import { AD_MAX_DOWNLOAD_TRIES, AD_MAX_RUN_MS, LOST_CONTACT_MS, VideoService } from '../../services/video/VideoService';
 import { VideoStore } from '../../services/video/VideoStore';
 import { AHV_KEY, FakeAhvServer, FakeRenderServer, TEST_KEY } from './helpers';
 
@@ -42,6 +42,7 @@ beforeEach(() => {
     ahv.failCreate = null;
     ahv.failUpload = null;
     ahv.cutDownload = false;
+    ahv.failResult = null;
     jest.spyOn(Logger, 'warn').mockImplementation(() => undefined);
 });
 afterEach(() => { jest.restoreAllMocks(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -530,4 +531,69 @@ test('hai engine chạy chung một vòng theo dõi, không lẫn nhau', async (
     await svc.tick();
     expect(svc.get(hf.id)).toMatchObject({ status: 'done', engine: 'hyperframes', stepText: '' });
     expect(svc.get(ad.id)).toMatchObject({ status: 'rendering', engine: 'ahv_ad', stepText: 'Khớp môi 1/2' });
+});
+
+
+test('ad: trạng thái AHV không hiểu được thì failed ngay, không nằm mãi ở đang chờ', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'cancelled', progress: 30 }); // tên kết thúc mới của AHV
+    await svc.tick();
+    expect(svc.get(job.id)).toMatchObject({ status: 'failed' });
+    expect(svc.get(job.id)!.error).toMatch(/không hiểu được: cancelled/);
+    expect(finished()[0].payload.ok).toBe(false);
+
+    const job2 = await svc.adCreate(adInput());
+    ahv.jobs.set('ad-2', { status: '', progress: 0 }); // thân JSON lạ, thiếu status
+    await svc.tick();
+    expect(svc.get(job2.id)).toMatchObject({ status: 'failed' });
+    expect(svc.get(job2.id)!.error).toMatch(/\(trống\)/);
+});
+
+test('ad: link kết quả chết (không phải 404) chỉ được thử lại hữu hạn rồi failed', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'succeeded', progress: 100, result: adResultBody() });
+    ahv.failResult = 403; // AHV siết quyền /public: tải mãi không được
+    for (let i = 0; i < AD_MAX_DOWNLOAD_TRIES - 1; i++) {
+        await svc.tick();
+        expect(svc.get(job.id)?.status).not.toBe('failed');
+    }
+    await svc.tick();
+    expect(svc.get(job.id)).toMatchObject({ status: 'failed' });
+    expect(svc.get(job.id)!.error).toMatch(/Không tải được video quảng cáo/);
+    expect(finished()).toHaveLength(1);
+    const videosDir = path.join(dir, 'videos');
+    expect(fs.existsSync(videosDir) ? fs.readdirSync(videosDir) : []).toEqual([]); // không để lại tệp dở
+});
+
+test('ad: trần thời gian áp cả khi đang tải kết quả, kể cả job nhảy thẳng từ chờ sang xong', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', { status: 'succeeded', progress: 100, result: adResultBody() });
+    ahv.failResult = 500;
+    await svc.tick(); // lần đầu thấy "đã giành lượt" -> đặt mốc trần
+    clock += AD_MAX_RUN_MS + 1000;
+    await svc.tick();
+    expect(svc.get(job.id)).toMatchObject({ status: 'failed' });
+    expect(svc.get(job.id)!.error).toMatch(/Quá thời gian/);
+});
+
+test('ad: cùng một mã cảnh báo về nhiều lần thì gộp lại một lần', async () => {
+    const svc = makeService();
+    const job = await svc.adCreate(adInput());
+    svc.startPolling();
+    ahv.jobs.set('ad-1', {
+        status: 'succeeded', progress: 100,
+        result: adResultBody({ warnings: [
+            { code: 'stt_mismatch', line: 'line:0' }, { code: 'stt_mismatch', line: 'vo:1' },
+            { code: 'stt_mismatch', line: 'end' }, { code: 'fallback_still', scenes: [2] },
+        ] }),
+    });
+    await svc.tick();
+    expect(JSON.parse(svc.get(job.id)!.resultJson).warnings).toEqual(['stt_mismatch', 'fallback_still']);
+    expect(finished()[0].payload.warnings).toEqual(['stt_mismatch', 'fallback_still']);
 });

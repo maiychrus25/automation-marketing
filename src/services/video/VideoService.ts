@@ -14,6 +14,10 @@ export const LOST_CONTACT_MS = 30 * 60_000;
  * sau khi gianh luot, luc xep hang khong tinh). Moc giu trong bo nho nhu `lastContact`.
  */
 export const AD_MAX_RUN_MS = 160 * 60_000;
+/** Số lần tải tệp kết quả được thử trước khi coi là lỗi, để link chết không thành vòng tải vô hạn. */
+export const AD_MAX_DOWNLOAD_TRIES = 3;
+/** Trạng thái job mà hợp đồng `ad_video` công bố; tên ngoài danh sách này là lỗi, không phải "đang chờ". */
+const AD_STATUSES = ['queued', 'running', 'succeeded', 'failed'];
 const CATALOG_TTL_MS = 10 * 60_000;
 const MAX_NAME_LENGTH = 100;
 const CANCELLED_MESSAGE = 'Đã huỷ';
@@ -21,6 +25,7 @@ const LOST_CONTACT_MESSAGE = 'Mất liên lạc với máy chủ render';
 const AD_LOST_CONTACT_MESSAGE = 'Mất liên lạc với AHV AI';
 const AD_TIMEOUT_MESSAGE = 'Quá thời gian theo dõi video quảng cáo AI';
 const AD_FAILED_MESSAGE = 'AHV AI báo video quảng cáo lỗi';
+const AD_DOWNLOAD_MESSAGE = 'Không tải được video quảng cáo từ AHV AI';
 const TERMINAL: VideoStatus[] = ['done', 'failed', 'cancelled'];
 const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
@@ -102,8 +107,9 @@ export function fillAdUploads(value: unknown, urls: string[]): unknown {
 
 /** Phan ket qua them cua `ad_video` de luu vao `result_json` (ma canh bao giu nguyen ke ca ma la). */
 export function toAdResult(result: AdJobResult): AdResult {
+    // AHV phát stt_mismatch theo từng câu nên cùng một mã về nhiều lần: gộp lại, giữ thứ tự gặp đầu tiên.
     const warnings = Array.isArray(result.warnings)
-        ? result.warnings.map((w) => (typeof w === 'string' ? w : String(w?.code ?? ''))).filter((c) => !!c)
+        ? [...new Set(result.warnings.map((w) => (typeof w === 'string' ? w : String(w?.code ?? ''))).filter((c) => !!c))]
         : [];
     return {
         warnings,
@@ -122,8 +128,10 @@ export class VideoService {
     private ticking = false;
     private readonly musicDownloads = new Map<string, Promise<void>>();
     private readonly lastContact = new Map<string, number>();
-    /** Lan dau thay job `ad_video` o trang thai `running`; chi de tinh tran AD_MAX_RUN_MS. */
+    /** Lan dau thay job `ad_video` khong con xep hang; chi de tinh tran AD_MAX_RUN_MS. */
     private readonly adRunStart = new Map<string, number>();
+    /** So lan tai tep ket qua da that bai, theo tung job. */
+    private readonly adDownloadTries = new Map<string, number>();
 
     constructor(private readonly deps: VideoServiceDeps) {}
 
@@ -250,6 +258,7 @@ export class VideoService {
         for (const file of [job.filePath, job.thumbPath]) if (file) this.removeInsideVideosDir(file);
         this.lastContact.delete(id);
         this.adRunStart.delete(id);
+        this.adDownloadTries.delete(id);
         this.deps.store.delete(id);
         this.deps.emit('video:changed');
     }
@@ -351,17 +360,25 @@ export class VideoService {
             this.finish(job, { status: 'failed', error: view.error?.message || AD_FAILED_MESSAGE }, true);
             return;
         }
-        if (view.status === 'succeeded') return this.finishAd(job, view);
+        // Tên trạng thái ngoài hợp đồng (đổi tên, thêm trạng thái kết thúc mới, thân JSON lạ) từng làm job
+        // nằm mãi ở "đang chờ" vì nhánh chờ không có trần nào: coi là lỗi và nói rõ nhận được gì.
+        if (!AD_STATUSES.includes(view.status)) {
+            this.finish(job, { status: 'failed', error: `AHV AI trả trạng thái không hiểu được: ${view.status || '(trống)'}` }, true);
+            return;
+        }
 
         const now = this.deps.now();
-        const status: VideoStatus = view.status === 'running' ? 'rendering' : 'queued';
-        if (status === 'rendering') {
+        // Trần thời gian áp cho mọi lúc job đã giành lượt chạy, kể cả lúc đang tải kết quả về.
+        if (view.status !== 'queued') {
             if (!this.adRunStart.has(job.id)) this.adRunStart.set(job.id, now);
             if (now - this.adRunStart.get(job.id)! > AD_MAX_RUN_MS) {
                 this.finish(job, { status: 'failed', error: AD_TIMEOUT_MESSAGE }, true);
                 return;
             }
         }
+        if (view.status === 'succeeded') return this.finishAd(job, view);
+
+        const status: VideoStatus = view.status === 'running' ? 'rendering' : 'queued';
         const progress = Math.min(Math.max(view.progress / 100, 0), 1);
         const stepText = adStepText(view.step, view.progress);
         if (status !== job.status || progress !== job.progress || stepText !== job.stepText) {
@@ -370,7 +387,10 @@ export class VideoService {
         }
     }
 
-    /** Xong: tai mp4 (va bia neu co) dung mot lan, roi ghi ket qua. Loi tai nem ra de vong sau thu lai. */
+    /**
+     * Xong: tai mp4 (va bia neu co) dung mot lan, roi ghi ket qua. Loi tai duoc thu lai o vong sau,
+     * nhung chi toi AD_MAX_DOWNLOAD_TRIES lan: link ket qua chet khong duoc thanh vong tai vo han.
+     */
     private async finishAd(job: VideoJob, view: AdJobView): Promise<void> {
         const result = view.result ?? {};
         if (!result.url) {
@@ -382,7 +402,17 @@ export class VideoService {
         let filePath = job.filePath;
         if (!filePath) {
             filePath = path.join(this.deps.videosDir, `${job.id}.mp4`);
-            await client.download(result.url, filePath);
+            try {
+                await client.download(result.url, filePath);
+            } catch (e) {
+                const tries = (this.adDownloadTries.get(job.id) ?? 0) + 1;
+                this.adDownloadTries.set(job.id, tries);
+                if (tries >= AD_MAX_DOWNLOAD_TRIES) {
+                    this.finish(job, { status: 'failed', error: AD_DOWNLOAD_MESSAGE }, true);
+                    return;
+                }
+                throw e; // vong sau thu lai
+            }
             if (!this.liveRow(job.id)) { fs.rmSync(filePath, { force: true }); return; } // bi xoa/huy trong luc tai
             this.deps.store.update(job.id, { filePath });
         }
@@ -444,6 +474,7 @@ export class VideoService {
         this.deps.store.update(job.id, { ...patch, finishedAt: this.deps.now() });
         this.lastContact.delete(job.id);
         this.adRunStart.delete(job.id);
+        this.adDownloadTries.delete(job.id);
         this.deps.emit('video:changed');
         if (!announce) return;
         const ok = patch.status === 'done';

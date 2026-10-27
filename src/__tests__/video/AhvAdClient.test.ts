@@ -66,9 +66,16 @@ test('mã lỗi của AHV đổi thành RenderErrorCode đã có, không thêm m
     expect((await caught(() => new AhvAdClient(server.url, '').createJob({}))).code).toBe('unconfigured');
 });
 
-test('thông báo lỗi không bao giờ chứa khoá API', async () => {
+test('401 nói bằng câu tiếng Việt của mình, không phải chữ unauthorized của AHV', async () => {
     const err = await caught(() => client('ahv-test-key-WRONG').createJob({}));
-    expect(err.message).not.toContain('ahv-test-key-WRONG');
+    expect(err.code).toBe('invalid');
+    expect(err.message).toBe('Khoá API AHV AI không đúng');
+});
+
+test('thông báo lỗi không bao giờ chứa khoá API (kể cả khi máy chủ dội khoá lại)', async () => {
+    server.failCreate = [400, { ok: false, error: { code: 400, reason: 'AD_SCENES', message: `khoá ${AHV_KEY} sai chỗ nào đó` } }];
+    const err = await caught(() => client().createJob({}));
+    expect(err.message).not.toContain(AHV_KEY);
     expect(err.message).toContain('***');
 });
 
