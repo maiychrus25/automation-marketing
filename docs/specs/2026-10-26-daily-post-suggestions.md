@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 26/10/2026 |
-| Trạng thái | Đã duyệt (26/10/2026) |
+| Trạng thái | Đã duyệt (26/10/2026); chưa phát hành (ghi chú triển khai 27/10/2026 bên dưới) |
 | Intent | `docs/intent/2026-10-26-facebook-growth-bot.md` (tính năng 1) |
 | Kế hoạch | `docs/plans/2026-10-26-daily-post-suggestions.md` |
 | Phiên bản dự kiến | 26.31.0 |
@@ -288,3 +288,28 @@ Không gọi Facebook thật, không gọi Claude thật:
 - `docs/protocol/maihub-control-protocol.md`: thao tác `pages.*`, `briefs.*`, `research.trending`, sự kiện mới.
 - `tools/maihub-bridge/README.md`: `brief-tick`, `install-brief`, `MAIHUB_AGENT_CMD`, `MAIHUB_AGENT_TIMEOUT_SEC`.
 - Intent: đã thêm ghi chú (26/10/2026) rằng người dùng là khách chỉ dùng tin nhắn, bot tự học Page.
+
+## Ghi chú triển khai/kiểm chứng 27/10/2026 — Task 4, chưa phát hành
+
+Giữ nguyên nội dung thiết kế lịch sử phía trên. Theo rulings 10–13 và báo cáo `docs/reports/2026-10-26-page-learn-spike.md`, bộ đọc Task 4 trong `src/services/dailyBrief/pageIdentity.ts` dùng **JSON đã tải trong DOM**, thay cho bước chủ động `fetch('/api/graphql/')` ở mục 2.3. Không phát minh `doc_id`, variables hoặc phân trang; `ProfileCometTimelineFeedQuery` chỉ là tên query đã quan sát. Không thực hiện thử Facebook/browser thật trong Task 4. Chưa nối bộ đọc vào `pages.learn` (Task 5), chưa tăng phiên bản hoặc triển khai; 26.31.0 vẫn **chưa phát hành**.
+
+- Danh tính: đối chiếu active `CurrentUserInitialData.USER_ID` với User ở đúng ngữ cảnh menu/header/feed và actor có `is_profile_plus` rõ ràng. Page cần cờ `true` cùng `delegate_page.id` nhất quán, khác active profile ID; người cần cờ `false` khớp và không có bằng chứng Page trái ngược. Thiếu/mâu thuẫn → `unknown`. Header/tên/`__typename` riêng lẻ, switcher, actor lạ và actor của bài chia sẻ không được dùng làm bằng chứng. Fixture người là **giả lập, chưa kiểm chứng thật**.
+- Bài mẫu: chỉ `timeline_list_feed_units.edges[*].node` của User/Page đã chọn; actor trực tiếp phải khớp active USER_ID (bài mẫu quan sát dùng ID này, không dùng delegated Page ID). Không gom story lồng nhau, không lấy text/metrics từ bài chia sẻ hay homepage news feed. Khử trùng mã bài/permalink và giữ thứ tự có sẵn, tối đa 10 bài, 500 ký tự mỗi bài; giới thiệu tối đa 1000 ký tự. Bằng chứng chỉ hỗ trợ một bài, không xác nhận đủ 10 hay 10 bài mới nhất.
+- Dữ liệu: kiểm kiểu và số nguyên an toàn không âm cho tương tác; thiếu/sai/mâu thuẫn là `null`, số 0 thật vẫn là 0. Timestamp giây hợp lệ đổi sang ms trong miền Date, sai/thiếu là `null`. Chỉ nhận URL HTTPS đúng origin `www.facebook.com`, không có credentials; permalink bỏ query/fragment để không trả token/tracking. Tên Page lấy từ delegate hoặc header đúng ngữ cảnh; các trường không có giữ rỗng.
+- Chỉ đọc: một `goto('https://www.facebook.com/me', {waitUntil:'load', timeout})` có timeout dương hữu hạn, mặc định 45000 ms, rồi `page.content()`. Dùng lại `loginProblemAt` sau chuyển hướng và khi điều hướng thất bại sau chuyển hướng; ném `PageLoginProblem` với `checkpoint`/`logged_out`, giữ nguyên lỗi điều hướng khác. Không bấm/gõ/cuộn, không chủ động fetch, chỉ `JSON.parse`, không ghi HTML/token/log.
+- Kiểm chứng: `src/__tests__/dailyBrief/pageIdentity.test.ts` dùng fixtures cũ và biến thể trong bộ nhớ, TDD RED → GREEN; hai vòng stress offline, focus regression, hai cấu hình `tsc --noEmit` và `node scripts/check-docs.js`. Không thêm fixture/dependency, không mở raw capture/Downloads/credentials, không nới sandbox. Controller chạy toàn bộ suites; live DOM timing, chuyển hướng thật, macOS browser, nhận dạng người thật và phân trang vẫn chưa được xác nhận.
+
+### Bổ sung sau review 27/10/2026 — sáu cơ chế lỗi của Task 4
+
+- Correction `2026-10-27` trong báo cáo spike làm rõ outer transport đã quan sát: `["ScheduledServerJS","handle",null,[{"__bbox": B}]]`, CurrentUser tại `B.define[i]`, Relay tại `B.require[i]`. Cập nhật **fixture Page hiện có** giữ lớp này, giữ nguyên toàn bộ payload/giá trị tổng hợp bên trong; helper của các test cũ chỉ mở đúng lớp đó để tiếp tục các phép biến đổi có sẵn. Reader vẫn nhận root/minimized, chỉ mở wrapper nhận diện được, tối đa 4 lớp/1024 envelope (budget hiệu chỉnh ở fix round 2 bên dưới); vượt giới hạn trả `unknown`, không dùng kết quả một phần hoặc tìm sâu actor bất kỳ.
+- Đọc comment theo ngữ cảnh HTML/script: bỏ comment HTML thật, giữ nguyên `<!--...-->` hoặc `<!--` literal trong JSON. Không thực thi script.
+- Permalink chỉ nhận path có định danh bài độc lập: `/reel/<id>`, `/posts/<id>`, `/permalink/<id>`, `/<profile>/posts/<id>`; bỏ query/fragment trên path hợp lệ để không trả token/tracking. Loại URL phụ thuộc query (`story.php`, `watch`, `photo.php`...) và path tùy ý thay vì tạo link mất định danh/gộp nhầm bài. Các path ngoài reel là trường hợp validation tổng hợp, không phải capture mới.
+- HTTP status ≥400 sau `goto` giữ là lỗi; checkpoint/logged_out có ưu tiên. Kiểm lại login/origin sau khi `content()` resolve; khi `goto`/`content()` reject, kiểm lại login rồi ném nguyên lỗi khác.
+- So sánh độc lập mọi tên hợp lệ từ header và delegate, không dùng fallback che mâu thuẫn. Các behavioral assertions cũ được giữ nguyên, thêm regression RED → GREEN riêng từng finding và chạy lại hai vòng focus cùng cả hai tsc/docs-check.
+- Không có dependency, external call, Git state change, version bump hay release. Wrapper delivery/timing, chuyển hướng/live Facebook, người thật và phân trang vẫn chưa kiểm chứng; controller thực hiện private offline-capture/full suites.
+
+### Hiệu chỉnh budget 27/10/2026 — fix round 2
+
+Số đếm controller cung cấp từ kiểm tra capture riêng là **176** và **241** script `application/json` hợp lệ trước khi mở wrapper. Budget 100 của round 1 không phù hợp kích thước đã quan sát. Dùng budget hữu hạn **1024 envelope tổng**, gồm mọi JSON root và `__bbox` của transport được nhận diện: mô hình test 241 root + một wrapper/root = 482 envelope, còn **542** envelope dự phòng. Đây là headroom theo mô hình tổng hợp, không suy đoán nội dung capture hay cam kết mọi cấu trúc tương lai đều vừa budget.
+
+Chỉ đổi constant budget; giữ depth **4**, không đổi selector transport, kiểm kiểu, identity/ownership/malformed/URL/metrics hoặc cách xử lý lỗi. Regression mới có 176/241 script với foreign actors/switcher trong noise không liên quan, đúng tổng 1024, vượt budget ban đầu/khi mở wrapper, và depth 4/5; hostile fixture 200 nhánh cũ tăng lên **1025** để giữ ý nghĩa vượt bound mới, không bỏ assertion. Không đổi fixture hoặc thêm dependency trong round 2. Chạy riêng pageIdentity, DailyBriefStore, briefOperations và các login/parser/trending suites hai lần; không quét directory dailyBrief khi Task 5 đang sửa test. Controller kiểm lại actual capture/full suites; live timing/person/pagination vẫn chưa được xác nhận.

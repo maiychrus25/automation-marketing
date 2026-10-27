@@ -1,180 +1,193 @@
 <!doctype html>
-<!-- Offline-observed Page structure; ALL scalar content is synthetic, not real user data. Minimal fixture envelope; cache labels are synthetic. -->
+<!-- Offline-observed Page structure and ScheduledServerJS transport wrapper; IDs/content and cache labels are synthetic, not real user data. -->
 <script type="application/json">
 {
-  "define": [
-    [
-      "CurrentUserInitialData",
-      [],
-      {
-        "USER_ID": "100000000000101",
-        "ACCOUNT_ID": "100000000000001",
-        "NAME": "Example Driving School"
-      },
-      0
-    ]
-  ],
   "require": [
     [
-      "RelayPrefetchedStreamCache",
-      "next",
-      [],
+      "ScheduledServerJS",
+      "handle",
+      null,
       [
-        "fixture-menu",
         {
           "__bbox": {
-            "result": {
-              "data": {
-                "user": {
-                  "id": "100000000000101",
-                  "comet_profile_entity_menu": {
-                    "user": {
-                      "id": "100000000000101",
-                      "delegate_page": {
-                        "id": "200000000000201",
-                        "name": "Example Driving School",
-                        "viewer": {
-                          "actor": {
-                            "__typename": "User",
+            "define": [
+              [
+                "CurrentUserInitialData",
+                [],
+                {
+                  "USER_ID": "100000000000101",
+                  "ACCOUNT_ID": "100000000000001",
+                  "NAME": "Example Driving School"
+                },
+                0
+              ]
+            ],
+            "require": [
+              [
+                "RelayPrefetchedStreamCache",
+                "next",
+                [],
+                [
+                  "fixture-menu",
+                  {
+                    "__bbox": {
+                      "result": {
+                        "data": {
+                          "user": {
                             "id": "100000000000101",
-                            "is_profile_plus": true
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      ]
-    ],
-    [
-      "RelayPrefetchedStreamCache",
-      "next",
-      [],
-      [
-        "fixture-header",
-        {
-          "__bbox": {
-            "result": {
-              "data": {
-                "user": {
-                  "id": "100000000000101",
-                  "profile_header_renderer": {
-                    "user": {
-                      "__typename": "User",
-                      "id": "100000000000101",
-                      "name": "Example Driving School",
-                      "url": "https://www.facebook.com/example-driving-school/",
-                      "delegate_page": {
-                        "id": "200000000000201",
-                        "is_business_page_active": false
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      ]
-    ],
-    [
-      "RelayPrefetchedStreamCache",
-      "next",
-      [],
-      [
-        "fixture-feed",
-        {
-          "__bbox": {
-            "result": {
-              "data": {
-                "user": {
-                  "id": "100000000000101",
-                  "delegate_page": {
-                    "id": "200000000000201",
-                    "name": "Example Driving School",
-                    "category_name": "Driving school",
-                    "best_description": {
-                      "text": "Driving lessons for beginners. Practical instruction and road safety."
-                    }
-                  },
-                  "timeline_list_feed_units": {
-                    "edges": [
-                      {
-                        "node": {
-                          "__typename": "Story",
-                          "id": "fixture-story",
-                          "post_id": "300000000000301",
-                          "creation_time": 1793000000,
-                          "actors": [
-                            {
-                              "__typename": "User",
-                              "id": "100000000000101",
-                              "name": "Example Driving School"
-                            }
-                          ],
-                          "permalink_url": "https://www.facebook.com/reel/300000000000301",
-                          "comet_sections": {
-                            "content": {
-                              "story": {
-                                "message": {
-                                  "text": "Check mirrors and signal before changing lanes."
-                                }
-                              }
-                            },
-                            "feedback": {
-                              "story": {
-                                "story_ufi_container": {
-                                  "story": {
-                                    "feedback_context": {
-                                      "feedback_target_with_context": {
-                                        "comet_ufi_summary_and_actions_renderer": {
-                                          "feedback": {
-                                            "adaptive_ufi_action_renderers": [
-                                              {
-                                                "feedback": {
-                                                  "reaction_count": {
-                                                    "count": 12
-                                                  }
-                                                }
-                                              },
-                                              {
-                                                "feedback": {
-                                                  "comment_rendering_instance": {
-                                                    "comments": {
-                                                      "total_count": 3
-                                                    }
-                                                  }
-                                                }
-                                              },
-                                              {
-                                                "feedback": {
-                                                  "share_count": {
-                                                    "count": 2
-                                                  }
-                                                }
-                                              }
-                                            ]
-                                          }
-                                        }
-                                      }
+                            "comet_profile_entity_menu": {
+                              "user": {
+                                "id": "100000000000101",
+                                "delegate_page": {
+                                  "id": "200000000000201",
+                                  "name": "Example Driving School",
+                                  "viewer": {
+                                    "actor": {
+                                      "__typename": "User",
+                                      "id": "100000000000101",
+                                      "is_profile_plus": true
                                     }
                                   }
                                 }
                               }
                             }
                           }
-                        },
-                        "cursor": "fixture-cursor"
+                        }
                       }
-                    ]
+                    }
                   }
-                }
-              }
-            }
+                ]
+              ],
+              [
+                "RelayPrefetchedStreamCache",
+                "next",
+                [],
+                [
+                  "fixture-header",
+                  {
+                    "__bbox": {
+                      "result": {
+                        "data": {
+                          "user": {
+                            "id": "100000000000101",
+                            "profile_header_renderer": {
+                              "user": {
+                                "__typename": "User",
+                                "id": "100000000000101",
+                                "name": "Example Driving School",
+                                "url": "https://www.facebook.com/example-driving-school/",
+                                "delegate_page": {
+                                  "id": "200000000000201",
+                                  "is_business_page_active": false
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              ],
+              [
+                "RelayPrefetchedStreamCache",
+                "next",
+                [],
+                [
+                  "fixture-feed",
+                  {
+                    "__bbox": {
+                      "result": {
+                        "data": {
+                          "user": {
+                            "id": "100000000000101",
+                            "delegate_page": {
+                              "id": "200000000000201",
+                              "name": "Example Driving School",
+                              "category_name": "Driving school",
+                              "best_description": {
+                                "text": "Driving lessons for beginners. Practical instruction and road safety."
+                              }
+                            },
+                            "timeline_list_feed_units": {
+                              "edges": [
+                                {
+                                  "node": {
+                                    "__typename": "Story",
+                                    "id": "fixture-story",
+                                    "post_id": "300000000000301",
+                                    "creation_time": 1793000000,
+                                    "actors": [
+                                      {
+                                        "__typename": "User",
+                                        "id": "100000000000101",
+                                        "name": "Example Driving School"
+                                      }
+                                    ],
+                                    "permalink_url": "https://www.facebook.com/reel/300000000000301",
+                                    "comet_sections": {
+                                      "content": {
+                                        "story": {
+                                          "message": {
+                                            "text": "Check mirrors and signal before changing lanes."
+                                          }
+                                        }
+                                      },
+                                      "feedback": {
+                                        "story": {
+                                          "story_ufi_container": {
+                                            "story": {
+                                              "feedback_context": {
+                                                "feedback_target_with_context": {
+                                                  "comet_ufi_summary_and_actions_renderer": {
+                                                    "feedback": {
+                                                      "adaptive_ufi_action_renderers": [
+                                                        {
+                                                          "feedback": {
+                                                            "reaction_count": {
+                                                              "count": 12
+                                                            }
+                                                          }
+                                                        },
+                                                        {
+                                                          "feedback": {
+                                                            "comment_rendering_instance": {
+                                                              "comments": {
+                                                                "total_count": 3
+                                                              }
+                                                            }
+                                                          }
+                                                        },
+                                                        {
+                                                          "feedback": {
+                                                            "share_count": {
+                                                              "count": 2
+                                                            }
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "cursor": "fixture-cursor"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              ]
+            ]
           }
         }
       ]
