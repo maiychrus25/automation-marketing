@@ -291,3 +291,71 @@ describe('DailyBriefStore', () => {
         expect(store.claimDue(at('26T07:00:00'), eligible).map((brief) => brief.profileId)).toEqual(['p1', 'p2']);
     });
 });
+
+
+describe('expired settlement regression', () => {
+    it.each([0, 2])('persists the third failure with %i explicit failures, once', (explicit) => {
+        const { store } = setup();
+        let now = at('26T07:00:00');
+        store.saveBrief('p1', {}, now);
+        for (let i = 0; i < explicit; i++) {
+            const [claim] = store.claimDue(now, eligible);
+            store.finishBrief('p1', false, now++, claim.claimedAt!);
+        }
+        const expired = jest.fn();
+        store.claimDue(now, eligible);
+        for (let i = explicit; i < 3; i++) {
+            now += 3600000;
+            store.claimDue(now, eligible, undefined, expired);
+        }
+        expect(store.getBrief('p1')).toMatchObject({ status: 'idle', attempts: 3, attemptDate: '2026-10-26' });
+        const before = store.getBrief('p1');
+        store.claimDue(now + 1, eligible, undefined, expired);
+        expect(store.getBrief('p1')).toEqual(before);
+        expect(expired.mock.calls.map(([b]) => b.attempts)).toEqual(explicit ? [3] : [1, 2, 3]);
+        expect(() => store.finishBrief('p1', true, now, before!.claimedAt!)).toThrow(BRIEF_NOT_RUNNING_ERROR);
+    });
+
+    it.each(['ineligible', 'disabled', 'future-time'] as const)('settles %s work before testing reclaim eligibility', (mode) => {
+        const { store } = setup();
+        const now = at('26T07:00:00');
+        store.saveBrief('p1', {}, now);
+        store.claimDue(now, eligible);
+        if (mode === 'disabled') store.saveBrief('p1', { enabled: false }, now);
+        if (mode === 'future-time') store.saveBrief('p1', { time: '23:59' }, now);
+        const expired = jest.fn();
+        expect(store.claimDue(now + 3600000, () => mode !== 'ineligible', undefined, expired)).toEqual([]);
+        expect(store.getBrief('p1')).toMatchObject({ status: 'idle', attempts: 1, attemptDate: '2026-10-26' });
+        store.claimDue(now + 7200000, () => false, undefined, expired);
+        expect(expired).toHaveBeenCalledTimes(1);
+    });
+
+    it('snapshots the expired claimed day before resetting the next claim', () => {
+        const { store } = setup();
+        const now = at('26T23:50:00');
+        store.saveBrief('p1', {}, now);
+        for (let i = 0; i < 2; i++) {
+            const [b] = store.claimDue(now, eligible);
+            store.finishBrief('p1', false, now, b.claimedAt!);
+        }
+        store.claimDue(now, eligible);
+        const expired = jest.fn();
+        expect(store.claimDue(at('27T07:00:00'), eligible, undefined, expired)[0]).toMatchObject({ attempts: 0, attemptDate: '2026-10-27' });
+        expect(expired).toHaveBeenCalledWith(expect.objectContaining({ status: 'idle', attempts: 3, attemptDate: '2026-10-26' }));
+    });
+
+    it('does not publish expired outcomes when a later eligibility check rolls back', () => {
+        const { store } = setup();
+        const now = at('26T07:00:00');
+        store.saveBrief('p1', {}, now); store.saveBrief('p2', {}, now);
+        store.claimDue(now, eligible);
+        const before = store.listBriefs();
+        const expired = jest.fn();
+        expect(() => store.claimDue(now + 3600000, (id) => {
+            if (id === 'p2') throw new Error('rollback');
+            return true;
+        }, undefined, expired)).toThrow('rollback');
+        expect(store.listBriefs()).toEqual(before);
+        expect(expired).not.toHaveBeenCalled();
+    });
+});

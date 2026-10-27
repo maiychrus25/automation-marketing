@@ -149,6 +149,8 @@ GUIDE = "\n".join([
 ONBOARD_MIN_INTERVAL_SEC = 21600
 AGENT_TIMEOUT_DEFAULT_SEC = 2700
 AGENT_TERM_GRACE_SEC = 10
+BRIEF_TICK_BUDGET_SEC = 3300
+BRIEF_TICK_HEADROOM_SEC = 180  # TERM/KILL, API ownership checks and completion cleanup.
 ONBOARD_PROMPT = "\n".join([
     "Làm quen các Page của khách qua MaiHub, chỉ tạo trí nhớ cho Page, không tự đăng bài.",
     "1. Gọi maihub_pages_learn, lấy jobId rồi dùng maihub_wait_for chờ pages.learnFinished khớp jobId. Hết giờ chờ thì tiếp tục với after được trả về.",
@@ -1648,16 +1650,22 @@ def format_event(event, fetch_run):
 
 
 def format_brief_messages(event, fetch_draft, fetch_brief):
-    """Một tin cho mỗi nháp; lỗi chỉ báo khi brief đã thử ít nhất ba lần."""
+    """Một tin cho mỗi nháp; lỗi mới dùng snapshot, sự kiện cũ fallback counter hiện tại."""
     payload = event.get("payload") or {}
     name = clip(_one_line(payload.get("pageName")), MAX_FIELD_CHARS)
     if payload.get("ok") is not True:
-        try:
-            brief = (fetch_brief(payload.get("profileId")) or {}).get("brief") or {}
-            if (brief.get("attempts") or 0) < 3:
+        if "attempts" in payload:
+            attempts = payload["attempts"]
+            if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 3:
                 return []
-        except Exception:
-            return []
+        else:
+            # Legacy events have no historical counter; keep the old best-effort fallback.
+            try:
+                brief = (fetch_brief(payload.get("profileId")) or {}).get("brief") or {}
+                if (brief.get("attempts") or 0) < 3:
+                    return []
+            except Exception:
+                return []
         error = clip(_one_line(payload.get("error")) or "lỗi không rõ", MAX_FIELD_CHARS)
         return ["⚠️ %s: hôm nay chưa tạo được bài đề xuất — %s" % (name, error)]
 
@@ -1949,6 +1957,8 @@ def run_agent(cmd, prompt, timeout_sec, popen=subprocess.Popen, term_grace_sec=A
                     os.killpg(process.pid, 0)
                 except ProcessLookupError:
                     break
+                except PermissionError:
+                    pass  # Darwin can deny signal-0 while the terminated parent awaits reap.
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     try:
@@ -1963,7 +1973,7 @@ def run_agent(cmd, prompt, timeout_sec, popen=subprocess.Popen, term_grace_sec=A
 
 
 def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
-    """Một lượt timer: làm quen nếu cần, rồi chạy tuần tự các brief được MaiHub nhận việc."""
+    """Một lượt timer: làm quen rồi claim từng Page sát lúc chạy, trong budget monotonic."""
     result = {"onboarded": False, "ran": [], "warnings": []}
     directory = os.path.dirname(state_path) or "."
     os.makedirs(directory, mode=0o700, exist_ok=True)
@@ -1972,6 +1982,11 @@ def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return {"skipped": "locked"}
+        deadline = time.monotonic() + BRIEF_TICK_BUDGET_SEC
+
+        def agent_time():
+            return min(timeout_sec, max(0, int(deadline - time.monotonic() - BRIEF_TICK_HEADROOM_SEC)))
+
         try:
             client.call("system.status")
             identities = client.call("pages.list")["identities"]
@@ -1993,6 +2008,9 @@ def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
             for identity in identities:
                 if identity.get("kind") != "page":
                     continue
+                if agent_time() <= 0:
+                    result["warnings"].append("tick budget exhausted")
+                    return result
                 try:
                     client.call("briefs.get", {"profileId": identity["profileId"]})
                 except BridgeError as err:
@@ -2010,6 +2028,10 @@ def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
         except (OSError, ValueError):
             last_onboard = None
         if needs_onboard and (last_onboard is None or now_ms - last_onboard >= ONBOARD_MIN_INTERVAL_SEC * 1000):
+            available = agent_time()
+            if available <= 0:
+                result["warnings"].append("tick budget exhausted")
+                return result
             # Lưu trước khi gọi AI: lượt thất bại cũng phải chờ đủ 6 giờ.
             fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".brief-state.")
             try:
@@ -2024,33 +2046,63 @@ def brief_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
                 raise
             result["onboarded"] = True
             try:
-                code, timed_out = run_agent(command, ONBOARD_PROMPT, timeout_sec)
+                code, timed_out = run_agent(command, ONBOARD_PROMPT, available)
                 if timed_out or code != 0:
                     result["warnings"].append("agent quá giờ" if timed_out else "agent thoát mã %s" % code)
             except OSError as err:
                 result["warnings"].append(str(err))
-        try:
-            briefs = client.call("briefs.claimDue", idempotency_key=str(uuid.uuid4()))["briefs"]
-        except BridgeError as err:
-            result["warnings"].append(str(err))
+        if agent_time() <= 0:
+            result["warnings"].append("tick budget exhausted")
             return result
-        for brief in briefs:
-            profile_id = brief["profileId"]
-            claimed_at = brief["claimedAt"]
-            prompt = SUGGEST_PROMPT_TEMPLATE.format(brief_json=json.dumps(brief, ensure_ascii=False, indent=2))
-            code, timed_out = None, False
+        try:
+            candidates = client.call("briefs.list")["briefs"]
+        except BridgeError as err:
+            result["warnings"].append("MaiHub cần ≥ 26.31.0" if err.code == "UNKNOWN_METHOD" else str(err))
+            return result
+        attempted = set()
+        for candidate in candidates:
+            if agent_time() <= 0:
+                result["warnings"].append("tick budget exhausted")
+                break
+            profile_id = candidate["profileId"]
+            if profile_id in attempted:
+                continue
+            attempted.add(profile_id)
             try:
-                code, timed_out = run_agent(command, prompt, timeout_sec)
-            except OSError as err:
-                result["warnings"].append("%s: %s" % (profile_id, err))
-            result["ran"].append(profile_id)
+                claims = client.call("briefs.claimDue", {"profileId": profile_id},
+                                     idempotency_key=str(uuid.uuid4()))["briefs"]
+                if not claims:
+                    continue
+                brief = claims[0]
+                claimed_at = brief["claimedAt"]
+                current = client.call("briefs.get", {"profileId": profile_id})["brief"]
+                if current["status"] != "running" or current.get("claimedAt") != claimed_at:
+                    result["warnings"].append("%s: status/claimedAt đã đổi; bỏ qua claim cũ" % profile_id)
+                    continue
+            except BridgeError as err:
+                result["warnings"].append("MaiHub cần ≥ 26.31.0" if err.code == "UNKNOWN_METHOD" else "%s: %s" % (profile_id, err))
+                if err.code == "UNKNOWN_METHOD":
+                    break
+                continue
+            available = agent_time()
+            error = "tick budget exhausted"
+            if available > 0:
+                prompt = SUGGEST_PROMPT_TEMPLATE.format(brief_json=json.dumps(brief, ensure_ascii=False, indent=2))
+                code, timed_out = None, False
+                try:
+                    code, timed_out = run_agent(command, prompt, available)
+                except OSError as err:
+                    result["warnings"].append("%s: %s" % (profile_id, err))
+                result["ran"].append(profile_id)
+                error = "agent quá giờ" if timed_out else "agent thoát mã %s" % code
+            else:
+                result["warnings"].append("%s: %s" % (profile_id, error))
             try:
                 current = client.call("briefs.get", {"profileId": profile_id})["brief"]
                 if current["status"] == "running":
                     if current.get("claimedAt") != claimed_at:
                         result["warnings"].append("%s: claimedAt đã đổi; bỏ qua kết thúc claim cũ" % profile_id)
                         continue
-                    error = "agent quá giờ" if timed_out else "agent thoát mã %s" % code
                     client.call("briefs.finish", {"profileId": profile_id, "claimedAt": claimed_at,
                                                   "ok": False, "error": error},
                                 idempotency_key=str(uuid.uuid4()))

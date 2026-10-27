@@ -137,21 +137,34 @@ export class DailyBriefStore {
         return (this.db.queryOne<{ n: number }>('SELECT changes() AS n')?.n ?? 0) > 0;
     }
 
-    claimDue(now: number, isEligible: (profileId: string) => boolean): DailyBrief[] {
-        return this.db.transaction(() => {
+    claimDue(now: number, isEligible: (profileId: string) => boolean, profileId?: string,
+        onExpired?: (brief: DailyBrief) => void): DailyBrief[] {
+        const result = this.db.transaction(() => {
             const today = this.clock.date(now);
             const minutes = this.clock.minutes(now);
             const claimed: DailyBrief[] = [];
-            const briefs = this.db.query<any>('SELECT * FROM daily_briefs WHERE enabled = 1 ORDER BY profile_id').map(mapBrief);
+            const expired: DailyBrief[] = [];
+            const briefs = this.db.query<any>(
+                `SELECT * FROM daily_briefs${profileId === undefined ? '' : ' WHERE profile_id = ?'} ORDER BY profile_id`,
+                profileId === undefined ? [] : [profileId],
+            ).map(mapBrief);
             for (const brief of briefs) {
-                let attempts = brief.attemptDate === today ? brief.attempts : 0;
                 if (brief.status === 'running') {
                     if (now - brief.claimedAt! < BRIEF_STALE_MS) continue;
-                    attempts += 1;
-                    if (this.clock.date(brief.claimedAt!) !== today) attempts = 0;
+                    // Settle the original claimed day before any eligibility or new-day reset.
+                    brief.status = 'idle';
+                    brief.attempts += 1;
+                    brief.attemptDate = brief.claimedDate;
+                    brief.updatedAt = now;
+                    this.db.run(
+                        `UPDATE daily_briefs SET status = 'idle', attempt_date = ?, attempts = ?, updated_at = ? WHERE profile_id = ?`,
+                        [brief.attemptDate, brief.attempts, now, brief.profileId],
+                    );
+                    expired.push({ ...brief });
                 }
+                const attempts = brief.attemptDate === today ? brief.attempts : 0;
                 const [hours, minute] = brief.time.split(':').map(Number);
-                if (brief.lastRunDate === today || minutes < hours * 60 + minute
+                if (!brief.enabled || brief.lastRunDate === today || minutes < hours * 60 + minute
                     || attempts >= BRIEF_MAX_ATTEMPTS_PER_DAY || !isEligible(brief.profileId)) continue;
                 this.db.run(
                     `UPDATE daily_briefs SET status = 'running', claimed_at = ?, claimed_date = ?,
@@ -163,8 +176,11 @@ export class DailyBriefStore {
                     attemptDate: today, attempts, updatedAt: now,
                 });
             }
-            return claimed;
+            return { claimed, expired };
         });
+        // No observer sees a settlement that a later row can roll back.
+        for (const brief of result.expired) onExpired?.(brief);
+        return result.claimed;
     }
 
     finishBrief(profileId: string, ok: boolean, now: number, claimedAt: number): DailyBrief {

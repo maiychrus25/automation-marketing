@@ -102,7 +102,7 @@ export interface BriefPort {
     get(params: any): any;
     save(params: any): any;
     delete(params: any): any;
-    claimDue(): any;
+    claimDue(params?: { profileId?: string }): any;
     finish(params: any): any;
 }
 
@@ -622,12 +622,12 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             run: async (p) => deps.briefs.delete(pick(p, ['profileId'])),
         },
         {
-            name: 'briefs.claimDue', description: 'Nhận các Page đến giờ theo giờ máy, còn tồn tại và còn là Page. Không nhận trùng; tối đa 3 lần lỗi/ngày, nhận lại lượt treo sau 60 phút và tính một lỗi. Giữ claimedAt để finish.',
-            destructive: false, paramsSchema: noParams,
+            name: 'briefs.claimDue', description: 'Nhận các Page đến giờ theo giờ máy, còn tồn tại và còn là Page; profileId tuỳ chọn chỉ nhận Page đó, bỏ trống nhận batch. Không nhận trùng; tối đa 3 lần lỗi/ngày, nhận lại lượt treo sau 60 phút và tính một lỗi. Giữ claimedAt để finish.',
+            destructive: false, paramsSchema: obj({ profileId: { ...briefFields.profileId, minLength: 1 } }),
             resultSchema: obj({ briefs: { type: 'array', items: obj({
                 ...briefFields, pageName: str('Tên Page'), claimedAt: int('Mốc nhận lượt, mili giây epoch; truyền lại nguyên giá trị khi finish'),
             }, ['profileId', 'pageName', 'claimedAt']) } }, ['briefs']),
-            run: async () => deps.briefs.claimDue(),
+            run: async (p) => deps.briefs.claimDue(pick(p, ['profileId'])),
         },
         {
             name: 'briefs.finish', description: 'Kết thúc đúng lượt running có claimedAt khớp, nếu sai trả INVALID_PARAMS và giữ lượt hiện tại. Thành công ghi ngày nhận lượt; lỗi tăng số lần thử. Phát briefs.finished; error cắt 500 ký tự.',

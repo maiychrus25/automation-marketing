@@ -7,7 +7,7 @@ export interface BriefOperationsDeps {
     store: () => DailyBriefStore;
     now: () => number;
     profileExists: (id: string) => boolean;
-    emitFinished: (payload: { profileId: string; pageName: string; ok: boolean; draftIds: string[]; error?: string }) => void;
+    emitFinished: (payload: { profileId: string; pageName: string; ok: boolean; draftIds: string[]; error?: string; attempts?: number; attemptDate?: string | null }) => void;
 }
 
 /** Trí nhớ từng Page dùng chung cho Control API; chỉ cho sửa các trường nội dung/cấu hình. */
@@ -80,9 +80,14 @@ export function createBriefOperations(deps: BriefOperationsDeps) {
             if (!deps.store().deleteBrief(profileId)) throw new Error(BRIEF_NOT_FOUND_ERROR);
             return { deleted: true as const };
         },
-        claimDue: () => {
+        claimDue: (params?: any) => {
+            const profileId = params?.profileId === undefined ? undefined : profileIdOf(params);
             const store = deps.store();
-            const briefs = store.claimDue(deps.now(), (id) => deps.profileExists(id) && store.getIdentity(id)?.kind === 'page');
+            const briefs = store.claimDue(deps.now(), (id) => deps.profileExists(id) && store.getIdentity(id)?.kind === 'page',
+                profileId, (expired) => deps.emitFinished({
+                    profileId: expired.profileId, pageName: view(store, expired).pageName, ok: false, draftIds: [],
+                    error: 'Lượt đề xuất hết hạn', attempts: expired.attempts, attemptDate: expired.attemptDate,
+                }));
             return { briefs: briefs.map((brief) => view(store, brief)) };
         },
         finish: (params?: any) => {
@@ -97,6 +102,7 @@ export function createBriefOperations(deps: BriefOperationsDeps) {
             const brief = view(store, store.finishBrief(profileId, params.ok, deps.now(), params.claimedAt));
             deps.emitFinished({
                 profileId, pageName: brief.pageName, ok: params.ok, draftIds: params.draftIds ?? [],
+                ...(!params.ok ? { attempts: brief.attempts, attemptDate: brief.attemptDate } : {}),
                 ...(params.error !== undefined ? { error: params.error.slice(0, 500) } : {}),
             });
             return { brief };

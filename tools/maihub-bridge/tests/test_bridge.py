@@ -1495,6 +1495,21 @@ class FormatBriefTests(unittest.TestCase):
         self.assertEqual(self.brief_calls, ["p1"])
         self.assertEqual(self.draft_calls, [])
 
+    def test_delayed_failure_snapshots_warn_exactly_once_without_fetching_current_counter(self):
+        self.event['payload'].update(ok=False, error='failure', attemptDate='2026-10-26')
+        self.brief['brief']['attempts'] = 3
+        messages = []
+        for attempt in (1, 2, 3):
+            self.event['payload']['attempts'] = attempt
+            messages.extend(self.fmt())
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(self.brief_calls, [])
+        self.brief['brief']['attempts'] = 0
+        self.assertEqual(len(self.fmt()), 1)
+        self.brief = bridge.BridgeError('NOT_FOUND', 'deleted')
+        self.assertEqual(len(self.fmt()), 1)
+        self.assertEqual(self.brief_calls, [])
+
     def test_empty_draft_ids_are_silent(self):
         self.event["payload"]["draftIds"] = []
         self.assertEqual(self.fmt(), [])
@@ -2988,9 +3003,11 @@ class BriefTickTests(unittest.TestCase):
         self.clock = FakeClock(now=1800000000.0)
         self.agent_calls = []
         self.calls = []
+        self.claim_keys = []
         self.identities = [{"profileId": "p1", "kind": "page", "pageName": "Học lái xe",
                             "learnedAt": int(self.clock() * 1000)}]
         self.due = []
+        self.auto_finish = set()
         self.briefs = {"p1": {"profileId": "p1", "status": "idle", "attempts": 0, "claimedAt": None}}
         self.errors = {}
         self.agent_result = (0, False)
@@ -3004,8 +3021,16 @@ class BriefTickTests(unittest.TestCase):
             return {"workspace": {"id": "ws1"}}
         if method == "pages.list":
             return {"identities": self.identities}
-        if method == "briefs.claimDue":
+        if method == "briefs.list":
             return {"briefs": self.due}
+        if method == "briefs.claimDue":
+            self.claim_keys.append(idempotency_key)
+            claims = [b for b in self.due if not params or b["profileId"] == params["profileId"]]
+            for brief in claims:
+                current = self.briefs[brief['profileId']]
+                if current.get('claimedAt') == brief['claimedAt']:
+                    current['status'] = 'running'
+            return {"briefs": claims}
         if method == "briefs.get":
             profile_id = params["profileId"]
             if profile_id not in self.briefs:
@@ -3021,13 +3046,19 @@ class BriefTickTests(unittest.TestCase):
 
     def run_agent(self, cmd, prompt, timeout_sec):
         self.agent_calls.append((cmd, prompt, timeout_sec))
+        # The default fake agent completes its own claim, like the real prompt.
+        if self.agent_result == (0, False):
+            for brief in self.due:
+                if ('"profileId": "%s"' % brief['profileId']) in prompt and brief['profileId'] in self.auto_finish:
+                    self.briefs[brief['profileId']]['status'] = 'idle'
         return self.agent_result
 
     def tick(self, env=None, runner=None):
         # Lỗi thiếu API phải hiện thành FAIL rõ ràng trong vòng RED.
         self.assertTrue(callable(getattr(bridge, "brief_tick", None)), "brief_tick chưa được triển khai")
-        return bridge.brief_tick(self.client, env or {}, self.state_path,
-                                 run_agent=runner or self.run_agent, clock=self.clock)
+        with mock.patch.object(time, "monotonic", self.clock):
+            return bridge.brief_tick(self.client, env or {}, self.state_path,
+                                     run_agent=runner or self.run_agent, clock=self.clock)
 
     def set_due(self, count=1, status="idle"):
         self.due = [{"profileId": "p%d" % i, "pageName": "Page %d" % i, "niche": "Dạy lái xe",
@@ -3035,6 +3066,8 @@ class BriefTickTests(unittest.TestCase):
                      "notes": "Không quảng cáo", "draftsPerDay": 1, "claimedAt": 1800000000000 + i}
                     for i in range(1, count + 1)]
         for brief in self.due:
+            if status == 'idle':
+                self.auto_finish.add(brief['profileId'])
             self.briefs[brief["profileId"]] = dict(brief, status=status, attempts=0)
 
     def finishes(self):
@@ -3051,7 +3084,8 @@ class BriefTickTests(unittest.TestCase):
     def test_nothing_due_uses_no_agent(self):
         self.assertEqual(self.tick(), {"onboarded": False, "ran": [], "warnings": []})
         self.assertEqual(self.agent_calls, [])
-        self.assertIn(("briefs.claimDue", None), self.calls)
+        self.assertIn(("briefs.list", None), self.calls)
+        self.assertFalse(any(m == 'briefs.claimDue' for m, _ in self.calls))
 
     def test_empty_pages_onboard_once_per_six_hours_and_save_ms(self):
         self.identities = []
@@ -3151,11 +3185,14 @@ class BriefTickTests(unittest.TestCase):
 
     def test_replaced_running_claim_warns_without_finishing(self):
         self.set_due(status="running")
-        self.briefs["p1"]["claimedAt"] = 1800003600002
         for agent_result in ((1, False), (None, True)):
             with self.subTest(agent_result=agent_result):
                 self.agent_result = agent_result
-                result = self.tick()
+                self.briefs['p1']['claimedAt'] = self.due[0]['claimedAt']
+                def replace_after_launch(cmd, prompt, timeout_sec):
+                    self.briefs['p1']['claimedAt'] = 1800003600002
+                    return self.run_agent(cmd, prompt, timeout_sec)
+                result = self.tick(runner=replace_after_launch)
                 self.assertEqual(result["ran"], ["p1"])
                 self.assertEqual(self.finishes(), [])
                 self.assertEqual(len(result["warnings"]), 1)
@@ -3166,8 +3203,10 @@ class BriefTickTests(unittest.TestCase):
 
     def test_already_finished_brief_is_not_finished_twice(self):
         self.set_due()
-        self.agent_result = (1, False)
-        self.tick()
+        def finished(cmd, prompt, timeout_sec):
+            self.briefs['p1']['status'] = 'idle'
+            return (1, False)
+        self.tick(runner=finished)
         self.assertEqual(self.finishes(), [])
 
     def test_invalid_params_from_finish_warns_and_runs_next_brief(self):
@@ -3189,8 +3228,8 @@ class BriefTickTests(unittest.TestCase):
             return self.run_agent(cmd, prompt, timeout_sec)
 
         result = self.tick(runner=run_then_disconnect)
-        self.assertEqual(result["ran"], ["p1", "p2"])
-        self.assertEqual(len(self.agent_calls), 2)
+        self.assertEqual(result["ran"], ["p1"])
+        self.assertEqual(len(self.agent_calls), 1)
         self.assertEqual(len(result["warnings"]), 2)
 
     def test_old_maihub_warns_once_without_agent(self):
@@ -3241,6 +3280,128 @@ class BriefTickTests(unittest.TestCase):
                 self.assertEqual(ctx.exception.code, "CONFIG")
                 self.assertFalse(any(m == "briefs.claimDue" for m, _ in self.calls))
 
+    def test_replacement_running_idle_or_missing_prevents_launch_and_finish(self):
+        for state in ('running', 'idle', 'missing'):
+            with self.subTest(state=state):
+                self.set_due(status='running')
+                self.agent_calls[:] = []
+                self.calls[:] = []
+                self.briefs['p1']['claimedAt'] += 3600001
+                self.briefs['p1']['status'] = state
+                if state == 'missing':
+                    # Avoid the onboarding lookup; deletion occurs after the claim.
+                    self.identities[0]['kind'] = 'person'
+                    del self.briefs['p1']
+                def call(method, params=None, idempotency_key=None):
+                    if method == 'briefs.claimDue':
+                        self.calls.append((method, params))
+                        return {'briefs': self.due}
+                    return self.call(method, params, idempotency_key)
+                self.client.call = call
+                result = self.tick()
+                self.assertEqual(result['ran'], [])
+                self.assertEqual(self.agent_calls, [])
+                self.assertEqual(self.finishes(), [])
+
+    def test_jit_claims_never_reserve_waiting_pages_and_failures_are_not_retried(self):
+        self.set_due(3, status='running')
+        for brief in self.briefs.values():
+            brief['status'], brief['claimedAt'] = 'idle', None
+        def call(method, params=None, idempotency_key=None):
+            if method == 'briefs.claimDue' and params:
+                item = next(b for b in self.due if b['profileId'] == params['profileId'])
+                self.briefs[item['profileId']] = dict(item, status='running')
+            return self.call(method, params, idempotency_key)
+        self.client.call = call
+        def slow(cmd, prompt, timeout_sec):
+            active = [p for p, b in self.briefs.items() if b['status'] == 'running']
+            self.assertEqual(len(active), 1)
+            self.clock.now += timeout_sec + bridge.AGENT_TERM_GRACE_SEC
+            self.agent_calls.append((cmd, prompt, timeout_sec))
+            return (1, True)
+        result = self.tick(runner=slow)
+        self.assertEqual(result['ran'], ['p1', 'p2'])
+        self.assertLess(sum(c[2] for c in self.agent_calls), 3300)
+        self.assertLess(self.clock() - 1800000000, 3300)
+        self.assertEqual(self.briefs['p3']['status'], 'idle')
+        claims = [p['profileId'] for m, p in self.calls if m == 'briefs.claimDue']
+        self.assertEqual(claims, ['p1', 'p2'])
+        self.assertEqual(len(set(self.claim_keys)), len(self.claim_keys))
+        self.assertTrue(all(self.claim_keys))
+
+    def test_onboarding_and_oversized_timeout_share_a_monotonic_tick_budget(self):
+        self.identities = []
+        self.set_due(2)
+        def slow(cmd, prompt, timeout_sec):
+            self.agent_calls.append((cmd, prompt, timeout_sec))
+            self.assertLess(timeout_sec + bridge.AGENT_TERM_GRACE_SEC, 3600)
+            self.clock.now += timeout_sec + bridge.AGENT_TERM_GRACE_SEC
+            return (1, True)
+        result = self.tick({'MAIHUB_AGENT_TIMEOUT_SEC': '99999'}, runner=slow)
+        self.assertTrue(result['onboarded'])
+        self.assertEqual(result['ran'], [])
+        self.assertEqual(len(self.agent_calls), 1)
+        self.assertFalse(any(m == 'briefs.claimDue' for m, _ in self.calls))
+        self.assertLess(self.clock() - 1800000000, 3300)
+
+    def test_budget_exhausted_during_claim_finishes_owned_claim_without_agent(self):
+        self.set_due(status='running')
+        def call(method, params=None, idempotency_key=None):
+            response = self.call(method, params, idempotency_key)
+            if method == 'briefs.claimDue':
+                self.clock.now += 3300
+            return response
+        self.client.call = call
+        result = self.tick()
+        self.assertEqual(result['ran'], [])
+        self.assertEqual(self.agent_calls, [])
+        self.assertEqual(self.briefs['p1']['status'], 'idle')
+        self.assertEqual(len(self.finishes()), 1)
+        self.assertIn('budget', self.finishes()[0]['error'])
+
+    def test_candidate_failure_is_attempted_once_and_next_page_still_runs(self):
+        self.set_due(2)
+        self.due.append(dict(self.due[0]))  # A repeated candidate cannot retry its failed claim.
+        def call(method, params=None, idempotency_key=None):
+            if method == 'briefs.claimDue' and params == {'profileId': 'p1'}:
+                self.calls.append((method, params))
+                raise bridge.BridgeError('UNREACHABLE', 'offline')
+            return self.call(method, params, idempotency_key)
+        self.client.call = call
+        self.assertEqual(self.tick()['ran'], ['p2'])
+        self.assertEqual([p['profileId'] for m, p in self.calls if m == 'briefs.claimDue'], ['p1', 'p2'])
+        self.assertEqual(sum(m == 'briefs.list' for m, _ in self.calls), 1)
+
+    def test_default_onboarding_and_jobs_share_budget_despite_wall_clock_jump(self):
+        self.identities = []
+        self.set_due(2, status='running')
+        monotonic = FakeClock(now=0)
+        def slow(cmd, prompt, timeout_sec):
+            self.agent_calls.append((cmd, prompt, timeout_sec))
+            monotonic.now += timeout_sec + bridge.AGENT_TERM_GRACE_SEC
+            self.clock.now -= 86400  # Lease safety never compares machine wall clocks.
+            return (1, True)
+        with mock.patch.object(time, 'monotonic', monotonic):
+            result = bridge.brief_tick(self.client, {}, self.state_path, run_agent=slow, clock=self.clock)
+        self.assertEqual([c[2] for c in self.agent_calls], [2700, 410])
+        self.assertEqual(result['ran'], ['p1'])
+        self.assertLess(monotonic(), 3300)
+        self.assertFalse(any(m == 'briefs.claimDue' and p == {'profileId': 'p2'} for m, p in self.calls))
+
+    def test_unknown_claim_method_warns_once_and_stops_candidates_without_agent(self):
+        self.set_due(2)
+        self.errors['briefs.claimDue'] = bridge.BridgeError('UNKNOWN_METHOD', 'briefs.claimDue')
+        result = self.tick()
+        self.assertEqual(result['ran'], [])
+        self.assertEqual(result['warnings'], ['MaiHub cần ≥ 26.31.0'])
+        self.assertEqual(sum(m == 'briefs.claimDue' for m, _ in self.calls), 1)
+        self.assertEqual(self.agent_calls, [])
+
+    def test_resistant_child_guard_cannot_skip_permission_denial(self):
+        import inspect
+        source = inspect.getsource(self.test_run_agent_kills_resistant_child_after_parent_exits)
+        self.assertNotIn('skipTest', source)
+
     def test_prompts_include_required_steps_and_safety(self):
         self.assertTrue(hasattr(bridge, "ONBOARD_PROMPT"), "ONBOARD_PROMPT chưa được triển khai")
         for text in ("maihub_pages_learn", "pages.learnFinished", "maihub_wait_for", "maihub_pages_list",
@@ -3287,6 +3448,66 @@ class BriefTickTests(unittest.TestCase):
         self.assertAlmostEqual(clock(), 10)
         self.assertEqual(process.communicate.call_count, 2)  # vẫn thu hồi cha sau khi dọn group
 
+    def test_run_agent_waits_through_transient_probe_denial_until_group_is_gone(self):
+        process = mock.Mock(pid=87654321, returncode=-signal.SIGTERM)
+        process.communicate.side_effect = [subprocess.TimeoutExpired("fake", 1), (None, None)]
+        process.poll.side_effect = [None, None, -signal.SIGTERM]
+        clock = FakeClock(now=0)
+        with mock.patch.object(os, "killpg", side_effect=[None, PermissionError(1, "exit pending"),
+                                                        PermissionError(1, "exit pending"), ProcessLookupError()]) as killpg, \
+                mock.patch.object(time, "monotonic", clock), mock.patch.object(time, "sleep", clock.sleep):
+            try:
+                result = bridge.run_agent(["fake"], "prompt", 1, popen=lambda *a, **k: process)
+            except PermissionError as err:
+                self.fail("Transient signal-0 denial escaped before reap: %s" % err)
+        self.assertEqual(result, (-signal.SIGTERM, True))
+        self.assertEqual(killpg.call_args_list, [mock.call(process.pid, signal.SIGTERM)] + [mock.call(process.pid, 0)] * 3)
+        self.assertAlmostEqual(clock(), 0.2)
+        self.assertEqual(process.poll.call_count, 3)
+        self.assertEqual(process.communicate.call_count, 2)
+
+    def test_run_agent_persistent_probe_denial_reaches_bounded_sigkill(self):
+        for deny_kill in (False, True):
+            with self.subTest(deny_kill=deny_kill):
+                process = mock.Mock(pid=87654321, returncode=-signal.SIGKILL)
+                process.communicate.side_effect = [subprocess.TimeoutExpired("fake", 1), (None, None)]
+                clock = FakeClock(now=0)
+                denied = PermissionError(1, "real KILL denied")
+                def killpg(pid, sig):
+                    if sig == 0:
+                        raise PermissionError(1, "probe denied")
+                    if sig == signal.SIGKILL and deny_kill:
+                        raise denied
+                with mock.patch.object(os, "killpg", side_effect=killpg) as signals, \
+                        mock.patch.object(time, "monotonic", clock), mock.patch.object(time, "sleep", clock.sleep):
+                    if deny_kill:
+                        with self.assertRaises(PermissionError) as caught:
+                            bridge.run_agent(["fake"], "prompt", 1, popen=lambda *a, **k: process, term_grace_sec=0.25)
+                        self.assertIs(caught.exception, denied)
+                    else:
+                        try:
+                            result = bridge.run_agent(["fake"], "prompt", 1, popen=lambda *a, **k: process, term_grace_sec=0.25)
+                        except PermissionError as err:
+                            self.fail("Probe denial escaped before bounded escalation: %s" % err)
+                        self.assertEqual(result, (-signal.SIGKILL, True))
+                self.assertAlmostEqual(clock(), 0.25)
+                self.assertEqual(signals.call_args_list, [mock.call(process.pid, signal.SIGTERM)]
+                                 + [mock.call(process.pid, 0)] * 4 + [mock.call(process.pid, signal.SIGKILL)])
+                self.assertEqual(process.poll.call_count, 4)
+                self.assertEqual(process.communicate.call_count, 2)
+
+    def test_run_agent_real_term_denial_propagates_without_probe_or_retry(self):
+        process = mock.Mock(pid=87654321)
+        process.communicate.side_effect = [subprocess.TimeoutExpired("fake", 1), (None, None)]
+        denied = PermissionError(1, "real TERM denied")
+        with mock.patch.object(os, "killpg", side_effect=denied) as signals:
+            with self.assertRaises(PermissionError) as caught:
+                bridge.run_agent(["fake"], "prompt", 1, popen=lambda *a, **k: process)
+        self.assertIs(caught.exception, denied)
+        signals.assert_called_once_with(process.pid, signal.SIGTERM)
+        process.poll.assert_not_called()
+        self.assertEqual(process.communicate.call_count, 2)
+
     def test_run_agent_kills_resistant_child_after_parent_exits(self):
         processes = []
 
@@ -3309,14 +3530,6 @@ class BriefTickTests(unittest.TestCase):
                     process.communicate(timeout=5)
 
         self.addCleanup(cleanup)  # đăng ký trước khi sinh group, kể cả khi test thất bại
-        try:
-            with subprocess.Popen(["/bin/sleep", "30"], start_new_session=True) as probe:
-                try:
-                    os.killpg(probe.pid, signal.SIGTERM)
-                finally:
-                    probe.kill()
-        except PermissionError as err:
-            self.skipTest("Sandbox blocks process groups: %s" % err)
         ready_path = os.path.join(self.tmp.name, "agent-ready")
 
         def popen(*args, **kwargs):

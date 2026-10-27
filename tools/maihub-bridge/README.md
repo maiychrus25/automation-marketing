@@ -131,7 +131,11 @@ Service là `Type=oneshot`, chạy `python3 -I <bridge> brief-tick --env-file <.
 Trong `.env` MaiHub:
 
 - `MAIHUB_AGENT_CMD`: mặc định `claude -p --allowedTools mcp__maihub`; đổi bằng `--agent-cmd` hoặc sửa khoá này. Lệnh được tách thành argv, không chạy qua shell; lời nhắc truyền qua stdin.
-- `MAIHUB_AGENT_TIMEOUT_SEC`: số nguyên dương, mặc định `2700` giây cho mỗi lượt agent. Service có giới hạn tổng thời gian `3600` giây.
+- `MAIHUB_AGENT_TIMEOUT_SEC`: số nguyên dương, mặc định `2700` giây cho mỗi lượt agent, clamp theo budget tick monotonic `3300` giây (`BRIEF_TICK_BUDGET_SEC`), gồm onboarding, API và mọi agent. Giữ `180` giây headroom (`BRIEF_TICK_HEADROOM_SEC`) cho TERM/KILL (grace 10 giây), kiểm ownership và API cleanup (client mặc định 30 giây); agent tối đa `3120` giây, phần dư dành cho agent sau. Service và lease đều `3600` giây; cấu hình timeout lớn hơn lease cũng bị clamp. Budget điều khiển admission/runtime agent, không phải deadline cứng khi API/OS treo.
+
+Sau onboarding, tick đọc `briefs.list` một lần, thử mỗi profile tối đa một lần và chỉ `briefs.claimDue {profileId}` sát lúc chạy. Không giữ lease cho Page đang chờ. Trước agent, `briefs.get` phải còn `running` với `claimedAt` khớp; mất/đổi/đã hoàn tất ownership thì không agent hoặc stale finish. Budget hết thì không claim thêm; nếu hết trong lúc claim, xác minh ownership rồi finish lỗi `tick budget exhausted`, lỗi API/cleanup được cảnh báo. Dùng monotonic cho budget; đồng hồ tường chỉ phục vụ freshness/cooldown, không so giờ hai máy làm lease guard. Giữ `flock`, stdin prompt và process-group TERM/KILL.
+
+Completion lỗi mới `briefs.finished` có `attempts`/`attemptDate` snapshot, gồm lease hết hạn. Watcher dùng snapshot để chỉ báo lần lỗi thứ ba trở lên; không đọc counter đang thay đổi của brief. Poll expiry chỉ settle/emit một lần sau commit transaction, kể cả đã exhausted hoặc ineligible. Legacy event thiếu snapshot vẫn đọc counter hiện tại như cũ; fallback này best-effort, có thể dư/mất cảnh báo lịch sử. Tin nháp thành công, media labels, mã #suffix và yêu cầu khách duyệt giữ nguyên.
 
 Kiểm tra riêng trước khi cài:
 

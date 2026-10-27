@@ -506,6 +506,22 @@ describe('Page learner lifecycle wiring', () => {
         } finally { gate.resolve(reading); jest.useRealTimers(); }
     });
 
+    test.each(['checkpoint', 'logged_out'])('%s then successful forced learning restores actual research eligibility', async (state) => {
+        const { PageLoginProblem } = require('../../services/dailyBrief/pageIdentity');
+        const { eligibleProfiles } = require('../../services/research/profileRotation');
+        const posterStore = new FacebookPosterStore(mockDb);
+        const eligible = () => eligibleProfiles({ profiles: mockProfiles, excluded: [], busyIds: [],
+            loginStates: posterStore.listLoginStates(), usedLast24h: {}, lastUsedAt: {}, cap: 100, failedInScan: [] });
+        mockRead.mockRejectedValueOnce(new PageLoginProblem(state));
+        learnPages(['p1'], true); await tick();
+        expect(eligible()).toEqual([]);
+        expect(posterStore.listLoginStates()).toEqual(expect.arrayContaining([expect.objectContaining({ profileId: 'p1', state, source: 'run' })]));
+        learnPages(['p1'], true); await tick();
+        expect(eligible()).toEqual(['p1']);
+        expect(posterStore.listLoginStates()).toEqual(expect.arrayContaining([expect.objectContaining({ profileId: 'p1', state: 'ok', source: 'run' })]));
+        expect(isFacebookPosterBusy()).toBe(false);
+    });
+
     test('logged_out observation uses LoginChecker run vocabulary and the stored not_logged_in code', async () => {
         const { PageLoginProblem } = require('../../services/dailyBrief/pageIdentity');
         mockRead.mockRejectedValueOnce(new PageLoginProblem('logged_out'));

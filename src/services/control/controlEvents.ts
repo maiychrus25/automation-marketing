@@ -16,9 +16,11 @@ export function buildPagesLearnFinished(e: { jobId: string; results: LearnResult
 }
 
 /** Lượt đề xuất kết thúc; chỉ giữ các trường đã công bố. */
-export function buildBriefFinished(e: { profileId: string; pageName: string; ok: boolean; draftIds: string[]; error?: string }) {
+export function buildBriefFinished(e: { profileId: string; pageName: string; ok: boolean; draftIds: string[]; error?: string; attempts?: number; attemptDate?: string | null }) {
     return {
         profileId: e.profileId, pageName: e.pageName, ok: e.ok, draftIds: e.draftIds,
+        ...(e.attempts !== undefined ? { attempts: e.attempts } : {}),
+        ...(e.attemptDate !== undefined ? { attemptDate: e.attemptDate } : {}),
         ...(e.error !== undefined ? { error: e.error } : {}),
     };
 }

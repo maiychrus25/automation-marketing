@@ -84,6 +84,7 @@ test('skips a fresh successful identity, force rereads it, and the exact boundar
     await learner.whenIdle();
     expect(results()).toEqual([{ profileId: 'p1', kind: 'skipped', pageName: 'Page' }]);
     expect(deps.openForAutomation).not.toHaveBeenCalled();
+    expect(deps.observeLogin).not.toHaveBeenCalled();
     learner.learn(['p1'], true);
     await learner.whenIdle();
     seed();
@@ -233,6 +234,7 @@ test.each(['read', 'open', 'newPage', 'close', 'unknown'] as const)('%s failure 
     if (phase === 'unknown') deps.read.mockResolvedValueOnce({ ...empty, kind: 'unknown' } as any);
     learner.learn(['p1'], false);
     await learner.whenIdle();
+    expect(deps.observeLogin).not.toHaveBeenCalled();
     expect(store.getIdentity('p1')).toMatchObject({ ...before, errorCode: expect.any(String), error: expect.any(String) });
     expect(store.getIdentity('p1')?.errorCode).not.toBe('');
     expect(results()[0]).toMatchObject({ kind: 'unknown', error: expect.any(String) });
@@ -392,5 +394,21 @@ test('force retains pacing between every browser attempt even for fresh profiles
     expect(results().map((r: any) => r.profileId)).toEqual(ids);
     expect(results().every((r: any) => r.kind === 'page')).toBe(true);
     expect(lookup.mock.calls).toEqual(ids.map((id) => [id]));
+    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+});
+
+
+test('observes ok only after successful read, close and storage; listener failure retains success', async () => {
+    const { learner, deps, store, close, results } = setup();
+    const observed: unknown[] = [];
+    deps.observeLogin.mockImplementation((id: string, state: string) => {
+        observed.push({ state, closed: close.mock.calls.length, identity: store.getIdentity(id) });
+        throw new Error('listener');
+    });
+    learner.learn(['p1'], true); await learner.whenIdle();
+    expect(deps.observeLogin).toHaveBeenCalledWith('p1', 'ok');
+    expect(observed).toEqual([{ state: 'ok', closed: 1, identity: expect.objectContaining({ kind: 'page', errorCode: '' }) }]);
+    expect(results()).toEqual([{ profileId: 'p1', kind: 'page', pageName: 'Page' }]);
+    expect(store.getIdentity('p1')?.errorCode).toBe('');
     expect(deps.slot.release).toHaveBeenCalledTimes(1);
 });

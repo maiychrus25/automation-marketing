@@ -134,7 +134,7 @@ describe('brief operations', () => {
         ops.claimDue();
         expect(ops.finish({ profileId: 'p1', claimedAt: now, ok: false, error: 'e'.repeat(501) }).brief)
             .toMatchObject({ status: 'idle', attempts: 1, lastRunDate: null });
-        expect(emitFinished).toHaveBeenCalledWith({ profileId: 'p1', pageName: 'Trường lái xe', ok: false, draftIds: [], error: 'e'.repeat(500) });
+        expect(emitFinished).toHaveBeenCalledWith({ profileId: 'p1', pageName: 'Trường lái xe', ok: false, draftIds: [], error: 'e'.repeat(500), attempts: 1, attemptDate: '2026-10-26' });
     });
 
     it.each([
@@ -156,6 +156,8 @@ describe('brief operations', () => {
         ops.claimDue();
         advance(3600001);
         const reclaimed = ops.claimDue().briefs[0];
+        expect(emitFinished).toHaveBeenCalledWith(expect.objectContaining({ ok: false, attempts: 1, attemptDate: '2026-10-26' }));
+        emitFinished.mockClear(); // The expired claim emitted; the rejected stale finish must not.
         expect(() => ops.finish({ profileId: 'p1', claimedAt: now, ok: true })).toThrow(BRIEF_NOT_RUNNING_ERROR);
         expect(store.getBrief('p1')?.claimedAt).toBe(reclaimed.claimedAt);
         expect(emitFinished).not.toHaveBeenCalled();
@@ -183,4 +185,29 @@ describe('brief operations', () => {
         expect(ops.claimDue().briefs).toHaveLength(10);
         for (const brief of store.listBriefs()) expect(brief).toMatchObject({ attempts: 0, status: 'running', claimedAt: now + 86400003 });
     });
+});
+
+
+test('filtered claims leave other Pages idle and validate the optional profileId', () => {
+    const { store, ops, now } = setup();
+    for (const id of ['p1', 'p2']) { store.upsertIdentity(identity(id)); ops.save({ profileId: id, keywords: ['x'] }); }
+    for (const value of ['', ' ', null, 1]) expect(() => ops.claimDue({ profileId: value })).toThrow(/profileId/);
+    expect(ops.claimDue({ profileId: 'p1' }).briefs.map((b) => b.profileId)).toEqual(['p1']);
+    expect(store.getBrief('p2')).toMatchObject({ status: 'idle', claimedAt: null });
+    expect(ops.claimDue().briefs).toEqual([expect.objectContaining({ profileId: 'p2', claimedAt: now })]);
+});
+
+test('expired terminal failures emit a completion snapshot once even without a new claim', () => {
+    const { ops, emitFinished, advance } = setup();
+    ops.save({ profileId: 'p1', keywords: ['x'] });
+    ops.claimDue();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        advance(3600000);
+        const claims = ops.claimDue().briefs;
+        expect(claims).toHaveLength(attempt < 3 ? 1 : 0);
+        expect(emitFinished).toHaveBeenLastCalledWith(expect.objectContaining({ profileId: 'p1', ok: false,
+            draftIds: [], attempts: attempt, attemptDate: '2026-10-26' }));
+    }
+    ops.claimDue();
+    expect(emitFinished).toHaveBeenCalledTimes(3);
 });

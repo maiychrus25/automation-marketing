@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 26/10/2026 |
-| Trạng thái | Đã triển khai T0–T8; chuẩn bị local 26.31.0 (27/10/2026), chưa phát hành — Ruling 13; kiểm chứng live/vận hành và duyệt cuối còn chờ |
+| Trạng thái | Đã triển khai và review local 26.31.0 (27/10/2026), chưa phát hành — Rulings 13, 17–19; kiểm chứng live/vận hành và duyệt phát hành còn chờ |
 | Intent | `docs/intent/2026-10-26-facebook-growth-bot.md` (tính năng 1) |
 | Kế hoạch | `docs/plans/2026-10-26-daily-post-suggestions.md` |
 | Phiên bản dự kiến | 26.31.0 |
@@ -329,3 +329,24 @@ Theo Ruling 13, trạng thái là **chuẩn bị local, chưa phát hành**; yê
 **Kiểm chứng local thực chạy trong Task 9:** hai `tsc --noEmit` (electron và renderer với `NODE_OPTIONS=--max-old-space-size=4096`) exit 0; `node scripts/check-docs.js` OK. Hai vòng test tập trung dùng cùng bộ test hiện có: **13 Jest suites/556 tests mỗi vòng**, **92 bridge unittest mỗi vòng, OK, không skip**; gồm process-group timeout local, no-work/cooldown/flock, install ứng viên, watch, store/reader/learner/trending và wiring Control/research/poster/workspace/drafts. Không thêm/sửa test vì không thêm logic và chưa thấy gap tích hợp cụ thể cần test mới. Kiểm JSON xác nhận đúng ba version root `26.31.0`, mọi dữ liệu package/lock khác giữ nguyên; đã rà actual diff trong phạm vi.
 
 **Chưa chạy trong Task 9:** full Jest/Python và production TypeScript → strip-console → renderer builds (controller phụ trách), Electron dev/manual regression `research.search → research.get`, `drafts.create → drafts.approve`, bridge 26.30.0 thật gọi `describe`/`system.status`, dry-run với app 26.30.0 thật, Facebook/Telegram/Claude live, cài/status/journal systemd VPS và bot tương tác thật. Baseline controller T0–T8 là 107 suites/2296 tests Jest; không coi đó là full run của Task 9. Renderer warnings và console noise baseline được giữ, không che/sửa. Không có migration, git mutation, push/tag/deploy hoặc phát hành. Lệnh, output và phần việc controller còn lại: `.superpowers/sdd/2026-10-26-daily-post-suggestions/task-9-report.md`.
+
+
+## Ghi chú triển khai/kiểm chứng 27/10/2026 — Final fix wave BASE4a6c762, chưa phát hành
+
+Các mục thiết kế và ghi chú Task 9 ở trên giữ nguyên làm lịch sử. Rulings 17–18 thay thế hành vi batch-agent và cảnh báo từ counter hiện tại:
+
+- `briefs.claimDue {profileId?}` thêm filter chuỗi không rỗng trong BriefPort/schema/run/operations/store; bỏ qua vẫn trả batch `{briefs}` như cũ. Bridge đọc candidates một lần, mỗi profile tối đa một attempt/tick, claim JIT từng Page rồi kiểm `status + claimedAt` trước agent. Claim bị thay thế running/idle, mất hoặc hoàn tất không chạy agent/không stale finish; không có lease xếp hàng trong tick.
+- Budget tick đo bằng monotonic là 3300 giây, giữ 180 giây headroom cho TERM/KILL và API cleanup. Onboarding và agent dùng chung budget; timeout mặc định 2700 được clamp theo phần dư, tối đa 3120, kể cả override >3600. Hết budget không claim thêm; hết sau claim thì xác minh và finish lỗi ownership còn giữ. Không heartbeat hay so đồng hồ tường hai máy làm guard. API/OS treo vẫn là giới hạn của deadline admission này; cảnh báo cleanup lỗi, expiry vẫn là recovery.
+- Store settle lease hết hạn thành idle + attempts/ngày nhận cũ trước kiểm re-eligibility, kể cả exhausted, disabled, đổi giờ hoặc mất eligibility. Callback `onExpired` chỉ chạy sau transaction thành công; mỗi settlement phát `briefs.finished` lỗi một lần, kể cả lần ba không trả claim mới. Rollback/poll lại không phát sai/trùng. Ngày mới reset khi nhận lượt mới; `claimedAt` ownership, capacity và finish guards giữ nguyên.
+- Mọi completion lỗi mới có snapshot additive `attempts`, `attemptDate`, gồm expiry. Event builder chỉ project trường công bố. Formatter mới dùng snapshot, không fetch mutable current counter: delayed 1/2/3 chỉ một warning, delayed third sau reset vẫn warning. Legacy thiếu snapshot giữ best-effort fetch counter hiện tại; không thể phục dựng độ chính xác lịch sử từ payload cũ. Không migration; success/media/#suffix/approval giữ nguyên.
+- Learner chỉ quan sát `ok` sau Page/person read + close + store thành công, chưa huỷ; tái dùng wiring `LoginChecker.observe(..., 'run')`. Không quan sát khi fresh skip, unknown, read/close/store lỗi hay cancel; listener lỗi không làm hỏng success/slot. Regression kiểm error checkpoint/logged_out → forced learn thành công → hàm chọn profile Nghiên cứu thật.
+- Test resistant-child bỏ probe PermissionError self-skip; giữ process-group/cleanup/assertions thật. Nếu sandbox từ chối, test fail công khai để controller chạy ngoài sandbox.
+
+RED/GREEN từng finding, hai focused stress rounds, exact commands/output, actual-diff review và giới hạn còn lại được ghi trong `.superpowers/sdd/2026-10-26-daily-post-suggestions/final-fix-report.md`. Full socket suites/build do controller phụ trách; không phát hành, không live service, không Git mutation.
+
+
+### Kết quả controller cuối 27/10/2026 — chưa phát hành
+
+Sau final fix và follow-up Ruling 19: **full Jest 107 suites/2309 tests ×2; full bridge 297 tests ×5, đều OK và không skip**. Hai tsc, docs-check, production Electron compile/strip-console và renderer build đều exit 0. Review các finding liên thông và fix EPERM đã approve. Race EPERM khi signal-0 gặp nhóm đang thoát trên Darwin được sửa bằng cách tiếp tục poll/reap dưới deadline cũ; không coi EPERM là biến mất và không nuốt lỗi TERM/KILL thật. Những lượt test đỏ trước sửa vẫn được giữ trong report, không lấy retry xanh để che lỗi.
+
+`make build/test/lint` không có target (exit 2); renderer vẫn có cảnh báo Vite. Chưa đóng gói installer/native/E2EE, chưa kiểm chứng live Facebook/person/pagination/Telegram/Claude/VPS hoặc manual compatibility. Không tag/push/deploy, không tuyên bố phát hành. Bằng chứng và các quyết định còn lại được giữ trong ledger của plan; không sửa lại các ghi chú lịch sử phía trên.

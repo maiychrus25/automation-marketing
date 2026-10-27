@@ -431,3 +431,10 @@ describe('pages event sanitization', () => {
         ] });
     });
 });
+
+
+test('brief completion builder projects optional historical failure snapshots', () => {
+    expect(buildBriefFinished({ profileId: 'p', pageName: 'Page', ok: false, draftIds: [],
+        attempts: 3, attemptDate: '2026-10-26', privateData: 'omit' } as any))
+        .toEqual({ profileId: 'p', pageName: 'Page', ok: false, draftIds: [], attempts: 3, attemptDate: '2026-10-26' });
+});

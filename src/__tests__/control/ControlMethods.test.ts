@@ -105,6 +105,9 @@ describe('briefs.*', () => {
         await call('briefs.save', { ...patch, status: 'running', attempts: 99, claimedAt: 1 });
         expect(briefs.save).toHaveBeenCalledWith(patch);
         expect(await call('briefs.claimDue')).toEqual({ briefs: [{ profileId: 'p1', claimedAt: 123 }] });
+        expect(briefs.claimDue).toHaveBeenCalledWith({});
+        await call('briefs.claimDue', { profileId: 'p1', junk: 1 });
+        expect(briefs.claimDue).toHaveBeenLastCalledWith({ profileId: 'p1' });
         await call('briefs.finish', { profileId: 'p1', claimedAt: 123, ok: true, draftIds: ['d1'], error: '', junk: 1 });
         expect(briefs.finish).toHaveBeenCalledWith({ profileId: 'p1', claimedAt: 123, ok: true, draftIds: ['d1'], error: '' });
     });
@@ -154,6 +157,9 @@ describe('briefs.*', () => {
         expect(save.required).toEqual(['profileId']);
         expect(save.properties).toMatchObject({ niche: { maxLength: 300 }, keywords: { minItems: 1, maxItems: 10, items: { type: 'string', maxLength: 80 } },
             groupIds: { maxItems: 20 }, tone: { maxLength: 500 }, notes: { maxLength: 1000 }, draftsPerDay: { minimum: 1, maximum: 5 } });
+        const claim = found.find((m) => m.name === 'briefs.claimDue').paramsSchema;
+        expect(claim.properties.profileId).toMatchObject({ type: 'string', minLength: 1 });
+        expect(claim.required ?? []).toEqual([]);
         const finish = found.find((m) => m.name === 'briefs.finish').paramsSchema;
         expect(finish.required).toEqual(['profileId', 'claimedAt', 'ok']);
         expect(finish.properties.claimedAt.type).toBe('integer');

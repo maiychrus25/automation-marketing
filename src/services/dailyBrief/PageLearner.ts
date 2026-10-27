@@ -17,7 +17,7 @@ export interface PageLearnerDeps {
     slot: { acquire(): void; release(): void };
     shouldYield: () => boolean;
     isResearchRunning: () => boolean;
-    observeLogin: (id: string, state: 'checkpoint' | 'logged_out') => void;
+    observeLogin: (id: string, state: 'ok' | 'checkpoint' | 'logged_out') => void;
     onFinished: (e: { jobId: string; results: LearnResult[] }) => void;
     read: typeof readPageIdentity;
     now?: () => number;
@@ -120,6 +120,7 @@ export class PageLearner {
             if (this.stopping) return skipped;
             if (reading.kind === 'unknown') return this.failed(store, profileId, previous, 'unknown', 'Chưa xác định được danh tính Page');
             store.upsertIdentity({ ...reading, profileId, learnedAt: (this.deps.now ?? Date.now)(), errorCode: '', error: '' });
+            try { this.deps.observeLogin(profileId, 'ok'); } catch { /* login listeners cannot corrupt successful learning */ }
             return { profileId, kind: reading.kind, pageName: reading.pageName };
         } catch (error) {
             if (this.stopping) return skipped;
