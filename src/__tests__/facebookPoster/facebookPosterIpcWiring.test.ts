@@ -14,26 +14,34 @@ let mockServiceInstance: any = null;
 const mockReschedule = jest.fn();
 const mockBypass = jest.fn();
 const mockClearBypass = jest.fn();
+const mockRunFinished = jest.fn();
+const mockOpen = jest.fn();
+const mockRead = jest.fn();
+let mockResearchRunning = false;
+let mockSwitching = false;
+let mockEmployee = false;
+let mockDbName = 'db.sqlite';
+let mockProfiles = [{ id: 'p1', name: 'P1' }];
 
 jest.mock('electron', () => ({ dialog: {}, ipcMain: { handle: jest.fn() } }));
 jest.mock('../../services/database/DatabaseService', () => ({
     __esModule: true,
     default: {
         getInstance: () => ({
-            ...mockDb, getDbPath: () => path.join(mockDir, 'db.sqlite'), getBrowserProfileById: () => ({ id: 'p1', name: 'P1' }),
-            getBrowserProfiles: () => [], getSetting: () => null, setSetting: jest.fn(),
+            ...mockDb, getDbPath: () => path.join(mockDir, mockDbName), getBrowserProfileById: () => ({ id: 'p1', name: 'P1' }),
+            getBrowserProfiles: () => mockProfiles, getSetting: () => null, setSetting: jest.fn(),
         }),
     },
 }));
 jest.mock('../../services/event/EventBroadcaster', () => ({ __esModule: true, default: { emit: jest.fn() } }));
-jest.mock('../../utils/AppModeManager', () => ({ __esModule: true, default: { getInstance: () => ({ isEmployeeMode: () => false }) } }));
+jest.mock('../../utils/AppModeManager', () => ({ __esModule: true, default: { getInstance: () => ({ isEmployeeMode: () => mockEmployee }) } }));
 jest.mock('../../utils/Logger', () => ({ __esModule: true, default: { error: jest.fn(), log: jest.fn(), warn: jest.fn() } }));
 jest.mock('../../services/facebookPoster/FacebookPosterScheduler', () => ({
     FacebookPosterScheduler: class {
         constructor(deps: any) { capturedDeps = deps; }
         start() {}
         stop() {}
-        onRunFinished() {}
+        onRunFinished() { mockRunFinished(); }
         reschedule() { mockReschedule(); }
         bypassCampaignGateOnce(id: string) { mockBypass(id); }
         clearCampaignGateBypass(id: string) { mockClearBypass(id); }
@@ -63,15 +71,18 @@ jest.mock('../../services/facebookPoster/FacebookPosterService', () => {
     };
 });
 jest.mock('../../services/research/graphqlSession', () => ({ GraphqlSession: class {} }));
-jest.mock('../../../electron/ipc/browserProfileIpc', () => ({ getBrowserProfileService: () => ({}), isBrowserEngineInstalled: () => true }));
-jest.mock('../../../electron/ipc/researchIpc', () => ({ getResearchStore: () => ({}) }));
-jest.mock('../../../electron/ipc/workspaceIpc', () => ({ isWorkspaceSwitchInProgress: () => false }));
+jest.mock('../../../electron/ipc/browserProfileIpc', () => ({ getBrowserProfileService: () => ({ openForAutomation: (id: string) => mockOpen(id) }), isBrowserEngineInstalled: () => true }));
+jest.mock('../../../electron/ipc/researchIpc', () => ({ getResearchStore: () => ({}), isResearchRunning: () => mockResearchRunning }));
+jest.mock('../../../electron/ipc/workspaceIpc', () => ({ isWorkspaceSwitchInProgress: () => mockSwitching }));
 jest.mock('../../services/control/controlEvents', () => ({
+    buildPagesLearnFinished: jest.requireActual('../../services/control/controlEvents').buildPagesLearnFinished,
     emitControlEvent: jest.fn(), hasControlEventSink: () => false, buildRunStarted: jest.fn(), buildRunFinished: jest.fn(), buildScheduleMissed: jest.fn(),
     buildDraftApproved: jest.fn(), buildLoginProblem: jest.fn(), buildCheckFinished: jest.fn(), buildTrackFinished: jest.fn(), buildLeadsFound: jest.fn((p: unknown) => p), buildCollectFinished: jest.fn((p: unknown) => p),
 }));
 
-import { startFacebookPosterScheduler, stopFacebookPosterScheduler, posterOperations, campaignOperations, trackingOperations, leadOperations, isFacebookPosterBusy, scheduleWantsSlot, makeYieldingBusy } from '../../../electron/ipc/facebookPosterIpc';
+jest.mock('../../services/dailyBrief/pageIdentity', () => ({ ...jest.requireActual('../../services/dailyBrief/pageIdentity'), readPageIdentity: (...args: any[]) => mockRead(...args) }));
+
+import { learnPages, isPageLearnerRunning, cancelFacebookPosterJobs, cancelAndWaitFacebookPosterJobs, startFacebookPosterScheduler, stopFacebookPosterScheduler, posterOperations, campaignOperations, trackingOperations, leadOperations, isFacebookPosterBusy, scheduleWantsSlot, makeYieldingBusy } from '../../../electron/ipc/facebookPosterIpc';
 
 const NOW = Date.now();
 const schedule = (campaignId: string | null, params: Record<string, unknown> = {}) => ({
@@ -340,5 +351,177 @@ describe('makeYieldingBusy', () => {
         expect(busy()).toBe(true);
         state.base = false;
         expect(busy()).toBe(true); // clock starts only now
+    });
+});
+
+describe('Page learner lifecycle wiring', () => {
+    const reading = { kind: 'page', pageId: '123', pageName: 'Page', category: '', about: '', recentPosts: [] };
+    const tick = () => new Promise<void>((r) => setImmediate(r));
+    function deferred<T>() {
+        let resolve!: (value: T) => void;
+        const promise = new Promise<T>((r) => { resolve = r; });
+        return { promise, resolve };
+    }
+    beforeEach(async () => {
+        await cancelAndWaitFacebookPosterJobs();
+        mockEmployee = false; mockSwitching = false; mockResearchRunning = false;
+        mockDbName = 'db.sqlite'; mockProfiles = [{ id: 'p1', name: 'P1' }];
+        mockDb.run('DELETE FROM fb_poster_schedules');
+        mockOpen.mockReset().mockResolvedValue({ context: { pages: () => [{}] }, close: jest.fn(async () => undefined) });
+        mockRead.mockReset().mockResolvedValue(reading);
+        startFacebookPosterScheduler(); mockRunFinished.mockClear();
+        require('../../services/control/controlEvents').emitControlEvent.mockClear();
+    });
+    afterEach(async () => { await cancelAndWaitFacebookPosterJobs(); });
+
+    test('holds BUSY synchronously, emits a sanitized finish and wakes scheduler exactly once', async () => {
+        const started = learnPages(null, true);
+        expect(started.profileIds).toEqual(['p1']);
+        expect(isPageLearnerRunning()).toBe(true);
+        expect(isFacebookPosterBusy()).toBe(true);
+        expect(capturedDeps.isBusy()).toBe(true);
+        expect(mockCommentSchedulerDeps.isBusy()).toBe(true);
+        expect(() => learnPages(['p1'], true)).toThrow();
+        await tick();
+        expect(isFacebookPosterBusy()).toBe(false);
+        expect(mockRunFinished).toHaveBeenCalledTimes(1);
+        expect(require('../../services/control/controlEvents').emitControlEvent).toHaveBeenCalledWith('pages.learnFinished', {
+            jobId: started.jobId, results: [{ profileId: 'p1', kind: 'page', pageName: 'Page' }],
+        });
+    });
+    test('rejects research and shared-slot contention synchronously', () => {
+        mockResearchRunning = true;
+        expect(() => learnPages(['p1'], true)).toThrow(require('../../services/facebookPoster/FacebookPosterService').BUSY_ERROR);
+        mockResearchRunning = false;
+        posterOperations.current(); mockServiceInstance.acquireExclusive();
+        try { expect(() => learnPages(['p1'], true)).toThrow(); }
+        finally { mockServiceInstance.releaseExclusive(); }
+        expect(mockOpen).not.toHaveBeenCalled();
+    });
+    test('research cannot start search or group feeds while the learner owns the slot', async () => {
+        const gate = deferred<any>(); mockRead.mockReturnValueOnce(gate.promise);
+        learnPages(['p1'], true);
+        const realResearch = jest.requireActual('../../../electron/ipc/researchIpc');
+        const busy = require('../../services/facebookPoster/FacebookPosterService').BUSY_ERROR;
+        expect(() => realResearch.researchOperations.search({ source: 'posts', query: 'x' }, 'api')).toThrow(busy);
+        expect(() => realResearch.researchOperations.scanGroupFeeds({}, 'api')).toThrow(busy);
+        gate.resolve(reading); await tick();
+    });
+    test('cancel-and-wait keeps the workspace blocked until read AND session cleanup finish', async () => {
+        const readGate = deferred<any>(); const closeGate = deferred<void>();
+        const close = jest.fn(() => closeGate.promise);
+        mockOpen.mockResolvedValueOnce({ context: { pages: () => [{}] }, close });
+        mockRead.mockReturnValueOnce(readGate.promise);
+        learnPages(['p1'], true); await tick();
+        const { getDailyBriefStore } = require('../../../electron/ipc/dailyBriefIpc');
+        const before = getDailyBriefStore().getIdentity('p1');
+        let settled = false;
+        const waiting = cancelAndWaitFacebookPosterJobs().then((ok) => { settled = true; return ok; });
+        await tick(); expect(settled).toBe(false);
+        readGate.resolve(reading); await tick(); expect(settled).toBe(false);
+        closeGate.resolve(); expect(await waiting).toBe(true);
+        expect(getDailyBriefStore().getIdentity('p1')).toEqual(before);
+        expect(mockRunFinished).toHaveBeenCalledTimes(1);
+    });
+    test('cancel helper stops a pending read and still finishes once', async () => {
+        const gate = deferred<any>(); mockRead.mockReturnValueOnce(gate.promise);
+        learnPages(['p1'], true); await tick(); cancelFacebookPosterJobs();
+        gate.resolve(reading); await tick();
+        expect(isPageLearnerRunning()).toBe(false);
+        expect(mockRunFinished).toHaveBeenCalledTimes(1);
+    });
+    test.each(['workspace', 'employee'])('late read after %s change cannot write or emit into a new context', async (change) => {
+        const gate = deferred<any>(); mockRead.mockReturnValueOnce(gate.promise);
+        learnPages(['p1'], true); await tick();
+        const { getDailyBriefStore } = require('../../../electron/ipc/dailyBriefIpc');
+        const before = getDailyBriefStore().getIdentity('p1');
+        if (change === 'workspace') mockDbName = 'new.sqlite'; else mockEmployee = true;
+        gate.resolve(reading); await tick();
+        expect(getDailyBriefStore().getIdentity('p1')).toEqual(before);
+        const emit = require('../../services/control/controlEvents').emitControlEvent;
+        expect(emit.mock.calls.filter(([type]: any[]) => type === 'pages.learnFinished')).toHaveLength(0);
+        expect(mockRunFinished).not.toHaveBeenCalled();
+        expect(isPageLearnerRunning()).toBe(false);
+    });
+    test('a late open rejection after a workspace change cannot save an error into the new DB', async () => {
+        const gate = deferred<void>();
+        mockOpen.mockImplementationOnce(async () => { await gate.promise; throw new Error('late open error'); });
+        learnPages(['p1'], true); await tick();
+        const { getDailyBriefStore } = require('../../../electron/ipc/dailyBriefIpc');
+        const before = getDailyBriefStore().getIdentity('p1');
+        mockDbName = 'late-open.sqlite';
+        gate.resolve(); await tick();
+        expect(getDailyBriefStore().getIdentity('p1')).toEqual(before);
+        expect(mockRunFinished).not.toHaveBeenCalled();
+        const emit = require('../../services/control/controlEvents').emitControlEvent;
+        expect(emit.mock.calls.filter(([type]: any[]) => type === 'pages.learnFinished')).toHaveLength(0);
+    });
+    test('workspace switching and employee mode reject new jobs before opening', () => {
+        mockSwitching = true;
+        expect(() => learnPages(['p1'], true)).toThrow('Đang đổi workspace');
+        mockSwitching = false; mockEmployee = true;
+        expect(() => learnPages(['p1'], true)).toThrow();
+        expect(mockOpen).not.toHaveBeenCalled();
+    });
+    test('yielding to a due schedule never opens a profile and wakes the scheduler once', async () => {
+        const spy = jest.spyOn(FacebookPosterStore.prototype, 'nextScheduledAt').mockReturnValue(Date.now());
+        try {
+            learnPages(['p1'], true); await tick();
+            expect(mockOpen).not.toHaveBeenCalled();
+            expect(mockRunFinished).toHaveBeenCalledTimes(1);
+        } finally { spy.mockRestore(); }
+    });
+    test('failed learner construction leaves the shared slot free', () => {
+        const mod = require('../../services/dailyBrief/PageLearner');
+        const spy = jest.spyOn(mod, 'PageLearner').mockImplementationOnce(() => { throw new Error('construction'); });
+        mockDbName = 'construction.sqlite';
+        try { expect(() => learnPages(['p1'], true)).toThrow('construction'); }
+        finally { spy.mockRestore(); }
+        expect(isFacebookPosterBusy()).toBe(false);
+    });
+    test('pages.list uses identities and pageOperations.learn keeps only jobId', async () => {
+        const { pageOperations } = require('../../../electron/ipc/dailyBriefIpc');
+        expect(() => pageOperations.learn({ profileIds: [] })).toThrow();
+        expect(() => pageOperations.learn({ force: 'true' })).toThrow();
+        expect(Object.keys(pageOperations.learn({ profileIds: ['p1'], force: true }))).toEqual(['jobId']);
+        await tick();
+        expect(pageOperations.list()).toMatchObject({ identities: expect.arrayContaining([expect.objectContaining({ profileId: 'p1' })]) });
+    });
+
+    test('bounded stop-and-wait refuses to switch while read is unresolved, retaining the busy slot', async () => {
+        jest.useFakeTimers();
+        const gate = deferred<any>(); mockRead.mockReturnValueOnce(gate.promise);
+        try {
+            learnPages(['p1'], true);
+            for (let i = 0; i < 10; i++) await Promise.resolve();
+            const waiting = cancelAndWaitFacebookPosterJobs();
+            await jest.advanceTimersByTimeAsync(45000);
+            expect(await waiting).toBe(false);
+            expect(isFacebookPosterBusy()).toBe(true);
+            expect(() => learnPages(['p1'], true)).toThrow();
+            gate.resolve(reading);
+            for (let i = 0; i < 15; i++) await Promise.resolve();
+            expect(isFacebookPosterBusy()).toBe(false);
+            expect(mockRunFinished).toHaveBeenCalledTimes(1);
+        } finally { gate.resolve(reading); jest.useRealTimers(); }
+    });
+
+    test('logged_out observation uses LoginChecker run vocabulary and the stored not_logged_in code', async () => {
+        const { PageLoginProblem } = require('../../services/dailyBrief/pageIdentity');
+        mockRead.mockRejectedValueOnce(new PageLoginProblem('logged_out'));
+        learnPages(['p1'], true); await tick();
+        const { getDailyBriefStore } = require('../../../electron/ipc/dailyBriefIpc');
+        expect(getDailyBriefStore().getIdentity('p1').errorCode).toBe('not_logged_in');
+        expect(new FacebookPosterStore(mockDb).listLoginStates()).toEqual(expect.arrayContaining([
+            expect.objectContaining({ profileId: 'p1', state: 'logged_out', source: 'run' }),
+        ]));
+    });
+
+    test('a broken finish event listener cannot suppress the scheduler wake', async () => {
+        const emit = require('../../services/control/controlEvents').emitControlEvent;
+        emit.mockImplementationOnce(() => { throw new Error('listener'); });
+        learnPages(['p1'], true); await tick();
+        expect(mockRunFinished).toHaveBeenCalledTimes(1);
+        expect(isFacebookPosterBusy()).toBe(false);
     });
 });

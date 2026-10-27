@@ -1,8 +1,19 @@
 import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import type { FbPosterResult, FbPosterRun, FbPosterSchedule, LoginCheckOutcome, LoginCheckSource, LoginState } from '../../models/facebookPoster';
+import type { LearnResult } from '../dailyBrief/PageLearner';
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'briefs.finished';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'briefs.finished' | 'pages.learnFinished';
+
+export function buildPagesLearnFinished(e: { jobId: string; results: LearnResult[] }) {
+    return {
+        jobId: e.jobId,
+        results: e.results.map((r) => ({
+            profileId: r.profileId, kind: r.kind, pageName: r.pageName,
+            ...(r.error !== undefined ? { error: r.error } : {}),
+        })),
+    };
+}
 
 /** Lượt đề xuất kết thúc; chỉ giữ các trường đã công bố. */
 export function buildBriefFinished(e: { profileId: string; pageName: string; ok: boolean; draftIds: string[]; error?: string }) {

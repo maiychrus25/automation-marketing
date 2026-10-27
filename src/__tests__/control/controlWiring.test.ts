@@ -7,7 +7,7 @@ import { InboxMediaStore } from '../../services/control/InboxMediaStore';
 import { CertificateStore, CertificateKeyUnreadableError, PLAIN_KEY_WARNING, WEAK_KEY_WARNING } from '../../services/control/CertificateStore';
 import { ControlConfigError, buildFirewallCommand, parseStoredConfig, resolveAppVersion, validateConfigInput } from '../../services/control/controlConfig';
 import { toSafeProfiles } from '../../services/control/controlProfiles';
-import { buildBriefFinished, buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildVideoFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
+import { buildPagesLearnFinished, buildBriefFinished, buildCheckFinished, buildDraftApproved, buildLoginProblem, buildResearchFinished, buildRunFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildVideoFinished, emitControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 import { createCertificate } from '../../services/control/certificate';
 import { parseBotIp, withStoredPublicHost } from '../../services/control/controlConfig';
 import { memoryDb } from '../facebookPoster/helpers';
@@ -353,6 +353,7 @@ describe('daily brief IPC wiring', () => {
         const prepareFirst = jest.spyOn(first, 'exec');
         const prepareSecond = jest.spyOn(second, 'exec');
         jest.doMock('../../services/database/DatabaseService', () => ({ __esModule: true, default: { getInstance: () => current } }));
+        jest.doMock('../../../electron/ipc/facebookPosterIpc', () => ({ learnPages: jest.fn() }));
         try {
             jest.isolateModules(() => {
                 const { briefOperations: ops, getDailyBriefStore } = require('../../../electron/ipc/dailyBriefIpc');
@@ -375,7 +376,7 @@ describe('daily brief IPC wiring', () => {
                 expect(prepareSecond).toHaveBeenCalledTimes(1);
                 events.setControlEventSink(null);
             });
-        } finally { jest.dontMock('../../services/database/DatabaseService'); }
+        } finally { jest.dontMock('../../services/database/DatabaseService'); jest.dontMock('../../../electron/ipc/facebookPosterIpc'); }
     });
 
     test('connects ControlMethodDeps.briefs to the actual briefOperations export', async () => {
@@ -403,15 +404,30 @@ describe('daily brief IPC wiring', () => {
         jest.doMock(mockedModules[8], () => ({ __esModule: true, default: { error: jest.fn() } }));
         try {
             jest.isolateModules(() => {
-                expected = require('../../../electron/ipc/dailyBriefIpc').briefOperations;
+                expected = require('../../../electron/ipc/dailyBriefIpc');
                 api = require('../../../electron/ipc/controlApiIpc');
             });
             await api.restartControlApi();
-            expect(captured?.briefs).toBe(expected);
+            expect(captured?.briefs).toBe(expected.briefOperations);
+            expect(captured?.pages).toBe(expected.pageOperations);
+            expect(captured?.pages).toBeDefined();
             expect(captured?.briefs).toBeDefined();
         } finally {
             await api?.shutdownControlApi();
             mockedModules.forEach((name) => jest.dontMock(name));
         }
+    });
+});
+
+describe('pages event sanitization', () => {
+    test('projects only the public fields at both levels, omitting absent error', () => {
+        const e = { jobId: 'j1', html: 'PRIVATE', results: [
+            { profileId: 'p1', kind: 'page' as const, pageName: 'Page', token: 'SECRET', recentPosts: [] },
+            { profileId: 'p2', kind: 'unknown' as const, pageName: '', error: 'safe error', cookie: 'SECRET' },
+        ] };
+        expect(buildPagesLearnFinished(e)).toEqual({ jobId: 'j1', results: [
+            { profileId: 'p1', kind: 'page', pageName: 'Page' },
+            { profileId: 'p2', kind: 'unknown', pageName: '', error: 'safe error' },
+        ] });
     });
 });

@@ -2,6 +2,7 @@ import DatabaseService from '../../src/services/database/DatabaseService';
 import { DailyBriefStore } from '../../src/services/dailyBrief/DailyBriefStore';
 import { createBriefOperations } from '../../src/services/dailyBrief/briefOperations';
 import { buildBriefFinished, emitControlEvent } from '../../src/services/control/controlEvents';
+import { learnPages } from './facebookPosterIpc';
 
 const preparedDbPaths = new Set<string>();
 
@@ -23,3 +24,12 @@ export const briefOperations = createBriefOperations({
     profileExists: (id) => !!DatabaseService.getInstance().getBrowserProfileById(id),
     emitFinished: (payload) => emitControlEvent('briefs.finished', buildBriefFinished(payload)),
 });
+
+export const pageOperations = {
+    learn: (p: { profileIds?: string[] | null; force?: boolean } = {}) => {
+        if (p.force !== undefined && typeof p.force !== 'boolean') throw new Error('force phải là boolean');
+        const { jobId } = learnPages(p.profileIds ?? null, p.force ?? false);
+        return { jobId };
+    },
+    list: () => ({ identities: getDailyBriefStore().listIdentities() }),
+};

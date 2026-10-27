@@ -5,6 +5,7 @@ import DatabaseService from '../../src/services/database/DatabaseService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import { FacebookPosterStore } from '../../src/services/facebookPoster/FacebookPosterStore';
+import { BUSY_ERROR } from '../../src/services/facebookPoster/FacebookPosterService';
 import { ResearchService } from '../../src/services/research/ResearchService';
 import { MAX_LIMIT, ResearchStore } from '../../src/services/research/ResearchStore';
 import { parseTrendingParams, rankTrending } from '../../src/services/research/trending';
@@ -20,7 +21,7 @@ import { buildResearchFinished, emitControlEvent } from '../../src/services/cont
 import { getBrowserProfileService } from './browserProfileIpc';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
 import {
-    isFacebookPosterEmployeeBlocked, listFacebookLoginStates, listFacebookPosterRunProfileIds, observeFacebookLogin,
+    isFacebookPosterEmployeeBlocked, isPageLearnerRunning, listFacebookLoginStates, listFacebookPosterRunProfileIds, observeFacebookLogin,
 } from './facebookPosterIpc';
 
 export const WORKSPACE_SWITCHING_ERROR = 'Đang đổi workspace, thử lại sau';
@@ -59,6 +60,8 @@ function store(): ResearchStore {
 export function getResearchStore(): ResearchStore {
     return store();
 }
+
+export function isResearchRunning(): boolean { return service?.isRunning() ?? false; }
 
 function profileList(): { id: string; name: string }[] {
     return db().getBrowserProfiles().map((p) => ({ id: p.id, name: p.name }));
@@ -141,6 +144,7 @@ export const researchOperations = {
 
     search: (params: any, origin: ResearchOrigin) => {
         if (isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        if (isPageLearnerRunning()) throw new Error(BUSY_ERROR);
         const profileIds = checkProfileIds(params?.profileIds, profileList().map((p) => p.id));
         return getService().search({
             source: params?.source, query: params?.query, recent: params?.recent, year: params?.year,
@@ -150,6 +154,7 @@ export const researchOperations = {
 
     scanGroupFeeds: (params: any, origin: ResearchOrigin) => {
         if (isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        if (isPageLearnerRunning()) throw new Error(BUSY_ERROR);
         const profileIds = checkProfileIds(params?.profileIds, profileList().map((p) => p.id));
         return getService().scanGroupFeeds({
             groupUrls: params?.groupUrls, sinceDays: params?.sinceDays, limitPerGroup: params?.limitPerGroup, profileIds, origin,

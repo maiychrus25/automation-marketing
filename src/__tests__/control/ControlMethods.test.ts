@@ -37,6 +37,50 @@ function makeDeps() {
     return deps;
 }
 
+describe('pages.*', () => {
+    function setupPages() {
+        const pages = { learn: jest.fn((_p: any) => ({ jobId: 'j1', profileIds: ['p1'] })), list: jest.fn(() => ({ identities: [] })) };
+        const methods = createControlMethods({ ...makeDeps(), pages } as unknown as ControlMethodDeps);
+        const call = (name: string, p: any = {}) => methods.find((m) => m.name === name)!.run(p, {});
+        return { pages, methods, call };
+    }
+    it('defaults omitted IDs to null and force to false; exposes only jobId', async () => {
+        const { pages, call } = setupPages();
+        expect(await call('pages.learn', { junk: 'x' })).toEqual({ jobId: 'j1' });
+        expect(pages.learn).toHaveBeenCalledWith({ profileIds: null, force: false });
+        expect(await call('pages.list')).toEqual({ identities: [] });
+        expect(pages.list).toHaveBeenCalledWith();
+        await call('pages.learn', { profileIds: ['p1', 'p1'], force: true, junk: 'x' });
+        expect(pages.learn).toHaveBeenLastCalledWith({ profileIds: ['p1'], force: true });
+    });
+    it.each([[], [''], [2], 'p1', Array(51).fill('p1')])('rejects invalid IDs %p before the port', async (profileIds) => {
+        const { pages, call } = setupPages();
+        await expect(call('pages.learn', { profileIds })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+        expect(pages.learn).not.toHaveBeenCalled();
+    });
+    it.each([null, 0, 'true'])('rejects force %p before the port', async (force) => {
+        const { pages, call } = setupPages();
+        await expect(call('pages.learn', { force })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+        expect(pages.learn).not.toHaveBeenCalled();
+    });
+    it('maps BUSY and unknown profile errors using the existing contract', async () => {
+        const { pages, call } = setupPages();
+        pages.learn.mockImplementationOnce(() => { throw new Error(BUSY_ERROR); });
+        await expect(call('pages.learn')).rejects.toMatchObject({ code: 'BUSY' });
+        pages.learn.mockImplementationOnce(() => { throw new UnknownProfilesError(['missing']); });
+        await expect(call('pages.learn', { profileIds: ['missing'] })).rejects.toMatchObject({ code: 'NOT_FOUND', details: { missing: ['missing'] } });
+    });
+    it('adds two non-destructive methods with the public response schema', () => {
+        const { methods } = setupPages();
+        expect(methods).toHaveLength(58);
+        const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('pages.')) as any[];
+        expect(found.map((m) => m.name).sort()).toEqual(['pages.learn', 'pages.list']);
+        expect(found.every((m) => m.destructive === false)).toBe(true);
+        expect(found.find((m) => m.name === 'pages.learn').resultSchema.required).toEqual(['jobId']);
+        expect(found.find((m) => m.name === 'pages.list').resultSchema.required).toEqual(['identities']);
+    });
+});
+
 describe('briefs.*', () => {
     function setupBriefs() {
         const briefs = {
@@ -340,6 +384,7 @@ describe('describe', () => {
             'schedules.list', 'schedules.update', 'schedules.delete',
             'runs.current', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
             'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.trending', 'research.cancel',
+            'pages.learn', 'pages.list',
             'briefs.list', 'briefs.get', 'briefs.save', 'briefs.delete', 'briefs.claimDue', 'briefs.finish',
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',

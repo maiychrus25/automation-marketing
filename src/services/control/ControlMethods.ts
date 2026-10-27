@@ -4,6 +4,7 @@ import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../facebookPoster/FacebookPost
 import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../research/researchOperationsLogic';
 import { RenderError } from '../video/RenderClient';
 import { BRIEF_NOT_FOUND_ERROR } from '../dailyBrief/briefOperations';
+import type { PageIdentity } from '../../models/dailyBrief';
 
 /** Mã lỗi cố định của giao thức (spec §3.2). */
 export type ControlErrorCode =
@@ -105,6 +106,11 @@ export interface BriefPort {
     finish(params: any): any;
 }
 
+export interface PagePort {
+    learn(params: { profileIds: string[] | null; force: boolean }): { jobId: string };
+    list(): { identities: PageIdentity[] };
+}
+
 /** Các thao tác theo dõi bài đăng (`trackingOperations`); kiểm tra tham số nằm ở đó. */
 export interface TrackingPort {
     track(params: any): any;
@@ -158,6 +164,7 @@ export interface ControlMethodDeps {
     leads: LeadPort;
     videos: VideoPort;
     briefs?: BriefPort;
+    pages?: PagePort;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
     checkLogins(profileIds: string[] | null): { checkId: string; profileIds: string[] };
@@ -567,6 +574,30 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             paramsSchema: obj({}),
             resultSchema: obj({ cancelled: { type: 'boolean', description: 'true nếu có lượt quét bị huỷ' } }, ['cancelled']),
             run: async () => deps.research.cancel(),
+        },
+        {
+            name: 'pages.learn', description: 'Học danh tính Page/người bằng bộ đọc chỉ đọc. Chạy nền trong khe việc chung, không chạy cùng Nghiên cứu và nhường lịch đăng. Bỏ qua lần học thành công trong 24 giờ trừ khi force=true; kết quả qua pages.learnFinished.',
+            destructive: false,
+            paramsSchema: obj({
+                profileIds: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: 50, description: 'Bỏ trống = mọi profile' },
+                force: { type: 'boolean', default: false },
+            }),
+            resultSchema: obj({ jobId: str('Mã lượt học') }, ['jobId']),
+            run: async (p) => {
+                const raw = p.profileIds;
+                if (raw !== undefined && raw !== null && (!Array.isArray(raw) || !raw.length || raw.length > 50 || raw.some((id) => typeof id !== 'string' || !id))) {
+                    throw new ControlError('INVALID_PARAMS', 'profileIds phải là danh sách 1–50 mã (chuỗi không rỗng)', { field: 'profileIds' });
+                }
+                if (p.force !== undefined && typeof p.force !== 'boolean') throw new ControlError('INVALID_PARAMS', 'force phải là boolean', { field: 'force' });
+                const { jobId } = await deps.pages.learn({ profileIds: raw == null ? null : [...new Set(raw as string[])], force: p.force ?? false });
+                return { jobId };
+            },
+        },
+        {
+            name: 'pages.list', description: 'Danh tính đã học của mọi profile trong workspace, kèm recentPosts, learnedAt và lỗi lần học gần nhất.',
+            destructive: false, paramsSchema: noParams,
+            resultSchema: obj({ identities: { type: 'array', items: { type: 'object' } } }, ['identities']),
+            run: async () => deps.pages.list(),
         },
         {
             name: 'briefs.list', description: 'Danh sách kế hoạch Page trong workspace, kèm pageName và trạng thái.',

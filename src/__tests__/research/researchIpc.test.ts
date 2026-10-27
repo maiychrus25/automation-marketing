@@ -3,13 +3,15 @@ jest.mock('electron', () => ({ dialog: {}, ipcMain: { handle: jest.fn() }, shell
 jest.mock('xlsx', () => ({}));
 const mockSearch = jest.fn(() => ({ scanId: 's1' }));
 const mockScanGroups = jest.fn(() => ({ scanId: 's2' }));
+const mockLearnerRunning = jest.fn(() => false);
+const mockResearchRunning = jest.fn(() => false);
 const mockStatus = jest.fn(() => ({ running: true, scanId: 'sx' }));
 jest.mock('../../services/research/ResearchService', () => ({
     ResearchService: class {
         search = (...a: any[]) => (mockSearch as any)(...a);
         scanGroupFeeds = (...a: any[]) => (mockScanGroups as any)(...a);
         status = () => mockStatus();
-        isRunning = () => false;
+        isRunning = () => mockResearchRunning();
         cancel = () => false;
     },
     MAX_PROFILE_IDS: 50,
@@ -29,14 +31,14 @@ jest.mock('../../services/facebookPoster/FacebookPosterStore', () => ({ Facebook
 jest.mock('../../services/control/controlEvents', () => ({ buildResearchFinished: jest.fn(), emitControlEvent: jest.fn() }));
 jest.mock('../../../electron/ipc/browserProfileIpc', () => ({ getBrowserProfileService: () => ({ isRunning: () => false }) }));
 jest.mock('../../../electron/ipc/facebookPosterIpc', () => ({
-    isFacebookPosterEmployeeBlocked: () => false, listFacebookLoginStates: () => [], listFacebookPosterRunProfileIds: () => [], observeFacebookLogin: jest.fn(),
+    isFacebookPosterEmployeeBlocked: () => false, isPageLearnerRunning: () => mockLearnerRunning(), listFacebookLoginStates: () => [], listFacebookPosterRunProfileIds: () => [], observeFacebookLogin: jest.fn(),
 }));
 let switching = false;
 jest.mock('../../../electron/ipc/workspaceIpc', () => ({ isWorkspaceSwitchInProgress: () => switching }));
 
-import { INVALID_LINK_ERROR, WORKSPACE_SWITCHING_ERROR, researchOperations } from '../../../electron/ipc/researchIpc';
+import { INVALID_LINK_ERROR, WORKSPACE_SWITCHING_ERROR, isResearchRunning, researchOperations } from '../../../electron/ipc/researchIpc';
 
-beforeEach(() => { jest.clearAllMocks(); switching = false; });
+beforeEach(() => { jest.clearAllMocks(); switching = false; mockLearnerRunning.mockReturnValue(false); mockResearchRunning.mockReturnValue(false); });
 
 describe('researchOperations during a workspace switch (M6)', () => {
     it('starts normally when idle', () => {
@@ -69,4 +71,20 @@ describe('researchOperations.openLink (M5)', () => {
             await expect(researchOperations.openLink({ url })).rejects.toThrow(INVALID_LINK_ERROR);
             expect(mockOpenExternal).not.toHaveBeenCalled();
         });
+});
+
+describe('research/learner mutual exclusion', () => {
+    it('rejects search and group feeds synchronously while learning, before touching the research service', () => {
+        mockLearnerRunning.mockReturnValue(true);
+        const busy = require('../../services/facebookPoster/FacebookPosterService').BUSY_ERROR;
+        expect(() => researchOperations.search({ source: 'posts', query: 'x' }, 'api')).toThrow(busy);
+        expect(() => researchOperations.scanGroupFeeds({}, 'api')).toThrow(busy);
+        expect(mockSearch).not.toHaveBeenCalled();
+        expect(mockScanGroups).not.toHaveBeenCalled();
+    });
+    it('exports the actual service running state for the synchronous learner gate', () => {
+        expect(isResearchRunning()).toBe(false);
+        mockResearchRunning.mockReturnValue(true);
+        expect(isResearchRunning()).toBe(true);
+    });
 });

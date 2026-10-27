@@ -77,6 +77,21 @@ beforeEach(() => {
 });
 
 describe('workspace:switch', () => {
+    it('keeps DB and event sink on the old workspace until learner cleanup joins poster stop-and-wait', async () => {
+        const learnerIdle = deferred<boolean>();
+        mockPoster.isBusy.mockReturnValue(true);
+        mockPoster.cancelAndWait.mockReturnValueOnce(learnerIdle.promise);
+        const switching = call('workspace:switch', 'new');
+        await new Promise((r) => setImmediate(r));
+        expect(mockPoster.stopScheduler).toHaveBeenCalledTimes(1);
+        expect(mockDb.switchToWorkspaceDb).not.toHaveBeenCalled();
+        expect(mockControl.sync).not.toHaveBeenCalled();
+        expect(mockControl.stop).not.toHaveBeenCalled();
+        learnerIdle.resolve(true);
+        expect((await switching).success).toBe(true);
+        expect(mockDb.switchToWorkspaceDb).toHaveBeenCalledWith('/db/new.db');
+    });
+
     it('refuses and rolls back when the poster job does not stop', async () => {
         mockPoster.cancelAndWait.mockResolvedValue(false);
         // After switchWorkspace the manager already points at the new id

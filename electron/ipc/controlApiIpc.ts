@@ -22,7 +22,7 @@ import {
 } from '../../src/services/control/controlConfig';
 import { checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, posterOperations, trackingOperations, campaignOperations, leadOperations } from './facebookPosterIpc';
 import { researchOperations } from './researchIpc';
-import { briefOperations } from './dailyBriefIpc';
+import { briefOperations, pageOperations } from './dailyBriefIpc';
 import { videoOperations } from './videoIpc';
 import { getInboxMediaStore } from './inboxMedia';
 import { getBrowserEngineStatus, getBrowserProfileService, getBrowserSandboxState } from './browserProfileIpc';
@@ -127,6 +127,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
     const methods = createControlMethods({
         poster,
         briefs: briefOperations,
+        pages: pageOperations,
         research: {
             search: (p) => researchOperations.search(p, 'api'),
             scanGroupFeeds: (p) => researchOperations.scanGroupFeeds(p, 'api'),

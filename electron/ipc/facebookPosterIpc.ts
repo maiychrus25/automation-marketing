@@ -7,7 +7,7 @@ import DatabaseService from '../../src/services/database/DatabaseService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import AppModeManager from '../../src/utils/AppModeManager';
 import Logger from '../../src/utils/Logger';
-import { FacebookPosterService, ENGINE_MISSING_ERROR } from '../../src/services/facebookPoster/FacebookPosterService';
+import { FacebookPosterService, BUSY_ERROR, ENGINE_MISSING_ERROR } from '../../src/services/facebookPoster/FacebookPosterService';
 import { FacebookPosterStore } from '../../src/services/facebookPoster/FacebookPosterStore';
 import { buildRunCsv } from '../../src/services/facebookPoster/runCsv';
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from '../../src/services/facebookPoster/mediaRules';
@@ -37,8 +37,11 @@ import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
-import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished } from '../../src/services/control/controlEvents';
-import { getResearchStore } from './researchIpc';
+import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildPagesLearnFinished } from '../../src/services/control/controlEvents';
+import { getResearchStore, isResearchRunning } from './researchIpc';
+import { getDailyBriefStore } from './dailyBriefIpc';
+import { PageLearner } from '../../src/services/dailyBrief/PageLearner';
+import { readPageIdentity } from '../../src/services/dailyBrief/pageIdentity';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
 import type { FbPosterLead, FbPosterRun, LeadStatus, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
@@ -53,6 +56,9 @@ let lastDbPath: string | null = null;
 let checker: LoginChecker | null = null;
 let checkerDbPath: string | null = null;
 let checkerService: FacebookPosterService | null = null;
+let learner: PageLearner | null = null;
+let learnerDbPath: string | null = null;
+let learnerService: FacebookPosterService | null = null;
 let loginScheduler: LoginCheckScheduler | null = null;
 let tracker: PostTracker | null = null;
 let trackerDbPath: string | null = null;
@@ -185,6 +191,66 @@ function getChecker(): LoginChecker {
         });
     }
     return checker;
+}
+
+/** Like the checker, the learner binds to one workspace and one shared slot. */
+function getPageLearner(): PageLearner {
+    const svc = getService();
+    const dbPath = db().getDbPath();
+    if (learner && (learnerDbPath !== dbPath || learnerService !== svc)) {
+        if (learner.isRunning()) throw new Error(BUSY_ERROR);
+        learner = null;
+    }
+    if (!learner) {
+        const yielding = makeYieldingBusy(() => false);
+        let instance: PageLearner;
+        const current = () => db().getDbPath() === dbPath && learner === instance && !isFacebookPosterEmployeeBlocked();
+        instance = new PageLearner({
+            store: getDailyBriefStore,
+            openForAutomation: async (id) => {
+                try {
+                    const session = await getBrowserProfileService().openForAutomation(id);
+                    return {
+                        context: session.context,
+                        close: async () => {
+                            try { await session.close(); }
+                            finally { if (!current() || isWorkspaceSwitchInProgress()) instance.stop(); }
+                        },
+                    };
+                } finally { if (!current() || isWorkspaceSwitchInProgress()) instance.stop(); }
+            },
+            slot: { acquire: () => svc.acquireExclusive(), release: () => svc.releaseExclusive() },
+            shouldYield: () => {
+                if (!current()) { instance.stop(); return true; }
+                return yielding();
+            },
+            isResearchRunning,
+            observeLogin: (id, state) => {
+                if (current()) safely('learnObserveLogin', () => getChecker().observe(id, state, 'run'));
+            },
+            onFinished: (e) => {
+                if (!current()) return;
+                safely('learnFinished', () => emitControlEvent('pages.learnFinished', buildPagesLearnFinished(e)));
+                safely('onRunFinished', () => scheduler?.onRunFinished());
+            },
+            read: readPageIdentity,
+        });
+        learner = instance;
+        learnerDbPath = dbPath;
+        learnerService = svc;
+    }
+    return learner;
+}
+
+export function isPageLearnerRunning(): boolean { return learner?.isRunning() ?? false; }
+
+/** Synchronous BUSY check and slot reservation, before the background read starts. */
+export function learnPages(profileIds: string[] | null, force: boolean): { jobId: string; profileIds: string[] } {
+    if (isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+    if (isFacebookPosterEmployeeBlocked()) throw new Error('Tính năng Học Page chỉ dùng được ở chế độ Boss/Standalone');
+    const known = db().getBrowserProfiles().map((p) => p.id);
+    const ids = checkProfileIds(profileIds === null ? undefined : profileIds, known) ?? known;
+    return getPageLearner().learn([...new Set(ids)], force);
 }
 
 function readTrackingConfig() {
@@ -356,9 +422,9 @@ export function isFacebookPosterSchedulerRunning(): boolean {
     return scheduler !== null;
 }
 
-/** True while a run or a login check is active; the updater refuses to restart then. */
+/** True while a poster or side job is active; the updater refuses to restart then. */
 export function isFacebookPosterBusy(): boolean {
-    return (service?.isBusy() ?? false) || (tracker?.isRunning() ?? false) || (collector?.isRunning() ?? false);
+    return (service?.isBusy() ?? false) || (tracker?.isRunning() ?? false) || (collector?.isRunning() ?? false) || isPageLearnerRunning();
 }
 
 /** Stops a running job (if any). Called on app quit and before the workspace database is switched. */
@@ -367,6 +433,7 @@ export function cancelFacebookPosterJobs(): void {
     checker?.stop();
     tracker?.stop();
     collector?.stop();
+    learner?.stop();
 }
 
 /** Cancels the running job and waits (bounded) for it to end, so it cannot write into the next workspace DB. True = no job runs anymore. Never throws. */
@@ -377,6 +444,8 @@ export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
     theTracker?.stop();
     const theCollector = collector;
     theCollector?.stop();
+    const theLearner = learner;
+    theLearner?.stop();
     let ok = true;
     try {
         if (service) ok = await service.stopAndWait();
@@ -403,6 +472,13 @@ export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
         await Promise.race([theCollector.whenIdle().catch(() => undefined), timedOut]);
         clearTimeout(timer);
         if (theCollector.isRunning()) ok = false;
+    }
+    if (theLearner?.isRunning()) {
+        let timer: NodeJS.Timeout | undefined;
+        const timedOut = new Promise<void>((resolve) => { timer = setTimeout(resolve, CHECK_STOP_GRACE_MS); timer.unref?.(); });
+        await Promise.race([theLearner.whenIdle().catch(() => undefined), timedOut]);
+        clearTimeout(timer);
+        if (theLearner.isRunning()) ok = false;
     }
     return ok;
 }
@@ -586,7 +662,9 @@ function offsetOf(value: any): number {
 
 /** True when the Facebook Poster is unavailable because the app runs in employee mode. Shared by IPC and the control API. */
 export function isFacebookPosterEmployeeBlocked(): boolean {
-    return AppModeManager.getInstance().isEmployeeMode();
+    const blocked = AppModeManager.getInstance().isEmployeeMode();
+    if (blocked) learner?.stop();
+    return blocked;
 }
 
 /** Same employee-mode guard and error envelope as browserProfileIpc. */
