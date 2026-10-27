@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- SYNTHETIC / NOT LIVE-VERIFIED. No personal-profile capture exists. Explicit matching is_profile_plus=false and no delegate_page model a conservative future contract. -->
+<script type="application/json">
+{
+  "define": [
+    [
+      "CurrentUserInitialData",
+      [],
+      {
+        "USER_ID": "fixture-person-id",
+        "ACCOUNT_ID": "fixture-person-id",
+        "NAME": "Synthetic Person"
+      },
+      0
+    ]
+  ],
+  "require": [
+    [
+      "RelayPrefetchedStreamCache",
+      "next",
+      [],
+      [
+        "fixture-person",
+        {
+          "__bbox": {
+            "result": {
+              "data": {
+                "viewer": {
+                  "actor": {
+                    "__typename": "User",
+                    "id": "fixture-person-id",
+                    "is_profile_plus": false
+                  }
+                },
+                "user": {
+                  "__typename": "User",
+                  "id": "fixture-person-id",
+                  "name": "Synthetic Person"
+                }
+              }
+            }
+          }
+        }
+      ]
+    ]
+  ]
+}
+</script>

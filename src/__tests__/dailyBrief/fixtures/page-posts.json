@@ -1,0 +1,84 @@
+{
+  "user": {
+    "id": "100000000000101",
+    "delegate_page": {
+      "id": "200000000000201",
+      "name": "Example Driving School",
+      "category_name": "Driving school",
+      "best_description": {
+        "text": "Driving lessons for beginners. Practical instruction and road safety."
+      }
+    },
+    "timeline_list_feed_units": {
+      "edges": [
+        {
+          "node": {
+            "__typename": "Story",
+            "id": "fixture-story",
+            "post_id": "300000000000301",
+            "creation_time": 1793000000,
+            "actors": [
+              {
+                "__typename": "User",
+                "id": "100000000000101",
+                "name": "Example Driving School"
+              }
+            ],
+            "permalink_url": "https://www.facebook.com/reel/300000000000301",
+            "comet_sections": {
+              "content": {
+                "story": {
+                  "message": {
+                    "text": "Check mirrors and signal before changing lanes."
+                  }
+                }
+              },
+              "feedback": {
+                "story": {
+                  "story_ufi_container": {
+                    "story": {
+                      "feedback_context": {
+                        "feedback_target_with_context": {
+                          "comet_ufi_summary_and_actions_renderer": {
+                            "feedback": {
+                              "adaptive_ufi_action_renderers": [
+                                {
+                                  "feedback": {
+                                    "reaction_count": {
+                                      "count": 12
+                                    }
+                                  }
+                                },
+                                {
+                                  "feedback": {
+                                    "comment_rendering_instance": {
+                                      "comments": {
+                                        "total_count": 3
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "feedback": {
+                                    "share_count": {
+                                      "count": 2
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "cursor": "fixture-cursor"
+        }
+      ]
+    }
+  }
+}
