@@ -364,7 +364,7 @@ test('100 schedule replays and 100 cancellations survive runtime restart without
     expect(executions.get(first.scheduleId)).toMatchObject({ status: 'cancelled', revision: 2 });
     expect(db.query("SELECT * FROM control_events WHERE type='pageCampaigns.scheduleChanged'")).toHaveLength(2);
     expect(poster.getSchedule(first.scheduleId)).toMatchObject({ enabled: false, nextRunAt: null });
-});
+}, 30000); // 200 HTTPS round trips: ~3.8 s locally, over Jest's 5 s default on slower CI runners.
 
 // Catches accepting stale authority before any effect, rather than merely hiding it in reports.
 test.each(['revoked-runner', 'revoked-receiver', 'revoked-grant', 'corrupt-runner', 'expired', 'gate', 'default-gate', 'wrong-actor'])('scheduler denies %s authority before publish', async fault => {
