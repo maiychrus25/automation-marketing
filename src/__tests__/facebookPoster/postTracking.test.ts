@@ -1,8 +1,9 @@
 import {
-    DEFAULT_POST_TRACKING_CONFIG, POST_TRACKING_SETTING_KEY, computeNextCheckAt, dueStatsMilestone, markOverdueStatsDone, linkRetryExhausted,
-    matchesOwnPost, normalizeHead, parsePostTrackingConfig, pickBestMatch, validatePostTrackingConfig,
+    DEFAULT_POST_TRACKING_CONFIG, PAGE_MATCH_WINDOW_MS, POST_TRACKING_SETTING_KEY, computeNextCheckAt, dueStatsMilestone, markOverdueStatsDone,
+    linkRetryExhausted, matchPagePosts, matchesOwnPost, normalizeHead, parsePostTrackingConfig, pickBestMatch, validatePostTrackingConfig,
 } from '../../services/facebookPoster/postTracking';
 import type { PostTrackingRow } from '../../models/facebookPoster';
+import type { PagePostSample } from '../../models/dailyBrief';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -10,7 +11,7 @@ const cfg = DEFAULT_POST_TRACKING_CONFIG;
 
 function row(over: Partial<PostTrackingRow> = {}): PostTrackingRow {
     return {
-        resultId: 1, runId: 'r', scheduleId: null, campaignId: null, variant: '', profileId: 'p1', groupUrl: 'https://www.facebook.com/groups/1/', groupId: '',
+        resultId: 1, runId: 'r', scheduleId: null, campaignId: null, variant: '', profileId: 'p1', targetKind: 'group', pageId: '', groupUrl: 'https://www.facebook.com/groups/1/', groupId: '',
         postId: '', postUrl: null, postedAt: 1_000_000, textHead: normalizeHead('Bán  Hàng  Giá Rẻ hôm nay'),
         linkStatus: 'missing', removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null,
         statsDone: [], commentsDone: [], nextCommentAt: null, ...over,
@@ -123,6 +124,49 @@ test('dueStatsMilestone', () => {
     expect(dueStatsMilestone({ ...r, statsDone: ['60m'] }, cfg, at(1440))).toBe('1440m');
     expect(dueStatsMilestone(row({ linkStatus: 'missing' }), cfg, at(100))).toBeNull();
     expect(dueStatsMilestone({ ...r, removedSuspected: true }, cfg, at(100))).toBeNull();
+});
+
+describe('matchPagePosts', () => {
+    const T = 1_000_000;
+    const sample = (over: Partial<PagePostSample> = {}): PagePostSample => ({
+        postId: 'p1', text: 'Bán hàng giá rẻ hôm nay', reactions: 1, comments: 2, shares: 3, postedAt: T, url: '', ...over,
+    });
+    const ids = (m: Map<number, PagePostSample>) => [...m].map(([id, s]) => [id, s.postId]);
+
+    test('knownRowMatchesByPostIdOnly', () => {
+        const known = row({ resultId: 1, linkStatus: 'known', postId: 'p9', textHead: 'khác hẳn', postedAt: T - 5 * HOUR });
+        expect(ids(matchPagePosts([known], [sample({ postId: 'p9' })]))).toEqual([[1, 'p9']]);
+        // cùng chữ, cùng giờ nhưng khác mã: dòng đã có mã không nhận theo chữ
+        expect(ids(matchPagePosts([{ ...known, textHead: row().textHead, postedAt: T }], [sample({ postId: 'other' })]))).toEqual([]);
+    });
+
+    test('missingRowMatchesExactlyOneWithinFifteenMinutes', () => {
+        expect(PAGE_MATCH_WINDOW_MS).toBe(15 * MIN);
+        const r = row({ resultId: 2 });
+        expect(ids(matchPagePosts([r], [sample({ postedAt: T + 15 * MIN })]))).toEqual([[2, 'p1']]);
+        expect(ids(matchPagePosts([r], [sample({ postedAt: T - 15 * MIN })]))).toEqual([[2, 'p1']]);
+        expect(ids(matchPagePosts([r], [sample({ postedAt: T + 15 * MIN + 1 })]))).toEqual([]);
+        expect(ids(matchPagePosts([r], [sample({ text: 'Nội dung khác' })]))).toEqual([]);
+        expect(ids(matchPagePosts([r], [sample({ postedAt: null })]))).toEqual([]);
+        expect(ids(matchPagePosts([r], [sample({ postId: '' })]))).toEqual([]);
+        expect(ids(matchPagePosts([row({ resultId: 2, textHead: '' })], [sample({ text: '' })]))).toEqual([]);
+        expect(ids(matchPagePosts([row({ resultId: 2, linkStatus: 'pending_approval' })], [sample()]))).toEqual([[2, 'p1']]);
+    });
+
+    test('twoCandidatePostsStayMissing', () => {
+        expect(ids(matchPagePosts([row({ resultId: 3 })], [sample({ postId: 'a' }), sample({ postId: 'b', postedAt: T + 10 * MIN })]))).toEqual([]);
+    });
+
+    test('twoMissingRowsSameHeadStayMissing', () => {
+        expect(ids(matchPagePosts([row({ resultId: 4 }), row({ resultId: 5, postedAt: T + 5 * MIN })], [sample()]))).toEqual([]);
+    });
+
+    test('postClaimedByKnownRowIsNotReusedForMissingRow', () => {
+        const known = row({ resultId: 6, linkStatus: 'known', postId: 'a' });
+        const missing = row({ resultId: 7 });
+        expect(ids(matchPagePosts([known, missing], [sample({ postId: 'a' })]))).toEqual([[6, 'a']]);
+        expect(ids(matchPagePosts([known, missing], [sample({ postId: 'a' }), sample({ postId: 'b' })]))).toEqual([[6, 'a'], [7, 'b']]);
+    });
 });
 
 describe('config', () => {

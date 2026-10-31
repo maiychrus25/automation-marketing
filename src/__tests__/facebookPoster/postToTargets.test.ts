@@ -391,7 +391,7 @@ test('bấm Next xong mà bước cuối không hiện nút Đăng thì phải b
  * Page giả cho luồng đăng thành công, có kênh 'response' để giả lập phản hồi
  * GraphQL. `graphqlBody: null` nghĩa là không phát sự kiện nào.
  */
-function pageSuccessful({ graphqlBody = null, graphqlThrows = false, clicked = [] }: { graphqlBody?: string | null; graphqlThrows?: boolean; clicked?: string[] } = {}) {
+function pageSuccessful({ graphqlBody = null, graphqlBodies, graphqlThrows = false, clicked = [] }: { graphqlBody?: string | null; graphqlBodies?: string[]; graphqlThrows?: boolean; clicked?: string[] } = {}) {
   const listeners: Record<string, ((arg: unknown) => void)[]> = { response: [] };
   const page: FakePage = {
     goto: async () => {},
@@ -410,13 +410,14 @@ function pageSuccessful({ graphqlBody = null, graphqlThrows = false, clicked = [
       if (fn.name === 'focusEditorInPage') return true;
       if (fn.name === 'markPublishButtonInPage') {
         // Bấm Đăng: phát phản hồi GraphQL cho listener đang gắn.
-        if (graphqlBody !== null || graphqlThrows) {
+        // `graphqlBodies`: nhiều phản hồi theo đúng thứ tự đến.
+        for (const body of graphqlBodies ?? (graphqlBody !== null || graphqlThrows ? [graphqlBody] : [])) {
           for (const fn2 of listeners.response) {
             fn2({
               url: () => 'https://www.facebook.com/api/graphql/',
               text: async () => {
                 if (graphqlThrows) throw new Error('phản hồi đã bị huỷ');
-                return graphqlBody;
+                return body;
               },
             });
           }
@@ -430,9 +431,17 @@ function pageSuccessful({ graphqlBody = null, graphqlThrows = false, clicked = [
   return page;
 }
 
-test.each(['old-feed','unrelated-story','mutation-shaped-current-id'])('autonomyDoesNotTreatUnboundPostEvidenceAsCommentAuthority(%s)',async source=>{
+// Spec 2026-10-31 §4.1: lượt autonomy không còn trả postUrl:null cố định — link được giữ khi chủ bài (từ phản hồi
+// mutation tạo bài) đúng Page đang đăng; vẫn không tự bình luận. Chế độ Page bỏ qua phản hồi không phải mutation tạo bài
+// (kể cả có "__typename":"Story"), nên 'unrelated-story' không có link; thiếu chủ cũng không có link.
+test.each([
+  ['old-feed', null],
+  ['unrelated-story', null],
+  ['mutation-shaped-current-id', 'https://www.facebook.com/12345/posts/20002'],
+  ['mutation-without-owner', null],
+])('autonomyDoesNotTreatUnboundPostEvidenceAsCommentAuthority(%s)',async (source,expectedUrl)=>{
   const clicked:string[]=[]; const navigated:string[]=[];
-  const story={__typename:'Story',post_id:'20002',id:Buffer.from('S:_I12345:20002').toString('base64')};
+  const story=source==='mutation-without-owner'?{__typename:'Story',post_id:'20002'}:{__typename:'Story',post_id:'20002',id:Buffer.from('S:_I12345:20002').toString('base64')};
   const graphqlBody=source==='old-feed'?null:JSON.stringify({data:source==='unrelated-story'?{unrelated:story}:{story_create:{story}}});
   const page=pageSuccessful({graphqlBody,clicked}) as any;
   const original=page.evaluate; let counts=0;
@@ -448,11 +457,125 @@ test.each(['old-feed','unrelated-story','mutation-shaped-current-id'])('autonomy
     return original(fn,...args);
   };
   const guard={variantIndex:0,assertPost:()=>{},assertCurrent:()=>{},beforeEffect:async()=>{},settle:()=>{}};
-  const result=await runWithFakeTimers(()=>postToTargets({text:'Same first forty characters on the old and new posts',comment:'First comment',targets:['https://www.facebook.com/'],minDelay:0,maxDelay:0},makeDeps(loggedInCtx([]),page,{autonomyGuard:guard})));
+  const result=await runWithFakeTimers(()=>postToTargets({text:'Same first forty characters on the old and new posts',comment:'First comment',targets:['https://www.facebook.com/'],minDelay:0,maxDelay:0},makeDeps(loggedInCtx([]),page,{autonomyGuard:guard,expectedPageId:'12345'})));
   expect(result.posted).toBe(1); expect(result.results[0].ok).toBe(true);
   expect(clicked).not.toContain('comment-send'); expect(clicked).not.toContain('Enter');
   expect(navigated).toEqual(['https://www.facebook.com/','https://www.facebook.com/']);
-  expect(result.results[0].postUrl).toBeNull(); expect(result.results[0].commentStatus).toBe('no_post_url');
+  expect(result.results[0].postUrl).toBe(expectedUrl); expect(result.results[0].verifiedPostUrl).toBe(expectedUrl); expect(result.results[0].commentStatus).toBe('no_post_url');
+});
+
+// --- Spec 2026-10-31 §4.1: chế độ Page chỉ xác nhận bài (verifiedPostUrl) khi chủ bài đúng Page đang đăng ---
+// postUrl (link bình luận đầu + post_url của kết quả) giữ nguyên cách bắt cũ; verifiedPostUrl chỉ dùng làm bằng chứng theo dõi.
+const PAGE_STORY_BODY = '{"data":{"story_create":{"story_id":"UzpfSTEyNTQ3NDQwNDEwNTM5NTU6MTIyMTMxNDM1ODIxNDEzNzQz","post_id":"122131435821413743","publishing_flow":"ASYNC_SILENT","story":null,"feed_story_edge":null}}}';
+const PAGE_POST_URL = 'https://www.facebook.com/1254744041053955/posts/122131435821413743';
+const DOM_POST_URL = 'https://www.facebook.com/1/posts/10001';
+
+/** Đăng một bài chế độ Page lên trang chủ (có thể kèm bình luận đầu); ghi tên hàm page.evaluate và các cú bấm. */
+async function postAsPage(graphqlBodies: string | string[], expectedPageId: string, comment: string | null = null, commentDelayMin = 0) {
+  const clicked: string[] = []; const navigated: string[] = []; const evaluated: string[] = []; const clickedAt: Record<string, number> = {};
+  const page = pageSuccessful({ graphqlBodies: ([] as string[]).concat(graphqlBodies), clicked }) as any;
+  const original = page.evaluate; let counts = 0;
+  page.goto = async (url: string) => { navigated.push(url); };
+  page.url = () => navigated[navigated.length - 1] ?? 'https://www.facebook.com/';
+  page.keyboard = { type: async () => {}, press: async () => { clicked.push('Enter'); } };
+  page.locator = (selector: string) => ({ focus: async () => {}, first: () => ({ click: async () => {
+    const name = selector.includes('comment-send') ? 'comment-send' : 'publish';
+    clicked.push(name); clickedAt[name] ??= Date.now();
+  } }) });
+  page.evaluate = async (fn: AnyFn, ...args: any[]) => {
+    evaluated.push(fn.name);
+    if (fn.name === 'findOwnPostLinkInPage') return DOM_POST_URL;
+    if (fn.name === 'readPostStateInPage') return { found: true, pendingMarker: null };
+    if (fn.name === 'countCommentBlocksInPage') return counts++;
+    if (['openCommentBoxInPage', 'markCommentBoxInPage', 'commentTypedInPage', 'markCommentSendButtonInPage', 'commentTextVisibleInPage'].includes(fn.name)) return true;
+    return original(fn, ...args);
+  };
+  const ra = await runWithFakeTimers(() => postToTargets(
+    { text: 'nội dung', comment, commentDelayMin, targets: ['https://www.facebook.com/'], minDelay: 0, maxDelay: 0 },
+    makeDeps(loggedInCtx([]), page, { expectedPageId }),
+  ));
+  return { r: ra.results[0], evaluated, clicked, navigated, clickedAt };
+}
+
+test('pageModeAcceptsOnlyOwnerMatchingPage', async () => {
+  const { r } = await postAsPage(PAGE_STORY_BODY, '1254744041053955');
+  expect(r.ok).toBe(true);
+  expect(r.verifiedPostUrl).toBe(PAGE_POST_URL);
+  expect(r.postUrl).toBe(PAGE_POST_URL);
+});
+
+test.each([
+  ['foreign owner', PAGE_STORY_BODY, '999', PAGE_POST_URL],
+  ['page not learned', PAGE_STORY_BODY, '', PAGE_POST_URL],
+  ['no owner in body', '{"data":{"story_create":{"post_id":"555"}}}', '777', DOM_POST_URL],
+  ['conflicting owner_id values', '{"data":{"story_create":{"post_id":"555","owner_id":"777","actor":{"owner_id":"888"}}}}', '777', DOM_POST_URL],
+  ['story post id differs from post_id', JSON.stringify({ data: { story_create: { story_id: Buffer.from('S:_I1254744041053955:122131435821413700').toString('base64'), post_id: '122131435821413743' } } }), '1254744041053955', 'https://www.facebook.com/1254744041053955/posts/122131435821413743'],
+])('pageModeRejectsForeignMissingOrConflictingOwner(%s)', async (_label, body, expectedPageId, legacyUrl) => {
+  const { r } = await postAsPage(body, expectedPageId);
+  expect(r.ok).toBe(true);
+  expect(r.verifiedPostUrl).toBeNull();
+  expect(r.postUrl).toBe(legacyUrl); // cách bắt link cũ không đổi
+});
+
+test('pageModeAcceptsUniqueOwnerIdFallback', async () => {
+  const { r } = await postAsPage('{"data":{"story_create":{"post_id":"555","owner_id":"777"}}}', '777');
+  expect(r.verifiedPostUrl).toBe('https://www.facebook.com/777/posts/555');
+});
+
+// Phản hồi mang bài CŨ của chính Page ("__typename":"Story", chủ đúng) đến trước mutation thật: không được khoá vào bài cũ.
+test('pageModeIgnoresOldStoryResponseBeforeCreateMutation', async () => {
+  const oldStory = JSON.stringify({ data: { node: { __typename: 'Story', post_id: '122131435821413700',
+    id: Buffer.from('S:_I1254744041053955:122131435821413700').toString('base64') } } });
+  const { r } = await postAsPage([oldStory, PAGE_STORY_BODY], '1254744041053955');
+  expect(r.postUrl).toBe(PAGE_POST_URL);
+  expect(r.verifiedPostUrl).toBe(PAGE_POST_URL);
+});
+
+// Bình luận đầu của lượt đăng tay chế độ Page không được hồi quy: vẫn dùng link bắt kiểu cũ dù chưa xác minh được chủ.
+test.each([
+  ['page not learned', PAGE_STORY_BODY, '', PAGE_POST_URL, null],
+  ['learned page, verified owner', PAGE_STORY_BODY, '1254744041053955', PAGE_POST_URL, PAGE_POST_URL],
+  ['owner missing, DOM fallback', '{"data":{"story_create":{"post_id":"555"}}}', '777', DOM_POST_URL, null],
+])('pageModeOwnerFirstCommentKeepsLegacyTarget(%s)', async (_label, body, expectedPageId, legacyUrl, verified) => {
+  const { r, clicked, navigated } = await postAsPage(body, expectedPageId, 'Bình luận đầu');
+  expect(r.postUrl).toBe(legacyUrl);
+  expect(r.verifiedPostUrl).toBe(verified);
+  expect(r.commentStatus).toBe('posted');
+  expect(clicked).toContain('comment-send');
+  expect(navigated).toContain(legacyUrl);
+});
+
+// Lượt đăng tay chế độ Page chỉ thấy phản hồi Story (bài CŨ của chính Page, không có mutation tạo bài): không khoá vào bài cũ,
+// lấy link qua DOM như trước và vẫn bình luận đầu theo link đó; không có bằng chứng theo dõi.
+test('pageModeOwnerStoryOnlyBodyFallsBackToDomLinkAndStillComments', async () => {
+  const oldPost = 'https://www.facebook.com/1254744041053955/posts/122131435821413700';
+  const storyOnly = JSON.stringify({ data: { node: { __typename: 'Story', post_id: '122131435821413700',
+    id: Buffer.from('S:_I1254744041053955:122131435821413700').toString('base64') } } });
+  const { r, clicked, navigated } = await postAsPage(storyOnly, '1254744041053955', 'Bình luận đầu');
+  expect(r.ok).toBe(true);
+  expect(r.postUrl).toBe(DOM_POST_URL);
+  expect(r.verifiedPostUrl).toBeNull();
+  expect(r.commentStatus).toBe('posted');
+  expect(clicked).toContain('comment-send');
+  expect(navigated).toContain(DOM_POST_URL);
+  expect(navigated).not.toContain(oldPost);
+});
+
+// Bình luận đầu chờ X phút (≤ 60) trước khi trả kết quả: giờ đăng của dòng theo dõi Page phải là lúc bấm Đăng, không phải lúc có kết quả.
+test('pageModeResultCarriesThePublishClickTimeBeforeTheCommentDelay', async () => {
+  const { r, clickedAt } = await postAsPage('{"data":{"story_create":{"post_id":"555"}}}', '777', 'Bình luận đầu', 20);
+  expect(r.ok).toBe(true);
+  expect(r.verifiedPostUrl).toBeNull(); // chưa xác minh được chủ: dòng theo dõi sẽ tìm lại theo giờ đăng
+  expect(r.commentStatus).toBe('posted');
+  expect(r.publishedAt).toBe(clickedAt.publish);
+  expect(clickedAt['comment-send'] - r.publishedAt!).toBeGreaterThanOrEqual(20 * 60_000);
+});
+
+test('groupModeResultHasNoPublishedAt', async () => {
+  const page = pageSuccessful({ graphqlBody: '{"data":{"story_create":{"story":{"post_id":"123456","id":"abc"}}}}' });
+  const res = await runWithFakeTimers(() => postToTargets({ text: 'x', targets: ['https://www.facebook.com/groups/777/'], minDelay: 0, maxDelay: 0 }, makeDeps(loggedInCtx([]), page)));
+  expect(res.results[0].ok).toBe(true);
+  expect('publishedAt' in res.results[0]).toBe(false);
 });
 
 test('bắt được post_id từ phản hồi GraphQL và ghép thành link nhóm', async () => {

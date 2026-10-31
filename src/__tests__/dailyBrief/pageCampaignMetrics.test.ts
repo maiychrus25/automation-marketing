@@ -144,3 +144,41 @@ describe('Campaign metrics',()=>{
         expect(f.report().missingReasons).toContain('source_unavailable');
     });
 });
+
+// Spec 2026-10-31 §4.5: campaign 4320-minute numbers come from the bound tracking row's fb_poster_post_stats.
+function tracked(counts:[number,number,number]) {
+    const f=setup();const id=7;const postUrl=`https://www.facebook.com/67890/posts/${id}`;const observedAt=publishedAt+72*hour+5*60000;
+    f.db.run('INSERT INTO page_campaign_published (result_id,workspace_id,page_id,profile_id,campaign_id,record_json) VALUES (?,?,?,?,?,?)',
+        [id,scope.workspaceId,scope.pageId,scope.profileId,'campaign',JSON.stringify({...scope,resultId:id,campaignId:'campaign',runId:`run-${id}`,scheduleId:`schedule-${id}`,
+            runnerKeyId:'runner',grantId:'grant',publishedAt,postId:String(id),postUrl,sourceRef:`post-tracking:${id}`,reason:'',selection:{variant:'A',contentRevision:'revision',factIds:[]}})]);
+    const poster=new FacebookPosterStore(f.db);
+    poster.createTracking({resultId:id,runId:`run-${id}`,scheduleId:`schedule-${id}`,profileId:scope.profileId,targetKind:'page',pageId:scope.pageId,groupUrl:'https://www.facebook.com/',
+        groupId:'',postId:String(id),postUrl,postedAt:publishedAt,textHead:'',linkStatus:'known',removedSuspected:false,lastSeenAt:null,lastCheckedAt:null,checkCount:0,nextCheckAt:null,statsDone:['4320m']});
+    poster.addPostStats(id,{capturedAt:observedAt,reactions:counts[0],comments:counts[1],shares:counts[2]});
+    const scanId=`post-stats:${id}:4320`;f.store.reserveMeasurement(scope,'campaign',id,4320,scanId);
+    const observation={resultId:id,postId:String(id),postUrl,pageId:scope.pageId,campaignId:'campaign',publishedAt,observedAt,milestoneMinutes:4320 as const,
+        sourceRef:scanId,status:'measured' as const,reason:'',reactions:counts[0],comments:counts[1],shares:counts[2]};
+    return {...f,id,observation};
+}
+describe('Campaign metrics from tracked post stats',()=>{
+    it('reportHasRealTotalsFromPostStats',()=>{
+        const f=tracked([4,2,1]);
+        // Counts that differ from the stored snapshot are never accepted as a measurement.
+        for(const patch of [{reactions:99},{observedAt:f.observation.observedAt+1},{sourceRef:'post-stats:7:1440'}])
+            expect(()=>f.store.recordObservation({...f.observation,...patch})).toThrow();
+        f.store.recordObservation(f.observation);
+        expect(f.report()).toMatchObject({published:1,eligible:1,measured:1,coverage:1,totalEngagement:7,missingReasons:[]});
+        expect(f.report().observations).toEqual([{...f.observation,sourceAvailable:true}]);
+    });
+    it('deletedStatsRowMakesSourceUnavailable',()=>{
+        const f=tracked([4,2,1]);f.store.recordObservation(f.observation);
+        f.db.run('DELETE FROM fb_poster_post_stats');
+        expect(f.report()).toMatchObject({published:1,eligible:1,measured:0,totalEngagement:null});
+        expect(f.report().missingReasons).toContain('source_unavailable');
+        expect(f.report().observations).toEqual([expect.objectContaining({resultId:f.id,sourceAvailable:false})]);
+        const foreign=tracked([4,2,1]);foreign.store.recordObservation(foreign.observation);
+        foreign.db.run("UPDATE fb_poster_post_tracking SET page_id='other'");
+        expect(foreign.report()).toMatchObject({measured:0,totalEngagement:null});
+        expect(foreign.report().missingReasons).toContain('source_unavailable');
+    });
+});

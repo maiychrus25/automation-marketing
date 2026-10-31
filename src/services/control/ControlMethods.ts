@@ -4,6 +4,7 @@ import { PosterRunSelectionError } from '../facebookPoster/FacebookPosterCoordin
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../facebookPoster/FacebookPosterService';
 import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../research/researchOperationsLogic';
 import { RenderError } from '../video/RenderClient';
+import { DEFAULT_NOTIFICATION_CONFIG, LEAD_DIGEST_MINUTES, mergeNotificationConfig } from '../facebookPoster/notificationRules';
 import { BRIEF_NOT_FOUND_ERROR } from '../dailyBrief/briefOperations';
 import type { PageIdentity } from '../../models/dailyBrief';
 import type { ControlPrincipal } from '../../models/pageOperations';
@@ -153,6 +154,13 @@ export interface TrackingPort {
     bestTimes(params?: any): any;
     getConfig(): any;
     setConfig(params: any): any;
+    pageMetrics(params: any): any;
+}
+
+/** Cấu hình báo cáo 📊 / gom tin 🎯 qua bot (`notificationOperations`); kiểm tham số nằm ở đó và ở method. */
+export interface NotificationPort {
+    getConfig(): any;
+    setConfig(params: any): any;
 }
 
 /** Các thao tác chiến dịch (`campaignOperations`); kiểm tra tham số nằm ở đó. */
@@ -197,6 +205,7 @@ export interface ControlMethodDeps {
     videos: VideoPort;
     briefs?: BriefPort;
     pages?: PagePort;
+    notifications?: NotificationPort;
     protectedWritesEnabled?(): boolean;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
@@ -265,6 +274,14 @@ function requireString(params: ControlParams, field: string): string {
     if (typeof value !== 'string' || !value) throw new ControlError('INVALID_PARAMS', `Thiếu tham số ${field}`, { field });
     return value;
 }
+
+/** Từ chối trường lạ (method chỉ owner nhưng vẫn là ranh giới tin cậy). */
+function rejectUnknown(params: ControlParams, keys: string[]): void {
+    const extra = Object.keys(params).filter((key) => !keys.includes(key));
+    if (extra.length) throw new ControlError('INVALID_PARAMS', `Trường không hỗ trợ: ${extra.join(', ')}`, { field: extra[0] });
+}
+
+const PAGE_METRICS_MAX_DAYS = 90; // = MAX_PAGE_METRICS_DAYS ở electron/ipc/facebookPosterIpc.ts (lớp này không nhập được electron)
 
 function pick(params: ControlParams, keys: string[]): ControlParams {
     const out: ControlParams = {};
@@ -672,6 +689,23 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             },
         },
         {
+            name: 'pages.metrics', description: `Chỉ owner. Số liệu bài đăng lên Page đã biết Page trong days ngày gần nhất (1–${PAGE_METRICS_MAX_DAYS}, mặc định 30): mỗi Page có pageName, các bài (resultId, postId, postUrl, postedAt, linkStatus known/missing/pending_approval/not_found, text, snapshots = mọi lần đo theo mốc, cũ trước) và followers = chuỗi người theo dõi theo ngày (rỗng khi chưa đọc được, không có số 0 giả). pageId tuỳ chọn để lấy một Page.`,
+            destructive: false,
+            paramsSchema: obj({
+                pageId: { type: 'string', minLength: 1, description: 'Chỉ Page này; bỏ trống = mọi Page' },
+                days: int(`Số ngày gần nhất (1–${PAGE_METRICS_MAX_DAYS}, mặc định 30)`, { minimum: 1, maximum: PAGE_METRICS_MAX_DAYS, default: 30 }),
+            }),
+            resultSchema: obj({ pages: { type: 'array', items: { type: 'object' }, description: '{ pageId, pageName, posts: [{ resultId, postId, postUrl, postedAt, linkStatus, text, snapshots }], followers: [{ pageId, profileId, capturedOn, capturedAt, followers }] }, sắp theo pageId' } }, ['pages']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'pages.metrics', p);
+                rejectUnknown(p, ['pageId', 'days']);
+                if (p.pageId !== undefined && (typeof p.pageId !== 'string' || !p.pageId)) throw new ControlError('INVALID_PARAMS', 'pageId phải là chuỗi không rỗng', { field: 'pageId' });
+                const days = p.days === undefined ? 30 : p.days;
+                if (!Number.isInteger(days) || days < 1 || days > PAGE_METRICS_MAX_DAYS) throw new ControlError('INVALID_PARAMS', `days phải là số nguyên từ 1 đến ${PAGE_METRICS_MAX_DAYS}`, { field: 'days' });
+                return deps.tracking.pageMetrics({ ...(p.pageId === undefined ? {} : { pageId: p.pageId }), days });
+            },
+        },
+        {
             name: 'briefs.list', description: 'Danh sách kế hoạch Page trong workspace, kèm pageName và trạng thái.',
             destructive: false, paramsSchema: noParams,
             resultSchema: obj({ briefs: { type: 'array', items: { type: 'object' } } }, ['briefs']),
@@ -762,10 +796,10 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
         },
         {
             name: 'posts.stats',
-            description: 'Báo cáo hiệu quả bài đăng nhóm theo nhóm / profile / lịch / ngày / từng bài / chiến dịch / biến thể: số bài, số có link, chờ duyệt, nghi bị xoá, reactions/comments/shares (lần đo mới nhất), tương tác trung bình và tỉ lệ so với số thành viên nhóm (null nếu chưa biết).',
+            description: 'Báo cáo hiệu quả bài đã đăng (nhóm và Page) theo nhóm (chỉ bài nhóm) / Page (chỉ bài Page) / profile / lịch / ngày / từng bài / chiến dịch / biến thể / giờ / thứ: số bài, số có link, chờ duyệt, nghi bị xoá, reactions/comments/shares (lần đo mới nhất), tương tác trung bình và tỉ lệ so với số thành viên nhóm (null nếu chưa biết).',
             destructive: false,
             paramsSchema: obj({
-                groupBy: { type: 'string', enum: ['group', 'profile', 'schedule', 'day', 'post', 'campaign', 'variant', 'hour', 'weekday'], description: 'Gom theo (hour: giờ máy "00"–"23"; weekday: "1"–"7" = Thứ 2 … Chủ nhật; variant: so sánh biến thể trong cùng một lịch; dòng có insufficient = chưa đủ 5 bài đo)' },
+                groupBy: { type: 'string', enum: ['group', 'page', 'profile', 'schedule', 'day', 'post', 'campaign', 'variant', 'hour', 'weekday'], description: 'Gom theo (group: chỉ bài nhóm; page: chỉ bài Page, key = pageId, label = tên Page; hour: giờ máy "00"–"23"; weekday: "1"–"7" = Thứ 2 … Chủ nhật; variant: so sánh biến thể trong cùng một lịch; dòng có insufficient = chưa đủ 5 bài đo)' },
                 campaignId: str("Lọc theo chiến dịch; '' = bài không thuộc chiến dịch"),
                 scheduleId: str('Lọc theo lịch'),
                 from: int('Từ thời điểm (epoch ms; mặc định 30 ngày trước)', { minimum: 0 }),
@@ -963,6 +997,34 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             }),
             resultSchema: obj({ config: { type: 'object', description: 'Cấu hình hiện hành' } }, ['config']),
             run: async (p) => (p.config === undefined ? deps.leads.getConfig() : deps.leads.setConfig(p.config)),
+        },
+        {
+            name: 'notifications.config',
+            description: 'Chỉ owner. Đọc cấu hình tin qua bot: reportCadence (off/daily/weekly), reportHour (0–23, giờ máy), reportWeekday (1 = thứ Hai … 7 = Chủ nhật, chỉ dùng với weekly), leadDigestMinutes (0 = gửi ngay; 15/30/60/120/240 = gom tin khách tiềm năng).',
+            destructive: false, paramsSchema: noParams,
+            resultSchema: obj({ config: { type: 'object', description: '{ reportCadence, reportHour, reportWeekday, leadDigestMinutes }' } }, ['config']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'notifications.config', p);
+                rejectUnknown(p, []);
+                return deps.notifications.getConfig();
+            },
+        },
+        {
+            name: 'notifications.setConfig',
+            description: 'Chỉ owner. Lưu một phần cấu hình tin qua bot (chỉ gửi trường muốn đổi) rồi trả cấu hình mới. Đổi lịch báo cáo: kỳ hiện tại được ghi nhận, báo cáo đầu tiên là kỳ sau. Đổi leadDigestMinutes: BUSY khi đang thu bình luận; về 0 thì tin gom đang chờ được gửi ngay.',
+            destructive: false,
+            paramsSchema: obj({
+                reportCadence: { type: 'string', enum: ['off', 'daily', 'weekly'], description: 'Báo cáo hiệu quả 📊: tắt, hằng ngày hoặc hằng tuần' },
+                reportHour: int('Giờ gửi báo cáo (0–23, giờ máy)', { minimum: 0, maximum: 23 }),
+                reportWeekday: int('Thứ gửi báo cáo tuần (1 = thứ Hai … 7 = Chủ nhật)', { minimum: 1, maximum: 7 }),
+                leadDigestMinutes: { type: 'integer', enum: [...LEAD_DIGEST_MINUTES], description: 'Gom tin khách tiềm năng 🎯 (phút); 0 = gửi ngay từng lượt' },
+            }),
+            resultSchema: obj({ config: { type: 'object', description: 'Cấu hình hiện hành' } }, ['config']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'notifications.setConfig', p);
+                mergeNotificationConfig({ ...DEFAULT_NOTIFICATION_CONFIG }, p); // trường lạ / ngoài miền → INVALID_PARAMS trước khi chạm port
+                return deps.notifications.setConfig(pick(p, ['reportCadence', 'reportHour', 'reportWeekday', 'leadDigestMinutes']));
+            },
         },
         {
             name: 'videos.templates',

@@ -2,7 +2,7 @@ import { memoryDb } from './helpers';
 import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
 import { PageCampaignStore } from '../../services/dailyBrief/PageCampaignStore';
 import { PageCampaignExecutionStore } from '../../services/dailyBrief/PageCampaignExecutionStore';
-import { PageCampaignTracker } from '../../services/facebookPoster/PageCampaignTracker';
+import { PageCampaignTracker, trackedMilestone, hasDueCampaignMilestone, dueCampaignPosts, TRACKED_STATS_WINDOW_MS } from '../../services/facebookPoster/PageCampaignTracker';
 import { ResearchStore } from '../../services/research/ResearchStore';
 import { ResearchService } from '../../services/research/ResearchService';
 import type { CampaignExecution } from '../../models/pageCampaigns';
@@ -152,5 +152,124 @@ describe('Page campaign measurement',()=>{
         await expect(pending).rejects.toThrow('retired');
         await tracker.whenIdle();expect(tracker.isRunning()).toBe(false);
         expect(f.store.listObservations(scope,'campaign',0,Number.MAX_SAFE_INTEGER)).toEqual([]);
+    });
+});
+
+// Spec 2026-10-31 §4.5: a bound Page row is measured from fb_poster_post_stats only; no research, no runner-supplied counts.
+const minute=60000;
+function tracked(linkStatus:'known'|'missing'|'pending_approval'|'not_found',statsDone:string[]=[]) {
+    const f=setup(null);const poster=new FacebookPosterStore(f.db);
+    const known=linkStatus==='known';
+    const row={resultId:f.resultId,runId:'run',scheduleId:'schedule',profileId:scope.profileId,targetKind:'page' as const,pageId:scope.pageId,
+        groupUrl:'https://www.facebook.com/',groupId:'',postId:known?'12345':'',postUrl:known?url:null,postedAt:publishedAt,textHead:'',linkStatus,
+        removedSuspected:false,lastSeenAt:null,lastCheckedAt:null,checkCount:0,nextCheckAt:null,statsDone};
+    poster.createTracking(row);
+    const stats=(at:number,counts:(number|null)[])=>poster.addPostStats(f.resultId,{capturedAt:at,reactions:counts[0],comments:counts[1],shares:counts[2]});
+    // What PostTracker + onPagePostKnown do when the post is found: one stats row for the due milestones, then the binding.
+    const find=(at:number,done:string[],counts:(number|null)[]|null)=>{
+        poster.updateTracking(f.resultId,{linkStatus:'known',postId:'12345',postUrl:url,statsDone:done});
+        if(counts)stats(at,counts);
+        return new PageCampaignExecutionStore(f.db).bindTrackedPost({...row,linkStatus:'known',postId:'12345',postUrl:url},at,scope.workspaceId);
+    };
+    const tracker=(at:number)=>new PageCampaignTracker({db:f.db,now:()=>at,assertCurrent(){},researchStore:f.researchStore,
+        research:{reserveSearch(){throw new Error('research must not run');},whenIdle:async()=>{},cancelOwned:()=>false}});
+    const post=()=>f.store.listPublished(scope,'campaign')[0];
+    return {...f,poster,stats,find,tracker,post};
+}
+function bound(statsDone:string[]=[],linkStatus:'known'|'not_found'='known') {
+    const f=tracked('known',statsDone);
+    expect(f.find(publishedAt,statsDone,null)).toBe('bound');
+    if(linkStatus!=='known')f.poster.updateTracking(f.resultId,{linkStatus});
+    return f;
+}
+describe('Page campaign measurement from tracked post stats',()=>{
+    it('statsSourceRecordsMeasuredObservationAt4320',async()=>{
+        const f=bound(['60m','1440m','4320m']);
+        f.stats(publishedAt+60*minute+5*minute,[1,0,0]);f.stats(publishedAt+1440*minute+5*minute,[2,1,0]);
+        const observedAt=publishedAt+4320*minute+5*minute;f.stats(observedAt,[5,2,1]);
+        const at=publishedAt+4320*minute+10*minute;
+        for(let i=0;i<3;i++)expect(await f.tracker(at).collect(scope,'campaign',()=>{})).toEqual({checked:1,measured:1,unavailable:0});
+        expect(await f.tracker(at).collect(scope,'campaign',()=>{})).toEqual({checked:0,measured:0,unavailable:0});
+        const observations=f.store.listObservations(scope,'campaign',0,Number.MAX_SAFE_INTEGER);
+        expect(observations.map(o=>[o.milestoneMinutes,o.sourceRef,o.reactions])).toEqual([60,1440,4320].map((m,i)=>[m,`post-stats:${f.resultId}:${m}`,[1,2,5][i]]));
+        expect(observations[2]).toEqual({resultId:f.resultId,postId:'12345',postUrl:url,pageId:scope.pageId,campaignId:'campaign',publishedAt,observedAt,
+            milestoneMinutes:4320,sourceRef:`post-stats:${f.resultId}:4320`,status:'measured',reason:'',reactions:5,comments:2,shares:1});
+        expect(f.store.observationSourceAvailable(observations[2],f.post())).toBe(true);
+        expect(f.researchStore.countScans()).toBe(0);
+    });
+    it('statsSourcePendingUntilTrackerMarksMilestone',async()=>{
+        const f=bound();const at=publishedAt+61*minute;
+        expect(trackedMilestone(f.db,f.post(),60,at)).toEqual({status:'pending'});
+        expect(hasDueCampaignMilestone(f.db,f.post(),[],at)).toBe(false);
+        expect(await f.tracker(at).collect(scope,'campaign',()=>{})).toEqual({checked:0,measured:0,unavailable:0});
+        expect(f.store.listMeasurements(scope,'campaign')).toEqual([]);
+        f.poster.updateTracking(f.resultId,{statsDone:['60m']});
+        expect(hasDueCampaignMilestone(f.db,f.post(),[],at)).toBe(true);
+        // Past the 24 h window the milestone is decided even if the tracker never marked it.
+        const late=bound();const after=publishedAt+60*minute+24*60*minute+1;
+        expect(trackedMilestone(late.db,late.post(),60,after)).toEqual({status:'unavailable',reason:'exact_post_not_found'});
+        expect(trackedMilestone(late.db,late.post(),1440,after)).toEqual({status:'pending'});
+    });
+    it('statsSourceUnavailableWhenMilestoneDoneWithoutSnapshot',async()=>{
+        const f=bound(['60m']);const at=publishedAt+61*minute;
+        expect(await f.tracker(at).collect(scope,'campaign',()=>{})).toEqual({checked:1,measured:0,unavailable:1});
+        expect(f.store.listMeasurements(scope,'campaign')).toEqual([{resultId:f.resultId,milestoneMinutes:60,scanId:`post-stats:${f.resultId}:60`,completedAt:at,reason:'exact_post_not_found'}]);
+        expect(f.store.listObservations(scope,'campaign',0,Number.MAX_SAFE_INTEGER)).toEqual([]);
+        const lost=bound([],'not_found');
+        expect(trackedMilestone(lost.db,lost.post(),60,at)).toEqual({status:'unavailable',reason:'exact_post_not_found'});
+        const foreign=bound();foreign.db.run("UPDATE fb_poster_post_tracking SET page_id='other'");foreign.stats(publishedAt+65*minute,[1,1,1]);
+        expect(trackedMilestone(foreign.db,foreign.post(),60,at)).toEqual({status:'unavailable',reason:'source_mismatch'});
+        const group=bound();group.db.run("UPDATE fb_poster_post_tracking SET target_kind='group'");group.stats(publishedAt+65*minute,[1,1,1]);
+        expect(trackedMilestone(group.db,group.post(),60,at)).toEqual({status:'unavailable',reason:'source_mismatch'});
+    });
+    it('nullCountsStayUnavailable',async()=>{
+        const f=bound(['60m']);f.stats(publishedAt+65*minute,[null,3,0]);
+        expect(await f.tracker(publishedAt+70*minute).collect(scope,'campaign',()=>{})).toEqual({checked:1,measured:0,unavailable:1});
+        expect(f.store.listObservations(scope,'campaign',0,Number.MAX_SAFE_INTEGER)).toEqual([expect.objectContaining({
+            milestoneMinutes:60,status:'unavailable',reason:'missing_counts',reactions:null,comments:3,shares:0,sourceRef:`post-stats:${f.resultId}:60`})]);
+    });
+    it('unboundPostFoundAtMinute120KeepsMilestone60',async()=>{
+        const f=tracked('missing');const at=publishedAt+61*minute;
+        expect(hasDueCampaignMilestone(f.db,f.post(),[],at)).toBe(false);
+        expect(await f.tracker(at).collect(scope,'campaign',()=>{})).toEqual({checked:0,measured:0,unavailable:0});
+        expect(f.store.listMeasurements(scope,'campaign')).toEqual([]);
+        expect(f.find(publishedAt+120*minute,['60m'],[3,1,0])).toBe('bound');
+        expect(await f.tracker(publishedAt+121*minute).collect(scope,'campaign',()=>{})).toEqual({checked:1,measured:1,unavailable:0});
+        expect(f.store.listObservations(scope,'campaign',0,Number.MAX_SAFE_INTEGER)).toEqual([expect.objectContaining({
+            milestoneMinutes:60,observedAt:publishedAt+120*minute,sourceRef:`post-stats:${f.resultId}:60`,status:'measured',reactions:3,comments:1,shares:0})]);
+        expect(f.researchStore.countScans()).toBe(0);
+    });
+    it('unboundPostFoundWithin4320WindowMeasures4320',async()=>{
+        const f=tracked('pending_approval');const at=publishedAt+4321*minute;
+        // 60 and 1440 windows have passed without a link: recorded unavailable as before; 4320 still waits.
+        for(let i=0;i<2;i++)expect(await f.tracker(at).collect(scope,'campaign',()=>{})).toEqual({checked:1,measured:0,unavailable:1});
+        expect(await f.tracker(at).collect(scope,'campaign',()=>{})).toEqual({checked:0,measured:0,unavailable:0});
+        expect(f.store.listMeasurements(scope,'campaign').map(m=>[m.milestoneMinutes,m.reason])).toEqual([[60,'unconfirmed_post_target'],[1440,'unconfirmed_post_target']]);
+        expect(f.find(publishedAt+4400*minute,['60m','1440m','4320m'],[7,2,1])).toBe('bound');
+        expect(await f.tracker(publishedAt+4401*minute).collect(scope,'campaign',()=>{})).toEqual({checked:1,measured:1,unavailable:0});
+        expect(f.store.listObservations(scope,'campaign',0,Number.MAX_SAFE_INTEGER)).toEqual([expect.objectContaining({
+            milestoneMinutes:4320,observedAt:publishedAt+4400*minute,sourceRef:`post-stats:${f.resultId}:4320`,status:'measured'})]);
+    });
+    it('notFoundOrExpiredUnboundPostIsUnavailableAndNeverMeasuredFromUnverifiedSource',async()=>{
+        const lost=tracked('not_found');lost.stats(publishedAt+65*minute,[9,9,9]);
+        expect(await lost.tracker(publishedAt+70*minute).collect(scope,'campaign',()=>{})).toEqual({checked:1,measured:0,unavailable:1});
+        expect(lost.store.listMeasurements(scope,'campaign')).toEqual([expect.objectContaining({milestoneMinutes:60,reason:'unconfirmed_post_target'})]);
+        const late=tracked('missing');late.stats(publishedAt+65*minute,[9,9,9]);
+        expect(await late.tracker(publishedAt+60*minute+TRACKED_STATS_WINDOW_MS+1).collect(scope,'campaign',()=>{})).toEqual({checked:1,measured:0,unavailable:1});
+        for(const f of [lost,late]){
+            expect(f.store.listObservations(scope,'campaign',0,Number.MAX_SAFE_INTEGER)).toEqual([]);
+            expect(f.researchStore.countScans()).toBe(0);
+        }
+    });
+    it('oneBrokenCampaignDoesNotHideOtherDueCampaigns',()=>{
+        const f=bound(['60m']);const at=publishedAt+61*minute;
+        f.db.run("INSERT INTO page_campaign_published (result_id,workspace_id,page_id,profile_id,campaign_id,record_json) VALUES (8001,?,?,?,'campaign','{broken')",[scope.workspaceId,scope.pageId,scope.profileId]);
+        f.db.run("INSERT INTO page_campaign_links VALUES ('second',?,?,?,1,1,'proposal-2',?,NULL)",[scope.workspaceId,scope.pageId,scope.profileId,publishedAt]);
+        f.db.run('INSERT INTO page_campaign_published (result_id,workspace_id,page_id,profile_id,campaign_id,record_json) VALUES (8002,?,?,?,?,?)',[scope.workspaceId,scope.pageId,scope.profileId,'second',
+            JSON.stringify({...scope,resultId:8002,campaignId:'second',runId:'run-2',scheduleId:'schedule-2',runnerKeyId:'runner',grantId:'grant',selection:null,comparison:null,publishedAt,postId:null,postUrl:null,sourceRef:null,reason:'unconfirmed_post_target'})]);
+        const errors:string[]=[];
+        const due=[...dueCampaignPosts(f.db,scope.workspaceId,at,campaignId=>errors.push(campaignId))];
+        expect(due.map(entry=>[entry.scope.campaignId,entry.post.resultId])).toEqual([['second',8002]]);
+        expect(errors).toEqual(['campaign']);
     });
 });

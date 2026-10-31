@@ -45,6 +45,7 @@ beforeEach(async () => {
         },
         getDbPath: () => path.join(dir, 'workspace.db'),
         getSetting: (name: string) => name.includes('control') ? JSON.stringify({ enabled: true, port: 47321, allowList: ['127.0.0.1'], protectedWritesEnabled: gate }) : undefined,
+        setSetting: () => undefined,
         getBrowserProfileById: (id: string) => profiles[id] ? { id, name: id } : undefined,
         getBrowserProfiles: () => Object.keys(profiles).map(id => ({ id, name: id })),
     };
@@ -217,7 +218,12 @@ test.each(['direct', 'fallback'])('owner-confirmed campaign reaches real schedul
     await ok(s.runner, 'pageWork.finish', { ...lease(s.work), reason: 'Synthetic posted outcome', evidenceRefs: [] });
     time += 86400000; await restart();
     const next = (await ok(s.runner, 'pageWork.claimDue', { pageId: s.pageId })).work;
-    expect(await ok(s.runner, 'pageCampaigns.collect', { ...lease(next), campaignId: s.campaignId })).toEqual({ checked: 1, measured: 0, unavailable: 1 });
+    // Spec 2026-10-31 §4.5 (Task 4 fix I-1): the Page row is still `missing` inside the 60-minute milestone's 24 h window, so it waits.
+    expect(await ok(s.runner, 'pageCampaigns.collect', { ...lease(next), campaignId: s.campaignId })).toEqual({ checked: 0, measured: 0, unavailable: 0 });
+    expect(campaigns.listMeasurements({ workspaceId: 'workspace', pageId: s.pageId, profileId: 'alpha' }, s.campaignId)).toEqual([]);
+    time += 2 * 3600000;
+    const later = (await ok(s.runner, 'pageWork.claimDue', { pageId: s.pageId })).work;
+    expect(await ok(s.runner, 'pageCampaigns.collect', { ...lease(later), campaignId: s.campaignId })).toEqual({ checked: 1, measured: 0, unavailable: 1 });
     expect(db.query('SELECT * FROM research_scans')).toHaveLength(0);
     expect(campaigns.listMeasurements({ workspaceId: 'workspace', pageId: s.pageId, profileId: 'alpha' }, s.campaignId)[0].reason).toBe('unconfirmed_post_target');
 });

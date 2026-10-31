@@ -141,6 +141,18 @@ export interface ProfileLoginState {
 
 export type LinkStatus = 'known' | 'missing' | 'pending_approval' | 'not_found';
 
+/** Loại đích của dòng theo dõi (spec 2026-10-31 §4.2); dòng cũ là 'group'. */
+export type TrackTargetKind = 'group' | 'page';
+
+/** Một lần chụp số người theo dõi của Page; tối đa một dòng mỗi Page mỗi ngày địa phương. */
+export interface PageFollowerRow {
+    pageId: string;
+    profileId: string;
+    capturedOn: string;
+    capturedAt: number;
+    followers: number;
+}
+
 export interface PostTrackingRow {
     resultId: number;
     runId: string;
@@ -148,6 +160,10 @@ export interface PostTrackingRow {
     campaignId: string | null;
     variant: string;
     profileId: string;
+    targetKind: TrackTargetKind;
+    /** Id Page chủ bài với dòng 'page' (đã xác minh hoặc '' khi chưa học được Page); '' với dòng 'group'. */
+    pageId: string;
+    /** Với dòng 'page': URL đích của kết quả (thường là trang chủ), không phải URL nhóm. */
     groupUrl: string;
     groupId: string;
     postId: string;
@@ -176,7 +192,19 @@ export interface PostStatsSnapshot {
     shares: number | null;
 }
 
-export type PostStatsGroupBy = 'group' | 'profile' | 'schedule' | 'campaign' | 'variant' | 'day' | 'post' | 'hour' | 'weekday';
+/** 'group' chỉ bài nhóm, 'page' chỉ bài Page (theo page_id); các cách gom khác tính cả hai. */
+export type PostStatsGroupBy = 'group' | 'page' | 'profile' | 'schedule' | 'campaign' | 'variant' | 'day' | 'post' | 'hour' | 'weekday';
+
+/** Một Page trong `pages.metrics` / `facebookPoster:pageMetrics` (spec 2026-10-31 §6); chỉ bài Page đã biết Page. */
+export interface PageMetrics {
+    pageId: string;
+    /** Tên Page đã học, chưa có thì là pageId. */
+    pageName: string;
+    /** Mới nhất trước; `snapshots` là mọi lần đo, cũ trước. */
+    posts: { resultId: number; postId: string; postUrl: string | null; postedAt: number; linkStatus: LinkStatus; text: string; snapshots: PostStatsSnapshot[] }[];
+    /** Theo ngày tăng dần; rỗng khi chưa đọc được (không có số 0 giả). */
+    followers: PageFollowerRow[];
+}
 
 export interface PostStatsReportRow {
     key: string;

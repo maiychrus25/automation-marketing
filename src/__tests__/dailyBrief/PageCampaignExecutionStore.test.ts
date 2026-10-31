@@ -373,3 +373,94 @@ it('reservedRunOfThisPageBeforeSubmitStillCountsAgainstThisPage',()=>{
     s.poster.createRun({id:'same-run',kind:'post',mode:'page',params:row.params,startedAt:now+60000,scheduleId:'same-page'});
     expect(submit).toThrow(expect.objectContaining({code:'LIMIT_EXCEEDED'}));
 });
+// Spec 2026-10-31 §4.5: a confirmed Page tracking row binds to its campaign execution; no path creates a schedule/run/publish.
+const postUrl='https://www.facebook.com/page/posts/555';
+function submitted(s:ReturnType<typeof setup>, id:string, outcome:'posted'|'failed'='posted', errorCode='uncertain_after_submit') {
+    s.store.reserve(s.input(id),now);
+    s.poster.createRun({id:`${id}-run`,kind:'post',mode:'page',params:s.poster.getSchedule(id)!.params,startedAt:now+120000,scheduleId:id,campaignId:s.accepted.campaignId});
+    s.store.beginSubmit(id,`${id}-run`,now+120000);
+    const resultId=s.poster.addResult({runId:`${id}-run`,profileId:'profile',profileName:'',targetUrl:'https://www.facebook.com/',targetName:'',outcome,error:'',
+        errorCode:outcome==='failed'?errorCode:'',attempts:1,postUrl:null,commentStatus:'not_requested',identity:'',createdAt:now+120000});
+    s.store.settle(id,outcome==='posted'?'posted':'uncertain',resultId,now+120000);
+    const row={resultId,runId:`${id}-run`,scheduleId:id as string|null,targetKind:'page' as 'page'|'group',pageId:'page',postId:'555',postUrl:postUrl as string|null,linkStatus:'known' as 'known'|'missing'};
+    return {resultId,row};
+}
+const effects=(s:ReturnType<typeof setup>)=>['fb_poster_runs','fb_poster_results','fb_poster_schedules','page_campaign_executions']
+    .map(table=>s.db.queryOne<{n:number}>(`SELECT COUNT(*) AS n FROM ${table}`)!.n);
+it('bindTrackedPostRegistersTargetForPostedExecution',()=>{
+    const s=setup(); const {resultId,row}=submitted(s,'bound');
+    const before=effects(s); const schedule=s.poster.getSchedule('bound');
+    expect(s.store.bindTrackedPost(row,now+180000,scope.workspaceId)).toBe('bound');
+    expect(s.campaigns.listPublished(scope,s.accepted.campaignId)).toEqual([expect.objectContaining({resultId,postId:'555',postUrl,sourceRef:`post-tracking:${resultId}`,reason:''})]);
+    const bound=[s.store.get('bound'),s.db.query('SELECT * FROM page_campaign_published')];
+    expect(s.store.bindTrackedPost(row,now+240000,scope.workspaceId)).toBe('bound');
+    s.campaigns.registerSettledResults(scope.workspaceId);
+    expect([s.store.get('bound'),s.db.query('SELECT * FROM page_campaign_published')]).toEqual(bound);
+    expect(effects(s)).toEqual(before); expect(s.poster.getSchedule('bound')).toEqual(schedule);
+});
+it('bindTrackedPostSettlesUncertainToPostedWithoutNewRun',()=>{
+    const s=setup(); const {resultId,row}=submitted(s,'uncertain','failed');
+    expect(s.store.get('uncertain')).toMatchObject({status:'uncertain',resultId});
+    const before=effects(s); const schedule=s.poster.getSchedule('uncertain');
+    expect(s.store.bindTrackedPost(row,now+180000,scope.workspaceId)).toBe('settled');
+    expect(s.store.get('uncertain')).toMatchObject({status:'posted',resultId,runId:'uncertain-run'});
+    expect(s.campaigns.listPublished(scope,s.accepted.campaignId)).toEqual([expect.objectContaining({resultId,postId:'555',postUrl,sourceRef:`post-tracking:${resultId}`,reason:''})]);
+    const settled=[s.store.get('uncertain'),s.db.query('SELECT * FROM page_campaign_published')];
+    expect(s.store.bindTrackedPost(row,now+240000,scope.workspaceId)).toBe('bound');
+    // Startup backfill passes no target; the reconciled failed result must neither throw nor drop the binding.
+    s.campaigns.registerSettledResults(scope.workspaceId);
+    expect([s.store.get('uncertain'),s.db.query('SELECT * FROM page_campaign_published')]).toEqual(settled);
+    expect(effects(s)).toEqual(before); expect(s.poster.getSchedule('uncertain')).toEqual(schedule);
+    expect(s.db.queryOne<{outcome:string}>('SELECT outcome FROM fb_poster_results WHERE id=?',[resultId])?.outcome).toBe('failed');
+});
+it('bindTrackedPostSkipsForeignPageRunOrResult',()=>{
+    const s=setup(); const {resultId,row}=submitted(s,'guarded','failed');
+    const state=()=>[s.store.get('guarded'),s.db.query('SELECT * FROM page_campaign_published'),effects(s)];
+    const before=state();
+    for (const patch of [{pageId:'other-page'},{pageId:''},{runId:'other-run'},{resultId:resultId+1},{scheduleId:'missing'},{scheduleId:null},
+        {targetKind:'group' as const},{linkStatus:'missing' as const},{postId:'556'},{postUrl:null},{postUrl:'https://example.com/page/posts/555'},
+        {postUrl:'https://www.facebook.com/777/posts/555'},{postUrl:'https://www.facebook.com/permalink.php?story_fbid=555&id=777'}])
+        expect(s.store.bindTrackedPost({...row,...patch},now+180000,scope.workspaceId)).toBe('skipped');
+    expect(state()).toEqual(before);
+    const bare=memoryDb(); new FacebookPosterStore(bare).ensureSchema();
+    expect(new PageCampaignExecutionStore(bare,clock).bindTrackedPost(row,now,scope.workspaceId)).toBe('skipped');
+    // The execution must belong to the composition's captured workspace (as recoverPageCampaignExecutions requires).
+    for (const workspaceId of ['other-workspace',undefined]) expect(s.store.bindTrackedPost(row,now+180000,workspaceId)).toBe('skipped');
+    expect(state()).toEqual(before);
+});
+it('uncertainResultWithoutTargetStaysUnconfirmed',()=>{
+    const s=setup(); const {resultId}=submitted(s,'unconfirmed','failed');
+    const before=s.store.get('unconfirmed')!;
+    expect(()=>s.store.settle('unconfirmed','posted',resultId,now+180000)).toThrow();
+    expect(()=>s.campaigns.registerPostedResult({...before,status:'posted'})).toThrow();
+    expect(s.store.get('unconfirmed')).toEqual(before);
+    expect(s.db.query('SELECT * FROM page_campaign_published')).toEqual([]);
+    // Only an uncertain_after_submit result may be reconciled, even with a verified target.
+    const other=setup(); const failed=submitted(other,'failed','failed','network');
+    expect(()=>other.store.bindTrackedPost(failed.row,now+180000,scope.workspaceId)).toThrow();
+    expect(other.store.get('failed')).toMatchObject({status:'uncertain',resultId:failed.resultId});
+    expect(other.db.query('SELECT * FROM page_campaign_published')).toEqual([]);
+});
+it('bindKnownTrackedPostsCatchesUpMissedCallbacks',()=>{
+    const s=setup(undefined,3);
+    const rows=[submitted(s,'missed-posted'),submitted(s,'missed-uncertain','failed'),submitted(s,'missed-network','failed','network')];
+    const track=(row:typeof rows[number]['row'],patch:Record<string,unknown>={})=>s.poster.createTracking({...row,profileId:'profile',groupUrl:'https://www.facebook.com/',groupId:'',
+        postedAt:now+120000,textHead:'',removedSuspected:false,lastSeenAt:null,lastCheckedAt:null,checkCount:0,nextCheckAt:null,statsDone:[],...patch} as any);
+    rows.forEach(({row})=>track(row));
+    // A callback that never fired leaves known rows unbound; group, missing and non-campaign rows are never candidates.
+    track({...rows[0].row,resultId:9001},{targetKind:'group',pageId:''});
+    track({...rows[0].row,resultId:9002,scheduleId:null});
+    const before=effects(s);
+    expect(s.store.bindKnownTrackedPosts('other-workspace',now+180000)).toBe(0);
+    expect(s.db.query("SELECT * FROM page_campaign_published WHERE json_extract(record_json,'$.sourceRef') IS NOT NULL")).toEqual([]);
+    // The network-failed row throws inside its own bind and does not block the others.
+    expect(s.store.bindKnownTrackedPosts(scope.workspaceId,now+180000)).toBe(2);
+    expect(s.store.get('missed-uncertain')).toMatchObject({status:'posted'});
+    expect(s.store.get('missed-network')).toMatchObject({status:'uncertain'});
+    expect(s.campaigns.listPublished(scope,s.accepted.campaignId).map(p=>[p.resultId,p.sourceRef]))
+        .toEqual([rows[0].resultId,rows[1].resultId].map(id=>[id,`post-tracking:${id}`]));
+    const bound=s.db.query('SELECT * FROM page_campaign_published');
+    expect(s.store.bindKnownTrackedPosts(scope.workspaceId,now+240000)).toBe(0);
+    expect(s.db.query('SELECT * FROM page_campaign_published')).toEqual(bound);
+    expect(effects(s)).toEqual(before);
+});

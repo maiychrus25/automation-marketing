@@ -6,6 +6,10 @@ export interface LaunchedPage { ctx: BrowserContext; page: Page; }
 
 export interface TaskDeps {
     autonomyGuard?: import('../../models/pageCampaigns').AutonomyExecutionGuard;
+    /** Chỉ có khi đăng chế độ Page: id Page đã học của profile; '' = chưa học được Page → không nhận link nào. */
+    expectedPageId?: string;
+    /** Đồng hồ cho giờ bấm Đăng của bài Page (`publishedAt`); thiếu thì Date.now. */
+    now?: () => number;
     /** Opens the profile's automation browser. The task closes ctx itself when done (as FB Poster did). */
     launch: () => Promise<LaunchedPage>;
     getIsStopping: () => boolean;

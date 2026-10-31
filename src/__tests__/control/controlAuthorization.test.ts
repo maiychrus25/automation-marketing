@@ -52,6 +52,35 @@ describe('scoped Control authorization', () => {
     }
     expect(() => authorizeMethod({ kind: 'legacy', keyId: 'old' }, method, { confirm: true }, resources())).not.toThrow();
   });
+  it.each(['pages.metrics', 'notifications.config', 'notifications.setConfig'])('owner-only %s is neither visible nor callable for scoped principals', (method) => {
+    const methods = createControlMethods({} as any);
+    expect(methods.some((m) => m.name === method)).toBe(true);
+    for (const principal of [runner, receiver]) {
+      expect(visibleMethods(principal, methods).map((m) => m.name)).not.toContain(method);
+      for (const params of [{}, { pageId: 'page1' }, { days: 30 }, { leadDigestMinutes: 0 }, { workId: 'work1' }]) forbidden(() => authorizeMethod(principal, method, params, resources()));
+    }
+    expect(() => authorizeMethod({ kind: 'legacy', keyId: 'old' }, method, {}, resources())).not.toThrow();
+  });
+  it('runnerHasNoMetricsOrNotificationWrite', () => {
+    const methods = createControlMethods({} as any);
+    for (const principal of [runner, receiver]) {
+      expect(visibleMethods(principal, methods).map((m) => m.name).filter((n) => /^(pages\.metrics|notifications\.|posts\.)/.test(n))).toEqual([]);
+    }
+  });
+  it('scoped callers are refused by the real method run, before any port is touched', async () => {
+    const tracking = { pageMetrics: jest.fn() };
+    const notifications = { getConfig: jest.fn(), setConfig: jest.fn() };
+    const methods = createControlMethods({ tracking, notifications } as any);
+    for (const principal of [runner, receiver]) {
+      const ctx = { principal, assertCurrent: () => {}, resources: resources() };
+      for (const [name, params] of [['pages.metrics', { days: 30 }], ['notifications.config', {}], ['notifications.setConfig', { leadDigestMinutes: 0 }]] as const) {
+        await expect(methods.find((m) => m.name === name)!.run(params, ctx)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+    }
+    expect(tracking.pageMetrics).not.toHaveBeenCalled();
+    expect(notifications.getConfig).not.toHaveBeenCalled();
+    expect(notifications.setConfig).not.toHaveBeenCalled();
+  });
   it('fails closed without current runner mutation gate authority, not for reads/receiver/legacy', () => {
     const absent = { ...resources(), protectedWritesEnabled: undefined };
     forbidden(() => authorizeMethod(runner, 'pageWork.claimDue', { pageId: 'page1' }, absent));

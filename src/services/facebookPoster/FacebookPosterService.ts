@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { AutomationSession } from '../browser/BrowserProfileService';
 import type { ProfileJobLease, ProfileJobPriority, ProfileTaskContext } from '../browser/ProfileJobQueue';
-import type { FbPosterComment, FbPosterMode, FbPosterRun, LinkStatus } from '../../models/facebookPoster';
+import type { FbPosterComment, FbPosterMode, FbPosterRun, LinkStatus, PostTrackingRow } from '../../models/facebookPoster';
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import type { LaunchedPage, LogLevel, TaskDeps } from './types';
 import { collectComments } from './collectComments';
@@ -51,6 +51,10 @@ export interface FacebookPosterServiceDeps {
     diagnosticsDir?: () => string | null;
     /** Gọi sau khi lưu bình luận mới (chỉ các dòng thật sự mới); lỗi của hàm này chỉ được ghi log. */
     onCommentsSaved?: (rows: FbPosterComment[]) => void | Promise<void>;
+    /** Id Page đã học của profile ('' = chưa học được); chỉ dùng khi đăng chế độ Page để xác minh chủ bài. */
+    resolvePageId?: (profileId: string) => string;
+    /** Gọi sau khi tạo dòng theo dõi bài Page đã có link (không gọi cho bài nhóm); lỗi của hàm này chỉ được ghi log. */
+    onPagePostKnown?: (row: PostTrackingRow) => void;
     tasks?: Partial<{ postToTargets: typeof postToTargets; scanGroups: typeof scanGroups; searchAndJoinGroups: typeof searchAndJoinGroups; collectComments: typeof collectComments }>;
 }
 
@@ -91,12 +95,14 @@ interface ProfilePlan {
     reachedCritical: boolean;
     /** Có ít nhất một kết quả 'posted': tài khoản chắc chắn còn đăng nhập. */
     posted: boolean;
+    /** Chỉ lượt đăng chế độ Page: Page đã học, đọc một lần cho cả profile ('' = chưa học) để link xác minh và dòng theo dõi cùng một Page. */
+    pageId?: string;
 }
 interface ActiveRun { controller: AbortController; options: RunStartOptions; run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number };
     /** Chỉ có khi bài có biến thể: chỉ số biến thể (0 = A) của cặp (profile, đích), chia một lần cho cả lượt. */
     variantIndex?: (profileId: string, url: string) => number | undefined;
     autonomyGuard?: import('../../models/pageCampaigns').AutonomyExecutionGuard; }
-interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; pendingApproval?: boolean; identity?: string; errorCode?: string; attempts?: number; }
+interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; pendingApproval?: boolean; verifiedPostUrl?: string | null; publishedAt?: number; identity?: string; errorCode?: string; attempts?: number; }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -405,6 +411,10 @@ export class FacebookPosterService {
             leaveCritical: () => { plan.critical = false; },
             clearReachedCritical: () => { plan.reachedCritical = false; },
         };
+        if (params.kind === 'post' && params.mode === 'page') {
+            taskDeps.expectedPageId = plan.pageId = this.deps.resolvePageId?.(profileId) ?? '';
+            taskDeps.now = this.now;
+        }
         const diagnosticsDir = params.kind === 'post' ? this.deps.diagnosticsDir?.() ?? null : null;
         if (diagnosticsDir) {
             taskDeps.saveDiagnostic = (page, info) => {
@@ -507,6 +517,8 @@ export class FacebookPosterService {
                             postUrl: r.postUrl,
                             commentStatus: r.commentStatus,
                             pendingApproval: r.pendingApproval,
+                            verifiedPostUrl: r.verifiedPostUrl,
+                            publishedAt: r.publishedAt,
                             identity: r.identity,
                         }),
                     },
@@ -599,10 +611,12 @@ export class FacebookPosterService {
         this.emitProgress(active);
     }
 
-    /** Tạo dòng theo dõi cho bài nhóm đã đăng. Mọi lỗi chỉ ghi log, không ảnh hưởng kết quả đăng. */
+    /** Tạo dòng theo dõi cho bài nhóm/Page đã đăng. Mọi lỗi chỉ ghi log, không ảnh hưởng kết quả đăng. */
     private trackPostedResult(active: ActiveRun, plan: ProfilePlan, row: ResultRow, resultId: number): void {
         const params = active.params;
-        if (params.kind !== 'post' || params.mode !== 'group' || row.outcome !== 'posted') return;
+        if (params.kind !== 'post') return;
+        if (params.mode === 'page') { this.trackPagePostedResult(active, plan, row, resultId); return; }
+        if (params.mode !== 'group' || row.outcome !== 'posted') return;
         try {
             const postedAt = this.now();
             const found = active.variantIndex?.(plan.profileId, row.url);
@@ -613,7 +627,7 @@ export class FacebookPosterService {
                 : row.pendingApproval || row.commentStatus === 'pending_approval' ? 'pending_approval' : 'missing';
             const tracking = {
                 resultId, runId: active.run.id, scheduleId: active.run.scheduleId, campaignId: active.run.campaignId, variant: variantLabel, profileId: plan.profileId,
-                groupUrl: row.url,
+                targetKind: 'group' as const, pageId: '', groupUrl: row.url,
                 groupId: /\/groups\/(\d+)/.exec(row.url)?.[1] ?? '',
                 postId: postUrl ? /\/(?:posts|permalink)\/(\d+)|[?&]story_fbid=(\d+)/.exec(postUrl)?.slice(1).find(Boolean) ?? '' : '',
                 postUrl, postedAt, textHead: normalizeHead(variantText(params, index)), linkStatus,
@@ -627,6 +641,44 @@ export class FacebookPosterService {
             this.store.createTracking(tracking);
         } catch (err) {
             this.emit('facebookPoster:log', { runId: active.run.id, profileId: plan.profileId, level: 'warning', message: `Không tạo được dòng theo dõi bài: ${errorMessage(err)}`, at: this.now() });
+        }
+    }
+
+    /**
+     * Dòng theo dõi bài Page (spec 2026-10-31 §4.2): URL chỉ được giữ khi đã học được Page; lượt chiến dịch "uncertain" cũng có
+     * dòng (missing) để tìm lại. Dòng Page không thu bình luận (next_comment_at NULL).
+     */
+    private trackPagePostedResult(active: ActiveRun, plan: ProfilePlan, row: ResultRow, resultId: number): void {
+        const params = active.params as Extract<StartParams, { kind: 'post' }>;
+        const uncertainCampaign = row.errorCode === 'uncertain_after_submit' && !!active.autonomyGuard;
+        if (row.outcome !== 'posted' && !uncertainCampaign) return;
+        let tracking: PostTrackingRow;
+        try {
+            const now = this.now();
+            // Lúc bấm Đăng (bước đăng báo về); thiếu thì lúc có kết quả. Tìm lại bài so giờ này với giờ tạo bài của Facebook (±15 phút).
+            const postedAt = row.publishedAt ?? now;
+            const found = active.variantIndex?.(plan.profileId, row.url);
+            const pageId = plan.pageId ?? '';
+            // Chỉ link đã xác minh chủ Page là bằng chứng; link bắt kiểu cũ (bình luận đầu, post_url của kết quả) không tính.
+            const postUrl = pageId !== '' ? row.verifiedPostUrl ?? null : null;
+            tracking = {
+                resultId, runId: active.run.id, scheduleId: active.run.scheduleId, campaignId: active.run.campaignId ?? null, variant: VARIANT_LABELS[found ?? -1] ?? '',
+                profileId: plan.profileId, targetKind: 'page', pageId, groupUrl: row.url, groupId: '',
+                postId: postUrl ? /\/posts\/(\d+)/.exec(postUrl)?.[1] ?? '' : '',
+                postUrl, postedAt, textHead: normalizeHead(variantText(params, found ?? 0)), linkStatus: postUrl ? 'known' : 'missing',
+                removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null, statsDone: [], commentsDone: [], nextCommentAt: null,
+            };
+            tracking.nextCheckAt = computeNextCheckAt(tracking, this.deps.readTrackingConfig?.() ?? DEFAULT_POST_TRACKING_CONFIG, now);
+            this.store.createTracking(tracking);
+        } catch (err) {
+            this.emit('facebookPoster:log', { runId: active.run.id, profileId: plan.profileId, level: 'warning', message: `Không tạo được dòng theo dõi bài: ${errorMessage(err)}`, at: this.now() });
+            return;
+        }
+        if (tracking.linkStatus !== 'known') return;
+        try {
+            this.deps.onPagePostKnown?.(tracking);
+        } catch (err) {
+            this.emit('facebookPoster:log', { runId: active.run.id, profileId: plan.profileId, level: 'warning', message: `Không báo được bài Page đã có link: ${errorMessage(err)}`, at: this.now() });
         }
     }
 

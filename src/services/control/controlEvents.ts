@@ -40,7 +40,7 @@ export function projectPageWorkEvent(event: ControlEvent, principal: ControlPrin
         ...(event.type === 'pageWork.draftSaved' && typeof p.draftId === 'string' && work.draftIds.includes(p.draftId) ? { draftId: p.draftId } : {}) };
 }
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'briefs.finished' | 'pages.learnFinished';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'briefs.finished' | 'pages.learnFinished' | 'metrics.report' | 'leads.digest';
 
 export function buildPagesLearnFinished(e: { jobId: string; results: LearnResult[] }) {
     return {
@@ -115,12 +115,24 @@ export function buildTrackFinished(e: {
     };
 }
 
-/** Có khách tiềm năng mới; chỉ giữ các trường đã công bố, tối đa 3 mẫu. */
-export function buildLeadsFound(e: { count: number; auto: boolean; samples: { authorName: string; text: string; postUrl: string }[]; leadIds?: number[]; campaignIds?: string[] }) {
+type LeadsFoundInput = { count: number; auto: boolean; samples: { authorName: string; text: string; postUrl: string }[]; leadIds?: number[]; campaignIds?: string[] };
+
+/**
+ * Có khách tiềm năng mới; chỉ giữ các trường đã công bố, tối đa 3 mẫu. `deferred: true` (chỉ khi đang gom tin) nghĩa là
+ * sự kiện vẫn vào event log cho bot đọc nhưng bridge không gửi tin riêng: lead sẽ có trong `leads.digest`.
+ */
+export function buildLeadsFound(e: LeadsFoundInput & { deferred?: boolean }) {
     return {
         count: e.count, auto: e.auto, leadIds: e.leadIds ?? [], campaignIds: e.campaignIds ?? [],
         samples: e.samples.slice(0, 3).map((s) => ({ authorName: s.authorName, text: s.text, postUrl: s.postUrl })),
+        ...(e.deferred === true ? { deferred: true } : {}),
     };
+}
+
+/** Một tin gom khách tiềm năng cho mọi lead trong [from, to]; `label` là `HH:mm–HH:mm` giờ địa phương do app định dạng. */
+export function buildLeadsDigest(e: LeadsFoundInput & { from: number; to: number; label: string }) {
+    const { count, auto, leadIds, campaignIds, samples } = buildLeadsFound(e);
+    return { count, auto, leadIds, campaignIds, samples, from: e.from, to: e.to, label: e.label };
 }
 
 /** Lượt thu bình luận kết thúc (kể cả bị huỷ); `errors` là số lỗi. Bot lọc theo `jobId`. */
@@ -154,6 +166,12 @@ export function setControlEventSink(next: Sink | null): void {
 
 export function hasControlEventSink(): boolean {
     return sink !== null;
+}
+
+/** Ghi bắt buộc: ném khi Control API không ghi sự kiện hoặc ghi lỗi, để nơi gọi giữ trạng thái và thử lại (báo cáo, tin gom). */
+export function recordControlEvent(type: ControlEventType, payload: unknown): void {
+    if (!sink) throw new Error('Control API không ghi sự kiện');
+    sink(type, payload);
 }
 
 /** Không bao giờ ném: sự kiện Control API không được làm hỏng luồng Đăng Facebook. */

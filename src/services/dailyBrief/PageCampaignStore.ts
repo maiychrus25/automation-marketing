@@ -152,14 +152,16 @@ export class PageCampaignStore {
             const actual:CampaignExecution|null=persisted ? JSON.parse(persisted.execution_json) : null;
             if (!actual || actual.status!=='posted' || actual.resultId!==execution.resultId || actual.runId!==execution.runId) invalid();
             assertScope(execution,actual);
+            const existing=this.listPublished(execution,execution.campaignId).find(row=>row.resultId===execution.resultId);
             const result=this.db.queryOne<any>(`SELECT r.*,u.started_at,u.schedule_id,u.campaign_id,u.mode,u.kind FROM fb_poster_results r
                 JOIN fb_poster_runs u ON u.id=r.run_id WHERE r.id=?`,[execution.resultId]);
-            if (!result || result.outcome!=='posted' || result.run_id!==execution.runId || result.schedule_id!==execution.scheduleId
+            // An uncertain submit is only proof once a verified Page post target binds it (now, or in an earlier bound registration).
+            const reconciled=result?.outcome==='failed' && result.error_code==='uncertain_after_submit' && (!!target || !!existing?.sourceRef);
+            if (!result || (result.outcome!=='posted' && !reconciled) || result.run_id!==execution.runId || result.schedule_id!==execution.scheduleId
                 || result.campaign_id!==execution.campaignId || result.profile_id!==execution.profileId || result.kind!=='post'
                 || result.mode!=='page' || result.target_url!=='https://www.facebook.com/') invalid();
             const normalized=target ? campaignPostTarget(target.postUrl) : null;
             if (target && (!normalized || normalized.postId!==target.postId || !target.sourceRef)) invalid();
-            const existing=this.listPublished(execution,execution.campaignId).find(row=>row.resultId===execution.resultId);
             if (existing?.sourceRef && target && (existing.postId!==normalized?.postId || existing.postUrl!==normalized?.postUrl || existing.sourceRef!==target.sourceRef)) invalid();
             if (existing && (!target || existing.sourceRef)) return;
             const publishedAt=Number.isSafeInteger(result.created_at) && result.created_at>=result.started_at ? result.created_at : null;
@@ -200,6 +202,13 @@ export class PageCampaignStore {
     observationSourceAvailable(observation:CampaignObservation,post:CampaignPublishedPost):boolean {
         const measurement=this.db.queryOne<any>('SELECT * FROM page_campaign_measurements WHERE result_id=? AND milestone_minutes=?',[post.resultId,observation.milestoneMinutes]);
         if (!measurement || measurement.scan_id!==observation.sourceRef || !post.sourceRef || post.postId!==observation.postId || post.postUrl!==observation.postUrl) return false;
+        if (observation.sourceRef.startsWith('post-stats:')) {
+            if (post.sourceRef!==`post-tracking:${post.resultId}` || observation.sourceRef!==`post-stats:${post.resultId}:${observation.milestoneMinutes}`) return false;
+            const tracking=this.db.queryOne<any>('SELECT target_kind,page_id,post_id FROM fb_poster_post_tracking WHERE result_id=?',[post.resultId]);
+            if (!tracking || tracking.target_kind!=='page' || tracking.page_id!==post.pageId || tracking.post_id!==post.postId) return false;
+            return this.db.query<any>('SELECT reactions,comments,shares FROM fb_poster_post_stats WHERE result_id=? AND captured_at=?',[post.resultId,observation.observedAt])
+                .some(row=>(row.reactions ?? null)===observation.reactions && (row.comments ?? null)===observation.comments && (row.shares ?? null)===observation.shares);
+        }
         const research=new ResearchStore(this.db),scan=research.getScan(observation.sourceRef);
         if (!scan || scan.source!=='posts' || scan.origin!=='api' || scan.status!=='done' || scan.query!==post.postUrl
             || scan.profileIds.length!==1 || scan.profileIds[0]!==post.profileId || scan.startedAt>observation.observedAt) return false;

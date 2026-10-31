@@ -13,8 +13,11 @@ import { FacebookPosterStore, type SqlDatabase } from '../facebookPoster/Faceboo
 import { PAGE_CAMPAIGN_EXECUTION_SCHEMA_SQL } from '../facebookPoster/schema';
 import { computeNextRun } from '../facebookPoster/scheduleTime';
 import { DailyBriefStore, systemClock, type LocalClock } from './DailyBriefStore';
-import { PageCampaignStore } from './PageCampaignStore';
+import { PageCampaignStore, campaignPostTarget } from './PageCampaignStore';
 import { PageWorkStore } from './PageWorkStore';
+import type { PostTrackingRow } from '../../models/facebookPoster';
+
+type CampaignPostTarget = {postId:string;postUrl:string;sourceRef:string};
 
 /** Internal DB-only revocation; the caller wraps grant, reservation and ticket changes atomically. */
 export function cancelCampaignGrantAuthority(db:SqlDatabase, grant:CampaignGrant, now:number, clock?:LocalClock):void {
@@ -116,27 +119,64 @@ export class PageCampaignExecutionStore {
             return this.get(scheduleId)!;
         });
     }
-    settle(scheduleId:string, outcome:'posted'|'uncertain', resultId:number|null, _now:number):void {
+    settle(scheduleId:string, outcome:'posted'|'uncertain', resultId:number|null, _now:number, target?:CampaignPostTarget):void {
         this.db.transaction(() => {
             const execution=this.get(scheduleId);
             if (!execution || !['posted','uncertain'].includes(outcome) || (resultId !== null && (!Number.isSafeInteger(resultId) || resultId < 1)))
                 fail('CONFLICT','Kết quả lịch không hợp lệ');
             if (execution.status === outcome && execution.resultId === resultId) {
-                if (outcome==='posted' && resultId!==null) this.recordMeasurement(execution);
+                if (outcome==='posted' && resultId!==null) this.recordMeasurement(execution,target);
                 return;
             }
             if (execution.status !== 'submitting' && !(execution.status === 'uncertain' && outcome === 'posted'))
                 fail('CONFLICT','Không thể đổi kết quả đã ghi');
             const settled={...execution,status:outcome,resultId,revision:execution.revision+1};
             this.write(settled,execution.revision);
-            if (outcome==='posted' && resultId!==null) this.recordMeasurement(settled);
+            if (outcome==='posted' && resultId!==null) this.recordMeasurement(settled,target);
         });
     }
-    private recordMeasurement(execution:CampaignExecution):void {
+    /** Binds a confirmed Page tracking row to its own execution. Never creates a schedule, run or publish. */
+    bindTrackedPost(row:Pick<PostTrackingRow,'resultId'|'runId'|'scheduleId'|'targetKind'|'pageId'|'postId'|'postUrl'|'linkStatus'>, now:number, workspaceId:string|undefined):'bound'|'settled'|'skipped' {
+        const tables=this.db.queryOne<{n:number}>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('page_campaign_executions','page_campaign_published')");
+        if (!tables) fail('INTERNAL','Không đọc được schema số liệu');
+        const found=row.postUrl ? campaignPostTarget(row.postUrl) : null;
+        if (tables.n!==2 || row.targetKind!=='page' || row.linkStatus!=='known' || !row.scheduleId || !row.pageId || !found || found.postId!==row.postId
+            || found.postUrl!==`https://www.facebook.com/${row.pageId}/posts/${row.postId}`) return 'skipped';
+        const execution=this.get(row.scheduleId);
+        if (!execution || !workspaceId || execution.workspaceId!==workspaceId || execution.runId!==row.runId || execution.resultId!==row.resultId
+            || execution.pageId!==row.pageId) return 'skipped';
+        const target={...found,sourceRef:`post-tracking:${row.resultId}`};
+        if (execution.status==='posted') {
+            new PageCampaignStore(this.db).registerPostedResult(execution,target);
+            return 'bound';
+        }
+        if (execution.status!=='uncertain') return 'skipped';
+        this.settle(execution.scheduleId,'posted',row.resultId,now,target);
+        return 'settled';
+    }
+    /** Startup catch-up for a skipped/failed onPagePostKnown: rebinds known Page rows whose execution has no target yet. */
+    bindKnownTrackedPosts(workspaceId:string|undefined, now:number):number {
+        const tables=this.db.queryOne<{n:number}>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('page_campaign_executions','page_campaign_published','fb_poster_post_tracking')");
+        if (!tables) fail('INTERNAL','Không đọc được schema số liệu');
+        if (tables.n!==3 || !workspaceId) return 0;
+        const rows=this.db.query<Parameters<PageCampaignExecutionStore['bindTrackedPost']>[0]>(`SELECT t.result_id AS resultId,t.run_id AS runId,
+            t.schedule_id AS scheduleId,t.target_kind AS targetKind,t.page_id AS pageId,t.post_id AS postId,t.post_url AS postUrl,t.link_status AS linkStatus
+            FROM fb_poster_post_tracking t JOIN page_campaign_executions e ON e.schedule_id=t.schedule_id
+            LEFT JOIN page_campaign_published p ON p.result_id=t.result_id
+            WHERE t.target_kind='page' AND t.link_status='known' AND e.workspace_id=? AND json_extract(p.record_json,'$.sourceRef') IS NULL
+            ORDER BY t.result_id`,[workspaceId]);
+        let bound=0;
+        for (const row of rows) {
+            // Each bind is its own transaction; a row that cannot bind stays unbound and is retried at the next startup.
+            try { if (this.bindTrackedPost(row,now,workspaceId)!=='skipped') bound++; } catch { /* keep catching up the others */ }
+        }
+        return bound;
+    }
+    private recordMeasurement(execution:CampaignExecution, target?:CampaignPostTarget):void {
         const table=this.db.queryOne<{n:number}>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='page_campaign_published'");
         if(!table)fail('INTERNAL','Không đọc được schema số liệu');
         // Task4 crash recovery precedes explicit Task5 composition; startup backfills after installation.
-        if(table.n)new PageCampaignStore(this.db).registerPostedResult(execution);
+        if(table.n)new PageCampaignStore(this.db).registerPostedResult(execution,target);
     }
     private authority(input:CampaignExecution, now:number):CampaignGrant {
         const campaigns=new PageCampaignStore(this.db); const grant=campaigns.getGrant(input.grantId); const link=campaigns.getLink(input.campaignId);

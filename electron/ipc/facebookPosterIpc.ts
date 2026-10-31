@@ -23,14 +23,16 @@ import {
 } from '../../src/services/facebookPoster/LoginCheckScheduler';
 import { PostTracker, MAX_TRACK_GROUPS, MAX_TRACK_SINCE_DAYS, DEFAULT_TRACK_SINCE_DAYS, type TrackParams } from '../../src/services/facebookPoster/PostTracker';
 import { PostTrackScheduler } from '../../src/services/facebookPoster/PostTrackScheduler';
-import { PageCampaignTracker, CAMPAIGN_TRACK_MILESTONES } from '../../src/services/facebookPoster/PageCampaignTracker';
-import { PageCampaignStore } from '../../src/services/dailyBrief/PageCampaignStore';
+import { PageCampaignTracker, dueCampaignPosts } from '../../src/services/facebookPoster/PageCampaignTracker';
+import { PageCampaignExecutionStore } from '../../src/services/dailyBrief/PageCampaignExecutionStore';
 import { assertCampaignCollection } from '../../src/services/dailyBrief/pageCampaignOperations';
 import {
     POST_TRACKING_SETTING_KEY, parsePostTrackingConfig, validatePostTrackingConfig,
 } from '../../src/services/facebookPoster/postTracking';
 import { CommentCollector } from '../../src/services/facebookPoster/CommentCollector';
 import { CommentCollectScheduler } from '../../src/services/facebookPoster/CommentCollectScheduler';
+import { NotificationScheduler, buildMetricsReport, isDeferringLeads } from '../../src/services/facebookPoster/NotificationScheduler';
+import { LEAD_DIGEST_CURSOR_SETTING_KEY, NOTIFICATION_SETTING_KEY, mergeNotificationConfig, parseNotificationConfig, type NotificationConfig } from '../../src/services/facebookPoster/notificationRules';
 import { LeadDetector, buildLeadsFoundPayload, type LeadAiState } from '../../src/services/facebookPoster/LeadDetector';
 import { LEAD_CONFIG_SETTING_KEY, parseLeadConfig, validateLeadConfig } from '../../src/services/facebookPoster/leadRules';
 import { createLeadClassifier, openLoggedInSession, buildLeadSheetRows } from '../../src/services/facebookPoster/leadWiring';
@@ -43,7 +45,7 @@ import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
-import { emitControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildPagesLearnFinished } from '../../src/services/control/controlEvents';
+import { emitControlEvent, recordControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildPagesLearnFinished } from '../../src/services/control/controlEvents';
 import { getResearchStore, getResearchService, isResearchRunning, cancelResearch, cancelAndWaitResearch, retireResearchService } from './researchIpc';
 import { getPageWorkVideoOperations } from './videoIpc';
 import { getInboxMediaStore } from './inboxMedia';
@@ -54,10 +56,11 @@ import { PageWorkStore } from '../../src/services/dailyBrief/PageWorkStore';
 import { createPageCampaignExecutionGuard, recoverPageCampaignExecutions, type PageCampaignExecutionDeps } from '../../src/services/dailyBrief/pageCampaignExecution';
 import type { ControlPrincipal, PageContext } from '../../src/models/pageOperations';
 import { getDailyBriefStore } from './dailyBriefIpc';
+import { DailyBriefStore, systemClock } from '../../src/services/dailyBrief/DailyBriefStore';
 import { PageLearner } from '../../src/services/dailyBrief/PageLearner';
 import { readPageIdentity } from '../../src/services/dailyBrief/pageIdentity';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
-import type { FbPosterLead, FbPosterRun, LeadStatus, LinkStatus, LoginCheckSource, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
+import type { FbPosterLead, FbPosterRun, LeadStatus, LinkStatus, LoginCheckSource, PageMetrics, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 import { campaignBlockReason, readCampaignRef } from '../../src/services/facebookPoster/campaigns';
 import { scoreGroups } from '../../src/services/facebookPoster/groupScores';
@@ -97,14 +100,9 @@ function runDueCampaignTracking():boolean {
     if(admissionPaused || !captured || campaignTracker?.isRunning() || isResearchRunning() || isWorkspaceSwitchInProgress())return false;
     try {
         captured.assertCurrent();if(!captured.protectedWritesEnabled())return false;
-        const campaigns=new PageCampaignStore(captured.db);
-        const links=captured.db.query<{campaign_id:string}>('SELECT campaign_id FROM page_campaign_links WHERE workspace_id=? AND deleted_at IS NULL',[captured.workspaceId]);
-        for(const entry of links){
-            const scope=campaigns.getLink(entry.campaign_id)!;
-            const measurements=campaigns.listMeasurements(scope,scope.campaignId);
-            const post=campaigns.listPublished(scope,scope.campaignId).find(row=>row.publishedAt!==null && CAMPAIGN_TRACK_MILESTONES.some(m=>
-                captured.now()>=row.publishedAt!+m*60000 && !measurements.some(done=>done.resultId===row.resultId&&done.milestoneMinutes===m&&done.completedAt!==null)));
-            if(!post)continue;
+        const due=dueCampaignPosts(captured.db,captured.workspaceId,captured.now(),(campaignId,err)=>
+            Logger.warn(`[facebookPosterIpc] campaign tracking skipped ${campaignId}: ${(err as Error)?.message ?? err}`));
+        for(const {scope,post} of due){
             const guard=()=>{captured.assertCurrent();if(campaignExecutionContext!==captured || !captured.protectedWritesEnabled())throw new Error(WORKSPACE_SWITCHING_ERROR);
                 assertCampaignCollection(captured.db,scope,scope.campaignId,post.runnerKeyId,captured.now());};
             try {guard();}catch{continue;}
@@ -155,6 +153,7 @@ let collector: CommentCollector | null = null;
 let collectorDbPath: string | null = null;
 let collectorService: FacebookPosterCoordinator | null = null;
 let commentScheduler: CommentCollectScheduler | null = null;
+let notificationScheduler: NotificationScheduler | null = null;
 let scheduler: FacebookPosterScheduler | null = null;
 let schedulerDbPath: string | null = null;
 // Missed-run notices not yet handed to the UI. Only the first takeMissed drains them; after that the UI is live
@@ -178,7 +177,8 @@ const DEFAULT_REPORT_DAYS = 30;
 const BEST_TIMES_DAYS = 60;
 const MAX_TIME_BUCKET_ROWS = 100000; // gom giờ / thứ chỉ có 24 / 7 dòng; nới giới hạn để không bị cắt
 const LINK_STATUSES: LinkStatus[] = ['known', 'missing', 'pending_approval', 'not_found'];
-const STATS_GROUP_BY: PostStatsGroupBy[] = ['group', 'profile', 'schedule', 'campaign', 'variant', 'day', 'post', 'hour', 'weekday'];
+const STATS_GROUP_BY: PostStatsGroupBy[] = ['group', 'page', 'profile', 'schedule', 'campaign', 'variant', 'day', 'post', 'hour', 'weekday'];
+export const MAX_PAGE_METRICS_DAYS = 90;
 export const WORKSPACE_SWITCHING_ERROR = 'Đang đổi workspace, thử lại sau';
 export const POSTER_NOT_STOPPED_ERROR = 'Việc Đăng Facebook chưa dừng được. Thử lại sau.';
 
@@ -268,6 +268,7 @@ function getService(): FacebookPosterCoordinator {
         const boundDb = db();
         const dbPath = boundDb.getDbPath();
         const workspaceId = WorkspaceManager.getInstance().getActiveWorkspace()?.id ?? dbPath;
+        const campaignWorkspaceId = WorkspaceManager.getInstance().getActiveWorkspace()?.id;
         const generation = ++posterGeneration;
         serviceBinding = { db: boundDb, path: dbPath, generation };
         const browser = getBrowserProfileService();
@@ -353,8 +354,17 @@ function getService(): FacebookPosterCoordinator {
                 onLoginObserved: (profileId, state) => safely('onLoginObserved', () => {
                     boundObserver(profileId, state);
                 }),
+                // Spec 2026-10-31 §4.5: verified Page post → campaign binding on the run's own DB; never a new publish.
+                onPagePostKnown: (row) => safely('bindCampaignPost', () => { new PageCampaignExecutionStore(boundDb).bindTrackedPost(row, Date.now(), campaignWorkspaceId); }),
                 readTrackingConfig: () => parsePostTrackingConfig(boundDb.getSetting(POST_TRACKING_SETTING_KEY)),
                 readLeadConfig: boundReadLeadConfig,
+                // Page đã học của profile trong đúng DB của lượt; chưa có bảng/identity hoặc học lỗi = chưa học ('').
+                resolvePageId: (id) => {
+                    try {
+                        const i = new DailyBriefStore(boundDb).getIdentity(id);
+                        return i?.kind === 'page' && !i.errorCode ? i.pageId : '';
+                    } catch { return ''; }
+                },
                 // Lượt thu bình luận thủ công (collect_comments) cũng lọc khách; lỗi lọc không làm hỏng lượt thu.
                 // Khách của cả lượt được gom, phát một sự kiện khi lượt kết thúc (flushManualLeads).
                 onCommentsSaved: async (rows) => {
@@ -520,6 +530,7 @@ function getTracker(): PostTracker {
         trackerDbPath = dbPath;
         trackerService = svc;
         const boundDb = db();
+        const campaignWorkspaceId = WorkspaceManager.getInstance().getActiveWorkspace()?.id;
         const trackerStore = new FacebookPosterStore(boundDb);
         const researchStore = getResearchStore();
         const binding = getProfileJobBinding();
@@ -538,6 +549,16 @@ function getTracker(): PostTracker {
                     throw err;
                 }
             },
+            readPage: async (profileId, context) => {
+                const session = await binding.openForAutomation(profileId, context);
+                try {
+                    const page = session.context.pages()[0] ?? await session.context.newPage();
+                    binding.assertCurrent();
+                    return await readPageIdentity(page, { assertCurrent: binding.assertCurrent });
+                } finally {
+                    await session.close().catch(() => undefined);
+                }
+            },
             observeLogin: (profileId, state) => safely('trackObserveLogin', () => observer(profileId, state)),
             emit: (type, payload) => {
                 try { (type === 'posts.trackFinished' ? binding.assertSettled : binding.assertCurrent)(); } catch { return; }
@@ -550,6 +571,7 @@ function getTracker(): PostTracker {
             },
             getConfig: () => parsePostTrackingConfig(boundDb.getSetting(POST_TRACKING_SETTING_KEY)),
             getLeadConfig: () => parseLeadConfig(boundDb.getSetting(LEAD_CONFIG_SETTING_KEY)),
+            onPagePostKnown: (row) => safely('bindCampaignPost', () => { new PageCampaignExecutionStore(boundDb).bindTrackedPost(row, Date.now(), campaignWorkspaceId); }),
         });
     }
     return tracker;
@@ -559,10 +581,15 @@ function readLeadConfig() {
     return parseLeadConfig(db().getSetting(LEAD_CONFIG_SETTING_KEY));
 }
 
-/** Phát khi có khách mới: cho giao diện và cho Control API (`leads.found`, vào Telegram qua bridge). */
+function readNotificationConfig() {
+    return parseNotificationConfig(db().getSetting(NOTIFICATION_SETTING_KEY));
+}
+
+/** Phát khi có khách mới: cho giao diện và cho Control API (`leads.found`; đang gom tin thì đánh dấu `deferred`, bridge chờ `leads.digest`). */
 function emitLeadsFound(payload: { count: number; samples: { authorName: string; text: string; postUrl: string }[]; auto: boolean; leadIds: number[]; campaignIds: string[] }): void {
     EventBroadcaster.emit('facebookPoster:leadsFound', payload);
-    emitControlEvent('leads.found', buildLeadsFound(payload));
+    const deferred = isDeferringLeads(readNotificationConfig(), db().getSetting(LEAD_DIGEST_CURSOR_SETTING_KEY));
+    emitControlEvent('leads.found', buildLeadsFound({ ...payload, deferred }));
 }
 
 /** Bộ lọc khách của DB đang dùng (không giữ trạng thái nên dựng mỗi lần). AI = trợ lý mặc định của app. */
@@ -1034,6 +1061,34 @@ export function startFacebookPosterScheduler(): void {
         log: (msg) => Logger.warn(msg),
     });
     commentScheduler.start();
+    notificationScheduler = new NotificationScheduler({
+        now: Date.now,
+        timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+        setTimer: (fn, ms) => {
+            const handle = setTimeout(fn, ms);
+            handle.unref?.();
+            return handle;
+        },
+        clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+        readConfig: () => parseNotificationConfig(readSetting(NOTIFICATION_SETTING_KEY)),
+        readSetting,
+        writeSetting: (key, value) => boundDb.setSetting(key, value),
+        atomically: (fn) => boundDb.transaction(fn),
+        canPublish: () => {
+            try { binding.assertCurrent(); } catch { return false; }
+            return hasControlEventSink();
+        },
+        isCollecting: () => (collector?.isRunning() ?? false) || boundService.active().some(({ run }) => run.kind === 'collect_comments'),
+        publish: recordControlEvent,
+        buildReport: (period, cadence) => {
+            const identities = new DailyBriefStore(boundDb).listIdentities();
+            return buildMetricsReport(boundStore, period, cadence, (pageId) => identities.find((i) => i.pageId === pageId)?.pageName || pageId);
+        },
+        leadsAfter: (cursor) => boundStore.listLeadsAfter(cursor),
+        latestLeadCursor: () => boundStore.latestLeadCursor(),
+        log: (msg) => Logger.warn(msg),
+    });
+    notificationScheduler.start();
 }
 
 export function stopFacebookPosterScheduler(): void {
@@ -1041,15 +1096,18 @@ export function stopFacebookPosterScheduler(): void {
     const currentLogin = loginScheduler;
     const currentTrack = trackScheduler;
     const currentComment = commentScheduler;
+    const currentNotification = notificationScheduler;
     scheduler = null;
     loginScheduler = null;
     trackScheduler = null;
     commentScheduler = null;
+    notificationScheduler = null;
     schedulerDbPath = null;
     current?.stop();
     currentLogin?.stop();
     currentTrack?.stop();
     currentComment?.stop();
+    currentNotification?.stop();
 }
 
 function clampLimit(value: any, fallback: number, max: number): number {
@@ -1341,11 +1399,60 @@ export const trackingOperations = {
         return pickBestTimes(s.statsReport({ ...base, groupBy: 'hour' }), s.statsReport({ ...base, groupBy: 'weekday' }));
     },
 
+    /** Bài Page đã biết Page (`pageId` khác '') đăng trong `days` ngày gần nhất, mọi lần đo theo mốc và chuỗi người theo dõi theo ngày. */
+    pageMetrics: (params: { pageId?: string; days?: number }): { pages: PageMetrics[] } => {
+        const p: any = params ?? {};
+        const days = p.days === undefined ? DEFAULT_REPORT_DAYS : p.days;
+        if (!Number.isInteger(days) || days < 1 || days > MAX_PAGE_METRICS_DAYS) throw new Error(`days phải là số nguyên từ 1 đến ${MAX_PAGE_METRICS_DAYS}`);
+        if (p.pageId !== undefined && (typeof p.pageId !== 'string' || !p.pageId)) throw new Error('pageId không hợp lệ');
+        const s = store();
+        const since = Date.now() - days * DAY_MS;
+        const rows = s.listTracking({ targetKind: 'page', pageId: p.pageId, sinceMs: since, limit: MAX_TRACK_LIST_SCAN }).filter((r) => r.pageId !== '');
+        const history = s.statsHistory(rows.map((r) => r.resultId));
+        const texts = s.postTexts(rows);
+        const names = s.pageNames();
+        const pages = new Map<string, PageMetrics>();
+        const pageOf = (pageId: string) => {
+            let entry = pages.get(pageId);
+            if (!entry) pages.set(pageId, entry = { pageId, pageName: names.get(pageId) || pageId, posts: [], followers: [] });
+            return entry;
+        };
+        for (const r of rows) {
+            pageOf(r.pageId).posts.push({ resultId: r.resultId, postId: r.postId, postUrl: r.postUrl, postedAt: r.postedAt, linkStatus: r.linkStatus, text: (texts.get(r.resultId) ?? r.textHead).slice(0, 200), snapshots: history.get(r.resultId) ?? [] });
+        }
+        for (const f of s.listPageFollowers({ pageId: p.pageId, sinceDay: systemClock.date(since) })) if (f.pageId !== '') pageOf(f.pageId).followers.push(f);
+        return { pages: [...pages.values()].sort((a, b) => (a.pageId < b.pageId ? -1 : a.pageId > b.pageId ? 1 : 0)) };
+    },
+
     getConfig: () => ({ config: readTrackingConfig() }),
 
     setConfig: (params: any) => {
         const config = validatePostTrackingConfig(params);
         db().setSetting(POST_TRACKING_SETTING_KEY, JSON.stringify(config));
+        return { config };
+    },
+};
+
+/** Cấu hình báo cáo 📊 / gom tin 🎯 qua bot: dùng chung cho IPC và Control API (kiểm tham số nằm ở đây). */
+export const notificationOperations = {
+    getConfig: (): { config: NotificationConfig } => ({ config: readNotificationConfig() }),
+
+    /**
+     * Lưu một phần cấu hình. Đổi lịch báo cáo không chạm trạng thái kỳ: scheduler tự thấy lịch đổi và ghi kỳ hiện tại, không gửi.
+     * Đổi `leadDigestMinutes` thì ghi cấu hình và đổi con trỏ gom (`applyLeadDigestChange`) trong cùng một giao dịch: có lượt thu
+     * bình luận đang chạy hoặc gửi gộp lỗi thì không đổi gì; chưa có scheduler gắn với DB đang mở thì từ chối (BUSY).
+     */
+    setConfig: (patch: unknown): { config: NotificationConfig } => {
+        const current = readNotificationConfig();
+        const config = mergeNotificationConfig(current, patch);
+        const boundDb = db();
+        const notifier = notificationScheduler;
+        const digestChanged = config.leadDigestMinutes !== current.leadDigestMinutes;
+        if (digestChanged && (!notifier || schedulerDbPath !== boundDb.getDbPath())) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        boundDb.transaction(() => {
+            boundDb.setSetting(NOTIFICATION_SETTING_KEY, JSON.stringify(config));
+            if (digestChanged) notifier!.applyLeadDigestChange(config.leadDigestMinutes);
+        });
         return { config };
     },
 };
@@ -1486,6 +1593,9 @@ export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:bestTimes', trackingOperations.bestTimes);
     handle('facebookPoster:getTrackConfig', trackingOperations.getConfig);
     handle('facebookPoster:setTrackConfig', trackingOperations.setConfig);
+    handle('facebookPoster:pageMetrics', trackingOperations.pageMetrics);
+    handle('facebookPoster:getNotificationConfig', notificationOperations.getConfig);
+    handle('facebookPoster:setNotificationConfig', notificationOperations.setConfig);
     handle('facebookPoster:leadList', leadOperations.list);
     handle('facebookPoster:leadUpdate', leadOperations.update);
     handle('facebookPoster:leadConfigGet', leadOperations.getConfig);

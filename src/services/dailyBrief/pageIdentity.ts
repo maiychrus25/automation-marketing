@@ -18,6 +18,8 @@ export interface PageIdentityRead {
     category: string;
     about: string;
     recentPosts: PagePostSample[];
+    /** Vắng/null = chưa xác minh. */
+    followers?: number | null;
 }
 
 export class PageLoginProblem extends Error {
@@ -142,6 +144,7 @@ export function parseIdentityHtml(html: string, finalUrl: string): PageIdentityR
     }
     if (names.size > 1 || categories.size > 1 || descriptions.size > 1) return emptyIdentity();
     const feeds = payloads.filter((data) => at(data, 'user', 'id') === activeId && at(data, 'user', 'delegate_page', 'id') === pageId);
+    // shortcut: followers chưa có mẫu phản hồi thật đã lọc; giữ undefined tới khi có fixture page-followers.html
     return {
         kind: 'page', pageId, pageName: [...names][0] ?? '', category: [...categories][0] ?? '',
         about: ([...descriptions][0] ?? '').slice(0, MAX_ABOUT), recentPosts: postsFromFeeds(feeds),
@@ -187,6 +190,7 @@ function postsFromFeeds(feeds: unknown[]): PagePostSample[] {
             const seconds = count(story.creation_time);
             const milliseconds = seconds === null ? null : seconds * 1000;
             posts.push({
+                postId,
                 text: string(at(story, 'comet_sections', 'content', 'story', 'message', 'text')).slice(0, MAX_POST_TEXT),
                 reactions: metric(renderers, 'reaction_count', 'count'),
                 comments: metric(renderers, 'comment_rendering_instance', 'comments', 'total_count'),

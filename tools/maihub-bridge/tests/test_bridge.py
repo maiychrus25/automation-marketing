@@ -1426,16 +1426,16 @@ class FormatEventTests(unittest.TestCase):
         results.insert(0, {"outcome": "posted", "targetName": "OK", "error": ""})
         text = self.fmt(finished(1, posted=1, failed=5), {"r1": {"run": {}, "results": results}})
         lines = text.split("\n")
-        self.assertEqual(lines[0], "⚠️ Đăng ngay: xong 1/6, lỗi 5")
+        self.assertEqual(lines[0], "⚠️ Đăng bài lỗi: Đăng ngay — xong 1/6, lỗi 5")
         self.assertEqual(lines[1:], ["• Nhóm 0: Lỗi 0", "• Nhóm 1: Lỗi 1", "• Nhóm 2: Lỗi 2"])
 
     def test_failed_when_runs_get_raises_sends_head_only(self):
         text = self.fmt(finished(1, posted=0, failed=2), {"r1": bridge.BridgeError("UNREACHABLE", "x")})
-        self.assertEqual(text, "⚠️ Đăng ngay: xong 0/2, lỗi 2")
+        self.assertEqual(text, "⚠️ Đăng bài lỗi: Đăng ngay — xong 0/2, lỗi 2")
 
     def test_run_level_failure_without_failed_targets(self):
         text = self.fmt(finished(1, status="failed", posted=0))
-        self.assertTrue(text.startswith("⚠️ Đăng ngay: "))
+        self.assertTrue(text.startswith("⚠️ Đăng bài lỗi: Đăng ngay — "))
 
     def test_cancelled(self):
         self.assertEqual(self.fmt(finished(1, status="cancelled", posted=1, failed=1)), "⏹ Đăng ngay: đã huỷ (1/2)")
@@ -1546,13 +1546,13 @@ class FormatBriefTests(unittest.TestCase):
         for attempts in (3, 4):
             with self.subTest(attempts=attempts):
                 self.brief["brief"]["attempts"] = attempts
-                self.assertEqual(self.fmt(), ["⚠️ Mai Shop: hôm nay chưa tạo được bài đề xuất — Lỗi nghiên cứu"])
+                self.assertEqual(self.fmt(), ["⚠️ Đề xuất lỗi: Mai Shop — Lỗi nghiên cứu"])
         self.assertEqual(self.draft_calls, [])
 
     def test_failure_error_is_clipped_to_200_characters(self):
         self.event["payload"].update(ok=False, error="e" * 1000)
         self.brief["brief"]["attempts"] = 3
-        self.assertEqual(self.fmt(), ["⚠️ Mai Shop: hôm nay chưa tạo được bài đề xuất — " + "e" * 199 + "…"])
+        self.assertEqual(self.fmt(), ["⚠️ Đề xuất lỗi: Mai Shop — " + "e" * 199 + "…"])
 
     def test_failed_brief_fetch_is_silent(self):
         self.event["payload"].update(ok=False, error="Lỗi nghiên cứu")
@@ -1617,14 +1617,11 @@ class FormatTrackFinishedTests(unittest.TestCase):
         payload.update(over)
         return bridge.format_event({"seq": 1, "type": "posts.trackFinished", "payload": payload, "createdAt": 1}, lambda r: None)
 
-    def test_reports_links_and_suspected_removals(self):
-        self.assertEqual(self.fmt(), "📈 Theo dõi bài: kiểm tra 3 nhóm, lấy được 2 link, 1 bài có thể đã bị xoá")
-        self.assertEqual(self.fmt(auto=True, linked=0), "📈 Theo dõi bài: kiểm tra 3 nhóm, lấy được 0 link, 1 bài có thể đã bị xoá")
-        self.assertEqual(self.fmt(auto=True, removedSuspected=0), "📈 Theo dõi bài: kiểm tra 3 nhóm, lấy được 2 link, 0 bài có thể đã bị xoá")
-
-    def test_silent_when_nothing_new(self):
+    def test_never_sent_per_run(self):
+        self.assertIsNone(self.fmt())
+        self.assertIsNone(self.fmt(auto=True, linked=0))
+        self.assertIsNone(self.fmt(auto=True, removedSuspected=0))
         self.assertIsNone(self.fmt(linked=0, removedSuspected=0))
-        self.assertIsNone(self.fmt(auto=True, linked=0, removedSuspected=0, found=4))
 
 
 class FormatLeadsFoundTests(unittest.TestCase):
@@ -1652,6 +1649,10 @@ class FormatLeadsFoundTests(unittest.TestCase):
     def test_bool_count_is_not_a_count(self):
         self.assertIsNone(self.fmt(count=True))
 
+    def test_deferred_is_not_sent_individually(self):
+        self.assertIsNone(self.fmt(deferred=True))
+        self.assertEqual(self.fmt(deferred=False), "🎯 2 khách tiềm năng mới\nLan: giá bao nhiêu vậy shop\nHoa: ib mình nhé")
+
     def test_newlines_in_sample_text_become_spaces(self):
         self.assertEqual(self.fmt(count=1, samples=[{"authorName": "Lan\n", "text": "giá\nbao nhiêu\r\n vậy"}]), "🎯 1 khách tiềm năng mới\nLan: giá bao nhiêu vậy")
 
@@ -1659,6 +1660,97 @@ class FormatLeadsFoundTests(unittest.TestCase):
         self.assertEqual(self.fmt(count=1, samples=[{}, "bad"]), "🎯 1 khách tiềm năng mới")
         self.assertEqual(self.fmt(count=1, samples=None), "🎯 1 khách tiềm năng mới")
         self.assertEqual(self.fmt(count=1, samples=[{"authorName": "Lan"}]), "🎯 1 khách tiềm năng mới\nLan: ")
+
+
+class FormatLeadsDigestTests(unittest.TestCase):
+    def fmt(self, **over):
+        payload = {"count": 3, "auto": True, "leadIds": [1, 2, 3], "campaignIds": [], "from": 1, "to": 2, "label": "08:00–09:00", "samples": [
+            {"authorName": "Lan", "text": "giá bao nhiêu vậy shop", "postUrl": "u1"},
+            {"authorName": "Hoa", "text": "ib mình nhé", "postUrl": "u2"}]}
+        payload.update(over)
+        return bridge.format_event({"seq": 1, "type": "leads.digest", "payload": payload, "createdAt": 1}, lambda r: None)
+
+    def test_header_has_count_and_label_then_samples(self):
+        self.assertEqual(self.fmt(), "🎯 3 khách tiềm năng mới · 08:00–09:00\nLan: giá bao nhiêu vậy shop\nHoa: ib mình nhé")
+
+    def test_at_most_three_samples_clipped(self):
+        samples = [{"authorName": "N%d" % i, "text": "x" * 200} for i in range(5)]
+        lines = self.fmt(samples=samples).split("\n")
+        self.assertEqual(len(lines), 4)
+        self.assertEqual(lines[1], "N0: " + "x" * 79 + "…")
+
+    def test_silent_without_leads(self):
+        self.assertIsNone(self.fmt(count=0))
+        self.assertIsNone(self.fmt(count=True))
+        self.assertIsNone(self.fmt(count=None))
+
+    def test_tolerates_missing_label_and_samples(self):
+        self.assertEqual(self.fmt(label=None, samples=None), "🎯 3 khách tiềm năng mới")
+        self.assertEqual(self.fmt(samples=[{}, "bad"]), "🎯 3 khách tiềm năng mới · 08:00–09:00")
+
+
+class FormatMetricsReportTests(unittest.TestCase):
+    def fmt(self, **over):
+        payload = {"cadence": "weekly", "periodKey": "2026-W44", "from": 1, "to": 2, "label": "24/10–30/10", "posts": 12,
+                   "measured": 10, "engagement": 340, "notFound": 1,
+                   "top": [{"resultId": 1, "targetKind": "page", "text": "Bài hay nhất", "postUrl": None, "engagement": 120}],
+                   "followers": [{"pageId": "p1", "pageName": "Mai Shop", "current": 1234, "change": 12},
+                                 {"pageId": "p2", "pageName": "Mai Spa", "current": None, "change": None}]}
+        payload.update(over)
+        return bridge.format_event({"seq": 1, "type": "metrics.report", "payload": payload, "createdAt": 1}, lambda r: None)
+
+    def test_full_report(self):
+        self.assertEqual(self.fmt().split("\n"), [
+            "📊 Báo cáo hiệu quả · 24/10–30/10",
+            "Bài: 12 · Tương tác: 340 (10 bài đã đo) · Không tìm thấy link: 1",
+            "Nổi bật:", "1. Bài hay nhất — 120",
+            "Người theo dõi:", "Mai Shop: 1234 (+12)", "Mai Spa: chưa đủ dữ liệu"])
+
+    def test_engagement_null_is_not_zero(self):
+        line = self.fmt(engagement=None, measured=0).split("\n")[1]
+        self.assertEqual(line, "Bài: 12 · Tương tác: chưa đo được · Không tìm thấy link: 1")
+
+    def test_negative_and_zero_change(self):
+        text = self.fmt(followers=[{"pageName": "A", "current": 10, "change": -3}, {"pageName": "B", "current": 10, "change": 0},
+                                   {"pageName": "C", "current": 10, "change": None}])
+        self.assertIn("A: 10 (-3)", text)
+        self.assertIn("B: 10 (+0)", text)
+        self.assertIn("C: 10 (chưa đủ dữ liệu)", text)
+
+    def test_top_text_clipped_to_60_and_one_line(self):
+        text = self.fmt(top=[{"text": "a\nb" + "x" * 100, "engagement": 5}])
+        self.assertIn("1. a b" + "x" * 56 + "… — 5", text)
+
+    def test_missing_sections_are_dropped(self):
+        text = self.fmt(top=[], followers=[])
+        self.assertNotIn("Nổi bật", text)
+        self.assertNotIn("Người theo dõi", text)
+        self.assertEqual(self.fmt(top=None, followers="bad", notFound=None).split("\n"), [
+            "📊 Báo cáo hiệu quả · 24/10–30/10", "Bài: 12 · Tương tác: 340 (10 bài đã đo)"])
+
+    def test_bad_payload_does_not_raise(self):
+        self.assertEqual(self.fmt(label=None, posts=None, measured=None, engagement="x", notFound=None, top=[1, {}], followers=[None, {}]),
+                         "📊 Báo cáo hiệu quả")
+
+    def test_non_finite_numbers_are_treated_as_invalid(self):
+        nan, inf = float("nan"), float("inf")
+        text = self.fmt(posts=nan, engagement=inf, followers=[{"pageName": "A", "current": nan, "change": inf}])
+        self.assertEqual(text.split("\n"), ["📊 Báo cáo hiệu quả · 24/10–30/10", "Không tìm thấy link: 1",
+                                            "Nổi bật:", "1. Bài hay nhất — 120", "Người theo dõi:", "A: chưa đủ dữ liệu"])
+        self.assertIsNotNone(self.fmt(top=[{"text": "t", "engagement": nan}], notFound=inf))
+
+    def test_followers_capped_at_20_with_remainder_line(self):
+        followers = [{"pageName": "P%d" % i, "current": i, "change": 1} for i in range(25)]
+        lines = self.fmt(followers=followers).split("\n")
+        start = lines.index("Người theo dõi:")
+        self.assertEqual(lines[start + 1:], ["P%d: %d (+1)" % (i, i) for i in range(20)] + ["… và 5 Page khác"])
+        self.assertEqual(len(self.fmt(followers=followers[:20]).split("\n")) - start - 1, 20)
+        self.assertNotIn("Page khác", self.fmt(followers=followers[:20]))
+
+    def test_total_length_capped(self):
+        top = [{"text": "t" * 500, "engagement": 1}] * 3
+        followers = [{"pageName": "P" * 500, "current": 1, "change": 1}] * 50
+        self.assertLessEqual(len(self.fmt(top=top, followers=followers)), 3500)
 
 
 class NotifyTargetTests(unittest.TestCase):
@@ -1868,7 +1960,7 @@ class WatcherTests(unittest.TestCase):
                     "profileId": "p1", "attempts": attempts, "status": "idle", "claimedAt": None}}})
                 w.state = {"cursor": 0, "workspaceId": "ws1"}
                 w.step()
-                expected = [] if attempts == 1 else ["⚠️ Mai Shop: hôm nay chưa tạo được bài đề xuất — Quá giờ"]
+                expected = [] if attempts == 1 else ["⚠️ Đề xuất lỗi: Mai Shop — Quá giờ"]
                 self.assertEqual(self.sender.sent, expected)
                 self.assertEqual(self.state()["cursor"], 7)
                 self.assertEqual(self.client.calls, [("events.wait", {"after": 0, "timeoutSec": 25}),
@@ -2077,7 +2169,7 @@ class WatcherTests(unittest.TestCase):
         w = self.watcher([page([]), page([finished(1, posted=0, failed=1)])], runs)
         w.step()
         w.step()
-        self.assertEqual(self.sender.sent, ["⚠️ Đăng ngay: xong 0/1, lỗi 1\n• N: E"])
+        self.assertEqual(self.sender.sent, ["⚠️ Đăng bài lỗi: Đăng ngay — xong 0/1, lỗi 1\n• N: E"])
 
     def test_state_file_is_private_json(self):
         w = self.watcher([page([])])

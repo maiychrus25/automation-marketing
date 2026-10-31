@@ -78,6 +78,26 @@ function extractStoryOwnerFromBody(text: unknown): { ownerId: string; postId: st
   return null;
 }
 
+/** Giá trị "owner_id" của thân phản hồi, chỉ khi mọi lần xuất hiện đều bằng nhau (hai chủ khác nhau = không biết chủ). */
+function extractUniqueOwnerField(text: unknown): string | null {
+  const owners = new Set(Array.from(String(text || '').matchAll(/"owner_id":"(\d+)"/g), (m) => m[1]));
+  return owners.size === 1 ? [...owners][0] : null;
+}
+
+/**
+ * Link bài Page vừa đăng, chỉ khi chủ bài trong phản hồi mutation đúng Page đang đăng (spec 2026-10-31 §4.1).
+ * Thiếu Page đã học, chủ lạ, thiếu id hoặc id story lệch "post_id" thì null — thà không có link còn hơn link bài người khác.
+ */
+export function pageCaptureTarget(
+  captured: { postId: string | null; story: { ownerId: string; postId: string } | null; ownerField: string | null },
+  expectedPageId: string,
+): { postId: string; postUrl: string } | null {
+  const { postId, story, ownerField } = captured;
+  const owner = story?.ownerId ?? ownerField;
+  if (!expectedPageId || owner !== expectedPageId || !postId || (story && story.postId !== postId)) return null;
+  return { postId, postUrl: `https://www.facebook.com/${expectedPageId}/posts/${postId}` };
+}
+
 /** Ghép id bài thành link đầy đủ theo kiểu đích. */
 function buildPostUrl(target: { url: string }, postId: string | null, ownerId: string | null = null): string | null {
   if (!postId) return null;
@@ -514,6 +534,10 @@ interface SingleTargetOutcome {
   commentStatus?: CommentStatus;
   /** Bài đã đăng, chưa có link và trang đang hiện câu chờ duyệt. */
   pendingApproval?: boolean;
+  /** Chỉ có ở chế độ Page: link đã xác minh chủ bài là Page đang đăng (bằng chứng theo dõi), null nếu chưa xác minh được. */
+  verifiedPostUrl?: string | null;
+  /** Chỉ có ở chế độ Page: lúc bấm Đăng (epoch ms), trước khi chờ bình luận đầu. */
+  publishedAt?: number;
   /** Danh tính đọc được từ lời mời soạn bài ('' nếu không đọc được). */
   identity: string;
   /** Thời gian đã chờ trước khi bình luận (ms), để trừ vào khoảng nghỉ kế tiếp. */
@@ -554,7 +578,7 @@ async function postToSingleTarget(
   ctx: BrowserContext,
   target: { url: string; kind: 'group' | 'page' },
   { text, mediaPaths, comment, commentDelayMin = 0 }: { text: string; mediaPaths: string[]; comment: string | null; commentDelayMin?: number },
-  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog' | 'enterCritical' | 'autonomyGuard'> & {
+  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog' | 'enterCritical' | 'autonomyGuard' | 'expectedPageId' | 'now'> & {
     attachShortfall?: () => boolean;
     /** Lần thử thứ mấy (1-based). Từ lần 2 phải xoá bản nháp cũ trước khi gõ. */
     attempt?: number;
@@ -776,6 +800,9 @@ async function postToSingleTarget(
   // trong finally — để sống qua bài sau sẽ gán nhầm link của bài trước.
   let capturedId: string | null = null;
   let capturedOwner: string | null = null;
+  let capturedStory: { ownerId: string; postId: string } | null = null;
+  let capturedOwnerField: string | null = null;
+  const pageMode = typeof deps.expectedPageId === 'string';
   const listenToResponse = (response: Response) => {
     if (capturedId) return;
     if (!/\/api\/graphql/i.test(response.url())) return;
@@ -788,7 +815,11 @@ async function postToSingleTarget(
         // khác. Chỉ nhận phản hồi của mutation tạo bài — thà không có link
         // còn hơn lưu nhầm link bài người lạ rồi đi quét bình luận của họ.
         if (!/story_create|StoryCreate|create_story|"__typename":"Story"/i.test(body)) return;
+        // Chế độ Page: chỉ mutation tạo bài; phản hồi mang bài CŨ của chính Page ("__typename":"Story") đến trước không được khoá id.
+        if (pageMode && !/story_create|StoryCreate|create_story/i.test(body)) return;
         const story = extractStoryOwnerFromBody(body);
+        // Chủ bài cho chế độ Page lấy từ đúng thân phản hồi đã cho id bài, không ghép từ hai phản hồi.
+        if (!capturedId) { capturedStory = story; capturedOwnerField = extractUniqueOwnerField(body); }
         capturedOwner = capturedOwner || story?.ownerId || null;
         capturedId = capturedId || extractPostIdFromBody(body) || story?.postId || null;
       })
@@ -798,6 +829,7 @@ async function postToSingleTarget(
 
   let published = false;
   let dialogClosed = false;
+  let publishedAt: number | undefined;
   try {
     // Nút Đăng đang tắt nghĩa là Facebook chưa ghi nhận chữ — bấm cũng vô ích.
     // Báo đúng nguyên nhân ngay, thay vì bấm hụt rồi chờ 30 giây báo mơ hồ.
@@ -869,6 +901,8 @@ async function postToSingleTarget(
       // Chưa có cú bấm nào (dù đã enterCritical) nên vẫn là lỗi trước khi bấm.
       return failed('submit_not_found', 'Không tìm thấy nút Đăng');
     }
+    // Giờ đăng của dòng theo dõi Page: ngay sau cú bấm, không phải lúc có kết quả (bình luận đầu có thể chờ tới 60 phút).
+    if (pageMode) publishedAt = (deps.now ?? Date.now)();
 
     // Đóng modal gợi ý nếu Facebook chen vào, trước khi kết luận.
     await delayRandom(2000, 3000);
@@ -893,7 +927,7 @@ async function postToSingleTarget(
         ? 'Đã click Đăng nhưng vẫn ở trang /post/create — bài chưa lên'
         : 'Đã click Đăng nhưng hộp soạn thảo không đóng — bài chưa lên';
       sendLog(`[${kind}] [ERROR] ${reason}: ${url}`, 'error');
-      return failed('uncertain_after_submit', reason + UNCERTAIN_SUFFIX, true);
+      return { ...failed('uncertain_after_submit', reason + UNCERTAIN_SUFFIX, true), ...(publishedAt !== undefined ? { publishedAt } : {}) };
     }
 
     sendLog(`[${kind}] [SUCCESS] Đã đăng thành công: ${url}`, 'success');
@@ -908,11 +942,18 @@ async function postToSingleTarget(
     page.off('response', listenToResponse);
   }
 
-  // Neither the response-window capture nor an own-feed match binds a post to this publish request.
+  // Chế độ Page: bằng chứng theo dõi chỉ khi chủ bài trong phản hồi đúng Page đang đăng (không dùng đường dự phòng DOM).
+  // Tách khỏi link bình luận đầu bên dưới, vốn giữ nguyên cách bắt cũ.
+  const verifiedPageUrl = pageMode
+    ? pageCaptureTarget({ postId: capturedId, story: capturedStory, ownerField: capturedOwnerField }, deps.expectedPageId!)?.postUrl ?? null
+    : null;
+  const proof = pageMode ? { verifiedPostUrl: verifiedPageUrl, publishedAt } : {};
+
+  // An own-feed match never binds a post to this publish request; only an owner-verified Page capture does. Still no comment (sub-project B).
   if (deps.autonomyGuard) {
     const requested=!!String(comment ?? '').trim();
     if (requested) sendLog('[Đăng Bài] Đã đăng; chưa có bằng chứng định danh đúng bài vừa gửi nên không tự bình luận.', 'warning');
-    return {ok:true,postUrl:null,commentStatus:requested?'no_post_url':'not_requested',identity,waitedMs:0};
+    return {ok:true,postUrl:verifiedPageUrl,...proof,commentStatus:requested?'no_post_url':'not_requested',identity,waitedMs:0};
   }
 
   let postUrl = buildPostUrl({ url }, capturedId, capturedOwner);
@@ -941,7 +982,7 @@ async function postToSingleTarget(
       waitedMs += step;
     }
     if (getIsStopping()) {
-      return { ok: true, postUrl, commentStatus: 'failed', identity, waitedMs, pendingApproval };
+      return { ok: true, postUrl, ...proof, commentStatus: 'failed', identity, waitedMs, pendingApproval };
     }
   }
   const outcome = await postFirstComment(page, { postUrl, comment, text }, { sendLog, getIsStopping, autonomyGuard: deps.autonomyGuard });
@@ -949,7 +990,7 @@ async function postToSingleTarget(
     sendLog(`[${kind}] Bình luận chưa vào được (${url}): ${outcome.reason}`, 'warning');
   }
 
-  return { ok: true, postUrl, commentStatus: outcome.status, identity, waitedMs, pendingApproval };
+  return { ok: true, postUrl, ...proof, commentStatus: outcome.status, identity, waitedMs, pendingApproval };
 }
 
 export interface PostTargetResult {
@@ -962,6 +1003,10 @@ export interface PostTargetResult {
   identity: string;
   /** Đăng được nhưng chưa có link và trang báo chờ duyệt. */
   pendingApproval: boolean;
+  /** Chỉ có ở chế độ Page: link đã xác minh chủ Page (bằng chứng theo dõi); `postUrl` vẫn là link bắt kiểu cũ dùng cho bình luận đầu. */
+  verifiedPostUrl?: string | null;
+  /** Chỉ có ở chế độ Page khi đã bấm Đăng: lúc bấm (epoch ms), dùng làm giờ đăng của dòng theo dõi. */
+  publishedAt?: number;
   /** '' khi thành công. */
   errorCode: PostErrorCode | '';
   /** Số lần đã thử (≥ 1). */
@@ -1072,6 +1117,8 @@ export async function postToTargets(
       let waitedMs = 0;
       let errorCode: PostErrorCode | '' = '';
       let pendingApproval = false;
+      let verifiedPostUrl: string | null | undefined;
+      let publishedAt: number | undefined;
       let attempts = 0;
       let loginProblem: 'checkpoint' | 'logged_out' | null = null;
       let browserClosed = false;
@@ -1080,7 +1127,7 @@ export async function postToTargets(
       try {
         for (let attempt = 1; ; attempt++) {
           attempts = attempt;
-          ok = false; error = null; postUrl = null; errorCode = ''; commentStatus = 'not_requested'; pendingApproval = false;
+          ok = false; error = null; postUrl = null; errorCode = ''; commentStatus = 'not_requested'; pendingApproval = false; verifiedPostUrl = undefined; publishedAt = undefined;
           // Đã qua điểm không quay lại trong lần thử này chưa (để phân loại ngoại lệ).
           let enteredCritical = false;
           let afterSubmit = false;
@@ -1098,13 +1145,15 @@ export async function postToTargets(
           }
           try {
             const single = await postToSingleTarget(page, ctx, target, { text: textFor?.(target.url) ?? text, mediaPaths: files, comment, commentDelayMin },
-              { getIsStopping, sendLog, autonomyGuard: deps.autonomyGuard, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall, attempt, onNavigated: dropDialogHandler });
+              { getIsStopping, sendLog, autonomyGuard: deps.autonomyGuard, expectedPageId: deps.expectedPageId, now: deps.now, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall, attempt, onNavigated: dropDialogHandler });
             // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
             // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
             ok = single.ok;
             postUrl = single.postUrl;
             identity = single.identity;
             pendingApproval = !!single.pendingApproval;
+            verifiedPostUrl = single.verifiedPostUrl;
+            publishedAt = single.publishedAt;
             waitedMs = single.waitedMs ?? 0;
             if (!single.ok) {
               errorCode = single.errorCode ?? 'unknown';
@@ -1162,7 +1211,7 @@ export async function postToTargets(
             break;
           }
         }
-        const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity, pendingApproval, errorCode, attempts };
+        const entry: PostTargetResult = { url: target.url, ok, error, postUrl, commentStatus, identity, pendingApproval, errorCode, attempts, ...(verifiedPostUrl !== undefined ? { verifiedPostUrl } : {}), ...(publishedAt !== undefined ? { publishedAt } : {}) };
         results.push(entry);
         // Báo ngay khi đích này xong để nơi gọi ghi lịch sử/hiển thị từng bước,
         // không đợi cả lượt.

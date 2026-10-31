@@ -1,16 +1,21 @@
 import type { GroupGrade } from '../../../services/facebookPoster/groupScores';
 import type { BestTimes } from '../../../services/facebookPoster/bestTimes';
-import type { LinkStatus, PostStatsSnapshot, PostStatsGroupBy } from '../../../models/facebookPoster';
+import type { LinkStatus, PostStatsSnapshot, PostStatsGroupBy, PostTrackingRow, PageFollowerRow, TrackTargetKind } from '../../../models/facebookPoster';
+import type { NotificationConfig } from '../../../services/facebookPoster/notificationRules';
 
 export interface LinkChip { label: string; cls: string; title: string }
 
 /** Chip trạng thái link theo spec 7; null khi đã có link và không nghi bị xoá (không cần chip). */
-export function linkChip(linkStatus: LinkStatus, removedSuspected: boolean): LinkChip | null {
+export function linkChip(linkStatus: LinkStatus, removedSuspected: boolean, targetKind: TrackTargetKind = 'group'): LinkChip | null {
   if (removedSuspected) return { label: 'Có thể đã bị xoá', cls: 'text-red-400 border-red-500/30', title: 'Bài từng thấy nhưng lần kiểm tra gần nhất không còn thấy' };
   switch (linkStatus) {
     case 'pending_approval': return { label: 'Chờ duyệt', cls: 'text-orange-400 border-orange-500/30', title: 'Bài đang chờ quản trị viên nhóm duyệt' };
-    case 'missing': return { label: 'Chưa có link', cls: 'text-gray-400 border-gray-600', title: 'Chưa lấy được link bài, MaiHub sẽ thử lại' };
-    case 'not_found': return { label: 'Không tìm thấy', cls: 'text-gray-400 border-gray-600', title: 'Đã thử hết các mốc nhưng không thấy bài trong nhóm' };
+    case 'missing':
+      if (targetKind === 'page') return { label: 'Đang tìm link', cls: 'text-gray-400 border-gray-600', title: 'MaiHub đang tìm lại bài trong các bài gần nhất của Page' };
+      return { label: 'Chưa có link', cls: 'text-gray-400 border-gray-600', title: 'Chưa lấy được link bài, MaiHub sẽ thử lại' };
+    case 'not_found':
+      if (targetKind === 'page') return { label: 'Không tìm thấy', cls: 'text-gray-400 border-gray-600', title: 'Đã thử hết các mốc nhưng không thấy bài trong các bài gần nhất của Page' };
+      return { label: 'Không tìm thấy', cls: 'text-gray-400 border-gray-600', title: 'Đã thử hết các mốc nhưng không thấy bài trong nhóm' };
     default: return null;
   }
 }
@@ -22,8 +27,9 @@ export function formatStatsLine(s: Pick<PostStatsSnapshot, 'reactions' | 'commen
   return `👍 ${num(s.reactions)} · 💬 ${num(s.comments)} · ↗ ${num(s.shares)}`;
 }
 
-export const GROUP_BY_OPTIONS: { value: Extract<PostStatsGroupBy, 'group' | 'profile' | 'schedule' | 'campaign' | 'variant' | 'hour' | 'weekday'>; label: string }[] = [
+export const GROUP_BY_OPTIONS: { value: Extract<PostStatsGroupBy, 'group' | 'page' | 'profile' | 'schedule' | 'campaign' | 'variant' | 'hour' | 'weekday'>; label: string }[] = [
   { value: 'group', label: 'Nhóm' },
+  { value: 'page', label: 'Page' },
   { value: 'profile', label: 'Profile' },
   { value: 'schedule', label: 'Lịch' },
   { value: 'campaign', label: 'Chiến dịch' },
@@ -78,3 +84,41 @@ export function formatBestTimes(result: Pick<BestTimes, 'hours' | 'weekdays' | '
   if (result.weekdays.length) parts.push(`Thứ nên đăng: ${result.weekdays.map((w) => w.label).join(', ')}`);
   return `${parts.join(' · ')} (60 ngày gần nhất, theo giờ máy)`;
 }
+
+/** Lý do ô số liệu trống của bài Page đã có link và đã qua mốc đo nhưng chưa có số; null khi không cần giải thích. */
+export function missingStatsReason(row: Pick<PostTrackingRow, 'linkStatus' | 'targetKind' | 'statsDone'>, latest: PostStatsSnapshot | null): string | null {
+  if (row.targetKind !== 'page' || row.linkStatus !== 'known' || row.statsDone.length === 0 || latest) return null;
+  return 'Không có trong 10 bài gần nhất của Page';
+}
+
+const DAY_MS = 86_400_000;
+const dayMs = (iso: string): number => Date.parse(`${iso}T00:00:00Z`);
+
+/** Số người theo dõi hiện tại và chênh lệch so với 7 / 30 ngày trước (lần chụp gần nhất không muộn hơn mốc đó); chưa có thì null (không đoán). */
+export function followerSummary(series: PageFollowerRow[]): { current: number | null; change7: number | null; change30: number | null } {
+  if (series.length === 0) return { current: null, change7: null, change30: null };
+  const sorted = [...series].sort((a, b) => a.capturedOn.localeCompare(b.capturedOn));
+  const last = sorted[sorted.length - 1];
+  const change = (days: number): number | null => {
+    const cutoff = dayMs(last.capturedOn) - days * DAY_MS;
+    const base = [...sorted].reverse().find((r) => dayMs(r.capturedOn) <= cutoff);
+    return base ? last.followers - base.followers : null;
+  };
+  return { current: last.followers, change7: change(7), change30: change(30) };
+}
+
+export const REPORT_CADENCE_OPTIONS: { value: NotificationConfig['reportCadence']; label: string }[] = [
+  { value: 'off', label: 'Tắt' },
+  { value: 'daily', label: 'Hằng ngày' },
+  { value: 'weekly', label: 'Hằng tuần' },
+];
+
+export const WEEKDAY_OPTIONS: { value: number; label: string }[] = [
+  ...[1, 2, 3, 4, 5, 6].map((value) => ({ value, label: `Thứ ${value + 1}` })),
+  { value: 7, label: 'Chủ nhật' },
+];
+
+export const LEAD_DIGEST_OPTIONS: { value: NotificationConfig['leadDigestMinutes']; label: string }[] = [
+  { value: 0, label: 'Gửi ngay' },
+  ...([15, 30, 60, 120, 240] as const).map((value) => ({ value, label: `${value} phút` })),
+];

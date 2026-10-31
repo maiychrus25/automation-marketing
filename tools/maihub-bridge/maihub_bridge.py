@@ -16,6 +16,7 @@ import hmac
 import io
 import http.client
 import json
+import math
 import os
 import pwd
 import re
@@ -79,6 +80,7 @@ GUIDE = "\n".join([
     "- Đăng: có sự kiện run.finished thì đọc kết quả bằng maihub_runs_get.",
     "- Xem lượt đang chạy: maihub_runs_active (mảng, tối đa 2 lượt, mỗi phần tử có run.id và progress). Dừng một lượt: maihub_runs_cancel với runId và confirm: true (idempotencyKey riêng cho từng runId: dùng lại key cũ chỉ phát lại kết quả cũ). Có từ 2 lượt đang chạy mà không gửi runId thì nhận CONFLICT: gọi maihub_runs_active, hỏi người dùng lượt nào rồi gửi lại với runId. runId lạ nhận NOT_FOUND; runId của lượt đã xong trả cancelled: false. Không gửi runId khi chỉ có tối đa một lượt thì cancelled: true chỉ là xác nhận đã gửi lệnh dừng, không phải bằng chứng lượt đã dừng (chờ run.finished). maihub_runs_current chỉ là lượt cũ nhất, không dùng để biết MaiHub có rảnh không.",
     "- Đo: maihub_posts_stats, maihub_posts_groupScores, maihub_posts_bestTimes.",
+    "- Học số liệu Page: maihub_pages_metrics (chỉ owner). Lịch báo cáo 📊 và gom tin khách 🎯 gửi qua bot: maihub_notifications_config đọc, maihub_notifications_setConfig đổi (reportCadence off/daily/weekly, reportHour, reportWeekday, leadDigestMinutes); đổi leadDigestMinutes nhận BUSY khi đang thu bình luận, hãy thử lại sau.",
     "- Thu khách: maihub_comments_collect, chờ comments.collectFinished (lọc theo jobId), rồi maihub_leads_list. Xem tiến độ bằng maihub_comments_collectStatus, dừng bằng maihub_comments_collectCancel.",
     "",
     "2. Quan hệ giữa các mã",
@@ -209,6 +211,7 @@ MAX_RETRY_AFTER_SEC = 300
 WATCH_MIN_POLL_SEC = 1
 MAX_FIELD_CHARS = 200
 MAX_LEAD_SAMPLES = 3
+MAX_FOLLOWER_LINES = 20
 LEAD_TEXT_CHARS = 80
 VIDEO_ERROR_CHARS = 120
 MAX_MESSAGE_CHARS = 3500
@@ -1694,6 +1697,57 @@ def _failure_lines(run_id, fetch_run):
             for r in failed[:MAX_ERROR_LINES]]
 
 
+def _is_num(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _leads_lines(payload, suffix):
+    count = payload.get("count")
+    if not (isinstance(count, int) and not isinstance(count, bool) and count > 0):  # không có khách mới thì không báo
+        return None
+    lines = ["🎯 %d khách tiềm năng mới%s" % (count, suffix)]
+    samples = payload.get("samples")
+    for sample in (samples if isinstance(samples, list) else [])[:MAX_LEAD_SAMPLES]:
+        if isinstance(sample, dict) and (sample.get("authorName") or sample.get("text")):
+            lines.append("%s: %s" % (clip(_one_line(sample.get("authorName")), MAX_FIELD_CHARS), clip(_one_line(sample.get("text")), LEAD_TEXT_CHARS)))
+    return lines
+
+
+def _metrics_lines(payload):
+    """📊 báo cáo hiệu quả; `label` do app định dạng, hiển thị nguyên văn. Trường thiếu/sai kiểu thì bỏ dòng, null không thành 0."""
+    label = _one_line(payload.get("label"))
+    lines = ["📊 Báo cáo hiệu quả" + (" · " + clip(label, MAX_FIELD_CHARS) if label else "")]
+    parts = []
+    if _is_num(payload.get("posts")):
+        parts.append("Bài: %d" % payload["posts"])
+    if "engagement" in payload and payload["engagement"] is None:
+        parts.append("Tương tác: chưa đo được")
+    elif _is_num(payload.get("engagement")):
+        measured = payload.get("measured")
+        parts.append("Tương tác: %d" % payload["engagement"] + (" (%d bài đã đo)" % measured if _is_num(measured) else ""))
+    if _is_num(payload.get("notFound")):
+        parts.append("Không tìm thấy link: %d" % payload["notFound"])
+    if parts:
+        lines.append(" · ".join(parts))
+    top = [t for t in (payload.get("top") if isinstance(payload.get("top"), list) else []) if isinstance(t, dict) and _one_line(t.get("text")) and _is_num(t.get("engagement"))]
+    if top:
+        lines.append("Nổi bật:")
+        lines += ["%d. %s — %d" % (i, clip(_one_line(t["text"]), 60), t["engagement"]) for i, t in enumerate(top[:3], 1)]
+    followers = [f for f in (payload.get("followers") if isinstance(payload.get("followers"), list) else []) if isinstance(f, dict) and _one_line(f.get("pageName"))]
+    if followers:
+        lines.append("Người theo dõi:")
+        for f in followers[:MAX_FOLLOWER_LINES]:
+            current, change = f.get("current"), f.get("change")
+            if not _is_num(current):
+                detail = "chưa đủ dữ liệu"
+            else:
+                detail = "%d (%s)" % (current, "%+d" % change if _is_num(change) else "chưa đủ dữ liệu")
+            lines.append("%s: %s" % (clip(_one_line(f["pageName"]), MAX_FIELD_CHARS), detail))
+        if len(followers) > MAX_FOLLOWER_LINES:
+            lines.append("… và %d Page khác" % (len(followers) - MAX_FOLLOWER_LINES))
+    return lines
+
+
 def format_event(event, fetch_run):
     """Tin tiếng Việt (văn bản thuần) cho một sự kiện, hoặc None nếu không cần báo. fetch_run(runId) có thể ném lỗi."""
     etype, payload = event.get("type"), event.get("payload") or {}
@@ -1703,12 +1757,13 @@ def format_event(event, fetch_run):
         posted, failed, skipped = (int(payload.get(k) or 0) for k in ("posted", "failed", "skipped"))
         total = posted + failed + skipped
         status = payload.get("status")
+        fail_head = "⚠️ Đăng bài lỗi: %s —" % label if payload.get("kind") in (None, "post") else "⚠️ %s:" % label
         if status == "cancelled":
             lines = ["⏹ %s: đã huỷ (%d/%d)" % (label, posted, total)]
         elif failed > 0:
-            lines = ["⚠️ %s: xong %d/%d, lỗi %d" % (label, posted, total, failed)] + _failure_lines(payload.get("runId"), fetch_run)
+            lines = ["%s xong %d/%d, lỗi %d" % (fail_head, posted, total, failed)] + _failure_lines(payload.get("runId"), fetch_run)
         elif status == "failed":  # lỗi cấp lượt chạy, không có đích nào ghi lỗi
-            lines = ["⚠️ %s: xong %d/%d, lượt chạy bị lỗi" % (label, posted, total)] + _failure_lines(payload.get("runId"), fetch_run)
+            lines = ["%s xong %d/%d, lượt chạy bị lỗi" % (fail_head, posted, total)] + _failure_lines(payload.get("runId"), fetch_run)
         elif status == "done" and payload.get("kind") not in KIND_LABELS:  # việc phụ (tham gia nhóm, quét nhóm, thu bình luận) xong không lỗi thì im
             lines = ["✅ %s: xong %d/%d" % (label, posted, total)] if total else ["✅ %s: xong" % label]
     elif etype == "comments.collectFinished":
@@ -1719,17 +1774,15 @@ def format_event(event, fetch_run):
         what = "bị checkpoint" if payload.get("state") == "checkpoint" else "hết phiên đăng nhập"
         lines = ["🔒 Profile \"%s\": %s" % (clip(payload.get("profileName") or "", MAX_FIELD_CHARS), what), "Mở MaiHub để đăng nhập lại."]
     elif etype == "posts.trackFinished":
-        linked, removed = (int(payload.get(k) or 0) for k in ("linked", "removedSuspected"))
-        if linked > 0 or removed > 0:  # không có link mới và không có bài bị xoá thì không báo
-            lines = ["📈 Theo dõi bài: kiểm tra %d nhóm, lấy được %d link, %d bài có thể đã bị xoá" % (int(payload.get("groups") or 0), linked, removed)]
+        lines = None  # không báo từng lượt theo dõi; số liệu nằm trong 📊 metrics.report
     elif etype == "leads.found":
-        count = payload.get("count")
-        if isinstance(count, int) and not isinstance(count, bool) and count > 0:  # không có khách mới thì không báo
-            lines = ["🎯 %d khách tiềm năng mới" % count]
-            samples = payload.get("samples")
-            for sample in (samples if isinstance(samples, list) else [])[:MAX_LEAD_SAMPLES]:
-                if isinstance(sample, dict) and (sample.get("authorName") or sample.get("text")):
-                    lines.append("%s: %s" % (clip(_one_line(sample.get("authorName")), MAX_FIELD_CHARS), clip(_one_line(sample.get("text")), LEAD_TEXT_CHARS)))
+        if payload.get("deferred") is not True:  # deferred: app đang gom, khách sẽ nằm trong 🎯 leads.digest
+            lines = _leads_lines(payload, "")
+    elif etype == "leads.digest":
+        label = _one_line(payload.get("label"))
+        lines = _leads_lines(payload, " · " + clip(label, MAX_FIELD_CHARS) if label else "")
+    elif etype == "metrics.report":
+        lines = _metrics_lines(payload)
     elif etype == "videos.finished":
         name = clip(_one_line(payload.get("name")), MAX_FIELD_CHARS)
         if payload.get("cancelled") is True:
@@ -1761,7 +1814,7 @@ def format_brief_messages(event, fetch_draft, fetch_brief):
             except Exception:
                 return []
         error = clip(_one_line(payload.get("error")) or "lỗi không rõ", MAX_FIELD_CHARS)
-        return ["⚠️ %s: hôm nay chưa tạo được bài đề xuất — %s" % (name, error)]
+        return ["⚠️ Đề xuất lỗi: %s — %s" % (name, error)]
 
     messages = []
     draft_ids = payload.get("draftIds") or []

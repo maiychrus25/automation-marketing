@@ -10,7 +10,7 @@ const finalUrl = 'https://www.facebook.com/example-driving-school/';
 const activeId = '100000000000101';
 const pageId = '200000000000201';
 const expectedPost = {
-    text: 'Check mirrors and signal before changing lanes.', reactions: 12, comments: 3, shares: 2,
+    postId: '300000000000301', text: 'Check mirrors and signal before changing lanes.', reactions: 12, comments: 3, shares: 2,
     postedAt: 1793000000000, url: 'https://www.facebook.com/reel/300000000000301',
 };
 const emptyIdentity = { kind: 'unknown', pageId: '', pageName: '', category: '', about: '', recentPosts: [] };
@@ -326,7 +326,7 @@ describe('parsePagePosts', () => {
         delete story.creation_time;
         story.comet_sections = { content: { story: { shared_story: shared } } };
         story.shared_story = shared;
-        expect(parsePagePosts(data)).toEqual([{ text: '', reactions: null, comments: null, shares: null,
+        expect(parsePagePosts(data)).toEqual([{ postId: expectedPost.postId, text: '', reactions: null, comments: null, shares: null,
             postedAt: null, url: expectedPost.url }]);
     });
 
@@ -576,5 +576,12 @@ describe('readPageIdentity', () => {
         const { page, calls } = fakePage(finalUrl, error);
         await expect(readPageIdentity(page)).rejects.toBe(error);
         expect(calls).toHaveLength(1);
+    });
+});
+
+describe('page post id and followers', () => {
+    it('keepsPostIdOnEachSample', () => expect(parsePagePosts(feed())[0].postId).toBe('300000000000301'));
+    it('followersStayNullUntilVerifiedFixture', () => {
+        expect(parseIdentityHtml(pageHtml, finalUrl).followers ?? null).toBeNull();
     });
 });

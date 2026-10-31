@@ -24,8 +24,8 @@ const identity = (profileId = 'p1'): PageIdentity => ({
     profileId, kind: 'page', pageId: '123', pageName: 'Driving school', category: 'Education',
     about: 'Driving lessons', learnedAt: at('26T06:00:00'), errorCode: '', error: '',
     recentPosts: [
-        { text: 'First lesson', reactions: 12, comments: 0, shares: null, postedAt: at('25T07:00:00'), url: 'https://fb.test/123/posts/1' },
-        { text: 'Next lesson', reactions: null, comments: null, shares: 0, postedAt: null, url: 'https://fb.test/123/posts/2' },
+        { postId: '1', text: 'First lesson', reactions: 12, comments: 0, shares: null, postedAt: at('25T07:00:00'), url: 'https://fb.test/123/posts/1' },
+        { postId: '2', text: 'Next lesson', reactions: null, comments: null, shares: 0, postedAt: null, url: 'https://fb.test/123/posts/2' },
     ],
 });
 

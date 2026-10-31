@@ -1,9 +1,10 @@
+import Logger from '../../utils/Logger';
 import { memoryDb } from '../facebookPoster/helpers';
 import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
 import { FacebookPosterScheduler } from '../../services/facebookPoster/FacebookPosterScheduler';
 import { ControlStore, CONTROL_SCHEMA_SQL } from '../../services/control/ControlStore';
 import { ControlEventRecorder } from '../../services/control/ControlEventRecorder';
-import { buildScheduleMissed, emitControlEvent, hasControlEventSink, setControlEventSink } from '../../services/control/controlEvents';
+import { buildLeadsDigest, buildLeadsFound, buildScheduleMissed, emitControlEvent, hasControlEventSink, recordControlEvent, setControlEventSink } from '../../services/control/controlEvents';
 
 afterEach(() => setControlEventSink(null));
 
@@ -62,5 +63,35 @@ describe('ControlEventRecorder', () => {
     const rows = control.listEventsAfter(0, 10);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ type: 'schedule.missed', payload: { scheduleId: 'a', name: 'Lịch a' } });
+  });
+
+  test('leadsFoundMarksDeferredOnlyWhenDigesting', () => {
+    const sample = (i: number) => ({ authorName: `A${i}`, text: `t${i}`, postUrl: `u${i}` });
+    const base = { count: 4, auto: true, samples: [1, 2, 3, 4].map(sample), leadIds: [4, 3], campaignIds: [] };
+    expect(buildLeadsFound({ ...base, deferred: true })).toMatchObject({ count: 4, deferred: true });
+    expect(buildLeadsFound({ ...base, deferred: false })).not.toHaveProperty('deferred');
+    expect(buildLeadsFound(base)).not.toHaveProperty('deferred');
+    expect(buildLeadsDigest({ ...base, from: 10, to: 20, label: '08:00–09:00', extra: 1 } as Parameters<typeof buildLeadsDigest>[0])).toEqual({
+      count: 4, auto: true, leadIds: [4, 3], campaignIds: [], samples: [1, 2, 3].map(sample), from: 10, to: 20, label: '08:00–09:00',
+    });
+  });
+
+  test('recordControlEventThrowsWithoutSink', () => {
+    expect(() => recordControlEvent('metrics.report', { periodKey: 'k' })).toThrow();
+    setControlEventSink(() => { throw new Error('disk full'); });
+    expect(() => recordControlEvent('leads.digest', { count: 1 })).toThrow('disk full');
+    const logged = jest.spyOn(Logger, 'error').mockImplementation(() => undefined);
+    try {
+      expect(() => emitControlEvent('leads.found', { count: 1 })).not.toThrow(); // emit keeps swallowing errors
+      expect(logged).toHaveBeenCalledTimes(1);
+    } finally { logged.mockRestore(); }
+    const recorder = new ControlEventRecorder();
+    const store = controlStore();
+    recorder.sync(true, false, () => store);
+    recordControlEvent('metrics.report', { periodKey: 'weekly:2026-11-02' });
+    recordControlEvent('leads.digest', { count: 2 });
+    expect(store.listEventsAfter(0, 10).map((e) => [e.type, e.payload])).toEqual([
+      ['metrics.report', { periodKey: 'weekly:2026-11-02' }], ['leads.digest', { count: 2 }],
+    ]);
   });
 });

@@ -4,10 +4,12 @@ import { keyOf, type CollectedComment } from './collectComments';
 import { parseCommentTime } from './commentTime';
 import { stripAccents } from './leadRules';
 import type { GroupScoreInput } from './groupScores';
+import type { LeadCursor } from './notificationRules';
+import { VARIANT_LABELS, variantText } from './variants';
 import type {
     FbPosterComment, FbPosterLead, LeadStatus, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
     CampaignStatus, FbPosterCampaign, FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
-    LinkStatus, PostStatsGroupBy, PostStatsReportRow, PostStatsSnapshot, PostTrackingRow,
+    LinkStatus, PostStatsGroupBy, PostStatsReportRow, PostStatsSnapshot, PageFollowerRow, PostTrackingRow, TrackTargetKind,
 } from '../../models/facebookPoster';
 
 /**
@@ -102,6 +104,8 @@ function mapTracking(row: any): PostTrackingRow {
         campaignId: row.campaign_id ?? null,
         variant: row.variant ?? '',
         profileId: row.profile_id,
+        targetKind: row.target_kind === 'page' ? 'page' : 'group',
+        pageId: row.page_id ?? '',
         groupUrl: row.group_url,
         groupId: row.group_id,
         postId: row.post_id,
@@ -166,7 +170,7 @@ function chunk<T>(items: T[], size: number): T[][] {
     return out;
 }
 
-const engagementOf = (s: PostStatsSnapshot) => (s.reactions ?? 0) + (s.comments ?? 0) + (s.shares ?? 0);
+export const engagementOf = (s: Pick<PostStatsSnapshot, 'reactions' | 'comments' | 'shares'>) => (s.reactions ?? 0) + (s.comments ?? 0) + (s.shares ?? 0);
 
 function localDay(ms: number): string {
     const d = new Date(ms);
@@ -578,21 +582,24 @@ export class FacebookPosterStore {
 
     // ─── Theo dõi bài đã đăng ────────────────────────────────────────────────
 
-    createTracking(row: Omit<PostTrackingRow, 'campaignId' | 'variant' | 'commentsDone' | 'nextCommentAt'> & { campaignId?: string | null; variant?: string; commentsDone?: string[]; nextCommentAt?: number | null }): void {
+    createTracking(row: Omit<PostTrackingRow, 'campaignId' | 'variant' | 'commentsDone' | 'nextCommentAt' | 'targetKind' | 'pageId'> & { campaignId?: string | null; variant?: string; commentsDone?: string[]; nextCommentAt?: number | null; targetKind?: TrackTargetKind; pageId?: string }): void {
         this.db.run(
             `INSERT OR IGNORE INTO fb_poster_post_tracking
-               (result_id, run_id, schedule_id, campaign_id, variant, profile_id, group_url, group_id, post_id, post_url, posted_at, text_head,
+               (result_id, run_id, schedule_id, campaign_id, variant, profile_id, target_kind, page_id, group_url, group_id, post_id, post_url, posted_at, text_head,
                 link_status, removed_suspected, last_seen_at, last_checked_at, check_count, next_check_at, stats_done, comments_done, next_comment_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [row.resultId, row.runId, row.scheduleId, row.campaignId ?? null, row.variant ?? '', row.profileId, row.groupUrl, row.groupId, row.postId, row.postUrl, row.postedAt,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [row.resultId, row.runId, row.scheduleId, row.campaignId ?? null, row.variant ?? '', row.profileId, row.targetKind ?? 'group', row.pageId ?? '',
+             row.groupUrl, row.groupId, row.postId, row.postUrl, row.postedAt,
              row.textHead, row.linkStatus, row.removedSuspected ? 1 : 0, row.lastSeenAt, row.lastCheckedAt, row.checkCount,
              row.nextCheckAt, row.statsDone.join(','), (row.commentsDone ?? []).join(','), row.nextCommentAt ?? null],
         );
     }
 
-    listTracking(filter: { linkStatus?: LinkStatus; profileId?: string; groupUrl?: string; campaignId?: string; scheduleId?: string; sinceMs?: number; untilMs?: number; limit?: number }): PostTrackingRow[] {
+    listTracking(filter: { linkStatus?: LinkStatus; profileId?: string; groupUrl?: string; campaignId?: string; scheduleId?: string; sinceMs?: number; untilMs?: number; limit?: number; targetKind?: TrackTargetKind; pageId?: string }): PostTrackingRow[] {
         const where: string[] = [];
         const params: any[] = [];
+        if (filter.targetKind !== undefined) { where.push('target_kind = ?'); params.push(filter.targetKind); }
+        if (filter.pageId !== undefined) { where.push('page_id = ?'); params.push(filter.pageId); }
         if (filter.linkStatus !== undefined) { where.push('link_status = ?'); params.push(filter.linkStatus); }
         if (filter.profileId !== undefined) { where.push('profile_id = ?'); params.push(filter.profileId); }
         if (filter.groupUrl !== undefined) { where.push('group_url = ?'); params.push(filter.groupUrl); }
@@ -608,24 +615,31 @@ export class FacebookPosterStore {
         ).map(mapTracking);
     }
 
-    /** Các cặp (profile, nhóm) có dòng đến hạn, bài chờ duyệt rồi bài chưa có link đứng trước, rồi theo mốc sớm nhất. */
-    listDuePairs(now: number, limit: number): { profileId: string; groupUrl: string }[] {
+    /**
+     * Các cặp (profile, nhóm) — hoặc (profile, Page) với dòng Page — có dòng đến hạn, bài chờ duyệt rồi bài chưa có link
+     * đứng trước, rồi theo mốc sớm nhất. Chỉ cặp Page mới có khóa `pageId`.
+     */
+    listDuePairs(now: number, limit: number): { profileId: string; groupUrl: string; pageId?: string }[] {
         return this.db.query<any>(
-            `SELECT profile_id, group_url,
+            `SELECT profile_id, group_url, target_kind, page_id,
                     MIN(CASE link_status WHEN 'pending_approval' THEN 0 WHEN 'missing' THEN 1 ELSE 2 END) AS priority,
                     MIN(next_check_at) AS earliest
              FROM fb_poster_post_tracking
              WHERE next_check_at IS NOT NULL AND next_check_at <= ?
-             GROUP BY profile_id, group_url
-             ORDER BY priority ASC, earliest ASC, profile_id ASC, group_url ASC LIMIT ?`,
+             GROUP BY profile_id, group_url, target_kind, page_id
+             ORDER BY priority ASC, earliest ASC, profile_id ASC, group_url ASC, page_id ASC LIMIT ?`,
             [now, limit],
-        ).map((r) => ({ profileId: r.profile_id, groupUrl: r.group_url }));
+        ).map((r) => (r.target_kind === 'page'
+            ? { profileId: r.profile_id, groupUrl: r.group_url, pageId: r.page_id }
+            : { profileId: r.profile_id, groupUrl: r.group_url }));
     }
 
-    listTrackingForPair(profileId: string, groupUrl: string, sinceMs: number): PostTrackingRow[] {
+    /** Dòng của một cặp: không có `pageId` thì chỉ dòng nhóm; có thì chỉ dòng của đúng Page đó. */
+    listTrackingForPair(profileId: string, groupUrl: string, sinceMs: number, pageId?: string): PostTrackingRow[] {
+        const kind = pageId === undefined ? "AND target_kind = 'group'" : "AND target_kind = 'page' AND page_id = ?";
         return this.db.query<any>(
-            'SELECT * FROM fb_poster_post_tracking WHERE profile_id = ? AND group_url = ? AND posted_at >= ? ORDER BY posted_at DESC, result_id DESC',
-            [profileId, groupUrl, sinceMs],
+            `SELECT * FROM fb_poster_post_tracking WHERE profile_id = ? AND group_url = ? AND posted_at >= ? ${kind} ORDER BY posted_at DESC, result_id DESC`,
+            pageId === undefined ? [profileId, groupUrl, sinceMs] : [profileId, groupUrl, sinceMs, pageId],
         ).map(mapTracking);
     }
 
@@ -656,13 +670,33 @@ export class FacebookPosterStore {
         return out;
     }
 
+    recordPageFollowers(row: PageFollowerRow): boolean {
+        this.db.run(
+            `INSERT OR IGNORE INTO fb_poster_page_followers (page_id, profile_id, captured_on, captured_at, followers) VALUES (?, ?, ?, ?, ?)`,
+            [row.pageId, row.profileId, row.capturedOn, row.capturedAt, row.followers],
+        );
+        return this.db.queryOne<{ n: number }>('SELECT changes() AS n')?.n === 1;
+    }
+
+    hasPageFollowersOn(pageId: string, capturedOn: string): boolean {
+        return this.db.query<any>(`SELECT 1 FROM fb_poster_page_followers WHERE page_id = ? AND captured_on = ?`, [pageId, capturedOn]).length > 0;
+    }
+
+    listPageFollowers(filter: { pageId?: string; sinceDay: string }): PageFollowerRow[] {
+        const where = filter.pageId === undefined ? ['captured_on >= ?'] : ['captured_on >= ?', 'page_id = ?'];
+        const params = filter.pageId === undefined ? [filter.sinceDay] : [filter.sinceDay, filter.pageId];
+        return this.db.query<any>(
+            `SELECT * FROM fb_poster_page_followers WHERE ${where.join(' AND ')} ORDER BY page_id, captured_on`, params,
+        ).map((r) => ({ pageId: r.page_id, profileId: r.profile_id, capturedOn: r.captured_on, capturedAt: r.captured_at, followers: r.followers }));
+    }
+
     // ─── Thu bình luận tự động ───────────────────────────────────────────────
 
-    /** Bài đã có link, đến mốc thu bình luận kế tiếp; sớm nhất trước. */
+    /** Bài nhóm đã có link, đến mốc thu bình luận kế tiếp; sớm nhất trước. Dòng Page không bao giờ vào lịch thu tự động. */
     listDueCommentPosts(now: number, limit: number): PostTrackingRow[] {
         return this.db.query<any>(
             `SELECT * FROM fb_poster_post_tracking
-             WHERE link_status = 'known' AND post_url IS NOT NULL AND post_url <> '' AND next_comment_at IS NOT NULL AND next_comment_at <= ?
+             WHERE target_kind = 'group' AND link_status = 'known' AND post_url IS NOT NULL AND post_url <> '' AND next_comment_at IS NOT NULL AND next_comment_at <= ?
              ORDER BY next_comment_at ASC, result_id ASC LIMIT ?`,
             [now, limit],
         ).map(mapTracking);
@@ -719,6 +753,20 @@ export class FacebookPosterStore {
         return { leads: matching.slice(filter.offset, filter.offset + filter.limit).map(mapLead), total: matching.length };
     }
 
+    /**
+     * Hàng chờ tin gom: lead có `id` lớn hơn con trỏ, theo thứ tự ghi (`id` AUTOINCREMENT, không lùi khi đồng hồ máy bị chỉnh).
+     * `cursor.at` (giờ phát hiện của lead cuối) chỉ còn để hiển thị; con trỏ cũ `{ at, id }` vẫn dùng được.
+     */
+    listLeadsAfter(cursor: LeadCursor): FbPosterLead[] {
+        return this.db.query<any>('SELECT * FROM fb_poster_leads WHERE id > ? ORDER BY id ASC', [cursor.id]).map(mapLead);
+    }
+
+    /** Lead ghi sau cùng (id lớn nhất). */
+    latestLeadCursor(): LeadCursor | null {
+        const row = this.db.queryOne<{ detected_at: number; id: number }>('SELECT detected_at, id FROM fb_poster_leads ORDER BY id DESC LIMIT 1');
+        return row ? { at: row.detected_at, id: row.id } : null;
+    }
+
     updateLead(id: number, patch: { status?: LeadStatus; note?: string }, at: number): FbPosterLead | null {
         const sets: string[] = ['updated_at = ?'];
         const params: any[] = [at];
@@ -756,6 +804,27 @@ export class FacebookPosterStore {
         );
     }
 
+    /**
+     * Nội dung gốc đã đăng của từng dòng theo dõi, lấy từ tham số lượt (`fb_poster_runs.params_json`) và nhãn biến thể của dòng.
+     * Lượt đã bị xoá hoặc tham số không có `text` thì không có mục (người gọi dùng `textHead`).
+     */
+    postTexts(rows: Pick<PostTrackingRow, 'resultId' | 'runId' | 'variant'>[]): Map<number, string> {
+        const params = new Map<string, any>();
+        for (const ids of chunk([...new Set(rows.map((r) => r.runId))], IN_CHUNK)) {
+            for (const run of this.db.query<{ id: string; params_json: string }>(`SELECT id, params_json FROM fb_poster_runs WHERE id IN (${ids.map(() => '?').join(',')})`, ids)) {
+                try { params.set(run.id, JSON.parse(run.params_json)); } catch { /* tham số hỏng: dùng textHead */ }
+            }
+        }
+        const out = new Map<number, string>();
+        for (const row of rows) {
+            const p = params.get(row.runId);
+            if (!p || typeof p.text !== 'string') continue;
+            const text = variantText(p, Math.max(0, VARIANT_LABELS.indexOf(row.variant)));
+            if (typeof text === 'string' && text !== '') out.set(row.resultId, text);
+        }
+        return out;
+    }
+
     /** Lần đo mới nhất của mỗi bài trong `resultIds` (bài chưa đo không có mặt). */
     latestStats(resultIds: number[]): PostStatsSnapshot[] {
         const out: PostStatsSnapshot[] = [];
@@ -780,6 +849,9 @@ export class FacebookPosterStore {
         else if (opts.campaignId !== undefined) { where.push('t.campaign_id = ?'); params.push(opts.campaignId); }
         if (opts.scheduleId !== undefined) { where.push('t.schedule_id = ?'); params.push(opts.scheduleId); }
         if (opts.groupUrl !== undefined) { where.push('t.group_url = ?'); params.push(opts.groupUrl); }
+        // Gom theo nhóm chỉ tính bài nhóm: dòng Page có group_url là trang chủ, không phải một nhóm.
+        if (opts.groupBy === 'group') where.push("t.target_kind = 'group'");
+        if (opts.groupBy === 'page') where.push("t.target_kind = 'page'");
         const rows = this.db.query<any>(
             `SELECT t.*, sc.name AS schedule_name, cp.name AS campaign_name,
                     (SELECT r.profile_name FROM fb_poster_results r WHERE r.profile_id = t.profile_id ORDER BY r.id DESC LIMIT 1) AS profile_name,
@@ -800,11 +872,14 @@ export class FacebookPosterStore {
             return memberCache.get(cacheKey) ?? null;
         };
 
+        const pageNames = opts.groupBy === 'page' ? this.pageNames() : new Map<string, string>();
+
         const buckets = new Map<string, { row: PostStatsReportRow; rates: number[]; engagement: number; latestAt: number }>();
         for (const r of rows) {
             const [key, label] = ((): [string, string] => {
                 switch (opts.groupBy) {
                     case 'group': return [r.group_url, r.group_name || r.group_url];
+                    case 'page': return [r.page_id, pageNames.get(r.page_id) || r.page_id || 'Page chưa xác định'];
                     case 'profile': return [r.profile_id, r.profile_name ?? ''];
                     case 'schedule': return [r.schedule_id ?? '', r.schedule_name ?? ''];
                     case 'campaign': return [r.campaign_id ?? '', r.campaign_id === null ? 'Không thuộc chiến dịch' : (r.campaign_name ?? '(chiến dịch đã xoá)')];
@@ -853,19 +928,14 @@ export class FacebookPosterStore {
         // Thứ tự khi cắt `limit` (luôn giữ dữ liệu mới): post/day theo bài mới nhất trước; group/profile/schedule
         // theo số bài giảm dần rồi theo bài mới nhất.
         const ordered = [...buckets.values()];
-        if (opts.groupBy === 'group' || opts.groupBy === 'profile' || opts.groupBy === 'schedule' || opts.groupBy === 'campaign' || opts.groupBy === 'variant') {
+        if (opts.groupBy === 'group' || opts.groupBy === 'page' || opts.groupBy === 'profile' || opts.groupBy === 'schedule' || opts.groupBy === 'campaign' || opts.groupBy === 'variant') {
             ordered.sort((a, c) => c.row.posts - a.row.posts || c.latestAt - a.latestAt);
         }
         if (opts.groupBy === 'hour' || opts.groupBy === 'weekday') ordered.sort((a, c) => (a.row.key < c.row.key ? -1 : 1));
         const kept = ordered.slice(0, opts.limit);
         if (opts.groupBy === 'post' && kept.length > 0) {
-            const byId = new Map(kept.map((k) => [k.row.post!.resultId, k.row.post!]));
-            for (const ids of chunk([...byId.keys()], IN_CHUNK)) {
-                const marks = ids.map(() => '?').join(',');
-                for (const snap of this.db.query<any>(
-                    `SELECT * FROM fb_poster_post_stats WHERE result_id IN (${marks}) ORDER BY captured_at, id`, ids,
-                )) byId.get(snap.result_id)?.snapshots.push(mapPostStats(snap));
-            }
+            const history = this.statsHistory(kept.map((k) => k.row.post!.resultId));
+            for (const k of kept) k.row.post!.snapshots = history.get(k.row.post!.resultId) ?? [];
         }
         return kept.map(({ row, rates, engagement }) => {
             row.insufficient = row.measured < MIN_MEASURED_FOR_COMPARISON;
@@ -913,6 +983,33 @@ export class FacebookPosterStore {
             });
         }
         return out;
+    }
+
+    /** Mọi lần đo của các bài trong `resultIds`, cũ trước (chia lô 500); bài chưa đo không có mặt. */
+    statsHistory(resultIds: number[]): Map<number, PostStatsSnapshot[]> {
+        const out = new Map<number, PostStatsSnapshot[]>();
+        for (const ids of chunk([...new Set(resultIds)], IN_CHUNK)) {
+            const marks = ids.map(() => '?').join(',');
+            for (const snap of this.db.query<any>(
+                `SELECT * FROM fb_poster_post_stats WHERE result_id IN (${marks}) ORDER BY captured_at, id`, ids,
+            )) {
+                const list = out.get(snap.result_id) ?? [];
+                list.push(mapPostStats(snap));
+                out.set(snap.result_id, list);
+            }
+        }
+        return out;
+    }
+
+    /** Tên Page đã học theo page_id; bảng danh tính (DailyBriefStore) chưa có thì rỗng. */
+    pageNames(): Map<string, string> {
+        try {
+            return new Map(this.db.query<{ page_id: string; page_name: string }>(
+                "SELECT page_id, page_name FROM fb_page_identities WHERE kind = 'page' AND page_id <> '' AND page_name <> ''",
+            ).map((r) => [r.page_id, r.page_name]));
+        } catch {
+            return new Map();
+        }
     }
 
     /** Số thành viên từ mục 'group' mới nhất của Nghiên cứu; bảng không tồn tại hoặc không có mục thì null. */

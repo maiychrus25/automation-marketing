@@ -2,14 +2,17 @@ import { randomUUID } from 'crypto';
 import type { ProfileTaskContext } from '../browser/ProfileJobQueue';
 import type { LinkStatus, PostTrackingRow } from '../../models/facebookPoster';
 import type { ParsedItem } from '../../models/research';
+import { systemClock } from '../dailyBrief/DailyBriefStore';
+import { PageLoginProblem, type PageIdentityRead } from '../dailyBrief/pageIdentity';
 import { ResearchError, type GraphqlSession } from '../research/graphqlSession';
 import { fetchGraphqlPage, groupKey, isUnresolved, prepareGroupFeed } from '../research/groupFeed';
 import { describeShape, parseGraphqlChunks, parseGroupFeed } from '../research/parsers';
+import Logger from '../../utils/Logger';
 import { BUSY_ERROR } from './FacebookPosterService';
 import { DEFAULT_LEAD_CONFIG, computeNextCommentAt, type LeadConfig } from './leadRules';
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import {
-    DEFAULT_POST_TRACKING_CONFIG, computeNextCheckAt, linkRetryExhausted, markOverdueStatsDone, pickBestMatch,
+    DEFAULT_POST_TRACKING_CONFIG, computeNextCheckAt, linkRetryExhausted, markOverdueStatsDone, matchPagePosts, pickBestMatch,
     type PostTrackingConfig,
 } from './postTracking';
 
@@ -32,7 +35,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const ROW_LIMIT = 5000;
 const SHAPE_DEPTH = 16;
 
-export interface TrackPair { profileId: string; groupUrl: string }
+/** Có `pageId` (kể cả `''` khi chưa học được Page) là cặp (profile, Page); không có là cặp (profile, nhóm). */
+export interface TrackPair { profileId: string; groupUrl: string; pageId?: string }
 export interface TrackParams {
     sinceDays?: number;
     groupUrls?: string[];
@@ -67,7 +71,8 @@ export type TrackSession = Pick<GraphqlSession, 'open' | 'ensureQuery' | 'call' 
 
 export interface PostTrackerDeps {
     store: Pick<FacebookPosterStore,
-        'listTracking' | 'listTrackingForPair' | 'updateTracking' | 'addPostStats' | 'updateCommentSchedule'>;
+        'listTracking' | 'listTrackingForPair' | 'updateTracking' | 'addPostStats' | 'updateCommentSchedule'
+        | 'recordPageFollowers' | 'hasPageFollowersOn'>;
     openSession(profileId: string, context: ProfileTaskContext): Promise<{ session: TrackSession; close(): Promise<void> }>;
     assertCurrent?: () => void;
     observeLogin(profileId: string, state: 'logged_out' | 'checkpoint'): void;
@@ -80,6 +85,12 @@ export interface PostTrackerDeps {
     sleep?: (ms: number) => Promise<void>;
     random?: () => number;
     newId?: () => string;
+    /** Đọc Page của profile (đi qua hàng chờ profile bằng đúng context của lượt); thiếu thì cặp Page chỉ lên lịch lại. */
+    readPage?(profileId: string, context: ProfileTaskContext): Promise<PageIdentityRead>;
+    /** Ngày địa phương YYYY-MM-DD cho ảnh chụp người theo dõi. */
+    localDate?: (ms: number) => string;
+    /** Dòng Page vừa có link khi tìm lại. */
+    onPagePostKnown?: (row: PostTrackingRow) => void;
 }
 
 interface Counters { checked: number; found: number; linked: number; removedSuspected: number; notFound: number }
@@ -96,6 +107,8 @@ export class PostTracker {
     private jobId: string | null = null;
     private progress = { done: 0, total: 0 };
     private last: TrackResult | null = null;
+    /** Cặp vừa xử lý có mở trình duyệt (kể cả mở lỗi). */
+    private openedBrowser = false;
     private readonly now: () => number;
     private readonly random: () => number;
     private readonly sleepFn: (ms: number) => Promise<void>;
@@ -158,17 +171,24 @@ export class PostTracker {
     // ---------- Chọn cặp (spec 4.1) ----------
 
     private selectPairs(params: TrackParams, sinceDays: number): TrackPair[] {
-        if (params.pairs) return params.pairs.slice(0, MAX_TRACK_GROUPS).map((p) => ({ profileId: p.profileId, groupUrl: p.groupUrl }));
+        if (params.pairs) {
+            return params.pairs.slice(0, MAX_TRACK_GROUPS).map((p) => (p.pageId === undefined
+                ? { profileId: p.profileId, groupUrl: p.groupUrl } : { profileId: p.profileId, groupUrl: p.groupUrl, pageId: p.pageId }));
+        }
         const sinceMs = this.now() - sinceDays * DAY_MS;
         const wantedGroups = params.groupUrls ? new Set(params.groupUrls.map(groupKey).filter(Boolean)) : null;
         const wantedProfiles = params.profileIds ? new Set(params.profileIds) : null;
         const groups = new Map<string, { pair: TrackPair; priority: number; checked: number }>();
         for (const row of this.deps.store.listTracking({ sinceMs, limit: ROW_LIMIT })) {
             if (row.linkStatus === 'not_found') continue;
+            // Page chưa học được thì không có gì để đọc; bộ hẹn giờ tự lên lịch lại các dòng đó.
+            if (row.targetKind === 'page' && row.pageId === '') continue;
             if (wantedProfiles && !wantedProfiles.has(row.profileId)) continue;
             if (wantedGroups && !wantedGroups.has(groupKey(row.groupUrl))) continue;
-            const key = `${row.profileId}\u0000${row.groupUrl}`;
-            const entry = groups.get(key) ?? { pair: { profileId: row.profileId, groupUrl: row.groupUrl }, priority: 1, checked: Infinity };
+            const page = row.targetKind === 'page';
+            const key = `${row.profileId}\u0000${row.groupUrl}${page ? `\u0000${row.pageId}` : ''}`;
+            const pair: TrackPair = page ? { profileId: row.profileId, groupUrl: row.groupUrl, pageId: row.pageId } : { profileId: row.profileId, groupUrl: row.groupUrl };
+            const entry = groups.get(key) ?? { pair, priority: 1, checked: Infinity };
             if (isPending(row.linkStatus)) entry.priority = 0;
             entry.checked = Math.min(entry.checked, row.lastCheckedAt ?? 0);
             groups.set(key, entry);
@@ -199,13 +219,16 @@ export class PostTracker {
         const errors: TrackError[] = [];
         const skipped = new Set<string>();
         const shape: { value?: string[] } = {};
+        this.openedBrowser = false;
         // Nhường một nhịp để `trackFinished` luôn phát sau khi `track()` đã trả về (kể cả khi không có cặp nào).
         await Promise.resolve();
         try {
           try {
             for (let i = 0; i < pairs.length && !this.cancelled; i++) {
                 const pair = pairs[i];
-                if (i > 0) await this.pause(GROUP_DELAY_MIN_MS, GROUP_DELAY_MAX_MS);
+                // Chỉ nghỉ sau cặp đã mở trình duyệt; cặp bị bỏ qua / lên lịch lại không mở gì thì không nghỉ.
+                if (this.openedBrowser) await this.pause(GROUP_DELAY_MIN_MS, GROUP_DELAY_MAX_MS);
+                this.openedBrowser = false;
                 if (this.cancelled) break;
                 if (skipped.has(pair.profileId)) {
                     this.backOffPair(pair, totals);
@@ -214,8 +237,8 @@ export class PostTracker {
                         await this.trackPair(pair, sinceMs, totals, shape);
                     } catch (e) {
                         this.backOffPair(pair, totals);
-                        const code = e instanceof ResearchError ? e.code : 'error';
-                        const message = e instanceof ResearchError ? e.code : (e instanceof Error ? e.message : String(e));
+                        const code = e instanceof ResearchError ? e.code : e instanceof PageLoginProblem ? e.state : 'error';
+                        const message = code !== 'error' ? code : (e instanceof Error ? e.message : String(e));
                         errors.push({ groupUrl: pair.groupUrl, profileId: pair.profileId, error: message });
                         if (code === 'logged_out' || code === 'checkpoint') {
                             try { this.deps.observeLogin(pair.profileId, code); } catch { /* quan sát không được làm hỏng lượt */ }
@@ -246,16 +269,25 @@ export class PostTracker {
         }
     }
 
-    private async trackPair(pair: TrackPair, sinceMs: number, totals: Counters, shape: { value?: string[] }): Promise<void> {
-        const all = this.deps.store.listTrackingForPair(pair.profileId, pair.groupUrl, sinceMs)
+    /** Dòng còn theo dõi của cặp; dòng quá cửa sổ 14 ngày không đọc nữa mà làm nguội để không đến hạn mãi (spec 4.5). */
+    private freshRows(pair: TrackPair, sinceMs: number, totals: Counters): PostTrackingRow[] {
+        const all = this.deps.store.listTrackingForPair(pair.profileId, pair.groupUrl, sinceMs, pair.pageId)
             .filter((r) => r.linkStatus !== 'not_found');
-        // Dòng quá cửa sổ 14 ngày không đọc nữa: làm nguội để không đến hạn mãi (spec 4.5).
         const staleBefore = this.now() - MAX_TRACK_SINCE_DAYS * DAY_MS;
         this.settleUnread(all.filter((r) => r.postedAt < staleBefore && this.isDue(r)), totals);
-        const rows = all.filter((r) => r.postedAt >= staleBefore);
+        return all.filter((r) => r.postedAt >= staleBefore);
+    }
+
+    private taskContext(): ProfileTaskContext {
+        return { jobId: this.jobId!, signal: this.abort.signal, priority: 'background', assertCurrent: () => { this.deps.assertCurrent?.(); } };
+    }
+
+    private async trackPair(pair: TrackPair, sinceMs: number, totals: Counters, shape: { value?: string[] }): Promise<void> {
+        if (pair.pageId !== undefined) return this.trackPagePair(pair, pair.pageId, sinceMs, totals);
+        const rows = this.freshRows(pair, sinceMs, totals);
         if (rows.length === 0) return;
-        const opened = await this.deps.openSession(pair.profileId, { jobId: this.jobId!, signal: this.abort.signal,
-            priority: 'background', assertCurrent: () => { this.deps.assertCurrent?.(); } });
+        this.openedBrowser = true;
+        const opened = await this.deps.openSession(pair.profileId, this.taskContext());
         try {
             this.deps.assertCurrent?.();
             if (this.cancelled) return;
@@ -273,7 +305,7 @@ export class PostTracker {
     /** Cặp lỗi: các dòng đến hạn được lên lịch như một lần kiểm tra không đọc được gì, để không bị chọn lại ở nhịp sau. */
     private backOffPair(pair: TrackPair, totals: Counters): void {
         try {
-            const rows = this.deps.store.listTrackingForPair(pair.profileId, pair.groupUrl, 0)
+            const rows = this.deps.store.listTrackingForPair(pair.profileId, pair.groupUrl, 0, pair.pageId)
                 .filter((r) => r.linkStatus !== 'not_found' && this.isDue(r));
             this.settleUnread(rows, totals);
         } catch { /* lên lịch lại không được làm hỏng lượt theo dõi */ }
@@ -335,6 +367,55 @@ export class PostTracker {
         return { items, oldest, groupId: prepared.groupId, userId };
     }
 
+    /** Cặp (profile, Page): đọc Page một lần qua hàng chờ profile, ghi người theo dõi, đối chiếu bài (spec page-publish-proof-metrics 4.4). */
+    private async trackPagePair(pair: TrackPair, pageId: string, sinceMs: number, totals: Counters): Promise<void> {
+        // Chưa biết Page (hoặc không có bộ đọc): không mở trình duyệt, chỉ lên lịch lại theo mốc như lần đọc lỗi.
+        if (pageId === '' || !this.deps.readPage) return this.backOffPair(pair, totals);
+        const rows = this.freshRows(pair, sinceMs, totals);
+        if (rows.length === 0) return;
+        this.openedBrowser = true;
+        const read = await this.deps.readPage(pair.profileId, this.taskContext());
+        this.deps.assertCurrent?.();
+        if (this.cancelled) return;
+        if (read.kind !== 'page' || read.pageId !== pageId) throw new Error('page_mismatch');
+        const now = this.now();
+        const today = (this.deps.localDate ?? systemClock.date)(now);
+        // Chỉ số đã xác minh mới được ghi; null/thiếu thì không ghi dòng nào.
+        if (typeof read.followers === 'number' && Number.isFinite(read.followers)) {
+            try {
+                if (!this.deps.store.hasPageFollowersOn(pageId, today)) {
+                    this.deps.store.recordPageFollowers({ pageId, profileId: pair.profileId, capturedOn: today, capturedAt: now, followers: read.followers });
+                }
+            } catch (err) {
+                // Ghi người theo dõi lỗi không được làm mất số liệu bài của cùng lượt đọc.
+                Logger.warn(`[PostTracker] không ghi được người theo dõi Page ${pageId}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }
+        const config = this.deps.getConfig?.() ?? DEFAULT_POST_TRACKING_CONFIG;
+        const hits = matchPagePosts(rows, read.recentPosts);
+        for (const row of rows) {
+            totals.checked++;
+            const hit = hits.get(row.resultId);
+            let patch: Partial<PostTrackingRow> = {};
+            if (hit) {
+                const url = `https://www.facebook.com/${pageId}/posts/${hit.postId}`;
+                patch = this.foundPatch(row, { fbId: hit.postId, url, reactions: hit.reactions, comments: hit.comments, shares: hit.shares }, '', config, now, totals);
+            } else if (row.linkStatus === 'known') {
+                // Trôi khỏi 10 bài gần nhất: mốc đó không có dữ liệu, không kết luận bài bị xóa (spec mục 5).
+                patch.statsDone = markOverdueStatsDone(row, config, now);
+            } else if (linkRetryExhausted(row, config, now)) {
+                totals.notFound++;
+                patch.linkStatus = 'not_found';
+            }
+            const merged: PostTrackingRow = { ...row, ...patch, lastCheckedAt: now };
+            merged.nextCheckAt = computeNextCheckAt(merged, config, now);
+            this.deps.store.updateTracking(row.resultId, { ...patch, lastCheckedAt: now, nextCheckAt: merged.nextCheckAt });
+            if (hit && row.linkStatus !== 'known') {
+                try { this.deps.onPagePostKnown?.(merged); } catch { /* người nhận lỗi không được làm hỏng lượt theo dõi */ }
+            }
+        }
+    }
+
     /** Đối chiếu từng dòng với các mục đã đọc (spec 4.3) rồi ghi kết quả. */
     private applyReading(rows: PostTrackingRow[], reading: PairReading, totals: Counters): void {
         const config = this.deps.getConfig?.() ?? DEFAULT_POST_TRACKING_CONFIG;
@@ -376,7 +457,7 @@ export class PostTracker {
     }
 
     private foundPatch(
-        row: PostTrackingRow, item: ParsedItem, groupId: string, config: PostTrackingConfig, now: number, totals: Counters,
+        row: PostTrackingRow, item: Pick<ParsedItem, 'fbId' | 'url' | 'reactions' | 'comments' | 'shares'>, groupId: string, config: PostTrackingConfig, now: number, totals: Counters,
     ): Partial<PostTrackingRow> {
         totals.found++;
         if (row.linkStatus !== 'known') totals.linked++;

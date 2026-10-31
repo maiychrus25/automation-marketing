@@ -12,6 +12,11 @@ let mockUseRealScheduler = false;
 let mockCommentSchedulerDeps: any = null;
 let mockLoginSchedulerDeps: any = null;
 let mockTrackSchedulerDeps: any = null;
+let mockNotificationDeps: any = null;
+let mockUseRealNotification = false;
+let mockNotificationInstance: any = null;
+let mockSink = false;
+const mockNotificationStop = jest.fn();
 let mockServiceDeps: any = null;
 let mockServiceInstance: any = null;
 let mockTrackerDeps: any;
@@ -69,6 +74,18 @@ jest.mock('../../services/facebookPoster/LoginCheckScheduler', () => ({
     LOGIN_CHECK_SETTING_KEY: 'k', parseLoginCheckConfig: () => ({}), validateLoginCheckConfig: (c: any) => c,
 }));
 jest.mock('../../services/facebookPoster/PostTrackScheduler', () => ({ PostTrackScheduler: class { constructor(deps: any) { mockTrackSchedulerDeps = deps; } start() {} stop() {} } }));
+jest.mock('../../services/facebookPoster/NotificationScheduler', () => ({
+    ...jest.requireActual('../../services/facebookPoster/NotificationScheduler'),
+    NotificationScheduler: class {
+        constructor(deps: any) {
+            mockNotificationDeps = deps;
+            mockNotificationInstance = mockUseRealNotification ? new (jest.requireActual('../../services/facebookPoster/NotificationScheduler').NotificationScheduler)(deps) : this;
+            if (mockUseRealNotification) return mockNotificationInstance;
+        }
+        start() {}
+        stop() { mockNotificationStop(); }
+    },
+}));
 jest.mock('../../services/facebookPoster/CommentCollectScheduler', () => ({
     CommentCollectScheduler: class {
         constructor(deps: any) { mockCommentSchedulerDeps = deps; }
@@ -122,12 +139,16 @@ jest.mock('../../../electron/ipc/researchIpc', () => ({
 jest.mock('../../../electron/ipc/workspaceIpc', () => ({ isWorkspaceSwitchInProgress: () => mockSwitching }));
 jest.mock('../../services/control/controlEvents', () => ({
     buildPagesLearnFinished: jest.requireActual('../../services/control/controlEvents').buildPagesLearnFinished,
-    emitControlEvent: jest.fn(), hasControlEventSink: () => false, buildRunStarted: jest.fn(), buildRunFinished: jest.fn(), buildScheduleMissed: jest.fn(),
+    emitControlEvent: jest.fn(), hasControlEventSink: () => mockSink, buildRunStarted: jest.fn(), buildRunFinished: jest.fn(), buildScheduleMissed: jest.fn(),
     buildDraftApproved: jest.fn(), buildLoginProblem: jest.fn(), buildCheckFinished: jest.fn(), buildTrackFinished: jest.fn(), buildLeadsFound: jest.fn((p: unknown) => p), buildCollectFinished: jest.fn((p: unknown) => p),
+    recordControlEvent: jest.fn(), buildLeadsDigest: jest.requireActual('../../services/control/controlEvents').buildLeadsDigest,
 }));
 
 jest.mock('../../services/dailyBrief/pageIdentity', () => ({ ...jest.requireActual('../../services/dailyBrief/pageIdentity'), readPageIdentity: (...args: any[]) => mockRead(...args) }));
 
+import { notificationOperations, MAX_PAGE_METRICS_DAYS } from '../../../electron/ipc/facebookPosterIpc';
+import { createControlMethods } from '../../services/control/ControlMethods';
+import { systemClock } from '../../services/dailyBrief/DailyBriefStore';
 import { getProfileJobBinding, getBoundPageCampaignCollector, listFacebookPosterRunProfileIds, setPageCampaignExecutionContext, stopPageCampaignExecution, learnPages, isPageLearnerRunning, cancelFacebookPosterJobs, cancelAndWaitFacebookPosterJobs, startFacebookPosterScheduler, stopFacebookPosterScheduler, posterOperations, registerFacebookPosterIpc, campaignOperations, trackingOperations, leadOperations, isFacebookPosterBusy } from '../../../electron/ipc/facebookPosterIpc';
 
 const NOW = Date.now();
@@ -696,6 +717,24 @@ describe('facebookPosterIpc wiring', () => {
         } finally { mockDatabaseInstance = original; }
     });
 
+    test('publish and tracker Page callbacks bind campaign posts on the captured DB only', async () => {
+        await currentWorkerDeps();
+        trackingOperations.track({}); await new Promise(resolve => setImmediate(resolve));
+        const { PageCampaignExecutionStore } = require('../../services/dailyBrief/PageCampaignExecutionStore');
+        const bind = jest.spyOn(PageCampaignExecutionStore.prototype, 'bindTrackedPost');
+        const original = mockDatabaseInstance;
+        const replacement = memoryDb(); new FacebookPosterStore(replacement).ensureSchema();
+        const query = jest.spyOn(replacement, 'query'); const queryOne = jest.spyOn(replacement, 'queryOne');
+        mockDatabaseInstance = { ...original, ...replacement };
+        const row = { resultId: 1, runId: 'r', scheduleId: 's', targetKind: 'page', pageId: 'p', postId: '1', postUrl: 'https://www.facebook.com/p/posts/1', linkStatus: 'known' };
+        try {
+            expect(() => mockServiceDeps.onPagePostKnown(row)).not.toThrow();
+            expect(() => mockTrackerDeps.onPagePostKnown(row)).not.toThrow();
+            expect(bind.mock.calls.map(call => call[0])).toEqual([row, row]);
+            expect(bind.mock.results.map(result => result.value)).toEqual(['skipped', 'skipped']);
+            expect(query).not.toHaveBeenCalled(); expect(queryOne).not.toHaveBeenCalled();
+        } finally { mockDatabaseInstance = original; bind.mockRestore(); }
+    });
     test('side factories retain old stores and suppress stale outward callbacks independently', async () => {
         trackingOperations.track({}); leadOperations.collect({}); learnPages(['p1'], true);
         await new Promise(resolve => setImmediate(resolve));
@@ -742,6 +781,58 @@ describe('facebookPosterIpc wiring', () => {
             expect(emit.mock.calls.map(c => c[0])).toEqual(['facebookPoster:trackFinished', 'facebookPoster:leadsFound', 'facebookPoster:commentCollectFinished']);
             expect(control.mock.calls.map(c => c[0])).toEqual(['posts.trackFinished', 'leads.found', 'comments.collectFinished', 'pages.learnFinished']);
         } finally { mockSwitching = false; }
+    });
+    test('notification scheduler is gated on the binding and the sink; leads.found is deferred only while digesting', async () => {
+        const controlEvents = require('../../services/control/controlEvents');
+        startFacebookPosterScheduler();
+        leadOperations.collect({}); // collector bound to the current generation, independent of test order
+        await new Promise(resolve => setImmediate(resolve));
+        const deps = mockNotificationDeps;
+        expect(deps.canPublish()).toBe(false); // no Control API sink in this composition
+        expect(deps.publish).toBe(controlEvents.recordControlEvent);
+        expect(deps.readConfig()).toEqual({ reportCadence: 'weekly', reportHour: 8, reportWeekday: 1, leadDigestMinutes: 60 });
+        const build = controlEvents.buildLeadsFound as jest.Mock;
+        build.mockClear();
+        mockCollectorDeps.emit('leads.found', { count: 1, samples: [], auto: true, leadIds: [1], campaignIds: [] });
+        expect(build.mock.calls[0][0]).toMatchObject({ count: 1, deferred: false }); // no digest cursor yet: sent immediately
+        let minutes = 60;
+        const getSetting = jest.spyOn(mockDatabaseInstance, 'getSetting').mockImplementation(((key: string) =>
+            key === 'fb_poster_notification_config' ? JSON.stringify({ reportCadence: 'weekly', reportHour: 8, reportWeekday: 1, leadDigestMinutes: minutes })
+                : key === 'fb_poster_lead_digest_cursor' ? JSON.stringify({ at: 1, id: 1, minutes }) : null) as any);
+        try {
+            build.mockClear();
+            mockCollectorDeps.emit('leads.found', { count: 1, samples: [], auto: true, leadIds: [2], campaignIds: [] });
+            expect(build.mock.calls[0][0]).toMatchObject({ count: 1, deferred: true });
+            minutes = 0;
+            build.mockClear();
+            mockCollectorDeps.emit('leads.found', { count: 1, samples: [], auto: true, leadIds: [3], campaignIds: [] });
+            expect(build.mock.calls[0][0]).toMatchObject({ count: 1, deferred: false });
+        } finally { getSetting.mockRestore(); await cancelAndWaitFacebookPosterJobs(); }
+        mockNotificationStop.mockClear();
+        stopFacebookPosterScheduler();
+        expect(mockNotificationStop).toHaveBeenCalledTimes(1);
+        startFacebookPosterScheduler();
+        expect(mockNotificationDeps).not.toBe(deps);
+    });
+    test('notification canPublish needs the current binding and a sink; isCollecting follows the collector', async () => {
+        const ipc = require('../../../electron/ipc/facebookPosterIpc');
+        const { CommentCollector } = require('../../services/facebookPoster/CommentCollector');
+        startFacebookPosterScheduler();
+        const deps = mockNotificationDeps;
+        mockSink = true;
+        try {
+            expect(deps.canPublish()).toBe(true);
+            expect(deps.isCollecting()).toBe(false);
+            leadOperations.collect({});
+            const running = jest.spyOn(CommentCollector.prototype, 'isRunning').mockReturnValue(true);
+            try { expect(deps.isCollecting()).toBe(true); } finally { running.mockRestore(); }
+            expect(await cancelAndWaitFacebookPosterJobs()).toBe(true); ipc.retireFacebookJobGeneration();
+            expect(deps.canPublish()).toBe(false);
+            startFacebookPosterScheduler();
+            expect(mockNotificationDeps).not.toBe(deps);
+            expect(mockNotificationDeps.canPublish()).toBe(true);
+            expect(deps.canPublish()).toBe(false);
+        } finally { mockSink = false; startFacebookPosterScheduler(); }
     });
     test('late completion and config reads stay on the captured DB, stale lease cannot open', async () => {
         await currentWorkerDeps();
@@ -1152,5 +1243,224 @@ describe('Page learner lifecycle wiring', () => {
         learnPages(['p1'], true); await tick();
         expect(mockRunFinished).toHaveBeenCalledTimes(1);
         expect(isFacebookPosterBusy()).toBe(false);
+    });
+});
+
+describe('page metrics and notification config (spec 2026-10-31 §6)', () => {
+    const DAY = 24 * 3600_000;
+    const handlers = new Map<string, (event: unknown, params?: any) => Promise<any>>();
+    const invoke = (channel: string, params?: any) => handlers.get(channel)!({}, params);
+    const control = (name: string, params: any = {}) => createControlMethods({ tracking: trackingOperations, notifications: notificationOperations } as any)
+        .find((m) => m.name === name)!.run(params, {});
+    const setting = (key: string): string | null => mockDb.queryOne<{ value: string }>('SELECT value FROM test_settings WHERE key = ?', [key])?.value ?? null;
+    const cursor = () => JSON.parse(setting('fb_poster_lead_digest_cursor')!);
+    const config = () => notificationOperations.getConfig().config;
+    let seq = 0;
+    const addLead = (detectedAt: number) => new FacebookPosterStore(mockDb).createLeads([{
+        commentKey: `notif-${++seq}`, postUrl: 'https://www.facebook.com/groups/1/posts/9/', resultId: null, groupUrl: '', campaignId: null, variant: '', profileId: 'p1',
+        authorId: '', authorName: `Khách ${seq}`, authorUrl: '', text: 'ib giá', commentedAtMs: null, matched: ['giá'], aiIntent: null, aiScore: null, aiReason: '',
+        status: 'new', note: '', detectedAt, updatedAt: detectedAt,
+    } as any])[0];
+    let getSpy: jest.SpyInstance;
+    let setSpy: jest.SpyInstance;
+
+    beforeAll(() => {
+        mockDb.exec('CREATE TABLE IF NOT EXISTS test_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+        (require('electron').ipcMain.handle as jest.Mock).mockImplementation((channel: string, handler: any) => { handlers.set(channel, handler); });
+        registerFacebookPosterIpc();
+        (require('electron').ipcMain.handle as jest.Mock).mockReset();
+    });
+    beforeEach(() => {
+        mockDb.run('DELETE FROM test_settings');
+        // Settings live in the same SQLite DB so the outer transaction of setConfig really rolls them back.
+        getSpy = jest.spyOn(mockDatabaseInstance, 'getSetting').mockImplementation(((key: string) => setting(key)) as any);
+        setSpy = jest.spyOn(mockDatabaseInstance, 'setSetting').mockImplementation(((key: string, value: string) =>
+            mockDb.run('INSERT OR REPLACE INTO test_settings (key, value) VALUES (?, ?)', [key, value])) as any);
+        stopFacebookPosterScheduler();
+        mockUseRealNotification = true;
+        mockSink = true;
+        startFacebookPosterScheduler();
+        (require('../../services/control/controlEvents').recordControlEvent as jest.Mock).mockReset();
+    });
+    afterEach(async () => {
+        await cancelAndWaitFacebookPosterJobs();
+        // Shared DB: other tests in this file expect no tracking rows, so remove what this block added.
+        mockDb.run('DELETE FROM fb_poster_post_stats WHERE result_id BETWEEN 91001 AND 91006');
+        mockDb.run('DELETE FROM fb_poster_post_tracking WHERE result_id BETWEEN 91001 AND 91006');
+        mockDb.run("DELETE FROM fb_poster_page_followers WHERE page_id IN ('pm-page', 'pm-other')");
+        mockDb.run("DELETE FROM fb_poster_leads WHERE comment_key LIKE 'notif-%'");
+        stopFacebookPosterScheduler();
+        mockUseRealNotification = false;
+        mockSink = false;
+        getSpy.mockRestore();
+        setSpy.mockRestore();
+        startFacebookPosterScheduler();
+    });
+    // Only writes that returned: a call that threw recorded nothing.
+    const published = (type: string) => {
+        const mock = require('../../services/control/controlEvents').recordControlEvent as jest.Mock;
+        return mock.mock.calls.filter((c, i) => c[0] === type && mock.mock.results[i].type === 'return');
+    };
+
+    test('setNotificationConfigResetsReportPeriodAndDigestCursor', async () => {
+        expect(await invoke('facebookPoster:getNotificationConfig')).toEqual({ success: true, config: { reportCadence: 'weekly', reportHour: 8, reportWeekday: 1, leadDigestMinutes: 60 } });
+        mockNotificationInstance.tickNow(); // initialises the report period and the digest cursor without sending
+        const initial = JSON.parse(setting('fb_poster_report_last_period')!);
+        expect(initial.rule).toBe('weekly:8:1');
+        const before = cursor();
+        expect(before.minutes).toBe(60);
+
+        // Schedule change: the scheduler re-records the current period of the new rule and sends nothing.
+        expect(await invoke('facebookPoster:setNotificationConfig', { reportCadence: 'daily', reportHour: 23 })).toEqual({ success: true, config: { reportCadence: 'daily', reportHour: 23, reportWeekday: 1, leadDigestMinutes: 60 } });
+        expect(cursor()).toEqual(before); // digest window unchanged: cursor untouched
+        mockNotificationInstance.tickNow();
+        expect(JSON.parse(setting('fb_poster_report_last_period')!).rule).toBe('daily:23');
+        expect(published('metrics.report')).toEqual([]);
+
+        // 60 → 0 through the Control API: the pending lead is flushed in the same call, cursor stands on it.
+        const l1 = addLead(Date.now() + 30 * DAY);
+        expect(await control('notifications.setConfig', { leadDigestMinutes: 0 })).toEqual({ config: expect.objectContaining({ leadDigestMinutes: 0 }) });
+        expect(published('leads.digest')).toHaveLength(1);
+        expect(published('leads.digest')[0][1]).toMatchObject({ leadIds: [l1.id] });
+        expect(cursor()).toEqual({ at: l1.detectedAt, id: l1.id, minutes: 0 });
+
+        // 0 → 15: leads already sent immediately are skipped; nothing is published.
+        const l2 = addLead(Date.now() + 31 * DAY);
+        expect(await invoke('facebookPoster:setNotificationConfig', { leadDigestMinutes: 15 })).toMatchObject({ success: true, config: { leadDigestMinutes: 15 } });
+        expect(cursor()).toEqual({ at: l2.detectedAt, id: l2.id, minutes: 15 });
+        // 15 → 30: only the stored window changes.
+        addLead(Date.now() + 32 * DAY);
+        await control('notifications.setConfig', { leadDigestMinutes: 30 });
+        expect(cursor()).toEqual({ at: l2.detectedAt, id: l2.id, minutes: 30 });
+        expect(published('leads.digest')).toHaveLength(1);
+        expect(config()).toEqual({ reportCadence: 'daily', reportHour: 23, reportWeekday: 1, leadDigestMinutes: 30 });
+    });
+
+    test('a digest switch is refused while a comment collect runs; other fields still save', async () => {
+        const { CommentCollector } = require('../../services/facebookPoster/CommentCollector');
+        mockNotificationInstance.tickNow();
+        leadOperations.collect({}); // binds the collector of this generation
+        const running = jest.spyOn(CommentCollector.prototype, 'isRunning').mockReturnValue(true);
+        try {
+            const before = { config: setting('fb_poster_notification_config'), cursor: setting('fb_poster_lead_digest_cursor') };
+            await expect(control('notifications.setConfig', { leadDigestMinutes: 0 })).rejects.toMatchObject({ code: 'BUSY' });
+            expect(await invoke('facebookPoster:setNotificationConfig', { leadDigestMinutes: 240, reportHour: 9 })).toEqual({ success: false, error: expect.stringContaining('thu bình luận') });
+            expect({ config: setting('fb_poster_notification_config'), cursor: setting('fb_poster_lead_digest_cursor') }).toEqual(before);
+            expect(config().leadDigestMinutes).toBe(60);
+            expect(await control('notifications.setConfig', { reportHour: 9, leadDigestMinutes: 60 })).toEqual({ config: expect.objectContaining({ reportHour: 9, leadDigestMinutes: 60 }) });
+        } finally { running.mockRestore(); }
+        await cancelAndWaitFacebookPosterJobs();
+        expect(await control('notifications.setConfig', { leadDigestMinutes: 120 })).toEqual({ config: expect.objectContaining({ leadDigestMinutes: 120 }) });
+        expect(cursor().minutes).toBe(120);
+    });
+
+    test('a digest switch is refused while a manual collect_comments run (not the auto collector) is active', async () => {
+        mockNotificationInstance.tickNow();
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        mockOpen.mockImplementation(async () => { await gate; throw new Error('synthetic launch stop'); });
+        posterOperations.start({ kind: 'collect_comments', params: { profileId: 'p1', postUrls: ['https://www.facebook.com/groups/1/posts/9/'] } });
+        try {
+            expect(leadOperations.collectStatus().running).toBe(false);
+            expect(mockNotificationDeps.isCollecting()).toBe(true);
+            const before = { config: setting('fb_poster_notification_config'), cursor: setting('fb_poster_lead_digest_cursor') };
+            await expect(control('notifications.setConfig', { leadDigestMinutes: 0 })).rejects.toMatchObject({ code: 'BUSY' });
+            expect({ config: setting('fb_poster_notification_config'), cursor: setting('fb_poster_lead_digest_cursor') }).toEqual(before);
+            expect(config().leadDigestMinutes).toBe(60);
+        } finally {
+            cancelFacebookPosterJobs(); release(); await cancelAndWaitFacebookPosterJobs();
+            mockOpen.mockReset(); startFacebookPosterScheduler();
+        }
+        expect(mockNotificationDeps.isCollecting()).toBe(false);
+    });
+
+    test('tracker readPage releases the profile session when the Page read throws', async () => {
+        trackingOperations.track({});
+        for (let i = 0; i < 50 && trackingOperations.status().running; i++) await new Promise(resolve => setImmediate(resolve));
+        expect(trackingOperations.status().running).toBe(false);
+        const close = jest.fn(async () => undefined);
+        mockOpen.mockResolvedValueOnce({ context: { once: jest.fn(), pages: () => [{}] }, close });
+        mockRead.mockRejectedValueOnce(new Error('synthetic read failure'));
+        const context = { jobId: 'page-read-error', signal: new AbortController().signal, priority: 'background', assertCurrent: () => undefined };
+        try {
+            await expect(mockTrackerDeps.readPage('p1', context)).rejects.toThrow('synthetic read failure');
+            expect(close).toHaveBeenCalledTimes(1);
+            expect(getProfileJobBinding().isProfileBusy('p1')).toBe(false);
+        } finally { mockOpen.mockReset(); mockRead.mockReset(); }
+    });
+
+    test('a failed digest flush leaves neither the config nor the cursor half-switched', async () => {
+        mockNotificationInstance.tickNow();
+        const pending = addLead(Date.now() + 40 * DAY);
+        const before = cursor();
+        const record = require('../../services/control/controlEvents').recordControlEvent as jest.Mock;
+        record.mockImplementationOnce(() => { throw new Error('ghi sự kiện lỗi'); });
+        expect((await invoke('facebookPoster:setNotificationConfig', { leadDigestMinutes: 0 })).success).toBe(false);
+        expect(config().leadDigestMinutes).toBe(60);
+        expect(setting('fb_poster_notification_config')).toBeNull();
+        expect(cursor()).toEqual(before);
+        expect(await invoke('facebookPoster:setNotificationConfig', { leadDigestMinutes: 0 })).toMatchObject({ success: true });
+        expect(published('leads.digest').map((c) => c[1].leadIds)).toEqual([[pending.id]]);
+        expect(cursor()).toEqual({ at: pending.detectedAt, id: pending.id, minutes: 0 });
+    });
+
+    test('without a scheduler bound to this DB a digest switch is refused, other fields save', async () => {
+        stopFacebookPosterScheduler();
+        await expect(control('notifications.setConfig', { leadDigestMinutes: 0 })).rejects.toMatchObject({ code: 'BUSY' });
+        expect(config().leadDigestMinutes).toBe(60);
+        expect(await control('notifications.setConfig', { reportCadence: 'off' })).toEqual({ config: expect.objectContaining({ reportCadence: 'off' }) });
+        expect(await invoke('facebookPoster:setNotificationConfig', { leadDigestMinutes: 45 })).toEqual({ success: false, error: expect.stringContaining('leadDigestMinutes') });
+        expect(await invoke('facebookPoster:setNotificationConfig', { junk: 1 })).toEqual({ success: false, error: expect.stringContaining('junk') });
+    });
+
+    test('pageMetrics text is the original posted text when the run row still has it', () => {
+        const s = new FacebookPosterStore(mockDb);
+        const now = Date.now();
+        s.createRun({ id: 'pm-text-run', kind: 'post', mode: 'page', params: { text: 'Khai Trương Chi Nhánh Mới' }, startedAt: now - DAY, scheduleId: null, campaignId: null } as any);
+        s.createTracking({ resultId: 91010, runId: 'pm-text-run', scheduleId: null, profileId: 'p1', targetKind: 'page', pageId: 'pm-text', groupUrl: 'https://www.facebook.com/',
+            groupId: '', postId: '', postUrl: null, postedAt: now - DAY, textHead: 'khai trương chi nhánh mới', linkStatus: 'missing', removedSuspected: false, lastSeenAt: null,
+            lastCheckedAt: null, checkCount: 0, nextCheckAt: null, statsDone: [] } as any);
+        try {
+            expect(trackingOperations.pageMetrics({ pageId: 'pm-text' }).pages[0].posts[0].text).toBe('Khai Trương Chi Nhánh Mới');
+        } finally {
+            mockDb.run('DELETE FROM fb_poster_post_tracking WHERE result_id = 91010');
+            mockDb.run("DELETE FROM fb_poster_runs WHERE id = 'pm-text-run'");
+        }
+    });
+
+    test('pageMetrics returns only known-Page rows with snapshots and followers, days 1–90', async () => {
+        const s = new FacebookPosterStore(mockDb);
+        const now = Date.now();
+        const row = (resultId: number, over: Record<string, unknown>) => s.createTracking({
+            resultId, runId: 'pm', scheduleId: null, profileId: 'p1', targetKind: 'page', pageId: 'pm-page', groupUrl: 'https://www.facebook.com/', groupId: '',
+            postId: '', postUrl: null, postedAt: now - DAY, textHead: `bài ${resultId}`, linkStatus: 'missing', removedSuspected: false, lastSeenAt: null,
+            lastCheckedAt: null, checkCount: 0, nextCheckAt: null, statsDone: [], ...over,
+        } as any);
+        row(91001, { postId: 'a1', postUrl: 'https://www.facebook.com/pm-page/posts/a1', linkStatus: 'known', postedAt: now - 2 * DAY });
+        row(91002, {});
+        row(91003, { pageId: '' });
+        row(91004, { targetKind: 'group', pageId: '', groupUrl: 'https://www.facebook.com/groups/pm/' });
+        row(91005, { postedAt: now - 40 * DAY });
+        row(91006, { pageId: 'pm-other' });
+        s.addPostStats(91001, { capturedAt: now - DAY, reactions: 3, comments: 1, shares: null });
+        s.addPostStats(91001, { capturedAt: now - 1000, reactions: 5, comments: 2, shares: 0 });
+        s.recordPageFollowers({ pageId: 'pm-page', profileId: 'p1', capturedOn: systemClock.date(now), capturedAt: now, followers: 120 });
+        s.recordPageFollowers({ pageId: 'pm-page', profileId: 'p1', capturedOn: systemClock.date(now - 60 * DAY), capturedAt: now - 60 * DAY, followers: 90 });
+        const out = trackingOperations.pageMetrics({ pageId: 'pm-page' });
+        expect(out.pages).toHaveLength(1);
+        expect(out.pages[0]).toMatchObject({ pageId: 'pm-page', pageName: 'pm-page' });
+        expect(out.pages[0].posts.map((p) => [p.resultId, p.linkStatus, p.snapshots.map((x) => x.reactions)])).toEqual([[91002, 'missing', []], [91001, 'known', [3, 5]]]);
+        expect(out.pages[0].posts[1]).toMatchObject({ postId: 'a1', postUrl: 'https://www.facebook.com/pm-page/posts/a1', text: 'bài 91001' });
+        expect(out.pages[0].followers.map((f) => f.followers)).toEqual([120]);
+        expect(trackingOperations.pageMetrics({ pageId: 'pm-page', days: MAX_PAGE_METRICS_DAYS }).pages[0].posts.map((p) => p.resultId)).toEqual([91002, 91001, 91005]);
+        const all = (await invoke('facebookPoster:pageMetrics', {})).pages as { pageId: string; posts: { resultId: number }[] }[];
+        expect(all.map((p) => p.pageId)).toEqual(expect.arrayContaining(['pm-page', 'pm-other']));
+        expect(all.map((p) => p.pageId)).not.toContain('');
+        expect(all.flatMap((p) => p.posts.map((x) => x.resultId))).not.toEqual(expect.arrayContaining([91003]));
+        expect(all.flatMap((p) => p.posts.map((x) => x.resultId))).not.toEqual(expect.arrayContaining([91004]));
+        for (const days of [0, 91, 1.5, '7']) expect(await invoke('facebookPoster:pageMetrics', { days })).toEqual({ success: false, error: expect.stringContaining('days') });
+        expect(await control('pages.metrics', { pageId: 'pm-page', days: 7 })).toMatchObject({ pages: [{ pageId: 'pm-page' }] });
+        const schema: any = createControlMethods({} as any).find((m) => m.name === 'pages.metrics')!.paramsSchema;
+        expect(schema.properties.days.maximum).toBe(MAX_PAGE_METRICS_DAYS); // Control and IPC limits stay equal
     });
 });

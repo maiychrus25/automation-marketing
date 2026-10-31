@@ -118,6 +118,16 @@ CREATE TABLE IF NOT EXISTS fb_poster_post_stats (
 );
 CREATE INDEX IF NOT EXISTS idx_fb_poster_post_stats_result ON fb_poster_post_stats(result_id, captured_at);
 
+CREATE TABLE IF NOT EXISTS fb_poster_page_followers (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_id     TEXT NOT NULL,
+    profile_id  TEXT NOT NULL,
+    captured_on TEXT NOT NULL,  -- ngày địa phương YYYY-MM-DD
+    captured_at INTEGER NOT NULL,
+    followers   INTEGER NOT NULL,
+    UNIQUE(page_id, captured_on)
+);
+
 -- Chiến dịch: docs/specs/2026-10-20-campaigns-variants.md mục 2
 CREATE TABLE IF NOT EXISTS fb_poster_campaigns (
     id         TEXT PRIMARY KEY,           -- uuid
@@ -179,4 +189,8 @@ export const FB_POSTER_MIGRATIONS: string[] = [
     'CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_next_comment ON fb_poster_post_tracking(next_comment_at)',
     'ALTER TABLE fb_poster_schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 1',
     "ALTER TABLE fb_poster_schedules ADD COLUMN authority_kind TEXT NOT NULL DEFAULT 'owner' CHECK (authority_kind IN ('owner','autonomy'))",
+    // 26.33: theo dõi bài Page dùng chung bảng (dòng cũ tự là 'group'). Index tạo sau ALTER.
+    "ALTER TABLE fb_poster_post_tracking ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'group'",
+    "ALTER TABLE fb_poster_post_tracking ADD COLUMN page_id TEXT NOT NULL DEFAULT ''",
+    'CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_page ON fb_poster_post_tracking(profile_id, target_kind, page_id)',
 ];

@@ -3,13 +3,13 @@ import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import PerformancePanel from './PerformancePanel';
-import { formatStatsLine, linkChip } from './trackingFormat';
-import type { FbPosterRun, FbPosterResult, LinkStatus, PostStatsSnapshot } from '../../../models/facebookPoster';
+import { formatStatsLine, linkChip, missingStatsReason } from './trackingFormat';
+import type { FbPosterRun, FbPosterResult, PostStatsSnapshot, PostTrackingRow } from '../../../models/facebookPoster';
 
 const PAGE_SIZE = 50;
 const TRACKING_LIMIT = 500;
 
-type TrackInfo = { linkStatus: LinkStatus; removedSuspected: boolean; latestStats: PostStatsSnapshot | null };
+type TrackInfo = Pick<PostTrackingRow, 'linkStatus' | 'removedSuspected' | 'targetKind' | 'statsDone'> & { latestStats: PostStatsSnapshot | null };
 
 export const KIND_LABEL: Record<string, string> = { post: 'Đăng bài', join: 'Tham gia nhóm', scan_groups: 'Quét nhóm', collect_comments: 'Thu bình luận' };
 const MODE_LABEL: Record<string, string> = { group: 'Nhóm', page: 'Page' };
@@ -179,9 +179,11 @@ export default function HistoryTab() {
                                 {r.error && <span className="text-red-400 break-words min-w-0">{r.error}</span>}
                                 {(() => {
                                   const t = tracking[run.id]?.[r.id];
-                                  const chip = t ? linkChip(t.linkStatus, t.removedSuspected) : null;
+                                  const chip = t ? linkChip(t.linkStatus, t.removedSuspected, t.targetKind) : null;
+                                  const missingReason = t ? missingStatsReason(t, t.latestStats) : null;
                                   return (<>
                                     {chip && <span aria-label={chip.label} title={chip.title} className={`shrink-0 whitespace-nowrap rounded border px-1.5 text-xs ${chip.cls}`}>{chip.label}</span>}
+                                    {missingReason && <span title={missingReason} aria-label={missingReason} className="text-gray-400 whitespace-nowrap">—</span>}
                                     {t?.latestStats && <span title={`Đo lúc ${formatTime(t.latestStats.capturedAt)}`} className="text-gray-400 whitespace-nowrap">{formatStatsLine(t.latestStats)}</span>}
                                   </>);
                                 })()}

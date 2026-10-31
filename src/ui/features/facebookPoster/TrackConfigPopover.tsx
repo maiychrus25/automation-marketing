@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
-import { formatMinutesList, minutesLabel, parseMinutesList } from './trackingFormat';
+import { formatMinutesList, minutesLabel, parseMinutesList, REPORT_CADENCE_OPTIONS, WEEKDAY_OPTIONS, LEAD_DIGEST_OPTIONS } from './trackingFormat';
 import type { PostTrackingConfig } from '../../../services/facebookPoster/postTracking';
+import type { NotificationConfig } from '../../../services/facebookPoster/notificationRules';
 
 const FOCUS = 'focus-visible:ring-2 focus-visible:ring-blue-500';
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, '0')}:00` }));
 
 export default function TrackConfigPopover() {
   const [open, setOpen] = useState(false);
@@ -13,6 +15,11 @@ export default function TrackConfigPopover() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [notif, setNotif] = useState<NotificationConfig | null>(null);
+  const [notifLoadFailed, setNotifLoadFailed] = useState(false);
+  const [notifSaving, setNotifSaving] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const [digestError, setDigestError] = useState('');
   const wrapRef = useRef<HTMLDivElement>(null);
   const gearRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -29,6 +36,16 @@ export default function TrackConfigPopover() {
       if (cancelled) return;
       if (res?.success && res.config) apply(res.config); else setLoadFailed(true);
     }).catch(() => { if (!cancelled) setLoadFailed(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Cài đặt thông báo là phần phụ: tải lỗi thì thay hai khối bằng một dòng báo lỗi, không chặn mốc theo dõi.
+  useEffect(() => {
+    let cancelled = false;
+    ipc.facebookPoster?.getNotificationConfig().then((res) => {
+      if (cancelled) return;
+      if (res?.success && res.config) setNotif(res.config); else setNotifLoadFailed(true);
+    }).catch(() => { if (!cancelled) setNotifLoadFailed(true); });
     return () => { cancelled = true; };
   }, []);
 
@@ -57,6 +74,25 @@ export default function TrackConfigPopover() {
     }
   };
 
+  // Lưu ngay khi đổi. Select là controlled theo bản đã lưu nên lỗi tự trả về giá trị cũ; lỗi gom tin hiện cạnh ô gom tin.
+  const saveNotif = async (patch: Partial<NotificationConfig>) => {
+    if (notifSaving) return;
+    const isDigest = 'leadDigestMinutes' in patch;
+    const setErr = isDigest ? setDigestError : setReportError;
+    setNotifSaving(true);
+    setReportError('');
+    setDigestError('');
+    try {
+      const res = await ipc.facebookPoster.setNotificationConfig(patch);
+      if (!res?.success || !res.config) throw new Error(res?.error || 'Không lưu được cài đặt');
+      setNotif(res.config);
+    } catch (err) {
+      setErr(err instanceof Error && err.message ? fieldLabels(err.message) : 'Không lưu được cài đặt');
+    } finally {
+      setNotifSaving(false);
+    }
+  };
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!config) return;
@@ -71,7 +107,7 @@ export default function TrackConfigPopover() {
       <button ref={gearRef} type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="dialog" aria-label="Cài đặt tự lấy link và đo tương tác" title="Tự lấy link và đo"
         className={`px-2 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 ${FOCUS}`}>⚙</button>
       {open && (
-        <div ref={popoverRef} tabIndex={-1} role="dialog" aria-label="Tự lấy link và đo" className="absolute right-0 top-full mt-1 z-20 w-[min(20rem,calc(100vw-8rem))] rounded-lg border border-gray-700 bg-gray-900 p-3 focus:outline-none space-y-2 shadow-lg">
+        <div ref={popoverRef} tabIndex={-1} role="dialog" aria-label="Tự lấy link và đo" className="absolute right-0 top-full mt-1 z-20 w-[min(20rem,calc(100vw-8rem))] rounded-lg border border-gray-700 bg-gray-900 p-3 focus:outline-none space-y-2 shadow-lg max-h-[75vh] overflow-y-auto">
           <p className="text-sm text-gray-200">Tự lấy link và đo</p>
           {config ? (
             <form onSubmit={submit} className="space-y-2">
@@ -94,6 +130,45 @@ export default function TrackConfigPopover() {
               <button type="submit" disabled={saving} className={`px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-200 hover:border-gray-400 disabled:opacity-50 ${FOCUS}`}>{saving ? 'Đang lưu…' : 'Lưu mốc thời gian'}</button>
             </form>
           ) : <p className="text-xs text-gray-400">{loadFailed ? 'Không tải được cài đặt' : 'Đang tải…'}</p>}
+          {!notif && notifLoadFailed && <p className="text-xs text-gray-400 border-t border-gray-700 pt-2">Không tải được cài đặt báo cáo</p>}
+          {notif && (
+            <div className="space-y-2 border-t border-gray-700 pt-2">
+              <div className="space-y-1">
+                <label className="block text-xs text-gray-400">
+                  Báo cáo qua bot
+                  <select value={notif.reportCadence} disabled={notifSaving} onChange={(e) => saveNotif({ reportCadence: e.target.value as NotificationConfig['reportCadence'] })} className={`input-field text-xs py-1 w-full mt-1 ${FOCUS}`}>
+                    {REPORT_CADENCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <label className="block text-xs text-gray-400 min-w-0">
+                    Giờ gửi báo cáo
+                    <select value={notif.reportHour} disabled={notifSaving || notif.reportCadence === 'off'} onChange={(e) => saveNotif({ reportHour: Number(e.target.value) })} className={`input-field text-xs py-1 w-full mt-1 ${FOCUS}`}>
+                      {HOUR_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </label>
+                  {notif.reportCadence === 'weekly' && (
+                    <label className="block text-xs text-gray-400 min-w-0">
+                      Thứ gửi báo cáo
+                      <select value={notif.reportWeekday} disabled={notifSaving} onChange={(e) => saveNotif({ reportWeekday: Number(e.target.value) })} className={`input-field text-xs py-1 w-full mt-1 ${FOCUS}`}>
+                        {WEEKDAY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    </label>
+                  )}
+                </div>
+                {reportError && <p role="alert" className="text-xs text-red-400 break-words">{reportError}</p>}
+              </div>
+              <div className="space-y-1">
+                <label className="block text-xs text-gray-400">
+                  Gom tin khách tiềm năng
+                  <select value={notif.leadDigestMinutes} disabled={notifSaving} onChange={(e) => saveNotif({ leadDigestMinutes: Number(e.target.value) as NotificationConfig['leadDigestMinutes'] })} className={`input-field text-xs py-1 w-full mt-1 ${FOCUS}`}>
+                    {LEAD_DIGEST_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </label>
+                {digestError && <p role="alert" className="text-xs text-red-400 break-words">{digestError}</p>}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -105,5 +180,9 @@ function fieldLabels(message: string): string {
   return message
     .replace(/\blinkRetryMinutes\b/g, 'Mốc thử lấy link')
     .replace(/\bstatsAtMinutes\b/g, 'Mốc đo tương tác')
-    .replace(/\bautoEnabled\b/g, 'Bật tự động');
+    .replace(/\bautoEnabled\b/g, 'Bật tự động')
+    .replace(/\breportCadence\b/g, 'Báo cáo qua bot')
+    .replace(/\breportHour\b/g, 'Giờ gửi báo cáo')
+    .replace(/\breportWeekday\b/g, 'Thứ gửi báo cáo')
+    .replace(/\bleadDigestMinutes\b/g, 'Gom tin khách tiềm năng');
 }

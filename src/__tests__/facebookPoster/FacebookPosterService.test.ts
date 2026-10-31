@@ -1632,11 +1632,8 @@ describe('FacebookPosterService post tracking rows', () => {
     expect(h.store.listTracking({})[0]).toMatchObject({ linkStatus: 'missing', nextCheckAt: 1_000_000 + 10 * 60_000 });
   });
 
-  test('page mode, failed posts and non-post kinds create no rows', async () => {
-    const page = harness({ postToTargets: one({ postUrl: 'https://www.facebook.com/p/posts/1/' }) });
-    page.service.start(params({ mode: 'page' }));
-    await page.service.whenIdle();
-    expect(page.store.listTracking({})).toHaveLength(0);
+  // Spec 2026-10-31 §3/§4.2: bài Page nay có dòng theo dõi, nên phần "page mode" của test cũ được bỏ.
+  test('failed posts and non-post kinds create no rows', async () => {
     const failed = harness({ postToTargets: one({ ok: false, error: 'lỗi', errorCode: 'unknown' }) });
     failed.service.start(params());
     await failed.service.whenIdle();
@@ -1656,6 +1653,143 @@ describe('FacebookPosterService post tracking rows', () => {
     expect(h.results(runId)[0].outcome).toBe('posted');
     expect(h.run(runId).status).not.toBe('failed');
     expect(h.emitted.some((e) => e.channel === 'facebookPoster:log' && e.data.level === 'warning' && e.data.message.includes('disk full'))).toBe(true);
+  });
+
+  // ─── Spec 2026-10-31: dòng theo dõi bài Page ───
+  const pageParams = (over: Partial<Extract<StartParams, { kind: 'post' }>> = {}) =>
+    postParams({ mode: 'page', profiles: [{ profileId: 'p1', targets: [HOME] }], ...over });
+  const PAGE_POST = 'https://www.facebook.com/777/posts/555';
+
+  test('pageModeCreatesPageTrackingRowForLearnedPage', async () => {
+    const h = harness({ postToTargets: one({ postUrl: PAGE_POST, verifiedPostUrl: PAGE_POST }) }, { resolvePageId: () => '777' });
+    h.service.start(pageParams());
+    await h.service.whenIdle();
+    const rows = h.store.listTracking({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ targetKind: 'page', pageId: '777', groupUrl: HOME, groupId: '', postId: '555', postUrl: PAGE_POST,
+      linkStatus: 'known', nextCheckAt: 1_000_000 + 60 * 60_000, nextCommentAt: null });
+  });
+
+  test('pageModeWithoutLinkIsMissingWithFirstRetryAt30Min', async () => {
+    const noLink = harness({ postToTargets: one({}) }, { resolvePageId: () => '777' });
+    noLink.service.start(pageParams());
+    await noLink.service.whenIdle();
+    expect(noLink.store.listTracking({})[0]).toMatchObject({ targetKind: 'page', pageId: '777', linkStatus: 'missing', postUrl: null, postId: '',
+      nextCheckAt: 1_000_000 + 30 * 60_000, nextCommentAt: null });
+    // Chưa học được Page: không giữ URL dù kết quả có link.
+    for (const over of [{ resolvePageId: () => '' }, {}]) {
+      const unlearned = harness({ postToTargets: one({ postUrl: PAGE_POST, verifiedPostUrl: PAGE_POST }) }, over);
+      unlearned.service.start(pageParams());
+      await unlearned.service.whenIdle();
+      expect(unlearned.store.listTracking({})[0]).toMatchObject({ targetKind: 'page', pageId: '', linkStatus: 'missing', postUrl: null, postId: '',
+        nextCheckAt: 1_000_000 + 30 * 60_000 });
+    }
+  });
+
+  test('pageTrackingRowUsesThePublishTimeSoTheReFindWindowMatches', async () => {
+    const { matchPagePosts } = jest.requireActual('../../services/facebookPoster/postTracking');
+    let clock = 1_000_000;
+    let seenNow: number | undefined;
+    const PUBLISHED = clock + 5_000;
+    const task = jest.fn(async (input: any, deps: any) => {
+      await deps.launch();
+      seenNow = deps.now?.();
+      clock = PUBLISHED + 20 * 60_000; // bình luận đầu chờ 20 phút trước khi có kết quả
+      deps.onResult({ url: input.targets[0], ok: true, error: null, postUrl: PAGE_POST, verifiedPostUrl: null, publishedAt: PUBLISHED, commentStatus: 'posted', identity: 'Me' });
+    });
+    const h = harness({ postToTargets: task }, { resolvePageId: () => '777', now: () => clock });
+    h.service.start(pageParams({ comment: 'Bình luận đầu', commentDelayMin: 20 }));
+    await h.service.whenIdle();
+    expect(seenNow).toBe(1_000_000); // bước đăng dùng đồng hồ của service
+    const [row] = h.store.listTracking({});
+    expect(row).toMatchObject({ targetKind: 'page', linkStatus: 'missing', postedAt: PUBLISHED, nextCheckAt: PUBLISHED + 30 * 60_000 });
+    const hits = matchPagePosts([row], [{ postId: '555', text: 'xin chào', postedAt: PUBLISHED, reactions: 1, comments: 0, shares: 0, url: '' }]);
+    expect(hits.get(row.resultId)?.postId).toBe('555');
+    // Không có publishedAt (ví dụ ngoại lệ sau cú bấm): dùng giờ có kết quả như trước.
+    const noTime = harness({ postToTargets: one({}) }, { resolvePageId: () => '777' });
+    noTime.service.start(pageParams());
+    await noTime.service.whenIdle();
+    expect(noTime.store.listTracking({})[0].postedAt).toBe(1_000_000);
+    // Bài nhóm giữ giờ có kết quả dù kết quả mang publishedAt.
+    const group = harness({ postToTargets: one({ postUrl: 'https://www.facebook.com/groups/123/posts/456/', publishedAt: 5 }) });
+    group.service.start(params());
+    await group.service.whenIdle();
+    expect(group.store.listTracking({})[0].postedAt).toBe(1_000_000);
+  });
+
+  test('pageModeLegacyCommentUrlIsNotTrackingProof', async () => {
+    // Link bắt kiểu cũ (dùng cho bình luận đầu) vẫn ghi vào kết quả như trước, nhưng chưa xác minh chủ Page thì dòng theo dõi là missing.
+    const h = harness({ postToTargets: one({ postUrl: PAGE_POST, verifiedPostUrl: null, commentStatus: 'posted' }) }, { resolvePageId: () => '777' });
+    const { runId } = h.service.start(pageParams({ comment: 'Bình luận đầu' }));
+    await h.service.whenIdle();
+    expect(h.results(runId)[0]).toMatchObject({ postUrl: PAGE_POST, commentStatus: 'posted' });
+    expect(h.store.listTracking({})[0]).toMatchObject({ targetKind: 'page', pageId: '777', linkStatus: 'missing', postUrl: null, postId: '' });
+  });
+
+  test('pageIdIsResolvedOncePerProfilePlan', async () => {
+    const ids = ['A', 'B']; let calls = 0;
+    const task = jest.fn(async (input: any, deps: any) => {
+      await deps.launch();
+      const url = `https://www.facebook.com/${deps.expectedPageId}/posts/9`;
+      deps.onResult({ url: input.targets[0], ok: true, error: null, postUrl: url, verifiedPostUrl: url, commentStatus: 'not_requested', identity: 'Me' });
+    });
+    const h = harness({ postToTargets: task }, { resolvePageId: () => ids[Math.min(calls++, 1)] });
+    h.service.start(pageParams());
+    await h.service.whenIdle();
+    expect(calls).toBe(1);
+    expect(h.store.listTracking({})[0]).toMatchObject({ pageId: 'A', postUrl: 'https://www.facebook.com/A/posts/9', linkStatus: 'known' });
+  });
+
+  test('passesExpectedPageIdOnlyInPageMode', async () => {
+    const seen: unknown[] = [];
+    const capture = jest.fn(async (input: any, deps: any) => { seen.push(deps.expectedPageId); await deps.launch(); });
+    const page = harness({ postToTargets: capture }, { resolvePageId: () => '777' });
+    page.service.start(pageParams());
+    await page.service.whenIdle();
+    const group = harness({ postToTargets: capture }, { resolvePageId: () => '777' });
+    group.service.start(params());
+    await group.service.whenIdle();
+    expect(seen).toEqual(['777', undefined]);
+  });
+
+  test('onPagePostKnownFiresOnceForKnownPageRowNeverForGroup', async () => {
+    const known: any[] = [];
+    const h = harness({ postToTargets: one({ postUrl: PAGE_POST, verifiedPostUrl: PAGE_POST }) }, { resolvePageId: () => '777', onPagePostKnown: (row) => { known.push(row); } });
+    h.service.start(pageParams());
+    await h.service.whenIdle();
+    expect(known).toHaveLength(1);
+    expect(known[0]).toMatchObject({ targetKind: 'page', pageId: '777', postId: '555', linkStatus: 'known', resultId: h.store.listTracking({})[0].resultId });
+    const missing = harness({ postToTargets: one({}) }, { resolvePageId: () => '777', onPagePostKnown: (row) => { known.push(row); } });
+    missing.service.start(pageParams());
+    await missing.service.whenIdle();
+    const group = harness({ postToTargets: one({ postUrl: 'https://www.facebook.com/groups/123/posts/456/' }) }, { resolvePageId: () => '777', onPagePostKnown: (row) => { known.push(row); } });
+    group.service.start(params());
+    await group.service.whenIdle();
+    expect(known).toHaveLength(1);
+    // Lỗi của người nghe chỉ ghi log, dòng và kết quả vẫn còn.
+    const throwing = harness({ postToTargets: one({ postUrl: PAGE_POST, verifiedPostUrl: PAGE_POST }) }, { resolvePageId: () => '777', onPagePostKnown: () => { throw new Error('listener boom'); } });
+    const { runId } = throwing.service.start(pageParams());
+    await throwing.service.whenIdle();
+    expect(throwing.results(runId)[0].outcome).toBe('posted');
+    expect(throwing.store.listTracking({})).toHaveLength(1);
+    expect(throwing.emitted.some((e) => e.channel === 'facebookPoster:log' && e.data.level === 'warning' && e.data.message.includes('listener boom'))).toBe(true);
+  });
+
+  test('campaignUncertainPageResultCreatesMissingRowOwnerUncertainDoesNot', async () => {
+    const uncertain = one({ ok: false, error: 'có thể đã lên', errorCode: 'uncertain_after_submit' });
+    const guard = { variantIndex: 0, assertPost: () => {}, assertCurrent: () => {}, beforeEffect: async () => {}, settle: () => {} };
+    const auto = harness({ postToTargets: uncertain }, { resolvePageId: () => '777', createExecutionGuard: () => guard } as any);
+    const p = pageParams({ variants: ['authorized'] });
+    auto.store.createSchedule({ id: 'auto', name: 'Auto', kind: 'once', params: p as any, runAt: 1_000_000, days: [], time: '', enabled: true, nextRunAt: 1_000_000, createdAt: 1 });
+    auto.store.updateAutonomySchedule('auto', {}, 1_000_000, 1);
+    auto.service.start(p, 'auto');
+    await auto.service.whenIdle();
+    expect(auto.store.listTracking({})).toHaveLength(1);
+    expect(auto.store.listTracking({})[0]).toMatchObject({ targetKind: 'page', pageId: '777', linkStatus: 'missing', postUrl: null, nextCommentAt: null });
+    const owner = harness({ postToTargets: one({ ok: false, error: 'có thể đã lên', errorCode: 'uncertain_after_submit' }) }, { resolvePageId: () => '777' });
+    owner.service.start(pageParams());
+    await owner.service.whenIdle();
+    expect(owner.store.listTracking({})).toHaveLength(0);
   });
 });
 

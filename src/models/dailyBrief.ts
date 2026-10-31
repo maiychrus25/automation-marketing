@@ -1,6 +1,8 @@
 export type PageIdentityKind = 'page' | 'person' | 'unknown';
 
 export interface PagePostSample {
+    /** Mã bài (story.post_id); mẫu lưu trước đây không có trường này. */
+    postId: string;
     text: string;
     reactions: number | null;
     comments: number | null;

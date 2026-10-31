@@ -446,6 +446,103 @@ describe('post tracking store', () => {
     expect(s.listDuePairs(1, 10)).toEqual([]);
   });
 
+  // ─── Spec 2026-10-31 §4.2: dòng Page dùng chung bảng, tách khỏi đường nhóm ───
+  const HOME = 'https://www.facebook.com/';
+  const pageRow = (resultId: number, pageId: string, over: Record<string, unknown> = {}) =>
+    trackRow(resultId, { targetKind: 'page', pageId, groupUrl: HOME, ...over });
+
+  test('migrationsDefaultExistingRowsToGroup', () => {
+    const db = memoryDb();
+    db.exec(`CREATE TABLE fb_poster_post_tracking (result_id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, schedule_id TEXT DEFAULT NULL,
+      profile_id TEXT NOT NULL, group_url TEXT NOT NULL, group_id TEXT NOT NULL DEFAULT '', post_id TEXT NOT NULL DEFAULT '', post_url TEXT DEFAULT NULL,
+      posted_at INTEGER NOT NULL, text_head TEXT NOT NULL DEFAULT '', link_status TEXT NOT NULL, removed_suspected INTEGER NOT NULL DEFAULT 0,
+      last_seen_at INTEGER DEFAULT NULL, last_checked_at INTEGER DEFAULT NULL, check_count INTEGER NOT NULL DEFAULT 0, next_check_at INTEGER DEFAULT NULL, stats_done TEXT NOT NULL DEFAULT '')`);
+    db.run(`INSERT INTO fb_poster_post_tracking (result_id, run_id, profile_id, group_url, posted_at, link_status) VALUES (1, 'r1', 'p1', 'https://www.facebook.com/groups/1/', 10, 'missing')`);
+    const s = new FacebookPosterStore(db);
+    s.ensureSchema();
+    s.ensureSchema();
+    expect(s.listTracking({})[0]).toMatchObject({ resultId: 1, targetKind: 'group', pageId: '' });
+    const indexes = db.query<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'index'`).map((i) => i.name);
+    expect(indexes).toContain('idx_fb_poster_post_tracking_page');
+    s.createTracking(trackRow(2));
+    expect(s.listTracking({}).find((r) => r.resultId === 2)).toMatchObject({ targetKind: 'group', pageId: '' });
+  });
+
+  test('groupPairsNeverIncludePageRows', () => {
+    const s = store();
+    s.createTracking(trackRow(1, { nextCheckAt: 10 }));
+    s.createTracking(pageRow(2, '777', { nextCheckAt: 10 }));
+    s.createTracking(pageRow(3, '888', { nextCheckAt: 20 }));
+    s.createTracking(pageRow(4, '777', { nextCheckAt: 30 }));
+    const pairs = s.listDuePairs(100, 10);
+    expect(pairs).toHaveLength(3);
+    const group = pairs.find((p) => p.groupUrl === 'https://www.facebook.com/groups/1/')!;
+    expect(group).toEqual({ profileId: 'p1', groupUrl: 'https://www.facebook.com/groups/1/' });
+    expect('pageId' in group).toBe(false);
+    expect(pairs.filter((p) => 'pageId' in p).map((p) => p.pageId).sort()).toEqual(['777', '888']);
+    expect(pairs.filter((p) => 'pageId' in p).every((p) => p.profileId === 'p1' && p.groupUrl === HOME)).toBe(true);
+  });
+
+  test('listTrackingForPairSeparatesKinds', () => {
+    const s = store();
+    s.createTracking(trackRow(1, { groupUrl: HOME }));
+    s.createTracking(pageRow(2, '777'));
+    s.createTracking(pageRow(3, '888'));
+    expect(s.listTrackingForPair('p1', HOME, 0).map((r) => r.resultId)).toEqual([1]);
+    expect(s.listTrackingForPair('p1', HOME, 0, '777').map((r) => r.resultId)).toEqual([2]);
+    expect(s.listTrackingForPair('p1', HOME, 0, '888')[0]).toMatchObject({ resultId: 3, targetKind: 'page', pageId: '888' });
+  });
+
+  test('listDueCommentPostsNeverIncludesPageRows', () => {
+    const s = store();
+    const linked = { linkStatus: 'known', postId: 'x', nextCommentAt: 50 };
+    s.createTracking(trackRow(1, { ...linked, postUrl: 'https://www.facebook.com/groups/1/posts/1/' }));
+    s.createTracking(pageRow(2, '777', { ...linked, postUrl: 'https://www.facebook.com/777/posts/2' }));
+    s.updateCommentSchedule(2, { commentsDone: [], nextCommentAt: 50 }); // như CommentCollector.settle sau một lượt thu tay trên link Page
+    expect(s.listDueCommentPosts(100, 10).map((r) => r.resultId)).toEqual([1]);
+  });
+
+  test('groupScoreInputsIgnorePageRows', () => {
+    const s = store();
+    s.createTracking(trackRow(1, { postedAt: 150, linkStatus: 'known', postId: 'x' }));
+    s.createTracking(pageRow(2, '777', { postedAt: 160, linkStatus: 'known', postId: 'y' }));
+    const range = { from: 0, to: 10_000 };
+    expect(s.statsReport({ ...range, groupBy: 'group', limit: 100 }).map((r) => r.key)).toEqual(['https://www.facebook.com/groups/1/']);
+    expect(s.groupScoreInputs(range).map((r) => r.groupUrl)).not.toContain(HOME);
+    expect(s.statsReport({ ...range, groupBy: 'profile', limit: 100 })[0].posts).toBe(2);
+  });
+
+  test('statsReportGroupByPageUsesPageRowsOnly', () => {
+    const s = store();
+    const db = (s as any).db;
+    s.createTracking(trackRow(1, { postedAt: 150, linkStatus: 'known', postId: 'x' }));
+    s.createTracking(pageRow(2, '777', { postedAt: 160, linkStatus: 'known', postId: 'y' }));
+    s.createTracking(pageRow(3, '777', { postedAt: 170, linkStatus: 'not_found' }));
+    s.createTracking(pageRow(4, '888', { postedAt: 180 }));
+    s.addPostStats(2, { capturedAt: 200, reactions: 4, comments: 1, shares: null });
+    const range = { from: 0, to: 10_000, limit: 100 };
+    // Không có bảng danh tính Page: nhãn là page_id.
+    expect(s.statsReport({ ...range, groupBy: 'page' }).map((r) => [r.key, r.label, r.posts])).toEqual([['777', '777', 2], ['888', '888', 1]]);
+    db.exec(`CREATE TABLE fb_page_identities (profile_id TEXT PRIMARY KEY, kind TEXT NOT NULL, page_id TEXT NOT NULL DEFAULT '', page_name TEXT NOT NULL DEFAULT '', learned_at INTEGER NOT NULL)`);
+    db.run(`INSERT INTO fb_page_identities (profile_id, kind, page_id, page_name, learned_at) VALUES ('p1', 'page', '777', 'Trang Bảy', 1), ('p2', 'page', '888', '', 1)`);
+    const rows = s.statsReport({ ...range, groupBy: 'page' });
+    expect(rows.map((r) => [r.key, r.label])).toEqual([['777', 'Trang Bảy'], ['888', '888']]);
+    expect(rows[0]).toMatchObject({ posts: 2, withLink: 1, notFound: 1, measured: 1, reactions: 4, comments: 1, shares: 0 });
+    expect(rows.flatMap((r) => r.key)).not.toContain('https://www.facebook.com/groups/1/');
+  });
+
+  test('statsReportGroupByPageBucketsUnlearnedPageRowsUnderAReadableLabel', () => {
+    const s = store();
+    s.createTracking(pageRow(1, '', { postedAt: 150 }));
+    s.createTracking(pageRow(2, '', { postedAt: 160, linkStatus: 'not_found' }));
+    s.createTracking(pageRow(3, '777', { postedAt: 170, linkStatus: 'known', postId: 'y' }));
+    s.addPostStats(3, { capturedAt: 200, reactions: 2, comments: 0, shares: 0 });
+    const rows = s.statsReport({ from: 0, to: 10_000, limit: 100, groupBy: 'page' });
+    expect(rows.map((r) => [r.key, r.label, r.posts])).toEqual(expect.arrayContaining([['', 'Page chưa xác định', 2], ['777', '777', 1]]));
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.key === '')).toMatchObject({ withLink: 0, notFound: 1, measured: 0 });
+  });
+
   test('latestStats chunks large id lists (more than 500 ids)', () => {
     const s = store();
     const ids = Array.from({ length: 1200 }, (_, i) => i + 1);
@@ -1017,5 +1114,27 @@ describe('comment leads store', () => {
     expect([...map.keys()].sort()).toEqual(['https://www.facebook.com/groups/1/posts/2/', 'https://www.facebook.com/groups/1/posts/3/']);
     expect(map.get('https://www.facebook.com/groups/1/posts/2/')!.resultId).toBe(2);
     expect(s.trackingByPostUrls([]).size).toBe(0);
+  });
+});
+
+describe('page followers snapshots', () => {
+  const base = { pageId: '777', profileId: 'p1', capturedOn: '2026-10-31', capturedAt: 1, followers: 1200 };
+  test('followersAtMostOneRowPerPagePerLocalDay', () => {
+    const s = store();
+    expect(s.recordPageFollowers(base)).toBe(true);
+    expect(s.recordPageFollowers({ ...base, capturedAt: 2, followers: 1300 })).toBe(false);
+    expect(s.listPageFollowers({ sinceDay: '2026-10-01' })).toEqual([base]);
+    expect(s.hasPageFollowersOn('777', '2026-10-31')).toBe(true);
+    expect(s.hasPageFollowersOn('777', '2026-10-30')).toBe(false);
+  });
+  test('listFiltersByPageAndSinceDayOrdered', () => {
+    const s = store();
+    s.recordPageFollowers({ ...base, capturedOn: '2026-10-30' });
+    s.recordPageFollowers(base);
+    s.recordPageFollowers({ ...base, pageId: '555' });
+    s.recordPageFollowers({ ...base, capturedOn: '2026-09-01' });
+    expect(s.listPageFollowers({ sinceDay: '2026-10-01' }).map((r) => `${r.pageId}/${r.capturedOn}`))
+      .toEqual(['555/2026-10-31', '777/2026-10-30', '777/2026-10-31']);
+    expect(s.listPageFollowers({ pageId: '777', sinceDay: '2026-10-31' }).map((r) => r.capturedOn)).toEqual(['2026-10-31']);
   });
 });

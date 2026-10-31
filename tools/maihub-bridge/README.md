@@ -178,7 +178,20 @@ python3 maihub_bridge.py watch --env-file <.env MaiHub> --notify-env <.env của
 - `--dry-run`: in tin ra stdout, không gửi Telegram.
 - Gửi lỗi thì thử lại sau 2, 10, 30 giây (HTTP 429 thì chờ `retry_after`), vẫn lỗi thì ghi stderr và bỏ tin đó.
 
-Các loại tin: `✅` lượt xong; `⚠️` lượt có lỗi (kèm tối đa 3 dòng `• đích: lỗi`); `⏹` lượt bị huỷ; `⏰` lỡ lịch; `🔒` profile hết phiên hoặc bị checkpoint; `📈` theo dõi bài đăng (`posts.trackFinished`, chỉ khi có link mới hoặc bài có thể đã bị xoá); `🎯` khách tiềm năng mới (`leads.found`, số khách kèm tối đa 3 dòng `tên: nội dung` cắt 80 ký tự; không báo khi không có khách mới); `🎬` video xong (`videos.finished`, `🎬 Video xong: <tên> (<giây>s)`; video ≤ 50 MiB được tải về thư mục trạng thái rồi gửi kèm bằng `sendVideo` với dòng đó làm chú thích, xoá tệp tạm sau khi gửi; quá giới hạn hoặc lỗi thì gửi chữ như cũ; `--dry-run` không tải) và `⚠️ Video lỗi: <tên> — <lỗi cắt 120 ký tự>` (video bị huỷ, `cancelled = true`, thì không báo); `⚠️` mất liên lạc MaiHub từ 300 giây (một tin) và `✅` khi kết nối lại; `🔑` khoá bị từ chối và `🔐` sai ghim chứng chỉ (một tin, thử lại mỗi 5 phút); "Đã chuyển workspace" khi MaiHub đổi workspace. Không báo `run.started`, `draft.approved`, `profiles.checkFinished`.
+Các loại tin (mỗi loại có tiền tố nhận biết riêng; `label` thời gian do app định dạng, bridge hiển thị nguyên văn, không tự đổi múi giờ):
+
+| Tin | Nguồn | Nội dung |
+| --- | --- | --- |
+| `📊 Báo cáo hiệu quả · <label>` | `metrics.report` | `Bài · Tương tác (n bài đã đo) · Không tìm thấy link`, `Nổi bật:` tối đa 3 bài (text cắt 60 ký tự), `Người theo dõi:` mỗi Page `tên: số (+đổi)`; thiếu số thì `chưa đo được` / `chưa đủ dữ liệu`, không bao giờ ghi 0 giả |
+| `🎯 <n> khách tiềm năng mới · <HH:mm–HH:mm>` | `leads.digest` | Một tin gom cho cả khoảng, kèm tối đa 3 dòng `tên: nội dung` (cắt 80 ký tự) |
+| `🎯 <n> khách tiềm năng mới` | `leads.found` | Tin riêng như cũ khi `leadDigestMinutes = 0`; sự kiện có `deferred: true` (app đang gom) thì KHÔNG gửi, khách nằm trong `leads.digest` |
+| `⚠️ Đăng bài lỗi: <tên lịch hoặc Đăng ngay> — xong a/b, lỗi n` | `run.finished` (`kind` vắng hoặc `post`) | Kèm tối đa 3 dòng `• đích: lỗi`; tham gia nhóm / quét nhóm lỗi giữ nhãn cũ `⚠️ Tham gia nhóm: …` |
+| `⚠️ Video lỗi: <tên> — <lỗi>` | `videos.finished` | Cắt 120 ký tự; video bị huỷ không báo |
+| `⚠️ Đề xuất lỗi: <Page> — <lỗi>` | `briefs.finished` | Chỉ sau 3 lần thử, lỗi cắt 200 ký tự |
+
+Tin còn lại giữ nguyên: `✅` lượt xong; `⏹` lượt bị huỷ; `⏰` lỡ lịch; `🔒` profile hết phiên hoặc bị checkpoint; `🎬` video xong (`videos.finished`, `🎬 Video xong: <tên> (<giây>s)`; video ≤ 50 MiB được tải về thư mục trạng thái rồi gửi kèm bằng `sendVideo` với dòng đó làm chú thích, xoá tệp tạm sau khi gửi; quá giới hạn hoặc lỗi thì gửi chữ như cũ; `--dry-run` không tải); `⚠️` mất liên lạc MaiHub từ 300 giây (một tin) và `✅` khi kết nối lại; `🔑` khoá bị từ chối và `🔐` sai ghim chứng chỉ (một tin, thử lại mỗi 5 phút); "Đã chuyển workspace" khi MaiHub đổi workspace. Không báo `run.started`, `draft.approved`, `profiles.checkFinished`, `posts.trackFinished` (không còn tin `📈` từng lượt; số liệu nằm trong `📊`).
+
+Lịch báo cáo và gom tin đổi bằng `notifications.setConfig` (khoá owner; tool `maihub_notifications_setConfig`): `reportCadence` `off|daily|weekly`, `reportHour` 0–23, `reportWeekday` 1–7, `leadDigestMinutes` 0|15|30|60|120|240. Đổi `leadDigestMinutes` trả `BUSY` khi đang thu bình luận. `maihub_pages_metrics` đọc số liệu Page để học. Ba phương thức `pages.metrics`, `notifications.config` và `notifications.setConfig` chỉ dùng được với khoá owner (khoá khác không thấy chúng trong danh mục `describe`). Báo cáo 📊 liệt kê tối đa 20 Page theo thứ tự payload, thừa thì thêm dòng `… và N Page khác`.
 
 ### Cài `watch` thành service (`install-watch`)
 

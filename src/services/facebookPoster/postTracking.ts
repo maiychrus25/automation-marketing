@@ -1,4 +1,5 @@
 import type { PostTrackingRow } from '../../models/facebookPoster';
+import type { PagePostSample } from '../../models/dailyBrief';
 
 // Quy tắc thuần của "Theo dõi bài": đối chiếu bài và lịch kiểm tra kế tiếp.
 // Spec: docs/specs/2026-10-19-post-performance.md mục 4.3 và 4.5.
@@ -114,6 +115,39 @@ export function pickBestMatch<T extends TrackableItem>(
 
 const isLinkPending = (row: Pick<PostTrackingRow, 'linkStatus'>) =>
     row.linkStatus === 'missing' || row.linkStatus === 'pending_approval';
+
+/** Cửa sổ giờ đăng khi tìm lại bài Page chưa có link (spec page-publish-proof-metrics 4.4). */
+export const PAGE_MATCH_WINDOW_MS = 15 * 60_000;
+
+type PageMatchRow = Pick<PostTrackingRow, 'resultId' | 'postId' | 'linkStatus' | 'postedAt' | 'textHead'>;
+
+/**
+ * Đối chiếu dòng Page với các bài gần nhất của Page: dòng có `postId` khớp theo mã; dòng chưa có link chỉ nhận khi đúng
+ * một bài chưa bị giành có cùng 60 ký tự đầu và giờ đăng trong ±15 phút, và bài đó không là ứng viên của dòng chờ nào khác.
+ */
+export function matchPagePosts(rows: PageMatchRow[], posts: PagePostSample[]): Map<number, PagePostSample> {
+    const hits = new Map<number, PagePostSample>();
+    const claimed = new Set<string>();
+    const byId = new Map(posts.filter((p) => p.postId !== '').map((p) => [p.postId, p]));
+    for (const row of rows) {
+        const hit = row.postId === '' ? undefined : byId.get(row.postId);
+        if (hit) { hits.set(row.resultId, hit); claimed.add(hit.postId); }
+    }
+    const pending = rows.filter((r) => !hits.has(r.resultId) && isLinkPending(r));
+    const candidates = new Map(pending.map((row) => {
+        const head = row.textHead.slice(0, MATCH_HEAD_CHARS);
+        return [row.resultId, head === '' ? [] : posts.filter((p) => p.postId !== '' && !claimed.has(p.postId)
+            && p.postedAt !== null && Math.abs(p.postedAt - row.postedAt) <= PAGE_MATCH_WINDOW_MS
+            && normalizeHead(p.text).slice(0, MATCH_HEAD_CHARS) === head)];
+    }));
+    for (const row of pending) {
+        const cand = candidates.get(row.resultId)!;
+        if (cand.length !== 1) continue;
+        const owners = pending.filter((r) => candidates.get(r.resultId)!.includes(cand[0]));
+        if (owners.length === 1) hits.set(row.resultId, cand[0]);
+    }
+    return hits;
+}
 
 /** Hết mốc thử lấy link mà vẫn chưa có link: người gọi đặt `not_found`. */
 export function linkRetryExhausted(row: PostTrackingRow, config: PostTrackingConfig, now: number): boolean {

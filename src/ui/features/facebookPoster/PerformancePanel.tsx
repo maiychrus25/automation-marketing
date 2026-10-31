@@ -4,9 +4,9 @@ import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import TrackConfigPopover from './TrackConfigPopover';
 import { formatCount, formatRate } from './researchFormat';
-import { GROUP_BY_OPTIONS, RANGE_OPTIONS, gradeChip, formatBestTimes } from './trackingFormat';
+import { GROUP_BY_OPTIONS, RANGE_OPTIONS, gradeChip, formatBestTimes, followerSummary } from './trackingFormat';
 import type { GroupScore } from '../../../services/facebookPoster/groupScores';
-import type { PostStatsGroupBy, PostStatsReportRow } from '../../../models/facebookPoster';
+import type { PageMetrics, PostStatsGroupBy, PostStatsReportRow } from '../../../models/facebookPoster';
 
 // Giới hạn của thao tác theo dõi (trackingOperations.track): đọc tối đa 14 ngày bài gần nhất.
 const MAX_TRACK_SINCE_DAYS = 14;
@@ -22,6 +22,8 @@ interface Props {
   scheduleId?: string;
 }
 
+const formatChange = (n: number | null): string => (n === null ? 'chưa đủ dữ liệu' : `${n > 0 ? '+' : ''}${n.toLocaleString('vi-VN')}`);
+
 export default function PerformancePanel({ campaignId, scheduleId }: Props = {}) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [days, setDays] = useState(30);
@@ -36,6 +38,7 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
   const [scores, setScores] = useState<Record<string, GroupScore>>({});
   const [openReasons, setOpenReasons] = useState<string | null>(null);
   const [bestLine, setBestLine] = useState('');
+  const [pageMetrics, setPageMetrics] = useState<PageMetrics[]>([]);
   const aliveRef = useRef(true);
 
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
@@ -64,6 +67,17 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
     }).catch(() => { /* ô điểm hiện — */ });
     return () => { cancelled = true; };
   }, [groupBy, days, campaignId, reloadTick]);
+
+  // Người theo dõi theo Page: 31 ngày đủ cho mốc 30 ngày; lỗi thì ẩn ô, không chặn bảng.
+  useEffect(() => {
+    setPageMetrics([]);
+    if (groupBy !== 'page') return;
+    let cancelled = false;
+    ipc.facebookPoster?.pageMetrics({ days: 31 }).then((res) => {
+      if (!cancelled && res?.success) setPageMetrics(res.pages || []);
+    }).catch(() => { /* ẩn ô người theo dõi */ });
+    return () => { cancelled = true; };
+  }, [groupBy, reloadTick]);
 
   // Gợi ý giờ đăng: khoảng mặc định 60 ngày của dịch vụ, chỉ lọc theo chiến dịch.
   useEffect(() => {
@@ -156,6 +170,27 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
           <TrackConfigPopover />
         </div>
       </div>
+      {groupBy === 'page' && pageMetrics.length > 0 && (
+        <section aria-labelledby="follower-box-title" className="space-y-1">
+          <h4 id="follower-box-title" className="text-xs font-medium text-gray-300">Người theo dõi</h4>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {pageMetrics.map((m) => {
+              const f = followerSummary(m.followers);
+              const lastOn = m.followers.reduce<string | null>((a, r) => (a === null || r.capturedOn > a ? r.capturedOn : a), null);
+              return (
+                <div key={m.pageId} className="rounded-lg border border-gray-700 p-2 text-xs min-w-0">
+                  <p className="truncate text-gray-300" title={m.pageName}>{m.pageName}</p>
+                  <dl className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                    <div><dt className="text-gray-400">Hiện tại</dt><dd className="text-gray-200" title={lastOn ? `Ghi ngày ${lastOn.split('-').reverse().join('/')}` : undefined}>{f.current === null ? 'chưa đủ dữ liệu' : f.current.toLocaleString('vi-VN')}</dd></div>
+                    <div><dt className="text-gray-400">7 ngày</dt><dd className="text-gray-200">{formatChange(f.change7)}</dd></div>
+                    <div><dt className="text-gray-400">30 ngày</dt><dd className="text-gray-200">{formatChange(f.change30)}</dd></div>
+                  </dl>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
       {loading ? <div className="flex justify-center py-4"><Spinner size={5} /></div>
         : loadError ? (
           <div className="flex flex-wrap items-center gap-2 text-xs">

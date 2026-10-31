@@ -10,13 +10,14 @@ import type { UpdateState, ActionResult as UpdateActionResult } from '../../serv
 import type { ResearchConfig } from '../../services/research/researchConfig';
 import type { AdVideoRequest, AdVoiceOption, VideoJob, VideoStatus } from '../../models/video';
 import type { ResearchItem, ResearchScan, ResearchSort, ResearchSource } from '../../models/research';
-import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterLead, LeadStatus, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, CampaignStatus } from '../../models/facebookPoster';
+import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterLead, LeadStatus, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, PageMetrics, CampaignStatus } from '../../models/facebookPoster';
 import type { GroupScore } from '../../services/facebookPoster/groupScores';
 import type { BestTimes } from '../../services/facebookPoster/bestTimes';
 import type { CampaignView } from '../../services/facebookPoster/campaignOperations';
 import type { PostTrackingConfig } from '../../services/facebookPoster/postTracking';
 import type { TrackStatus } from '../../services/facebookPoster/PostTracker';
 import type { LeadConfig } from '../../services/facebookPoster/leadRules';
+import type { NotificationConfig } from '../../services/facebookPoster/notificationRules';
 import type { CommentCollectStatus } from '../../services/facebookPoster/CommentCollector';
 import type { RunSnapshot } from '../../services/facebookPoster/FacebookPosterService';
 
@@ -767,6 +768,9 @@ declare global {
         bestTimes:      (params?: { from?: number; to?: number; groupUrl?: string; campaignId?: string }) => Promise<({ success: boolean; error?: string } & Partial<BestTimes>)>;
         getTrackConfig: () => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
         setTrackConfig: (config: PostTrackingConfig) => Promise<{ success: boolean; config?: PostTrackingConfig; error?: string }>;
+        pageMetrics:    (params?: { pageId?: string; days?: number }) => Promise<{ success: boolean; pages?: PageMetrics[]; error?: string }>;
+        getNotificationConfig: () => Promise<{ success: boolean; config?: NotificationConfig; error?: string }>;
+        setNotificationConfig: (patch: Partial<NotificationConfig>) => Promise<{ success: boolean; config?: NotificationConfig; error?: string }>;
         leadList:       (params?: { status?: LeadStatus; campaignId?: string; from?: number; to?: number; search?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; leads?: FbPosterLead[]; total?: number; error?: string }>;
         leadUpdate:     (params: { id: number; status?: LeadStatus; note?: string }) => Promise<{ success: boolean; lead?: FbPosterLead; error?: string }>;
         leadConfigGet:  () => Promise<{ success: boolean; config?: LeadConfig; error?: string }>;

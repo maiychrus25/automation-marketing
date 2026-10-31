@@ -20,6 +20,7 @@ import { createPageOperationMethods } from '../../src/services/control/pageOpera
 import type { ControlPrincipal, PageContext } from '../../src/models/pageOperations';
 import { PageWorkStore } from '../../src/services/dailyBrief/PageWorkStore';
 import { PageCampaignStore } from '../../src/services/dailyBrief/PageCampaignStore';
+import { PageCampaignExecutionStore } from '../../src/services/dailyBrief/PageCampaignExecutionStore';
 import { PageBusinessStore } from '../../src/services/dailyBrief/PageBusinessStore';
 import { DailyBriefStore } from '../../src/services/dailyBrief/DailyBriefStore';
 import { FacebookPosterStore } from '../../src/services/facebookPoster/FacebookPosterStore';
@@ -30,7 +31,7 @@ import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
     CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, withStoredPublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
-import { getBoundPageCampaignCollector, setPageCampaignExecutionContext, stopPageCampaignExecution, checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, createBoundPageWorkDependencies, createBoundPageApprovalDependencies, posterOperations, trackingOperations, campaignOperations, leadOperations } from './facebookPosterIpc';
+import { getBoundPageCampaignCollector, setPageCampaignExecutionContext, stopPageCampaignExecution, checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, createBoundPageWorkDependencies, createBoundPageApprovalDependencies, posterOperations, trackingOperations, campaignOperations, leadOperations, notificationOperations } from './facebookPosterIpc';
 import { researchOperations, cancelOwnedResearchScan } from './researchIpc';
 import { briefOperations, pageOperations, getDailyBriefStore } from './dailyBriefIpc';
 import { videoOperations } from './videoIpc';
@@ -232,6 +233,11 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             bestTimes: trackingOperations.bestTimes,
             getConfig: trackingOperations.getConfig,
             setConfig: trackingOperations.setConfig,
+            pageMetrics: trackingOperations.pageMetrics,
+        },
+        notifications: {
+            getConfig: () => notificationOperations.getConfig(),
+            setConfig: (p) => notificationOperations.setConfig(p),
         },
         campaigns: {
             list: campaignOperations.list,
@@ -283,6 +289,8 @@ async function startRuntime(config: ControlConfig): Promise<void> {
     const generation = workspaceGeneration;
     const works = new PageWorkStore(boundDb); works.ensureSchema();
     const campaigns = new PageCampaignStore(boundDb); campaigns.ensureSchema(); campaigns.registerSettledResults(workspaceId);
+    // Spec 2026-10-31 §4.5: rebind known Page posts whose one-shot onPagePostKnown was skipped or failed (journal-only, no publish).
+    new PageCampaignExecutionStore(boundDb).bindKnownTrackedPosts(workspaceId, Date.now());
     const boundControl = new ControlStore(boundDb);
     const business = new PageBusinessStore(boundDb); const briefs = new DailyBriefStore(boundDb);
     const scope = { db: boundDb, dbPath: boundPath, workspaceId, retired: false, works };

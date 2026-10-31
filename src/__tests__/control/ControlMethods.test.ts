@@ -6,6 +6,7 @@ import { PosterRunSelectionError } from '../../services/facebookPoster/FacebookP
 import { DailyBriefStore } from '../../services/dailyBrief/DailyBriefStore';
 import { createBriefOperations } from '../../services/dailyBrief/briefOperations';
 import { memoryDb } from '../facebookPoster/helpers';
+import { LEAD_DIGEST_BUSY_ERROR } from '../../services/facebookPoster/notificationRules';
 
 function makeDeps() {
     const poster = {
@@ -74,12 +75,69 @@ describe('pages.*', () => {
     });
     it('adds two non-destructive methods with the public response schema', () => {
         const { methods } = setupPages();
-        expect(methods).toHaveLength(60);
+        expect(methods).toHaveLength(63); // 60 + pages.metrics + notifications.config + notifications.setConfig (spec 2026-10-31 §6)
         const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('pages.')) as any[];
-        expect(found.map((m) => m.name).sort()).toEqual(['pages.learn', 'pages.list']);
+        expect(found.map((m) => m.name).sort()).toEqual(['pages.learn', 'pages.list', 'pages.metrics']);
         expect(found.every((m) => m.destructive === false)).toBe(true);
         expect(found.find((m) => m.name === 'pages.learn').resultSchema.required).toEqual(['jobId']);
         expect(found.find((m) => m.name === 'pages.list').resultSchema.required).toEqual(['identities']);
+    });
+});
+
+describe('pages.metrics and notifications.*', () => {
+    function setupMetrics() {
+        let config = { reportCadence: 'weekly', reportHour: 8, reportWeekday: 1, leadDigestMinutes: 60 };
+        const tracking = { pageMetrics: jest.fn((_p: any): any => ({ pages: [] })) };
+        const notifications = {
+            getConfig: jest.fn(() => ({ config })),
+            setConfig: jest.fn((patch: any) => { config = { ...config, ...patch }; return { config }; }),
+        };
+        const methods = createControlMethods({ ...makeDeps(), tracking, notifications } as unknown as ControlMethodDeps);
+        const call = (name: string, p: any = {}) => methods.find((m) => m.name === name)!.run(p, {});
+        return { tracking, notifications, methods, call };
+    }
+    it('pagesMetricsValidatesDays', async () => {
+        const { tracking, call } = setupMetrics();
+        expect(await call('pages.metrics')).toEqual({ pages: [] });
+        expect(tracking.pageMetrics).toHaveBeenLastCalledWith({ days: 30 });
+        await call('pages.metrics', { pageId: '777', days: 90 });
+        expect(tracking.pageMetrics).toHaveBeenLastCalledWith({ pageId: '777', days: 90 });
+        await call('pages.metrics', { days: 1 });
+        expect(tracking.pageMetrics).toHaveBeenLastCalledWith({ days: 1 });
+        tracking.pageMetrics.mockClear();
+        for (const bad of [{ days: 0 }, { days: 91 }, { days: 1.5 }, { days: '30' }, { pageId: '' }, { pageId: 7 }, { junk: 1 }]) {
+            await expect(call('pages.metrics', bad)).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+        }
+        expect(tracking.pageMetrics).not.toHaveBeenCalled();
+    });
+    it('setConfigRejectsOutOfDomain', async () => {
+        const { notifications, call } = setupMetrics();
+        const before = await call('notifications.config');
+        for (const bad of [{ leadDigestMinutes: 45 }, { reportHour: 24 }, { reportWeekday: 0 }, { reportCadence: 'monthly' }, { reportHour: 1.5 }, { junk: 1 }, { leadDigestMinutes: 15, extra: true }]) {
+            await expect(call('notifications.setConfig', bad)).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+        }
+        expect(notifications.setConfig).not.toHaveBeenCalled();
+        expect(await call('notifications.config')).toEqual(before);
+        await expect(call('notifications.config', { junk: 1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+        expect(await call('notifications.setConfig', { reportCadence: 'daily', leadDigestMinutes: 0 })).toEqual({ config: { reportCadence: 'daily', reportHour: 8, reportWeekday: 1, leadDigestMinutes: 0 } });
+        expect(notifications.setConfig).toHaveBeenCalledWith({ reportCadence: 'daily', leadDigestMinutes: 0 });
+    });
+    it('maps the collect-running refusal of a digest switch to BUSY', async () => {
+        const { notifications, call } = setupMetrics();
+        notifications.setConfig.mockImplementationOnce(() => { throw new Error(LEAD_DIGEST_BUSY_ERROR); });
+        await expect(call('notifications.setConfig', { leadDigestMinutes: 0 })).rejects.toMatchObject({ code: 'BUSY' });
+    });
+    it('describes three non-destructive methods with domain schemas', () => {
+        const { methods } = setupMetrics();
+        const byName = Object.fromEntries(describeMethods(methods).methods.map((m: any) => [m.name, m]));
+        for (const name of ['pages.metrics', 'notifications.config', 'notifications.setConfig']) expect(byName[name].destructive).toBe(false);
+        expect(byName['pages.metrics'].paramsSchema.properties.days).toMatchObject({ type: 'integer', minimum: 1, maximum: 90 });
+        expect(byName['pages.metrics'].resultSchema.required).toEqual(['pages']);
+        expect(byName['notifications.setConfig'].paramsSchema.properties).toMatchObject({
+            reportCadence: { enum: ['off', 'daily', 'weekly'] }, reportHour: { minimum: 0, maximum: 23 },
+            reportWeekday: { minimum: 1, maximum: 7 }, leadDigestMinutes: { enum: [0, 15, 30, 60, 120, 240] },
+        });
+        expect(byName['posts.stats'].paramsSchema.properties.groupBy.enum).toContain('page');
     });
 });
 
@@ -440,11 +498,12 @@ describe('describe', () => {
             'schedules.list', 'schedules.update', 'schedules.delete',
             'runs.current', 'runs.active', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
             'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.trending', 'research.cancel',
-            'pages.learn', 'pages.list',
+            'pages.learn', 'pages.list', 'pages.metrics',
             'briefs.list', 'briefs.get', 'briefs.save', 'briefs.delete', 'briefs.claimDue', 'briefs.finish',
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
             'comments.collect', 'comments.collectStatus', 'comments.collectCancel', 'comments.list', 'leads.list', 'leads.update', 'leads.config',
+            'notifications.config', 'notifications.setConfig',
             'videos.templates', 'videos.render', 'videos.adCreate', 'videos.status', 'videos.list', 'videos.cancel',
         ]);
         for (const m of d.methods) {
