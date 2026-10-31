@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 26/10/2026 |
-| Trạng thái | Đã gộp bản video remote b07b4ea; chuẩn bị dev 26.32.0, chưa phát hành; kiểm thử tự động nhánh tích hợp đã chạy, live/vận hành và duyệt phát hành còn chờ |
+| Trạng thái | Phát hành trong 26.32.0 (31/10/2026); kiểm chứng live/vận hành bot trên VPS còn chờ |
 | Intent | `docs/intent/2026-10-26-facebook-growth-bot.md` (tính năng 1) |
 | Kế hoạch | `docs/plans/2026-10-26-daily-post-suggestions.md` |
 | Phiên bản dự kiến | 26.32.0 |

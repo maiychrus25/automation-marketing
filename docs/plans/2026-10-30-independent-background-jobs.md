@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-10-30-independent-background-jobs.md` — anh duyệt bản viết ngày 30/10/2026 bằng “a duyệt nhé”.
 
-**Trạng thái:** Anh đã duyệt kế hoạch và yêu cầu thực hiện bằng subagent ngày 2026-10-30. Tasks 1–8 đã triển khai trong dev (2026-10-31), chờ broad review cuối; full Jest randomized xanh sau hai vòng sửa (fix-1/fix-2), release BLOCKED; chưa nghiệm thu hoặc phát hành. Baseline là working tree trên `feat/26.31-daily-post-suggestions`, gồm các thay đổi chưa commit hiện có; không khởi tạo từ HEAD làm mất chúng.
+**Trạng thái:** Phát hành trong 26.32.0 (31/10/2026) sau review từng task, review toàn nhánh và thay đổi "Thoát ngay". Kiểm chứng Jest/harness; chưa kiểm app thật/live.
 
 ## Global Constraints
 

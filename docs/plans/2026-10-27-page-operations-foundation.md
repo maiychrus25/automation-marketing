@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-10-27-page-operations-foundation.md` — bản viết đã được duyệt ngày 27/10/2026.
 
-**Trạng thái:** Anh đã duyệt và yêu cầu bắt đầu triển khai ngày 27/10/2026; đang triển khai local, chưa phát hành. Nền khảo sát: `823db94`, local 26.32.0 chưa phát hành.
+**Trạng thái:** Phát hành trong 26.32.0 (31/10/2026). Quyền tự động thật vẫn tắt (`protectedWritesEnabled=false`); live pilot chưa chạy.
 
 ## Global Constraints
 

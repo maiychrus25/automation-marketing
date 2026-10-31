@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 27/10/2026 |
-| Trạng thái | Spec/kế hoạch đã duyệt 27/10/2026; Tasks 1–9 và sửa F1–F4 được controller chấp nhận local ngày 28/10/2026 sau review độc lập/hai vòng kiểm chứng; Make/lint còn thiếu, chưa phát hành; live pilot INTEGRATION BLOCKED |
+| Trạng thái | Phát hành trong 26.32.0 (31/10/2026) sau review local Tasks 1–9 và sửa F1–F4; quyền tự động thật vẫn tắt (`protectedWritesEnabled=false`), live pilot chưa chạy |
 | Phạm vi bản này | Hồ sơ kinh doanh có nguồn, quyền của runner tự động, trạng thái công việc và bàn giao cho khách duyệt |
 | Nền code khảo sát | `823db94`, phiên bản local 26.32.0 chưa phát hành |
 | Tiền đề | `docs/intent/2026-10-26-facebook-growth-bot.md`, `docs/specs/2026-10-26-daily-post-suggestions.md` |

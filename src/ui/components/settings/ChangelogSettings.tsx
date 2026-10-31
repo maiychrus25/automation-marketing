@@ -15,6 +15,66 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.32.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '⚡ Đăng Facebook chạy tối đa 2 lượt cùng lúc trên các profile khác nhau; kiểm tra đăng nhập, theo dõi bài, thu bình luận chạy song song',
+      '🧭 Mỗi lượt có tiến độ, nhật ký và nút Hủy riêng; vẫn soạn bài mới trong lúc đang đăng',
+      '🗓️ Bot đề xuất bài hằng ngày theo từng Page',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Đăng song song: tối đa 2 lượt đăng/quét nhóm/tham gia nhóm/thu bình luận cùng lúc; lượt cần profile đang bận thì xếp hàng chờ (tối đa 2 giờ), tổng tối đa 30 trình duyệt',
+          'Bảng Tiến độ liệt kê từng lượt (Đang chạy / Đang chờ kèm lý do), mỗi lượt có nút Hủy riêng và hỏi xác nhận đúng lượt đó',
+          'API điều khiển: runs.active liệt kê các lượt đang chạy; runs.cancel nhận runId để hủy đúng lượt',
+          'Đề xuất bài hằng ngày: bot tự học Page và xem chủ đề đang nổi (research.trending)',
+          'Nền tảng vận hành Page và chiến dịch Page tự động cho bot (hồ sơ kinh doanh, duyệt bài, hạn mức theo Page); quyền tự đăng thật vẫn tắt trong bản này',
+          'Khi thoát app mà việc chưa dừng an toàn: chọn "Thoát ngay" (có hỏi xác nhận) thay vì phải tắt app từ bên ngoài',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Đổi workspace, cập nhật và thoát app chờ mọi việc dừng an toàn rồi mới đóng dữ liệu',
+          'Kiểm tra đăng nhập không còn bị khóa khi đang có lượt đăng',
+          'Lịch đăng chờ profile rảnh thay vì bị bỏ lỡ khi máy đang bận việc khác',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Khách tiềm năng từ bình luận không còn bị báo trùng khi cùng một bài có nhiều dạng link',
+          'Hai Page đến hạn cùng lúc không còn bị từ chối nhầm vì "hết hạn mức"',
+        ],
+      },
+    ],
+  },
+  {
+    version: '26.31.0',
+    date: '10/2026',
+    type: 'minor',
+    highlights: [
+      '🎬 Video Studio làm được video quảng cáo AI nhiều cảnh',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Video quảng cáo AI nhiều cảnh (engine ahv_ad) trong Video Studio; bot gọi qua videos.adCreate',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Việc làm video quảng cáo AI không còn bị treo',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.30.0',
     date: '10/2026',
     type: 'patch',

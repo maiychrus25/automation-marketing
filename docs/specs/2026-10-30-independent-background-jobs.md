@@ -1,7 +1,7 @@
 # Tác vụ nền độc lập khi đăng Facebook
 
 **Ngày:** 2026-10-30  
-**Trạng thái:** Spec và [implementation plan](../plans/2026-10-30-independent-background-jobs.md) đã được anh duyệt ngày 2026-10-30. Tasks 1–8 đã triển khai trong dev (2026-10-31), chờ broad review cuối; hai vòng randomized 2707/3707 xanh sau khi sửa fixture test, **phát hành BLOCKED** (thiếu Make targets, chưa đóng gói/native rebuild, chưa kiểm app thật/live). Chưa nghiệm thu.  
+**Trạng thái:** Phát hành trong 26.32.0 (31/10/2026) sau review từng task (Tasks 1–8), review toàn nhánh (một vòng sửa + vòng sửa nốt) và lựa chọn "Thoát ngay" do anh chọn. Kiểm chứng bằng Jest/harness (131 suites/3426 tests); chưa kiểm trên app Electron thật hoặc Facebook thật.\
 **Phạm vi:** Subproject điều phối đồng thời trong ứng dụng desktop, nền cho chế độ AI tự vận hành.  
 **Nguồn thiết kế UI:** `DESIGN.md`, đặc biệt bộ token `poster` và mục Màn hình Đăng Facebook.
 

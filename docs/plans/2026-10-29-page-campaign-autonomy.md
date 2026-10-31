@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-10-29-page-campaign-autonomy.md` — anh duyệt chuyển sang lập kế hoạch ngày 29/10/2026.
 
-**Trạng thái:** Anh duyệt kế hoạch 29/10/2026; Tasks 1–8 đã qua review local. Broad review và một lượt sửa/scoped re-review F1 đã kết thúc, không còn finding trong diff sửa lỗi; **nghiệm thu tổng thể vẫn BLOCKED**, chưa phát hành hoặc bật quyền đăng thật. HEAD nền `823db94`, giữ toàn bộ dirty Phase A và prior tasks. Make/lint, randomized legacy `groupContactType` seeds 2707/3707, current-publish/firstComment, live identity/collector, receiver isolation/fresh-HOME auth và packaging vẫn blocked. UI không đổi (render N/A); không có bình luận độc lập hoặc ROI thực.
+**Trạng thái:** Phát hành trong 26.32.0 (31/10/2026) sau review local Tasks 1–8, broad review và sửa F1. Quyền tự đăng thật vẫn tắt (`protectedWritesEnabled=false`); nghiệm thu live chưa chạy.
 
 **Ghi chú triển khai Task 8 (không viết lại thân kế hoạch lịch sử):** suite mới `pageCampaignAutonomy.integration.test.ts` dùng registry/auth/SQLite/operations/scheduler/post task thật và pinned HTTPS/Python bridge, giả lập external browser/sender. Stress gồm 50 contender, 100 replay + 100 cancel, 7 ngày qua restart/DST; production wiring không cần đổi. Already-green cases là existing-behavior verification, không nhận là RED→GREEN. Actual publisher vẫn unconfirmed/collector unavailable; confirmed measurement/optimization là synthetic tách riêng. Hai vòng commands/build scratch phải bàn giao cả failure, không nhận compile/bundle là production package/obfuscator parity. Controller sở hữu review sau freeze.
 

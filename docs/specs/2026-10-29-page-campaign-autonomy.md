@@ -3,7 +3,7 @@
 | Thuộc tính | Giá trị |
 |---|---|
 | Ngày | 29/10/2026 |
-| Trạng thái | Spec/kế hoạch đã duyệt 29/10/2026; Tasks 1–8 đã review local, broad review và scoped re-review F1 kết thúc; nghiệm thu tổng thể/live/release vẫn BLOCKED |
+| Trạng thái | Phát hành trong 26.32.0 (31/10/2026) sau review local Tasks 1–8, broad review và sửa F1; quyền tự đăng thật vẫn tắt, nghiệm thu live chưa chạy |
 | Kế hoạch | `docs/plans/2026-10-29-page-campaign-autonomy.md` |
 | Phạm vi | Chiến dịch theo Page, uỷ quyền tự vận hành, đo tín hiệu quan sát được và điều chỉnh có bằng chứng |
 | Nền khảo sát | `823db94`, cùng thay đổi local của Phase A; phiên bản local 26.32.0 chưa phát hành |
