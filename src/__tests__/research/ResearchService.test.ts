@@ -38,6 +38,10 @@ function setup(opts: {
     loginStates?: any[]; membership?: Record<string, string[]>; scannedAt?: Record<string, number>; openFail?: string[];
     ensureThrows?: Record<string, Error>; onSleep?: (ms: number, svc: ResearchService) => void; excluded?: string[];
     ensureHook?: (profileId: string, svc: ResearchService) => void; recaptureThrows?: boolean; docIds?: string[];
+    shouldYield?: () => boolean; assertCurrent?: () => void; assertCanStart?: () => void;
+    identity?: () => Promise<{ kind: 'page' | 'person' | 'unknown'; pageId: string }>;
+    sessionGuard?: (guard: () => void) => void;
+    newId?: () => string;
     hang?: boolean; feedQuery?: any; ensureThrowsFor?: (source: string, fresh: boolean, url: string) => Error | null;
 } = {}) {
     const store = new ResearchStore(memoryDb());
@@ -84,10 +88,12 @@ function setup(opts: {
     let n = 0;
     svc = new ResearchService({
         store,
-        openSession: async (id) => {
+        shouldYield: opts.shouldYield, assertCurrent: opts.assertCurrent, assertCanStart: opts.assertCanStart,
+        openSession: async (id, guard) => {
+            opts.sessionGuard?.(guard);
             if (opts.openFail?.includes(id)) throw new Error('Profile đang mở');
             opened.push(id);
-            return { session: makeSession(id), close: async () => { closed.push(id); hangRejects.forEach((f) => f()); } };
+            return { session: makeSession(id), readIdentity: opts.identity, close: async () => { closed.push(id); hangRejects.forEach((f) => f()); } };
         },
         listProfiles: () => profiles,
         isProfileBusy: (id) => !!opts.busy?.includes(id),
@@ -100,7 +106,7 @@ function setup(opts: {
         now: () => NOW,
         sleep: async (ms) => { sleeps.push(ms); opts.onSleep?.(ms, svc); },
         random: () => 0,
-        newId: () => `scan${++n}`,
+        newId: opts.newId ?? (() => `scan${++n}`),
     });
     return { svc, store, calls, sleeps, opened, closed, emitted, observed, ensured, freshFlags, recaptures: () => recaptures };
 }
@@ -117,7 +123,167 @@ const run = async (h: ReturnType<typeof setup>, p: Partial<Parameters<ResearchSe
     return h.store.getScan(scanId)!;
 };
 
+describe('local admission and trusted research', () => {
+    test('admission pause rejects scans before persistence without revoking an admitted scan settlement', async () => {
+        let paused = true;
+        const h = setup({ newId: () => 'admission-scan', assertCanStart: () => { if (paused) throw new Error('paused'); } });
+        expect(() => h.svc.search({ source: 'posts', query: 'query', origin: 'api' })).toThrow('paused');
+        expect(h.store.countScans()).toBe(0);
+        expect(h.opened).toEqual([]);
+        paused = false;
+        h.svc.search({ source: 'posts', query: 'query', origin: 'api' });
+        paused = true;
+        await h.svc.whenIdle();
+        expect(h.store.getScan('admission-scan')?.status).toBe('done');
+    });
+    const params = { source: 'posts' as const, query: 'test', origin: 'api' as const };
+    const owner = (assertCurrent = () => {}) => ({ scanId: 'owned', pageId: 'page1', profileId: 'p1', assertCurrent });
+    it('reserves locally before rows/browser and due schedules start neither', async () => {
+        const h = setup();
+        const reserved = h.svc.reserveSearch(params, owner());
+        expect(() => h.svc.search(params)).toThrow(BUSY_ERROR);
+        expect(h.store.countScans()).toBe(1); expect(h.opened).toEqual([]);
+        h.svc.cancel(); reserved.start(); await h.svc.whenIdle();
+        const due = setup({ shouldYield: () => true });
+        expect(() => due.svc.search(params)).toThrow(BUSY_ERROR);
+        expect(due.store.countScans()).toBe(0); expect(due.opened).toEqual([]);
+    });
+    it('reserves durably without opening, starts once and completes with legacy events', async () => {
+        const h = setup({ identity: async () => ({ kind: 'page', pageId: 'page1' }) });
+        const prepared = h.svc.reserveSearch(params, owner());
+        expect(h.store.getScan('owned')?.status).toBe('running'); expect(h.opened).toEqual([]);
+        expect(h.svc.isRunning()).toBe(true);
+        prepared.start(); prepared.start(); await h.svc.whenIdle();
+        expect(h.store.getScan('owned')?.itemCount).toBe(1); expect(h.opened).toEqual(['p1']);
+        expect(finishedEvents(h)).toHaveLength(1); expect(h.svc.isRunning()).toBe(false);
+        expect(() => h.svc.reserveSearch(params, owner())).toThrow();
+        expect(h.store.countScans()).toBe(1); expect(h.svc.isRunning()).toBe(false);
+    });
+    it.each(['person', 'unknown', 'wrong', 'checkpoint'])('fails closed for %s without query actions', async (actor) => {
+        const h = setup({ identity: async () => {
+            if (actor === 'checkpoint') throw new Error('checkpoint');
+            return { kind: actor === 'wrong' ? 'page' : actor as 'person' | 'unknown', pageId: 'wrong' };
+        } });
+        h.svc.reserveSearch(params, owner()).start(); await h.svc.whenIdle();
+        expect(h.ensured).toEqual([]); expect(h.calls).toEqual([]);
+        expect(h.store.getScan('owned')?.status).toBe('failed'); expect(h.svc.isRunning()).toBe(false);
+        expect(h.closed).toEqual(['p1']);
+    });
+    it('checks actor again before calls, not just at session startup', async () => {
+        let reads = 0;
+        const h = setup({ identity: async () => ({ kind: 'page', pageId: ++reads < 3 ? 'page1' : 'changed' }) });
+        h.svc.reserveSearch(params, owner()).start(); await h.svc.whenIdle();
+        expect(h.calls).toEqual([]); expect(h.store.getScan('owned')?.status).toBe('failed');
+        expect(h.svc.isRunning()).toBe(false);
+    });
+    it.each(['owner', 'workspace'])('revocation of %s after await prevents rows and exposure', async (scope) => {
+        let current = true; const guard = () => { if (!current) throw new Error('stale'); };
+        const h = setup({ assertCurrent: scope === 'workspace' ? guard : undefined,
+            identity: async () => ({ kind: 'page', pageId: 'page1' }),
+            script: () => { current = false; return postsPage(1, 1, null); } });
+        h.svc.reserveSearch(params, owner(scope === 'owner' ? guard : undefined)).start(); await h.svc.whenIdle();
+        expect(h.store.getScan('owned')?.itemCount).toBe(0); expect(h.emitted).toEqual([]);
+        expect(h.store.getScan('owned')?.status).toBe('failed');
+        expect(h.svc.isRunning()).toBe(false); expect(h.closed).toEqual(['p1']);
+    });
+    it('targeted cancellation ignores another scan and releases a reserved scan once', async () => {
+        const h = setup({  });
+        const pending = h.svc.reserveSearch(params, owner());
+        expect(h.svc.cancelOwned('other')).toBe(false); expect(h.svc.isRunning()).toBe(true);
+        expect(h.svc.cancelOwned('owned')).toBe(true); pending.start(); await h.svc.whenIdle();
+        expect(h.opened).toEqual([]); expect(h.store.getScan('owned')?.status).toBe('cancelled');
+        expect(h.svc.isRunning()).toBe(false); expect(h.svc.cancelOwned('owned')).toBe(false);
+    });
+    it('cancels only the owned hanging scan and closes its session exactly once', async () => {
+        const h = setup({ hang: true, identity: async () => ({ kind: 'page', pageId: 'page1' }) });
+        h.svc.reserveSearch(params, owner()).start();
+        for (let i = 0; i < 40 && h.calls.length === 0; i++) await Promise.resolve();
+        expect(h.calls).toHaveLength(1);
+        expect(h.svc.cancelOwned('foreign')).toBe(false); expect(h.closed).toEqual([]);
+        expect(h.svc.cancelOwned('owned')).toBe(true); await h.svc.whenIdle();
+        expect(h.closed).toEqual(['p1']); expect(h.svc.isRunning()).toBe(false);
+        expect(h.store.getScan('owned')?.status).toBe('cancelled');
+    });
+    it('protects group feed reads and uses only the bound profile', async () => {
+        const h = setup({ membership: { p1: ['https://www.facebook.com/groups/1/'] },
+            identity: async () => ({ kind: 'page', pageId: 'page1' }),
+            script: () => feedPage([['a', NOW / 1000]], null) });
+        h.svc.reserveGroupFeeds({ groupUrls: ['https://www.facebook.com/groups/1/'], origin: 'api', profileIds: ['p2'] }, owner()).start();
+        await h.svc.whenIdle(); expect(h.opened).toEqual(['p1']);
+        expect(h.store.getScan('owned')?.itemCount).toBe(1); expect(h.svc.isRunning()).toBe(false);
+    });
+    it('rejects a retained old session callback after a subsequent reservation', async () => {
+        let oldGuard!: () => void;
+        const h = setup({ sessionGuard: (guard) => { oldGuard = guard; }, identity: async () => ({ kind: 'page', pageId: 'page1' }) });
+        h.svc.reserveSearch(params, owner()).start(); await h.svc.whenIdle();
+        const next = h.svc.reserveSearch(params, { ...owner(), scanId: 'next' });
+        expect(() => oldGuard()).toThrow();
+        h.svc.cancelOwned(next.scanId); await h.svc.whenIdle();
+    });
+    it('releases without browser work if creating the reserved scan fails', () => {
+        const h = setup({  });
+        jest.spyOn(h.store, 'createScan').mockImplementation(() => { throw new Error('database unavailable'); });
+        expect(() => h.svc.reserveSearch(params, owner())).toThrow('database unavailable');
+        expect(h.opened).toEqual([]); expect(h.svc.isRunning()).toBe(false); expect(h.svc.isRunning()).toBe(false);
+    });
+    it('does not create effects if the reservation was rolled back before start', async () => {
+        const h = setup({  });
+        const reserved = h.svc.reserveSearch(params, owner());
+        jest.spyOn(h.store, 'getScan').mockReturnValue(undefined);
+        const finish = jest.spyOn(h.store, 'finishScan');
+        reserved.start(); await h.svc.whenIdle();
+        expect(h.opened).toEqual([]); expect(finish).not.toHaveBeenCalled(); expect(h.svc.isRunning()).toBe(false);
+    });
+    it('releases on denied reservation, failed startup, and yield during pagination', async () => {
+        const h = setup({  });
+        expect(() => h.svc.reserveSearch(params, owner(() => { throw new Error('denied'); }))).toThrow('denied');
+        expect(h.store.countScans()).toBe(0); expect(h.svc.isRunning()).toBe(false);
+        const failed = setup({ openFail: ['p1'] });
+        failed.svc.reserveSearch(params, owner()).start(); await failed.svc.whenIdle();
+        expect(failed.store.getScan('owned')?.status).toBe('failed'); expect(failed.svc.isRunning()).toBe(false);
+        let due = false; const yielding = setup({ shouldYield: () => due,
+            script: endless, onSleep: () => { due = true; } });
+        yielding.svc.search(params); await yielding.svc.whenIdle();
+        expect(yielding.calls).toHaveLength(1); expect(yielding.svc.isRunning()).toBe(false);
+    });
+});
+
 describe('ResearchService keyword scan', () => {
+    it('preserves cancellation requested by an admission callback', async () => {
+        let h!: ReturnType<typeof setup>;
+        h = setup({ newId: () => { h.svc.stop(); return 'cancelled-on-admission'; } });
+        const scan = await run(h);
+        expect(h.opened).toEqual([]);
+        expect(scan.status).toBe('cancelled');
+    });
+    it('reserves local admission before ID callback reentry', async () => {
+        let h!: ReturnType<typeof setup>;
+        let reentered = false;
+        h = setup({ newId: () => {
+            if (!reentered) {
+                reentered = true;
+                expect(() => h.svc.search({ source: 'posts', query: 'nested', origin: 'manual' })).toThrow(BUSY_ERROR);
+            }
+            return 'outer';
+        } });
+        await run(h);
+        expect(h.store.countScans()).toBe(1);
+    });
+    it('prefers a free eligible profile but preserves explicit busy pinning', async () => {
+        const automatic = setup({ profiles: ['p1', 'p2'], busy: ['p1'] });
+        await run(automatic, { limit: 1 });
+        expect(automatic.opened).toEqual(['p2']);
+        const pinned = setup({ profiles: ['p1', 'p2'], busy: ['p1'] });
+        await run(pinned, { limit: 1, profileIds: ['p1'] });
+        expect(pinned.opened).toEqual(['p1']);
+    });
+    it('busy fallback never bypasses excluded, login or daily-cap eligibility', async () => {
+        const h = setup({ profiles: ['p1', 'p2', 'p3', 'p4'], busy: ['p1', 'p2', 'p3', 'p4'],
+            excluded: ['p1'], loginStates: [{ profileId: 'p2', state: 'logged_out' }], cap: 1 });
+        jest.spyOn(h.store, 'itemsCapturedSince').mockImplementation(id => id === 'p3' ? 1 : 0);
+        await run(h, { limit: 1 });
+        expect(h.opened).toEqual(['p4']);
+    });
     it('chia 200 mục cho 4 profile, 50 mỗi profile, con trỏ nối tiếp', async () => {
         const h = setup({ script: endless });
         const scan = await run(h, { limit: 200 });
@@ -178,7 +344,7 @@ describe('ResearchService keyword scan', () => {
     });
 
     it('không có profile nào lúc bắt đầu: failed + no_profile_available', async () => {
-        const h = setup({ profiles: ['p1'], busy: ['p1'] });
+        const h = setup({ profiles: ['p1'], excluded: ['p1'] });
         const scan = await run(h);
         expect(scan.status).toBe('failed');
         expect(scan.errorCode).toBe('no_profile_available');
@@ -452,7 +618,7 @@ describe('ResearchService group_feed', () => {
     });
 
     it('không truyền groupUrls và không profile nào: failed', async () => {
-        const h = setup({ profiles: ['p1'], busy: ['p1'], membership: { p1: [G1] } });
+        const h = setup({ profiles: ['p1'], excluded: ['p1'], membership: { p1: [G1] } });
         const { scanId } = h.svc.scanGroupFeeds({ origin: 'manual' });
         await h.svc.whenIdle();
         const scan = h.store.getScan(scanId)!;

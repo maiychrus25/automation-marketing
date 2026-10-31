@@ -25,6 +25,8 @@ export interface CapturedQuery {
 interface SessionTokens { dtsg: string; lsd: string; userId: string }
 
 interface SessionDeps {
+    /** Main-process guard only; never passed into page.evaluate. */
+    assertCurrent?: () => void;
     now?: () => number;
     sleep?: (ms: number) => Promise<void>;
     random?: () => number;
@@ -111,21 +113,25 @@ export class GraphqlSession {
     private readonly now: () => number;
     private readonly sleep: (ms: number) => Promise<void>;
     private readonly random: () => number;
+    private readonly assertCurrent: () => void;
 
     constructor(
         private readonly page: Page,
         private readonly store: Pick<ResearchStore, 'getQuery' | 'saveQuery'>,
         deps: SessionDeps = {},
     ) {
+        this.assertCurrent = deps.assertCurrent ?? (() => {});
         this.now = deps.now ?? Date.now;
         this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
         this.random = deps.random ?? Math.random;
     }
 
     async open(): Promise<void> {
-        await gotoOrThrow(this.page, FB_HOME);
+        this.assertCurrent();
+        try { await gotoOrThrow(this.page, FB_HOME); } finally { this.assertCurrent(); }
         this.assertNotRedirected();
-        const t = await this.page.evaluate(readTokensInPage);
+        let t: ReturnType<typeof readTokensInPage>;
+        try { t = await this.page.evaluate(readTokensInPage); } finally { this.assertCurrent(); }
         if (!t.dtsg) {
             throw new ResearchError('logged_out', t.loginForm
                 ? 'Profile chưa đăng nhập Facebook (thấy form đăng nhập).'
@@ -133,7 +139,8 @@ export class GraphqlSession {
         }
         let userId = t.userId;
         if (!userId) {
-            const cookies = await this.page.context().cookies();
+            let cookies: Awaited<ReturnType<ReturnType<Page['context']>['cookies']>>;
+            try { cookies = await this.page.context().cookies(); } finally { this.assertCurrent(); }
             userId = cookies.find((c) => c.name === 'c_user')?.value || '';
         }
         if (!userId) throw new ResearchError('logged_out', 'Không đọc được ID người dùng Facebook; coi như chưa đăng nhập.');
@@ -142,6 +149,7 @@ export class GraphqlSession {
 
     /** Mã người dùng Facebook của profile (đọc khi open()); chỉ đọc. */
     userId(): string {
+        this.assertCurrent();
         if (!this.tokens) throw new ResearchError('logged_out', 'Phiên GraphQL chưa mở (gọi open() trước).');
         return this.tokens.userId;
     }
@@ -156,7 +164,9 @@ export class GraphqlSession {
 
     /** `fresh`: bỏ qua mẫu đã lưu, bắt từ chính trang `triggerUrl` (nhóm có link rút gọn cần id thật của nhóm đó). */
     async ensureQuery(source: ResearchSource, friendlyName: string, triggerUrl: string, fresh = false): Promise<CapturedQuery> {
+        this.assertCurrent();
         const stored = fresh ? undefined : this.store.getQuery(`${friendlyName}:${source}`);
+        this.assertCurrent();
         if (stored) {
             try {
                 const parsed = JSON.parse(stored.variablesTemplate);
@@ -170,6 +180,7 @@ export class GraphqlSession {
 
     /** Bắt lại truy vấn (doc_id hết hạn). Tối đa 1 lần cho mỗi phiên. */
     async recapture(source: ResearchSource, friendlyName: string, triggerUrl: string): Promise<CapturedQuery> {
+        this.assertCurrent();
         if (this.recaptured) {
             throw new ResearchError('query_changed', `Truy vấn ${friendlyName} vẫn hỏng sau khi bắt lại.`);
         }
@@ -178,6 +189,7 @@ export class GraphqlSession {
     }
 
     async call(query: CapturedQuery, variables: Record<string, unknown>): Promise<string> {
+        this.assertCurrent();
         const t = this.tokens;
         if (!t) throw new ResearchError('logged_out', 'Phiên GraphQL chưa mở (gọi open() trước).');
         const body = new URLSearchParams({
@@ -200,6 +212,8 @@ export class GraphqlSession {
             throw new ResearchError('parse_failed', isConnectionLost(e)
                 ? `Mất kết nối với trang: ${shortMessage(e)}`
                 : `Lỗi mạng khi gọi Facebook: ${shortMessage(e)}`);
+        } finally {
+            this.assertCurrent();
         }
         // 401/403 có thể do mã chống giả mạo hết hạn: chỉ bỏ qua profile này, KHÔNG coi là đăng xuất (đăng xuất chỉ nhận qua chuyển trang /login).
         if (res.status === 401 || res.status === 403) throw new ResearchError('rate_limited', `Facebook từ chối yêu cầu (HTTP ${res.status}).`);
@@ -209,6 +223,7 @@ export class GraphqlSession {
     }
 
     private async capture(source: ResearchSource, friendlyName: string, triggerUrl: string): Promise<CapturedQuery> {
+        this.assertCurrent();
         let exact: { name: string; docId: string; variables: string } | null = null;
         let fallback: typeof exact = null;
         const onRequest = (request: any) => {
@@ -225,15 +240,16 @@ export class GraphqlSession {
         };
         this.page.on('request', onRequest);
         try {
-            await gotoOrThrow(this.page, triggerUrl);
+            try { await gotoOrThrow(this.page, triggerUrl); } finally { this.assertCurrent(); }
             this.assertNotRedirected();
             for (let i = 0; i < MAX_SCROLLS && !exact; i++) {
-                await this.page.mouse.wheel(0, 1500);
-                await this.sleep(1500 + Math.floor(this.random() * 1500));
+                try { await this.page.mouse.wheel(0, 1500); } finally { this.assertCurrent(); }
+                try { await this.sleep(1500 + Math.floor(this.random() * 1500)); } finally { this.assertCurrent(); }
             }
         } finally {
             this.page.off('request', onRequest);
         }
+        this.assertCurrent();
         const hit = (exact || fallback) as { name: string; docId: string; variables: string } | null;
         if (!hit) {
             throw new ResearchError('query_changed', `Không bắt được truy vấn ${friendlyName} khi mở ${triggerUrl}.`);
@@ -242,7 +258,9 @@ export class GraphqlSession {
         try { variables = JSON.parse(hit.variables); } catch {
             throw new ResearchError('query_changed', `Biến của truy vấn ${hit.name} không đọc được (${triggerUrl}).`);
         }
+        this.assertCurrent();
         this.store.saveQuery(`${friendlyName}:${source}`, hit.docId, JSON.stringify({ friendlyName: hit.name, variables }), this.now());
+        this.assertCurrent();
         return { friendlyName: hit.name, docId: hit.docId, variables };
     }
 }

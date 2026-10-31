@@ -6,7 +6,9 @@ import { Transform, type Readable } from 'stream';
 import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MAX_IMAGE_BYTES, VIDEO_EXTENSIONS, extensionOf } from '../facebookPoster/mediaRules';
 import type { ControlStore } from './ControlStore';
 import type { IdempotencyCache } from './IdempotencyCache';
-import { ControlError, describe, toControlError, type ControlErrorCode, type ControlMethod } from './ControlMethods';
+import { ControlError, describe, toControlError, type ControlErrorCode, type ControlMethod, type ControlContext } from './ControlMethods';
+import type { ControlPrincipal } from '../../models/pageOperations';
+import { authorizeMethod, authorizeRoute, scopedRequestHash, visibleMethods, type ControlAuthorizationResources, type ScopedKeyPolicy } from './controlAuthorization';
 import { errorText, hashKey, ipAllowed, normalizeIp, type AuthLockout, type RateLimiter } from './controlSecurity';
 
 export const DEFAULT_CONTROL_PORT = 47321;
@@ -36,6 +38,7 @@ const STATUS_BY_CODE: Record<ControlErrorCode, number> = {
     UNAUTHORIZED: 401, FORBIDDEN_IP: 403, RATE_LIMITED: 429, INVALID_PARAMS: 400, NOT_FOUND: 404,
     CONFIRMATION_REQUIRED: 409, BUSY: 409, ENGINE_MISSING: 503, LIMIT_REACHED: 422,
     PAYLOAD_TOO_LARGE: 413, UNKNOWN_METHOD: 404, INTERNAL: 500,
+    FORBIDDEN: 403, CONFLICT: 409, LIMIT_EXCEEDED: 422, NEEDS_REVIEW: 409,
 };
 
 export interface SavedMedia { mediaId: string; name: string; size: number; kind: 'image' | 'video' | 'audio' }
@@ -58,11 +61,13 @@ export interface ControlApiServerOptions {
     openVideoFile?: (videoId: string, kind: 'video' | 'thumb') => Promise<{ stream: Readable; size: number }>;
     /** Ghép nối bằng vé một lần (không cần khoá Bearer). `consume` kiểm vé + IP; `onPaired` báo cho app sau khi đã tạo khoá. */
     pairing?: {
-        consume(ticket: string, ip: string): { name: string } | null;
+        consume(ticket: string, ip: string): { name: string; policy?: ScopedKeyPolicy } | null;
         onPaired(info: { keyId: string; keyName: string; ip: string }): void;
     };
     /** Nội dung maihub_bridge.py phục vụ ở GET /v1/bridge.py; null thì 404. */
     bridgeScript?: () => Buffer | null;
+    /** Required for scoped keys; captures principal/workspace/DB and denies if that lifetime is no longer current. */
+    authorizationResources?: (principal: Exclude<ControlPrincipal, { kind: 'legacy' }>) => ControlAuthorizationResources;
     now?: () => number;
 }
 
@@ -255,19 +260,30 @@ export class ControlApiServer {
             return;
         }
 
+        const principal: ControlPrincipal = keyInfo.policy ? { keyId: keyInfo.id, ...keyInfo.policy } : { kind: 'legacy', keyId: keyInfo.id };
+        let context: ControlContext;
+        try {
+            context = this.authorizationContext(principal, hashKey(match![1]));
+            context.assertCurrent!();
+        } catch (err) {
+            const mapped = toControlError(err);
+            this.auditRejected(path, keyInfo.name, ip, '(authorization)', mapped.code);
+            this.sendError(res, mapped, true);
+            return;
+        }
         // (6)-(7) Định tuyến và đọc thân (giới hạn kích thước áp khi đang nhận).
         if (path === '/v1/describe') {
             if (req.method !== 'GET') { this.sendMethodNotAllowed(res, 'GET'); return; }
-            this.send(res, 200, { ok: true, result: describe(this.opts.methods) });
+            this.send(res, 200, { ok: true, result: describe(visibleMethods(principal, this.opts.methods)) });
         } else if (path === '/v1/call') {
             if (req.method !== 'POST') { this.sendMethodNotAllowed(res, 'POST'); return; }
-            await this.handleCall(req, res, keyInfo.id, keyInfo.name, ip);
+            await this.handleCall(req, res, keyInfo.id, keyInfo.name, ip, context);
         } else if (path === '/v1/media') {
             if (req.method !== 'POST') { this.sendMethodNotAllowed(res, 'POST'); return; }
-            await this.handleMedia(req, res, keyInfo.name, ip);
+            await this.handleMedia(req, res, keyInfo.name, ip, context);
         } else if (path === '/v1/videos/file') {
             if (req.method !== 'GET') { this.sendMethodNotAllowed(res, 'GET'); return; }
-            await this.handleVideoDownload(req, res, keyInfo.name, ip);
+            await this.handleVideoDownload(req, res, keyInfo.name, ip, context);
         } else {
             this.sendError(res, new ControlError('NOT_FOUND', 'Không có đường dẫn này'));
         }
@@ -281,6 +297,39 @@ export class ControlApiServer {
         } catch (err) {
             Logger.error('[control] Không ghi được nhật ký:', errorText(err));
         }
+    }
+
+    private authorizationContext(principal: ControlPrincipal, keyHash: string): ControlContext {
+        if (principal.kind === 'legacy') return { principal, assertCurrent: () => {} };
+        const bound = this.opts.authorizationResources?.(principal);
+        if (!bound || typeof bound.assertCurrent !== 'function' || typeof bound.getPageIdentity !== 'function' || typeof bound.getWork !== 'function' || typeof bound.getResourceOwner !== 'function') {
+            throw new ControlError('FORBIDDEN', 'Không có quyền thực hiện thao tác này');
+        }
+        const policyHash = scopedRequestHash(principal, '', {});
+        const assertCurrent = () => {
+            // Check the captured workspace before touching ControlStore: its DB adapter may use a global connection.
+            bound.assertCurrent();
+            if (this.opts.isBlocked?.() || bound.workspaceId !== principal.workspaceId) throw new ControlError('FORBIDDEN', 'Không có quyền thực hiện thao tác này');
+            const active = this.opts.store.findActiveKeyByHash(keyHash);
+            if (!active?.policy || active.id !== principal.keyId || scopedRequestHash({ keyId: active.id, ...active.policy }, '', {}) !== policyHash) {
+                throw new ControlError('FORBIDDEN', 'Không có quyền thực hiện thao tác này');
+            }
+            bound.assertCurrent();
+        };
+        const resources: ControlAuthorizationResources = {
+            workspaceId: bound.workspaceId, assertCurrent,
+            getPageIdentity: (id) => bound.getPageIdentity(id),
+            getWork: (id) => bound.getWork(id),
+            getResourceOwner: (ref) => bound.getResourceOwner(ref),
+            ...(bound.protectedWritesEnabled ? { protectedWritesEnabled: () => bound.protectedWritesEnabled!() } : {}),
+            ...(bound.getCampaignResource ? { getCampaignResource: (kind: 'campaign' | 'proposal' | 'grant', id: string) => { assertCurrent(); return bound.getCampaignResource!(kind, id); } } : {}),
+            ...(bound.authorizeApproval ? { authorizeApproval: (method: string, params: Record<string, any>) => bound.authorizeApproval!(method, params) } : {}),
+        };
+        return { principal, assertCurrent, resources };
+    }
+
+    private canAudit(context: ControlContext): boolean {
+        try { context.assertCurrent!(); return true; } catch { return false; }
     }
 
     /** Đổi vé ghép nối lấy khoá mới. Mọi lỗi về vé đều là 401 cùng một thông báo để không lộ vé nào tồn tại. */
@@ -311,7 +360,7 @@ export class ControlApiServer {
             return;
         }
         const startedAt = this.now();
-        const created = store.createKey(info.name);
+        const created = store.createKey(info.name, info.policy);
         try {
             store.addAudit({ at: startedAt, keyName: created.name, ip, method: 'pair', paramsSummary: null, ok: true, errorCode: null, durationMs: this.now() - startedAt });
         } catch (err) {
@@ -323,7 +372,7 @@ export class ControlApiServer {
         }
     }
 
-    private async handleCall(req: IncomingMessage, res: ServerResponse, keyId: string, keyName: string, ip: string): Promise<void> {
+    private async handleCall(req: IncomingMessage, res: ServerResponse, keyId: string, keyName: string, ip: string, context: ControlContext): Promise<void> {
         const startedAt = this.now();
         let methodName: string | null = null;
         let params: unknown;
@@ -347,17 +396,33 @@ export class ControlApiServer {
             const method = this.opts.methods.find((m) => m.name === methodName);
             if (!method) throw new ControlError('UNKNOWN_METHOD', `Không có thao tác "${methodName}"`);
 
+            const assertAuthorized = () => {
+                context.assertCurrent!();
+                authorizeMethod(context.principal!, method.name, params as Record<string, any>, context.resources!);
+            };
+            assertAuthorized(); // Before any persisted or in-flight idempotency lookup.
+            const requestHash = context.principal!.kind === 'legacy' ? undefined : scopedRequestHash(context.principal! as Exclude<ControlPrincipal, { kind: 'legacy' }>, method.name, params as Record<string, any>);
             let result: unknown;
-            if (methodName === 'events.wait') {
+            if (methodName === 'events.wait' || methodName === 'pageWork.events') {
                 if ((this.activeWaits.get(keyId) ?? 0) >= MAX_CONCURRENT_WAITS_PER_KEY) {
-                    throw new ControlError('RATE_LIMITED', `Tối đa ${MAX_CONCURRENT_WAITS_PER_KEY} lời gọi events.wait cùng lúc cho mỗi khoá`);
+                    throw new ControlError('RATE_LIMITED', `Tối đa ${MAX_CONCURRENT_WAITS_PER_KEY} lời gọi ${methodName} cùng lúc cho mỗi khoá`);
                 }
                 this.activeWaits.set(keyId, (this.activeWaits.get(keyId) ?? 0) + 1);
                 waitHeld = true;
             }
             try {
-                result = await this.opts.idempotency.run(keyId, method.name, idem, () => method.run(params as Record<string, any>, { keyName, signal: abort.signal }));
+                const invoke = async () => {
+                    assertAuthorized();
+                    const value = await method.run(params as Record<string, any>, { ...context, keyName, signal: abort.signal });
+                    assertAuthorized(); // Never persist a result after revocation or a workspace switch.
+                    return value;
+                };
+                result = await this.opts.idempotency.run(keyId, method.name, idem, invoke, requestHash,
+                    context.principal!.kind === 'legacy' ? undefined : assertAuthorized,
+                    method.name === 'pageCampaigns.optimize' ? invoke : undefined);
+                assertAuthorized(); // Also covers cached results and callers awaiting another request's promise.
             } catch (err) {
+                assertAuthorized(); // A rejected await must not expose stale scope/gate error details either.
                 if (!(err instanceof ControlError)) { Logger.error(`[control] Thao tác ${methodName} lỗi:`, errorText(err)); }
                 throw toControlError(err);
             }
@@ -367,14 +432,14 @@ export class ControlApiServer {
                 ? new ControlError('PAYLOAD_TOO_LARGE', 'Thân yêu cầu vượt quá 1 MB')
                 : toControlError(err);
             errorCode = controlError.code;
-            this.sendError(res, controlError, controlError.code === 'PAYLOAD_TOO_LARGE');
+            this.sendError(res, controlError, controlError.code === 'PAYLOAD_TOO_LARGE' || controlError.code === 'FORBIDDEN');
         } finally {
             if (waitHeld) {
                 const left = (this.activeWaits.get(keyId) ?? 1) - 1;
                 if (left > 0) this.activeWaits.set(keyId, left); else this.activeWaits.delete(keyId);
             }
             try {
-                this.opts.store.addAudit({
+                if (this.canAudit(context)) this.opts.store.addAudit({
                     at: startedAt, keyName, ip, method: methodName, paramsSummary: summarizeParams(params),
                     ok: errorCode === null, errorCode, durationMs: this.now() - startedAt,
                 });
@@ -384,7 +449,7 @@ export class ControlApiServer {
         }
     }
 
-    private async handleVideoDownload(req: IncomingMessage, res: ServerResponse, keyName: string, ip: string): Promise<void> {
+    private async handleVideoDownload(req: IncomingMessage, res: ServerResponse, keyName: string, ip: string, context: ControlContext): Promise<void> {
         const startedAt = this.now();
         let errorCode: string | null = null;
         const summary: { videoId?: string; kind?: string; size?: number } = {};
@@ -396,11 +461,18 @@ export class ControlApiServer {
             const kind = query.get('kind') ?? 'video';
             if (kind !== 'video' && kind !== 'thumb') throw new ControlError('INVALID_PARAMS', 'kind phải là video hoặc thumb', { field: 'kind' });
             summary.kind = kind;
+            const assertAuthorized = () => {
+                context.assertCurrent!();
+                authorizeRoute(context.principal!, '/v1/videos/file', { kind: 'video', id: videoId }, context.resources!);
+            };
+            assertAuthorized();
             if (!this.opts.openVideoFile) throw new ControlError('NOT_FOUND', 'Không có đường dẫn này');
             let file: { stream: Readable; size: number };
             try {
                 file = await this.opts.openVideoFile(videoId, kind);
+                try { assertAuthorized(); } catch (err) { file.stream.destroy(); throw err; }
             } catch (err) {
+                context.assertCurrent!();
                 const mapped = toControlError(err);
                 if (mapped.code === 'INTERNAL') Logger.error('[control] Mở tệp video lỗi:', errorText(err));
                 throw mapped;
@@ -419,7 +491,18 @@ export class ControlApiServer {
                 'Cache-Control': 'no-store',
                 'Content-Disposition': `attachment; filename="${videoId}.${kind === 'video' ? 'mp4' : 'jpg'}"`,
             });
-            stream.pipe(res);
+            if (context.principal!.kind === 'legacy') {
+                stream.pipe(res);
+            } else {
+                const guarded = new Transform({
+                    transform(chunk, _encoding, callback) {
+                        try { assertAuthorized(); callback(null, chunk); } catch (err) { callback(err as Error); }
+                    },
+                });
+                guarded.on('error', () => { stream.destroy(); res.destroy(); });
+                res.on('close', () => guarded.destroy());
+                stream.pipe(guarded).pipe(res);
+            }
         } catch (err) {
             const controlError = toControlError(err);
             errorCode = controlError.code;
@@ -427,18 +510,20 @@ export class ControlApiServer {
             this.sendError(res, controlError);
         } finally {
             try {
-                this.opts.store.addAudit({ at: startedAt, keyName, ip, method: 'videos.download', paramsSummary: JSON.stringify(summary), ok: errorCode === null, errorCode, durationMs: this.now() - startedAt });
+                if (this.canAudit(context)) this.opts.store.addAudit({ at: startedAt, keyName, ip, method: 'videos.download', paramsSummary: JSON.stringify(summary), ok: errorCode === null, errorCode, durationMs: this.now() - startedAt });
             } catch (err) {
                 Logger.error('[control] Không ghi được nhật ký:', errorText(err));
             }
         }
     }
 
-    private async handleMedia(req: IncomingMessage, res: ServerResponse, keyName: string, ip: string): Promise<void> {
+    private async handleMedia(req: IncomingMessage, res: ServerResponse, keyName: string, ip: string, context: ControlContext): Promise<void> {
         const startedAt = this.now();
         let errorCode: string | null = null;
         let summary = '{}';
         try {
+            context.assertCurrent!();
+            authorizeRoute(context.principal!, '/v1/media', undefined, context.resources!);
             const name = sanitizeFilename(req.headers['x-filename'] as string | undefined);
             if (!name) throw new ControlError('INVALID_PARAMS', 'Thiếu hoặc sai header X-Filename', { field: 'X-Filename' });
             const ext = extensionOf(name);
@@ -484,10 +569,10 @@ export class ControlApiServer {
         } catch (err) {
             const controlError = toControlError(err);
             errorCode = controlError.code;
-            this.sendError(res, controlError, controlError.code === 'PAYLOAD_TOO_LARGE');
+            this.sendError(res, controlError, controlError.code === 'PAYLOAD_TOO_LARGE' || controlError.code === 'FORBIDDEN');
         } finally {
             try {
-                this.opts.store.addAudit({ at: startedAt, keyName, ip, method: 'media.upload', paramsSummary: summary, ok: errorCode === null, errorCode, durationMs: this.now() - startedAt });
+                if (this.canAudit(context)) this.opts.store.addAudit({ at: startedAt, keyName, ip, method: 'media.upload', paramsSummary: summary, ok: errorCode === null, errorCode, durationMs: this.now() - startedAt });
             } catch (err) {
                 Logger.error('[control] Không ghi được nhật ký:', errorText(err));
             }

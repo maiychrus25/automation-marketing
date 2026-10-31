@@ -1,6 +1,6 @@
 import type { FbPosterSchedule } from '../../models/facebookPoster';
 import type { FacebookPosterStore } from './FacebookPosterStore';
-import { BUSY_ERROR, type StartParams } from './FacebookPosterService';
+import { BUSY_ERROR, type RunStartOptions, type StartParams } from './FacebookPosterService';
 import { computeNextRun } from './scheduleTime';
 import Logger from '../../utils/Logger';
 
@@ -23,17 +23,23 @@ export interface SchedulerDeps {
     isBusy: () => boolean;
     /** Resolves media + validates; throws Error with a user-facing message (e.g. 'Không tìm thấy tệp ảnh/video'). */
     resolveParams: (schedule: FbPosterSchedule) => StartParams;
-    startRun: (params: StartParams, scheduleId: string) => { runId: string };
+    canStart: (params: StartParams) => boolean;
+    /** Cheap hint from the stored schedule's profile IDs, before the autonomy preflight; absent = no hint. */
+    canStartSchedule?: (schedule: FbPosterSchedule) => boolean;
+    startRun: (params: StartParams, scheduleId: string, options: RunStartOptions) => { runId: string };
     newId: () => string;
     onMissed: (notice: MissedNotice) => void;
     onChanged: () => void;
     /** Lý do chặn theo chiến dịch của lịch (tạm dừng / lưu trữ / ngoài thời gian), null khi không có chiến dịch hoặc chạy được; bỏ trống = không chặn (nối thật ở Electron). */
     campaignBlock?: (schedule: FbPosterSchedule, t: number) => string | null;
+    assertAutonomyCurrent?: (schedule: FbPosterSchedule) => void;
+    /** True while a run of this schedule is still live: its next occurrence waits instead of overlapping it. */
+    isScheduleRunning?: (scheduleId: string) => boolean;
 }
 
 interface QueueItem { scheduleId: string; enqueuedAt: number; }
 
-/** Fires due schedules, queues them while another job runs (one job at a time) and records missed/failed runs. */
+/** Keeps due occurrences queued until coordinator capacity and at least one profile are available. */
 export class FacebookPosterScheduler {
     private queue: QueueItem[] = [];
     /** Lịch vừa được duyệt "Đăng ngay": lệnh trực tiếp nên không bị chiến dịch chặn (spec 3.1). Chỉ giữ trong bộ nhớ. */
@@ -41,6 +47,7 @@ export class FacebookPosterScheduler {
     private timer: unknown = null;
     private stopped = false;
     private lastRunFailed = false;
+    private pumping = false;
 
     constructor(private readonly deps: SchedulerDeps) {}
 
@@ -59,13 +66,19 @@ export class FacebookPosterScheduler {
     }
 
     reschedule(): void {
-        if (!this.stopped) this.arm();
+        this.onResourcesChanged();
     }
 
     onRunFinished(): void {
-        if (this.stopped) return;
+        this.onResourcesChanged();
+    }
+
+    onResourcesChanged(): void {
+        // Keep the already-armed error retry: resource notifications must not clear or postpone it.
+        if (this.stopped || this.pumping || this.lastRunFailed) return;
+        const before = this.queue.length;
         this.pump();
-        this.deps.onChanged();
+        if (this.queue.length !== before) this.deps.onChanged();
     }
 
     /** Lượt kế tiếp của lịch này bỏ qua kiểm tra chiến dịch (dùng cho "Đăng ngay"). */
@@ -93,7 +106,8 @@ export class FacebookPosterScheduler {
                     this.gateBypass.delete(s.id);
                     this.recordMissed(s.id, MISSED_APP_CLOSED, s.nextRunAt, s);
                 } else {
-                    const reason = this.blockReason(s, t);
+                    // While busy (e.g. a workspace switch drain) an autonomy occurrence is queued unchecked; pumpQueue preflights it before any start.
+                    const reason = s.authorityKind === 'autonomy' && this.deps.isBusy() ? null : this.blockReason(s, t);
                     if (reason !== null) {
                         // Lịch lặp bỏ qua lặng lẽ (vẫn sang lần sau); lịch một lần không còn lần sau nên ghi bỏ lỡ.
                         if (s.kind === 'once') this.recordMissed(s.id, reason, s.nextRunAt ?? t, s);
@@ -114,6 +128,8 @@ export class FacebookPosterScheduler {
     }
 
     private pump(): void {
+        if (this.pumping) return;
+        this.pumping = true;
         this.lastRunFailed = false;
         try {
             this.pumpQueue();
@@ -121,6 +137,7 @@ export class FacebookPosterScheduler {
             this.lastRunFailed = true;
             Logger.error(`[FacebookPosterScheduler] pump failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
+            this.pumping = false;
             this.arm();
         }
     }
@@ -128,24 +145,32 @@ export class FacebookPosterScheduler {
     private pumpQueue(): void {
         const { store, now } = this.deps;
         const t = now();
-        this.queue = this.queue.filter((item) => {
-            if (t - item.enqueuedAt <= QUEUE_MAX_WAIT_MS) return true;
-            this.gateBypass.delete(item.scheduleId);
-            this.recordMissed(item.scheduleId, MISSED_QUEUE_TIMEOUT, t);
-            return false;
-        });
-        while (this.queue.length > 0 && !this.deps.isBusy()) {
-            const item = this.queue.shift()!;
+        for (const item of [...this.queue]) {
+            const remove = () => { this.queue = this.queue.filter(q => q !== item); };
             const s = store.getSchedule(item.scheduleId);
-            if (!s || !s.enabled || s.draft) { this.gateBypass.delete(item.scheduleId); continue; }
+            if (!s || !s.enabled || s.draft) { remove(); this.gateBypass.delete(item.scheduleId); continue; }
+            const deadlineAt = item.enqueuedAt + QUEUE_MAX_WAIT_MS;
+            if (t >= deadlineAt) {
+                this.recordMissed(s.id, MISSED_QUEUE_TIMEOUT, t, s);
+                remove(); this.gateBypass.delete(s.id); continue;
+            }
+            // Cheap gates first; the campaign/autonomy preflight (reads media, many queries) runs only right before a start.
+            if (this.deps.isScheduleRunning?.(s.id) || this.deps.isBusy() || this.deps.canStartSchedule?.(s) === false) continue;
             const blocked = this.blockReason(s, now());
-            if (blocked !== null) { this.recordMissed(s.id, blocked, now(), s); continue; }
+            if (blocked !== null) {
+                this.recordMissed(s.id, blocked, now(), s);
+                remove(); this.gateBypass.delete(s.id); continue;
+            }
             let runId: string;
             try {
-                runId = this.deps.startRun(this.deps.resolveParams(s), s.id).runId;
+                const params = this.deps.resolveParams(s);
+                if (!this.deps.canStart(params)) continue;
+                runId = this.deps.startRun(params, s.id, { priority: 'scheduled', deadlineAt }).runId;
+                remove();
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
-                if (message === BUSY_ERROR) { this.queue.unshift(item); break; }
+                if (message === BUSY_ERROR) break;
+                remove();
                 this.gateBypass.delete(s.id);
                 const id = this.deps.newId();
                 store.recordScheduleRun({ id, scheduleId: s.id, params: s.params, at: now(), status: 'failed', reason: message });
@@ -164,6 +189,14 @@ export class FacebookPosterScheduler {
 
     /** Lỗi đọc chiến dịch không được làm lịch ngừng chạy: coi như không bị chặn. */
     private blockReason(s: FbPosterSchedule, t: number): string | null {
+        if (s.authorityKind === 'autonomy') {
+            try {
+                if (!this.deps.assertAutonomyCurrent || !s.campaignId || this.deps.store.getCampaign(s.campaignId)?.status !== 'active')
+                    return 'Quyền lịch tự động không còn hiệu lực';
+                this.deps.assertAutonomyCurrent(s);
+                return this.deps.campaignBlock?.(s,t) ?? null;
+            } catch { return 'Không kiểm được quyền lịch tự động'; }
+        }
         if (this.gateBypass.has(s.id)) return null;
         try {
             return this.deps.campaignBlock?.(s, t) ?? null;
@@ -181,7 +214,7 @@ export class FacebookPosterScheduler {
             const candidates: number[] = [];
             const next = store.nextScheduledAt();
             if (next !== null) candidates.push(next);
-            if (this.queue.length > 0) candidates.push(this.queue[0].enqueuedAt + QUEUE_MAX_WAIT_MS);
+            for (const item of this.queue) candidates.push(item.enqueuedAt + QUEUE_MAX_WAIT_MS);
             if (candidates.length === 0 && !this.lastRunFailed) return;
             delay = candidates.length === 0 ? 0 : Math.min(Math.max(0, Math.min(...candidates) - now()), MAX_TIMER_MS);
             if (this.lastRunFailed) delay = Math.max(delay, ERROR_RETRY_MS);

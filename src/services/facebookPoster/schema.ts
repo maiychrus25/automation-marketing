@@ -1,4 +1,15 @@
 // Nguồn: docs/specs/2026-10-03-facebook-poster.md mục 5. Chạy lại nhiều lần được (IF NOT EXISTS).
+export const PAGE_CAMPAIGN_EXECUTION_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS page_campaign_executions (
+    schedule_id TEXT PRIMARY KEY NOT NULL,
+    workspace_id TEXT NOT NULL, page_id TEXT NOT NULL, profile_id TEXT NOT NULL,
+    work_id TEXT NOT NULL, campaign_id TEXT NOT NULL, grant_id TEXT NOT NULL,
+    planned_date TEXT NOT NULL, actual_date TEXT,
+    status TEXT NOT NULL CHECK (status IN ('reserved','submitting','posted','uncertain','cancelled')),
+    revision INTEGER NOT NULL, execution_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS page_campaign_execution_quota ON page_campaign_executions(workspace_id, page_id, planned_date, status);
+`;
 export const FB_POSTER_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS fb_poster_runs (
     id           TEXT PRIMARY KEY,          -- uuid
@@ -166,4 +177,6 @@ export const FB_POSTER_MIGRATIONS: string[] = [
     "ALTER TABLE fb_poster_post_tracking ADD COLUMN comments_done TEXT NOT NULL DEFAULT ''",
     'ALTER TABLE fb_poster_post_tracking ADD COLUMN next_comment_at INTEGER DEFAULT NULL',
     'CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_next_comment ON fb_poster_post_tracking(next_comment_at)',
+    'ALTER TABLE fb_poster_schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 1',
+    "ALTER TABLE fb_poster_schedules ADD COLUMN authority_kind TEXT NOT NULL DEFAULT 'owner' CHECK (authority_kind IN ('owner','autonomy'))",
 ];

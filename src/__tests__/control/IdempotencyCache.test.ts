@@ -80,3 +80,78 @@ describe('IdempotencyCache', () => {
     warn.mockRestore();
   });
 });
+
+describe('IdempotencyCache scoped fingerprints', () => {
+  it('sameIdempotencyKeyDifferentPayloadConflicts for saved and pending results', async () => {
+    const { cache } = make();
+    const run = cache.run.bind(cache) as any;
+    expect(await run('k', 'm', 'i', async () => 1, 'hash-a')).toBe(1);
+    await expect(run('k', 'm', 'i', async () => 2, 'hash-b')).rejects.toMatchObject({ code: 'CONFLICT' });
+    let release!: (v: number) => void;
+    const first = run('k', 'm', 'pending', () => new Promise<number>((r) => { release = r; }), 'hash-a');
+    await expect(run('k', 'm', 'pending', async () => 2, 'hash-b')).rejects.toMatchObject({ code: 'CONFLICT' });
+    release(7);
+    expect(await first).toBe(7);
+  });
+  it('never replays a legacy row lacking fingerprint for a scoped request', async () => {
+    const { store, cache } = make();
+    store.putIdempotent('k', 'old', 'm', '123', 1000);
+    await expect((cache.run as any)('k', 'm', 'old', async () => 2, 'scoped')).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(await cache.run('k', 'm', 'old', async () => 2)).toBe(123);
+  });
+});
+
+describe('IdempotencyCache durable replay',()=>{
+  it('returns validated durable result and never falls back after a replay rejection',async()=>{
+    const {cache,store}=make();await cache.run('key','optimize','saved',async()=>({id:'cached'}),'hash');
+    expect(await cache.run('key','optimize','saved',async()=>({id:'unexpected'}),'hash',()=>{},async()=>({id:'durable'}))).toEqual({id:'durable'});
+    await expect(cache.run('key','optimize','saved',async()=>({id:'unexpected'}),'hash',()=>{},async()=>{throw new Error('source pruned');})).rejects.toThrow('source pruned');
+    expect(store.getIdempotent('key','saved')!.result).toBe('{"id":"cached"}');
+    for(const [method,hash] of [['other','hash'],['optimize','different']]){
+      await expect(cache.run('key',method,'saved',async()=>0,hash,()=>{},async()=>{throw new Error('must not replay collision');})).rejects.toMatchObject({code:'CONFLICT'});
+    }
+  });
+  it('rechecks current authorization after the awaited durable replay',async()=>{
+    const {cache}=make();await cache.run('key','optimize','saved',async()=>7,'hash');
+    let current=true;const guard=()=>{if(!current)throw new Error('revoked during replay');};
+    await expect(cache.run('key','optimize','saved',async()=>8,'hash',guard,async()=>{queueMicrotask(()=>current=false);return 7;})).rejects.toThrow('revoked during replay');
+  });
+});
+
+describe('IdempotencyCache authorization lifetime', () => {
+  it('guards the fn completion-to-cache continuation gap before accessing storage', async () => {
+    const { cache, store } = make();
+    let current = true;
+    const assertCurrent = () => { if (!current) throw new Error('workspace switched'); };
+    const pending = (cache.run as any)('k', 'm', 'gap', async () => {
+      // Runs after the operation returned, before the cache continuation resumes.
+      queueMicrotask(() => { current = false; });
+      return { secret: true };
+    }, 'hash', assertCurrent);
+    await expect(pending).rejects.toThrow('workspace switched');
+    expect(store.getIdempotent('k', 'gap')).toBeNull();
+  });
+  it('revalidates each in-flight waiter rather than inheriting the first callers permission', async () => {
+    const { cache, store } = make();
+    let release!: (v: number) => void;
+    const run = cache.run.bind(cache) as any;
+    const first = run('k', 'm', 'wait', () => new Promise<number>((r) => { release = r; }), 'hash', () => {});
+    let waiterCurrent = true;
+    const second = run('k', 'm', 'wait', async () => 9, 'hash', () => { if (!waiterCurrent) throw new Error('revoked waiter'); });
+    waiterCurrent = false;
+    release(7);
+    expect(await first).toBe(7);
+    await expect(second).rejects.toThrow('revoked waiter');
+    expect(store.getIdempotent('k', 'wait')?.result).toBe('7');
+  });
+  it('guards before saved result lookup and fresh execution', async () => {
+    const { cache, store } = make();
+    const get = jest.spyOn(store, 'getIdempotent');
+    const fn = jest.fn(async () => 1);
+    for (const idem of ['saved', undefined]) {
+      await expect((cache.run as any)('k', 'm', idem, fn, 'hash', () => { throw new Error('stale'); })).rejects.toThrow('stale');
+    }
+    expect(get).not.toHaveBeenCalled();
+    expect(fn).not.toHaveBeenCalled();
+  });
+});

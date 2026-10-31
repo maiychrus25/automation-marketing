@@ -26,6 +26,19 @@ function setup() {
   return { env, sched, live };
 }
 
+describe('Page/group timer fairness',()=>{
+  test('trackingUsesOneFairTimer',()=>{
+    const startedKinds:string[]=[];let busy=false,autoEnabled=true;const timers:unknown[]=[];
+    const scheduler=new PostTrackScheduler({now:()=>0,setTimer:(fn)=>{timers.push(fn);return fn;},clearTimer:()=>{},
+      readConfig:()=>({autoEnabled} as any),isBusy:()=>busy,duePairs:()=>[pair(1)],runTrack:()=>{startedKinds.push('group');},
+      runDueCampaignTracking:()=>{startedKinds.push('page');return true;},log:()=>{}});
+    scheduler.start();for(let i=0;i<4;i++)scheduler.tickNow();
+    expect(startedKinds).toEqual(['group','page','group','page']);expect(timers).toHaveLength(1);
+    busy=true;scheduler.tickNow();expect(startedKinds).toHaveLength(4);
+    busy=false;autoEnabled=false;scheduler.tickNow();expect(startedKinds).toEqual(['group','page','group','page','page']);
+  });
+});
+
 describe('PostTrackScheduler', () => {
   test('start arms a timer every tick and re-arms after firing', () => {
     const { env, sched, live } = setup();

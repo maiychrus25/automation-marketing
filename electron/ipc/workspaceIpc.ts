@@ -11,10 +11,10 @@ import ConnectionManager from '../../src/utils/ConnectionManager';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import { startVideoPolling, stopVideoPolling } from './videoIpc';
-import { restartControlApi, stopControlApi, syncControlEventSink } from './controlApiIpc';
-import { closeAllBrowserProfiles } from './browserProfileIpc';
+import { restartControlApi, stopControlApi, syncControlEventSink, stopPagePreparationForWorkspaceSwitch, PAGE_PREPARATION_NOT_STOPPED_ERROR } from './controlApiIpc';
+import { closeAllBrowserProfilesAndWait, pauseBrowserProfileAdmission, resumeBrowserProfileAdmission, retireBrowserProfileGeneration } from './browserProfileIpc';
 import { RESEARCH_NOT_STOPPED_ERROR, cancelAndWaitResearch } from './researchIpc';
-import { POSTER_NOT_STOPPED_ERROR, cancelAndWaitFacebookPosterJobs, isFacebookPosterBusy, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './facebookPosterIpc';
+import { POSTER_NOT_STOPPED_ERROR, cancelAndWaitFacebookPosterJobs, isFacebookPosterBusy, startFacebookPosterScheduler, pauseFacebookJobAdmission, resumeFacebookJobAdmission, retireFacebookJobGeneration, isFacebookJobAdmissionPaused } from './facebookPosterIpc';
 
 /**
  * HTTP/HTTPS POST helper for remote login requests.
@@ -83,7 +83,7 @@ function httpPost(url: string, body: any, timeoutMs = 15000): Promise<any> {
 }
 
 const SWITCH_BUSY_ERROR = 'Đang chuyển workspace, thử lại sau.';
-/** The stop-and-switch wait can last ~55 s: a second switch/delete-of-active must not start meanwhile. */
+/** Protected/job/native drains have separate bounded waits; another transition must not start meanwhile. */
 let switchInProgress = false;
 
 /** Cho các module khác (ví dụ Nghiên cứu) từ chối việc mới khi đang đổi workspace. */
@@ -98,29 +98,35 @@ export function isWorkspaceSwitchInProgress(): boolean {
 export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
     const wm = () => WorkspaceManager.getInstance();
 
-    /** Stops the scheduler and the running poster job. False = job still runs (scheduler restarted); never switch the DB then. */
+    /**
+     * Pauses admission and drains every job. The scheduler keeps its queue (paused admission blocks starts) and is stopped by
+     * retirement, so a refused switch loses no queued occurrence. False = something still runs; never switch the DB then.
+     */
     let stopError = POSTER_NOT_STOPPED_ERROR;
     const stopPosterForSwitch = async (): Promise<boolean> => {
+        pauseBrowserProfileAdmission();
+        pauseFacebookJobAdmission();
         if (isFacebookPosterBusy() && mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('workspace:waitingForJobs', {});
         }
-        try { stopFacebookPosterScheduler(); } catch {}
+        stopError = PAGE_PREPARATION_NOT_STOPPED_ERROR;
+        let protectedStopped = false;
+        try { protectedStopped = await stopPagePreparationForWorkspaceSwitch(); } catch { /* refuse swap */ }
+        if (!protectedStopped) return false;
         stopError = POSTER_NOT_STOPPED_ERROR;
         // Lượt quét Nghiên cứu: huỷ và chờ tối đa 20 giây; chưa dừng thì không đổi workspace (như lượt Đăng Facebook).
         let researchStopped = false;
         try { researchStopped = await cancelAndWaitResearch(); } catch {}
         if (!researchStopped) {
             stopError = RESEARCH_NOT_STOPPED_ERROR;
-            try { startFacebookPosterScheduler(); } catch {}
             return false;
         }
-        if (await cancelAndWaitFacebookPosterJobs()) {
-            // Poster events of the stopped job are recorded; now stop serving so no call hits the DB mid-switch
+        if (await cancelAndWaitFacebookPosterJobs() && await closeAllBrowserProfilesAndWait(45000)) {
+            // Finished events of drained jobs were recorded into this workspace during the drain; now stop serving so no call hits the DB mid-switch
             try { await stopControlApi(); } catch {}
             try { stopVideoPolling(); } catch {} // timer của DB cũ không được chạm DB đang đổi
             return true;
         }
-        try { startFacebookPosterScheduler(); } catch {}
         return false;
     };
 
@@ -191,20 +197,22 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             if (!check.success) return check;
 
             // Any delete waits for a running switch: during A→B the manager already says B is active, but A's DB is still in use
-            if (switchInProgress) return { success: false, error: SWITCH_BUSY_ERROR };
+            if (switchInProgress || isFacebookJobAdmissionPaused()) return { success: false, error: SWITCH_BUSY_ERROR };
 
             // Record whether this is the currently active workspace BEFORE deleting
             if (wm().getActiveWorkspaceId() !== id) return wm().deleteWorkspace(id);
 
             switchInProgress = true;
             try {
-                if (!(await stopPosterForSwitch())) {
-                    return { success: false, error: stopError };
-                }
+                let stopped = false;
+                try { stopped = await stopPosterForSwitch(); }
+                finally { if (!stopped) await restartControlApi(); } // Fresh scope on retained DB; old closures stay retired.
+                if (!stopped) return { success: false, error: stopError };
                 // The poster is stopped: whatever happens below, the scheduler must come back
                 try {
                     const result = wm().deleteWorkspace(id);
                     if (result.success) {
+                        retireFacebookJobGeneration(); retireBrowserProfileGeneration();
                         // WorkspaceManager already updated activeWorkspaceId to the first remaining.
                         // Now we need to: switch DB + notify renderer (same as workspace:switch).
                         const newActiveWs = wm().getActiveWorkspace();
@@ -212,7 +220,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                             AppModeManager.getInstance().clearOverride();
                             const newDbPath = wm().resolveDbPath(newActiveWs.dbPath || 'deplao-tool.db');
                             // Browser profile data belongs to the workspace being left: close before its DB goes away
-                            try { closeAllBrowserProfiles(); } catch {}
+                            // Native owners were confirmed idle before changing the active workspace DB.
                             await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
                             FileStorageService.resetBaseDir();
 
@@ -228,12 +236,15 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                 } finally {
                     // Also runs after a rolled-back switch (previous DB active again) or when no workspace is left
                     syncControlEventSink(); // new DB: events from the scheduler start below must not be lost
+                    resumeFacebookJobAdmission(); resumeBrowserProfileAdmission();
                     try { startFacebookPosterScheduler(); } catch {}
                     try { startVideoPolling(); } catch {} // DB mới: tạo bảng video_jobs và theo dõi tiếp việc dở của nó
                     await restartControlApi(); // new workspace DB: its own config and keys (old keys stop working)
                 }
             } finally {
                 switchInProgress = false;
+                resumeFacebookJobAdmission(); resumeBrowserProfileAdmission();
+                try { startFacebookPosterScheduler(); } catch {}
             }
         } catch (err: any) {
             Logger.error(`[workspaceIpc] delete error: ${err.message}`);
@@ -263,12 +274,18 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
                 // Switch DatabaseService to the new workspace's DB
                 const newDbPath = wm().resolveDbPath(result.workspace.dbPath || 'deplao-tool.db');
                 // Browser profile data belongs to the workspace being left: close before its DB goes away
-                try { closeAllBrowserProfiles(); } catch {}
+                // Native owners were confirmed idle before changing the active workspace DB.
                 try {
+                    retireFacebookJobGeneration(); retireBrowserProfileGeneration();
                     await DatabaseService.getInstance().switchToWorkspaceDb(newDbPath);
+                } catch (error) {
+                    // DatabaseService rolls its handle back; restore identity before binding fresh services to it.
+                    if (prevWorkspaceId && prevWorkspaceId !== id) wm().restoreActiveWorkspace(prevWorkspaceId);
+                    throw error;
                 } finally {
                     // Also runs after a rolled-back switch: the previous DB is active again
                     syncControlEventSink(); // new DB: events from the scheduler start below must not be lost
+                    resumeFacebookJobAdmission(); resumeBrowserProfileAdmission();
                     try { startFacebookPosterScheduler(); } catch {}
                     try { startVideoPolling(); } catch {} // DB mới: tạo bảng video_jobs và theo dõi tiếp việc dở của nó
                     await restartControlApi(); // new workspace DB: its own config and keys (old keys stop working)
@@ -345,6 +362,7 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
             } catch { /* ignore rollback helper failure */ }
             // The DB was not switched, so the scheduler (possibly stopped above) belongs on the current DB; no-op if running
             syncControlEventSink();
+            resumeFacebookJobAdmission(); resumeBrowserProfileAdmission();
             try { startFacebookPosterScheduler(); } catch {}
             try { startVideoPolling(); } catch {}
             await restartControlApi();
@@ -355,12 +373,13 @@ export function registerWorkspaceIpc(mainWindow: BrowserWindow | null): void {
     };
 
     ipcMain.handle('workspace:switch', async (_e, { id }: { id: string }) => {
-        if (switchInProgress) return { success: false, error: SWITCH_BUSY_ERROR };
+        if (switchInProgress || isFacebookJobAdmissionPaused()) return { success: false, error: SWITCH_BUSY_ERROR };
         switchInProgress = true;
         try {
             return await switchWorkspace(id);
         } finally {
             switchInProgress = false;
+            resumeFacebookJobAdmission(); resumeBrowserProfileAdmission();
         }
     });
 

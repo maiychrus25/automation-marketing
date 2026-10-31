@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 
 export const SCHEDULE_MEDIA_DIR = 'facebook-poster-media';
 
@@ -37,7 +38,25 @@ export function copyScheduleMedia(baseDir: string, scheduleId: string, sources: 
 export function resolveScheduleMedia(baseDir: string, scheduleId: string, names: string[]): string[] {
   assertValidId(scheduleId);
   const dir = scheduleMediaDir(baseDir, scheduleId);
-  return names.map(n => path.join(dir, path.basename(n)));
+  return names.map(n => path.join(dir, /^revision-[1-9][0-9]*-[a-f0-9-]+\/[^/\\]+$/.test(n) ? n : path.basename(n)));
+}
+
+/** Each attempt owns a new immutable directory; no old referenced bytes are replaced. */
+export function prepareScheduleMedia(baseDir: string, scheduleId: string, revision: number, sources: string[]): { names: string[]; cleanup(): void } {
+  assertValidId(scheduleId);
+  if (!Number.isSafeInteger(revision) || revision < 1) throw new Error('Phiên bản bản nháp không hợp lệ');
+  const relative = `revision-${revision}-${randomUUID()}`;
+  const dir = path.join(scheduleMediaDir(baseDir, scheduleId), relative);
+  fs.mkdirSync(dir, { recursive: true });
+  const cleanup = () => { fs.rmSync(dir, { recursive: true, force: true }); };
+  try {
+    const names = sources.map((src, i) => {
+      const name = `${String(i + 1).padStart(2, '0')}-${sanitize(src)}`;
+      fs.copyFileSync(src, path.join(dir, name), fs.constants.COPYFILE_EXCL);
+      return `${relative}/${name}`;
+    });
+    return { names, cleanup };
+  } catch (error) { cleanup(); throw error; }
 }
 
 export function removeScheduleMedia(baseDir: string, scheduleId: string): void {

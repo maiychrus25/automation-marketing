@@ -282,7 +282,7 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 export async function postFirstComment(
   page: Page,
   input: { postUrl: string | null; comment: string | null; text: string },
-  deps: { sendLog?: TaskDeps['sendLog']; getIsStopping?: () => boolean } = {},
+  deps: { sendLog?: TaskDeps['sendLog']; getIsStopping?: () => boolean; autonomyGuard?: TaskDeps['autonomyGuard'] } = {},
 ): Promise<CommentOutcome> {
   const { postUrl, comment, text } = input;
   const { sendLog = () => {}, getIsStopping = () => false } = deps;
@@ -295,9 +295,20 @@ export async function postFirstComment(
     };
   }
 
+  const assertTarget = () => {
+    if (!deps.autonomyGuard) return;
+    deps.autonomyGuard.assertCurrent();
+    if (new URL(page.url()).href !== new URL(postUrl).href) throw new Error('Đích bình luận đã thay đổi');
+  };
   try {
+    if (deps.autonomyGuard) {
+      await deps.autonomyGuard.beforeEffect(page,'firstComment');
+      deps.autonomyGuard.assertCurrent();
+    }
     await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    assertTarget();
     await sleep(5000);
+    assertTarget();
     if (getIsStopping()) return { status: 'failed', reason: 'Đã huỷ giữa chừng.' };
 
     // Bài có thể đang nằm trong hàng chờ duyệt của nhóm. Bình luận vào bài
@@ -346,10 +357,20 @@ export async function postFirstComment(
       if (!(await page.evaluate(markCommentSendButtonInPage, { mark: COMMENT_BOX_MARK, labels: SEND_COMMENT_LABELS }))) {
         return { status: 'failed', reason: 'Không thấy nút gửi bình luận cạnh ô nhập.' };
       }
-      // Nút gửi có thể bị nút nhãn dán đè (đo thật 2026-10-10, nhóm). Bị chặn thì Playwright không bấm gì; con trỏ
-      // vẫn trong ô vừa gõ nên nhấn Enter — Facebook gửi bình luận bằng Enter (xuống dòng là Shift+Enter, xem trên).
+      // Owner legacy giữ Enter fallback cho nút bị nhãn dán che (đo 2026-10-10).
+      // Click rejection nói chung không chứng minh chưa gửi; autonomy bên dưới không retry.
+      if (deps.autonomyGuard) {
+        assertTarget();
+        await deps.autonomyGuard.beforeEffect(page,'firstComment');
+        if (getIsStopping()) return {status:'failed',reason:'Đã huỷ giữa chừng.'};
+        assertTarget();
+      }
       const sent = await page.locator('[data-maihub-target="comment-send"]').first().click({ timeout: 5000 }).then(() => true, () => false);
-      if (!sent) await page.keyboard.press('Enter');
+      if (!sent) {
+        // A rejected click can have dispatched; authority revalidation cannot make a retry safe.
+        if (deps.autonomyGuard) return {status:'failed',reason:'Kết quả gửi bình luận chưa rõ; không gửi lại bằng Enter.'};
+        await page.keyboard.press('Enter');
+      }
     } finally {
       await page.evaluate(function clearCommentBoxMark(mark: string) {
         for (const e of Array.from(document.querySelectorAll(`[${mark}]`))) e.removeAttribute(mark);

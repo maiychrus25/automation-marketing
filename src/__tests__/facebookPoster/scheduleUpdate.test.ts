@@ -1,14 +1,24 @@
 import { planScheduleUpdate, LEAD_ERROR, DRAFT_ENABLE_ERROR } from '../../services/facebookPoster/scheduleUpdate';
 import type { FbPosterSchedule } from '../../models/facebookPoster';
+import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
+import { memoryDb } from './helpers';
 
 const NOW = new Date(2026, 9, 7, 10, 0, 0).getTime(); // Wed 2026-10-07 10:00 local
 const base: FbPosterSchedule = {
-    id: 's1', name: 'old', kind: 'recurring', params: {}, runAt: null, days: [0, 1, 2, 3, 4, 5, 6], time: '09:00',
+    id: 's1', revision: 1, name: 'old', kind: 'recurring', params: {}, runAt: null, days: [0, 1, 2, 3, 4, 5, 6], time: '09:00',
     enabled: true, draft: false, campaignId: null, nextRunAt: NOW - 1000, lastRunId: null, createdAt: 0, updatedAt: 0,
 };
 const once: FbPosterSchedule = { ...base, kind: 'once', runAt: NOW - 5000, days: [], time: '', nextRunAt: null };
 
 describe('planScheduleUpdate', () => {
+    it('draftTimingEditIncrementsRevisionEvenAtTheSameClockAndNeverEnablesDraft', () => {
+        const store = new FacebookPosterStore(memoryDb()); store.ensureSchema();
+        store.createSchedule({...once, draft:true, enabled:false, runAt:null, nextRunAt:null, createdAt:NOW});
+        const before = store.getSchedule('s1')!;
+        const fields = planScheduleUpdate(before, {runAt:NOW + 120000}, NOW);
+        store.updateSchedule('s1', fields, NOW);
+        expect(store.getSchedule('s1')).toMatchObject({revision:before.revision + 1, draft:true, enabled:false, nextRunAt:null, runAt:NOW + 120000});
+    });
     it('renaming a fired one-time schedule writes only the name', () => {
         expect(planScheduleUpdate(once, { name: ' new ' }, NOW)).toEqual({ name: 'new' });
     });

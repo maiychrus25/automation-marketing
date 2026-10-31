@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { ScopedKeyPolicy } from '../src/services/control/controlAuthorization';
 import type { TelegramForumTopicContext } from '../src/models/telegram';
 
 // Expose typed API to renderer
@@ -903,14 +904,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ─── Control API (MaiHub bridge) ─────────────────────────────────────────
   controlApi: {
     getConfig:             ()                    => ipcRenderer.invoke('controlApi:getConfig'),
+    getScopeOptions:       ()                    => ipcRenderer.invoke('controlApi:getScopeOptions'),
     setConfig:             (config: any)         => ipcRenderer.invoke('controlApi:setConfig', config),
-    createKey:             (name: string)        => ipcRenderer.invoke('controlApi:createKey', { name }),
+    createKey:             (name: string, policy?: ScopedKeyPolicy) => ipcRenderer.invoke('controlApi:createKey', { name, ...(policy === undefined ? {} : { policy }) }),
     listKeys:              ()                    => ipcRenderer.invoke('controlApi:listKeys'),
     revokeKey:             (id: string)          => ipcRenderer.invoke('controlApi:revokeKey', { id }),
     listAudit:             (limit?: number)      => ipcRenderer.invoke('controlApi:listAudit', { limit }),
     firewallCommand:       ()                    => ipcRenderer.invoke('controlApi:firewallCommand'),
     regenerateCertificate: ()                    => ipcRenderer.invoke('controlApi:regenerateCertificate'),
-    createPairing:         (input: { name: string; botIp: string; publicHost: string }) => ipcRenderer.invoke('controlApi:createPairing', input),
+    createPairing:         (input: { name: string; botIp: string; publicHost: string; policy?: ScopedKeyPolicy }) => ipcRenderer.invoke('controlApi:createPairing', input),
     cancelPairing:         (botIp: string)       => ipcRenderer.invoke('controlApi:cancelPairing', { botIp }),
   },
 
@@ -948,7 +950,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   facebookPoster: {
     start:          (kind: string, params: any)  => ipcRenderer.invoke('facebookPoster:start', { kind, params }),
-    cancel:         ()                            => ipcRenderer.invoke('facebookPoster:cancel'),
+    cancel:         (runId?: string)              => ipcRenderer.invoke('facebookPoster:cancel', runId === undefined ? undefined : { runId }),
+    active:         ()                            => ipcRenderer.invoke('facebookPoster:active'),
     current:        ()                            => ipcRenderer.invoke('facebookPoster:current'),
     listGroups:     (profileIds: string[])        => ipcRenderer.invoke('facebookPoster:listGroups', { profileIds }),
     listRuns:       (params?: any)                => ipcRenderer.invoke('facebookPoster:listRuns', params || {}),

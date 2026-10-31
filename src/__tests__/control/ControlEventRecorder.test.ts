@@ -56,7 +56,7 @@ describe('ControlEventRecorder', () => {
     } as Parameters<FacebookPosterStore['createSchedule']>[0]);
     new FacebookPosterScheduler({
       store: poster, now: () => T0, setTimer: () => 0, clearTimer: () => undefined, isBusy: () => false,
-      resolveParams: () => ({ kind: 'post' }) as never, startRun: () => ({ runId: 'x' }), newId: () => 'gen',
+      canStart: () => true, resolveParams: () => ({ kind: 'post' }) as never, startRun: () => ({ runId: 'x' }), newId: () => 'gen',
       onMissed: (n) => emitControlEvent('schedule.missed', buildScheduleMissed(n)), onChanged: () => undefined,
     }).start();
     const rows = control.listEventsAfter(0, 10);

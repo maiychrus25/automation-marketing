@@ -1,6 +1,23 @@
 import type { CampaignStatus, FbPosterCampaign, PostStatsReportRow } from '../../models/facebookPoster';
-import type { FacebookPosterStore } from './FacebookPosterStore';
+import type { FacebookPosterStore, SqlDatabase } from './FacebookPosterStore';
 import { isCampaignRunnable, validateCampaignInput } from './campaigns';
+import { PageCampaignStore } from '../dailyBrief/PageCampaignStore';
+import { cancelCampaignGrantAuthority } from '../dailyBrief/PageCampaignExecutionStore';
+
+function invalidateManagedCampaign(db:SqlDatabase,id:string,now:number,deleted=false):void {
+    const table=db.queryOne<{n:number}>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='page_campaign_links'");
+    if (!table) throw new Error('Không đọc được phạm vi chiến dịch');
+    if (!table.n) return;
+    const campaigns=new PageCampaignStore(db); const link=campaigns.getLink(id);
+    if (!link) return;
+    for (const grant of campaigns.listGrants(id).filter(grant => grant.status === 'active')) {
+        campaigns.revokeGrant(link,grant.id,grant.revision,now);
+        cancelCampaignGrantAuthority(db,grant,now);
+    }
+    db.run('UPDATE page_campaign_links SET revision=revision+1, deleted_at=? WHERE campaign_id=? AND revision=?',
+        [deleted ? now : link.deletedAt,id,link.revision]);
+    if (db.queryOne<{n:number}>('SELECT changes() AS n')?.n !== 1) throw new Error('Chiến dịch đã thay đổi');
+}
 
 const STATUSES: CampaignStatus[] = ['active', 'paused', 'archived'];
 
@@ -64,7 +81,11 @@ export function createCampaignOperations(deps: CampaignOperationsDeps) {
             const store = deps.store();
             const existing = requireCampaign(store, params?.id);
             const input = validateCampaignInput(params ?? {}, { existing, findByName: (n) => store.findCampaignByName(n) });
-            store.updateCampaign(existing.id, input, deps.now());
+            store.transaction(db => {
+                const now=deps.now();
+                store.updateCampaign(existing.id, input, now);
+                invalidateManagedCampaign(db,existing.id,now);
+            });
             deps.reschedule();
             return { campaign: view(store, store.getCampaign(existing.id)!) };
         },
@@ -75,7 +96,10 @@ export function createCampaignOperations(deps: CampaignOperationsDeps) {
             const counts = store.countCampaignSchedules(campaign.id);
             const total = counts.schedules + counts.drafts;
             if (total > 0) throw new Error(`Chiến dịch còn ${total} lịch/bài nháp, hãy chuyển hoặc xoá trước`);
-            store.deleteCampaign(campaign.id);
+            store.transaction(db => {
+                invalidateManagedCampaign(db,campaign.id,deps.now(),true);
+                store.deleteCampaign(campaign.id);
+            });
             deps.reschedule();
             return { deleted: true };
         },

@@ -45,6 +45,7 @@ function makeHarness(options: {
     useDefaultTerminate?: boolean;
     launchAutomation?: BrowserProfileServiceDeps['launchAutomation'];
     resolveSandbox?: BrowserProfileServiceDeps['resolveSandbox'];
+    getProfilesDir?: () => string;
 } = {}): Harness {
     const profilesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profiles-test-'));
     const harness: Harness = {
@@ -58,7 +59,7 @@ function makeHarness(options: {
             touchBrowserProfileOpened: (id) => { harness.touched.push(id); },
         },
         getExecutablePath: () => (options.executable === undefined ? '/engine/chrome' : options.executable),
-        getProfilesDir: () => profilesDir,
+        getProfilesDir: options.getProfilesDir || (() => profilesDir),
         platform: options.platform || 'linux',
         spawnBrowser: (executable, args) => {
             const child = new FakeChild();
@@ -98,6 +99,42 @@ describe('BrowserProfileService', () => {
     afterEach(() => {
         jest.useRealTimers();
         while (harnesses.length) fs.rmSync(harnesses.pop()!.profilesDir, { recursive: true, force: true });
+    });
+
+    it('keeps native ownership until the proxy forwarder has finished closing', async () => {
+        let finish!: () => void;
+        const stopping = new Promise<void>(resolve => { finish = resolve; });
+        const child = new FakeChild();
+        const service = new BrowserProfileService({
+            store: { getBrowserProfileById: () => makeProfile('a', 5), getProxyById: () => PROXY, touchBrowserProfileOpened: () => {} },
+            getExecutablePath: () => '/engine/chrome', getProfilesDir: () => create().profilesDir,
+            platform: 'linux', spawnBrowser: () => { setImmediate(() => child.emit('spawn')); return child; },
+            createForwarder: () => ({ start: async () => 1234, stop: () => stopping }),
+            terminate: () => {},
+        });
+        await service.open('a');
+        service.closeAll();
+        child.emit('exit');
+        expect(service.isIdle()).toBe(false);
+        expect(service.canReserveAutomation('a')).toBe(false);
+        finish();
+        await new Promise(resolve => setImmediate(resolve));
+        expect(service.isIdle()).toBe(true);
+    });
+
+    it('retries a rejected automation close without releasing ownership before confirmation', async () => {
+        const close = jest.fn().mockRejectedValueOnce(new Error('still open')).mockResolvedValueOnce(undefined);
+        const h = create({ launchAutomation: async () => ({ on: () => undefined, close } as any) });
+        const token = h.service.tryReserveAutomation('a')!;
+        await h.service.openForAutomation('a', token);
+        h.service.closeAll();
+        await new Promise(resolve => setImmediate(resolve));
+        expect(h.service.isIdle()).toBe(false);
+        expect(h.service.tryReserveAutomation('a')).toBeNull();
+        h.service.closeAll();
+        await new Promise(resolve => setImmediate(resolve));
+        expect(h.service.isIdle()).toBe(true);
+        expect(close).toHaveBeenCalledTimes(2);
     });
 
     it('opens a profile without proxy: spawns the engine with the profile data dir and marks it running', async () => {
@@ -206,6 +243,7 @@ describe('BrowserProfileService', () => {
         const h = create({ profiles: [makeProfile('a', 5)] });
         await h.service.open('a');
         h.children[0].emit('exit', 0);
+        expect(await h.service.waitUntilIdle(1000)).toBe(true);
         expect(h.service.getRunningIds()).toEqual([]);
         expect(h.forwarders[0].stopped).toBe(true);
         expect(h.statuses).toEqual([['a'], []]);
@@ -240,12 +278,16 @@ describe('BrowserProfileService', () => {
         expect(h.terminated).toEqual([]);
     });
 
-    it('closeAll() terminates every browser gracefully and clears state at once', async () => {
+    it('closeAll() terminates every browser gracefully and retains state until confirmed exit', async () => {
         const h = create({ profiles: [makeProfile('a', 5), makeProfile('b')] });
         await h.service.open('a');
         await h.service.open('b');
         h.service.closeAll();
         expect(h.terminated.map((t) => t.force)).toEqual([false, false]);
+        expect(h.service.getRunningIds()).toEqual(['a', 'b']);
+        expect(h.forwarders[0].stopped).toBe(false);
+        h.children.forEach(child => child.emit('exit', 0));
+        expect(await h.service.waitUntilIdle(1000)).toBe(true);
         expect(h.service.getRunningIds()).toEqual([]);
         expect(h.forwarders[0].stopped).toBe(true);
     });
@@ -270,6 +312,10 @@ describe('BrowserProfileService', () => {
         h.service.closeAll();
         await expect(opening).rejects.toThrow('Đã hủy mở trình duyệt');
         expect(h.terminated).toEqual([{ child: h.children[0], force: true }]);
+        expect(h.service.isRunning('a')).toBe(true);
+        expect(h.forwarders[0].stopped).toBe(false);
+        h.children[0].emit('exit', 0);
+        expect(await h.service.waitUntilIdle(1000)).toBe(true);
         expect(h.forwarders[0].stopped).toBe(true);
         expect(h.service.isRunning('a')).toBe(false);
         expect(h.touched).toEqual([]);
@@ -292,7 +338,7 @@ describe('BrowserProfileService', () => {
         await h.service.open('a');
         jest.useFakeTimers();
         h.service.closeAll();
-        expect(h.service.isRunning('a')).toBe(false);
+        expect(h.service.isRunning('a')).toBe(true);
         expect(h.terminated).toEqual([{ child: h.children[0], force: false }]);
         jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
         expect(h.terminated).toEqual([{ child: h.children[0], force: false }, { child: h.children[0], force: true }]);
@@ -316,6 +362,92 @@ describe('BrowserProfileService', () => {
         expect((h.children[0] as FakeChild).signals).toEqual(['SIGINT']);
         jest.advanceTimersByTime(FORCE_KILL_DELAY_MS);
         expect((h.children[0] as FakeChild).signals).toEqual(['SIGINT', 'SIGKILL']);
+    });
+
+    describe('reservation authority', () => {
+        it('exposes native reservation authority rather than allowing fabricated tokens', () => {
+            const h = create();
+            const token = h.service.tryReserveAutomation('a');
+            expect(token).not.toBeNull();
+            expect(h.service.tryReserveAutomation('a')).toBeNull();
+            h.service.releaseAutomationReservation({ profileId: 'a' });
+            expect(h.service.canReserveAutomation('a')).toBe(false);
+            h.service.releaseAutomationReservation(token!);
+            expect(h.service.canReserveAutomation('a')).toBe(true);
+        });
+    });
+
+    describe('confirmed cleanup', () => {
+        it.each(['open', 'openForAutomation'] as const)('%s leaves no pending entry when directory capture fails', async method => {
+            const h = create({ getProfilesDir: () => { throw new Error('workspace unavailable'); } });
+            await expect(h.service[method]('a')).rejects.toThrow('workspace unavailable');
+            expect(h.service.isRunning('a')).toBe(false);
+        });
+
+        it('retains a timed-out close and pending release until late successful completion', async () => {
+            jest.useFakeTimers();
+            let finish!: () => void;
+            const ctx = new EventEmitter() as any;
+            ctx.close = () => new Promise<void>(resolve => { finish = resolve; });
+            const h = create({ launchAutomation: async () => ctx });
+            const token = h.service.tryReserveAutomation('a')!;
+            const session = await h.service.openForAutomation('a', token);
+            h.service.releaseAutomationReservation(token);
+            const closing = session.close();
+            await jest.advanceTimersByTimeAsync(5000);
+            await closing;
+            expect(h.service.isRunning('a')).toBe(true);
+            expect(h.service.tryReserveAutomation('a')).toBeNull();
+            const idle = h.service.waitUntilIdle(1);
+            await jest.advanceTimersByTimeAsync(1);
+            expect(await idle).toBe(false);
+            finish();
+            await Promise.resolve();
+            expect(await h.service.waitUntilIdle(1)).toBe(true);
+            const next = h.service.tryReserveAutomation('a')!;
+            h.service.releaseAutomationReservation(token);
+            await expect(h.service.openForAutomation('a', token)).rejects.toThrow('không còn hiệu lực');
+            expect(h.service.canReserveAutomation('a')).toBe(false);
+            h.service.releaseAutomationReservation(next);
+        });
+
+        it('tracks cancelled late automation launches until the context confirms close', async () => {
+            let launched!: (ctx: any) => void;
+            const h = create({ launchAutomation: () => new Promise(resolve => { launched = resolve; }) });
+            const opening = h.service.openForAutomation('a');
+            await Promise.resolve();
+            h.service.closeAll();
+            expect(h.service.isRunning('a')).toBe(true);
+            const ctx = new EventEmitter() as any;
+            ctx.close = async () => { throw new Error('close rejected'); };
+            launched(ctx);
+            await expect(opening).rejects.toThrow('Đã hủy mở trình duyệt');
+            expect(h.service.isRunning('a')).toBe(true);
+            ctx.emit('close');
+            expect(h.service.isIdle()).toBe(true);
+        });
+
+        it('captures the profile directory before waiting for the proxy', async () => {
+            let directory = '/workspace/original';
+            let start!: (port: number) => void;
+            let launchedDir = '';
+            const service = new BrowserProfileService({
+                store: { getBrowserProfileById: () => makeProfile('a', 5), getProxyById: () => PROXY, touchBrowserProfileOpened: () => undefined },
+                getExecutablePath: () => '/fake', getProfilesDir: () => directory, platform: 'linux',
+                createForwarder: () => ({ start: () => new Promise(resolve => { start = resolve; }), stop: async () => undefined }),
+                launchAutomation: async (_exe, dir) => {
+                    launchedDir = dir;
+                    return { on: () => undefined, close: async () => undefined } as any;
+                },
+            });
+            const h = create();
+            directory = h.profilesDir;
+            const opening = service.openForAutomation('a');
+            directory = path.join(h.profilesDir, 'different');
+            start(1234);
+            await (await opening).close();
+            expect(launchedDir).toBe(path.join(h.profilesDir, 'a'));
+        });
     });
 
     describe('openForAutomation', () => {
@@ -408,5 +540,184 @@ describe('BrowserProfileService', () => {
                 .rejects.toThrow('Đã đạt giới hạn 30 profile mở cùng lúc');
             expect(h.service.getRunningIds()).toHaveLength(MAX_RUNNING_PROFILES);
         });
+    });
+});
+
+describe('native workspace generation facade', () => {
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    function deferred<T>() {
+        let resolve!: (value: T) => void;
+        const promise = new Promise<T>(r => { resolve = r; });
+        return { promise, resolve };
+    }
+    let dir: string;
+    let workspace: string;
+    let ipc: typeof import('../../../electron/ipc/browserProfileIpc');
+    let handlers: Map<string, (...args: any[]) => Promise<any>>;
+    let contexts: any[];
+    let writes: string[];
+    let reads: string[];
+    let events: unknown[];
+    let launches: string[];
+    let launch: (directory: string) => Promise<any>;
+    const mockedModules = [
+        'electron', 'child_process', '../../services/database/DatabaseService', '../../services/browser/BrowserEngineManager',
+        '../../services/browser/sandboxSupport', '../../services/browser/automationLauncher', '../../services/browser/fingerprint', '../../services/browser/ProxyForwarder',
+        '../../services/event/EventBroadcaster', '../../utils/AppModeManager', '../../utils/Logger',
+    ];
+    function context() {
+        const ctx: any = new EventEmitter();
+        ctx.close = jest.fn(async () => { ctx.emit('close'); });
+        contexts.push(ctx);
+        return ctx;
+    }
+    beforeEach(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-5-native-'));
+        workspace = 'A'; handlers = new Map(); contexts = []; writes = []; reads = []; events = []; launches = [];
+        // One deliberately mutable facade models DatabaseService.switchToWorkspaceDb.
+        const database = {
+            getDbPath: () => path.join(dir, workspace, 'workspace.db'),
+            getBrowserProfileById: (id: string) => { reads.push(workspace); return makeProfile(id, 5); },
+            getProxyById: () => { reads.push(workspace); return PROXY; },
+            touchBrowserProfileOpened: (id: string) => { writes.push(`${workspace}:${id}`); },
+        };
+        launch = async () => context();
+        jest.doMock('../../services/browser/fingerprint', () => {
+            const actual = jest.requireActual('../../services/browser/fingerprint');
+            return { ...actual, hostPersona: () => actual.hostPersona('linux') };
+        });
+        jest.doMock('child_process', () => ({ spawn: () => {
+            const child = new FakeChild(); setImmediate(() => child.emit('spawn')); return child;
+        } }));
+        jest.doMock('electron', () => ({ app: { getPath: () => dir }, ipcMain: { handle: (name: string, fn: any) => handlers.set(name, fn) } }));
+        jest.doMock('../../services/database/DatabaseService', () => ({ __esModule: true, default: { getInstance: () => database } }));
+        jest.doMock('../../services/browser/BrowserEngineManager', () => ({ BrowserEngineManager: class { getExecutablePath() { return '/engine/chrome'; } } }));
+        jest.doMock('../../services/browser/ProxyForwarder', () => ({ ProxyForwarder: class {
+            async start() { return 1234; }
+            async stop() {}
+        } }));
+        jest.doMock('../../services/browser/sandboxSupport', () => ({ getSandboxSupport: () => ({ get: async () => 'enabled' }) }));
+        jest.doMock('../../services/browser/automationLauncher', () => ({ launchAutomationBrowser: async (_exe: string, directory: string) => {
+            launches.push(directory); return launch(directory);
+        } }));
+        jest.doMock('../../services/event/EventBroadcaster', () => ({ __esModule: true, default: { emit: (...args: unknown[]) => events.push(args) } }));
+        jest.doMock('../../utils/AppModeManager', () => ({ __esModule: true, default: { getInstance: () => ({ isEmployeeMode: () => false }) } }));
+        jest.doMock('../../utils/Logger', () => ({ __esModule: true, default: { error: () => {}, warn: () => {} } }));
+        jest.isolateModules(() => { ipc = require('../../../electron/ipc/browserProfileIpc'); });
+        ipc.registerBrowserProfileIpc();
+    });
+    afterEach(() => {
+        jest.useRealTimers();
+        for (const ctx of contexts) ctx.emit('close');
+        for (const name of mockedModules) jest.dontMock(name);
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('pauses manual IPC and automation admission synchronously while a pending native launch settles', async () => {
+        const native = ipc.getBrowserProfileService();
+        const gate = deferred<any>(); launch = () => gate.promise;
+        const opening = native.openForAutomation('a');
+        await flush();
+        const drain = ipc.closeAllBrowserProfilesAndWait(1000);
+        expect(await handlers.get('browserProfile:open')!({}, { id: 'b' })).toMatchObject({ success: false });
+        await expect(native.openForAutomation('b')).rejects.toThrow();
+        expect(native.tryReserveAutomation('b')).toBeNull();
+        expect(() => ipc.retireBrowserProfileGeneration()).toThrow();
+        gate.resolve(context());
+        await expect(opening).rejects.toThrow('Đã hủy mở trình duyệt');
+        expect(await drain).toBe(true);
+        expect(writes).toEqual([]);
+        expect(launches).toEqual([path.join(dir, 'A', 'browser-profiles', 'a')]);
+    });
+
+    it('allows a captured pending launch to settle while paused without admitting another owner', async () => {
+        const native = ipc.getBrowserProfileService();
+        const gate = deferred<any>(); launch = () => gate.promise;
+        const opening = native.openForAutomation('a');
+        await flush();
+        ipc.pauseBrowserProfileAdmission();
+        expect(native.canReserveAutomation('b')).toBe(false);
+        gate.resolve(context());
+        const session = await opening;
+        expect(writes).toEqual(['A:a']);
+        expect(events).toHaveLength(1);
+        await session.close();
+        expect(await native.waitUntilIdle(1000)).toBe(true);
+        ipc.resumeBrowserProfileAdmission();
+        expect(native.canReserveAutomation('b')).toBe(true);
+    });
+
+    it('suppresses a pending launch write/status if the mutable facade was incorrectly retargeted and refuses a replacement until retirement', async () => {
+        const native = ipc.getBrowserProfileService();
+        const gate = deferred<any>(); launch = () => gate.promise;
+        const opening = native.openForAutomation('a');
+        await flush();
+        workspace = 'B';
+        expect(() => ipc.getBrowserProfileService()).toThrow();
+        expect(() => ipc.retireBrowserProfileGeneration()).toThrow();
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            gate.resolve(context());
+            const session = await opening;
+            expect(writes).toEqual([]); expect(events).toEqual([]);
+            expect(reads.every(value => value === 'A')).toBe(true);
+            expect(launches).toEqual([path.join(dir, 'A', 'browser-profiles', 'a')]);
+            await session.close();
+            expect(await native.waitUntilIdle(1000)).toBe(true);
+            ipc.retireBrowserProfileGeneration();
+            ipc.resumeBrowserProfileAdmission();
+            expect(ipc.getBrowserProfileService()).not.toBe(native);
+        } finally { warn.mockRestore(); }
+    });
+
+    it('retains the same generation across false drain and resumes only when explicitly requested', async () => {
+        const native = ipc.getBrowserProfileService();
+        const close = deferred<void>();
+        const ctx = context(); ctx.close = () => close.promise;
+        launch = async () => ctx;
+        await native.openForAutomation('a');
+        jest.useFakeTimers();
+        const drain = ipc.closeAllBrowserProfilesAndWait(20);
+        await jest.advanceTimersByTimeAsync(20);
+        expect(await drain).toBe(false);
+        expect(ipc.getBrowserProfileService()).toBe(native);
+        expect(native.canReserveAutomation('b')).toBe(false);
+        ipc.resumeBrowserProfileAdmission();
+        const reservation = native.tryReserveAutomation('b');
+        expect(reservation).not.toBeNull();
+        native.releaseAutomationReservation(reservation!);
+        const retry = ipc.closeAllBrowserProfilesAndWait(20);
+        close.resolve();
+        expect(await retry).toBe(true);
+        expect(writes).toEqual(['A:a']);
+    });
+
+    it('permanently retires old references through A-B-A and ignores old close events and tokens', async () => {
+        const first = ipc.getBrowserProfileService();
+        const oldToken = first.tryReserveAutomation('a')!;
+        const oldSession = await first.openForAutomation('a', oldToken);
+        const oldContext = oldSession.context as any;
+        expect(await ipc.closeAllBrowserProfilesAndWait(1000)).toBe(true);
+        ipc.retireBrowserProfileGeneration();
+        workspace = 'B'; ipc.resumeBrowserProfileAdmission();
+        const second = ipc.getBrowserProfileService();
+        expect(second).not.toBe(first);
+        expect(await ipc.closeAllBrowserProfilesAndWait(1000)).toBe(true);
+        ipc.retireBrowserProfileGeneration();
+        workspace = 'A'; ipc.resumeBrowserProfileAdmission();
+        const reopened = ipc.getBrowserProfileService();
+        const newToken = reopened.tryReserveAutomation('a')!;
+        await reopened.openForAutomation('a', newToken);
+        writes.length = 0; reads.length = 0; events.length = 0;
+        await expect(first.open('b')).rejects.toThrow();
+        await expect(first.openForAutomation('b')).rejects.toThrow();
+        expect(first.tryReserveAutomation('b')).toBeNull();
+        expect(() => first.getProfileDir('b')).toThrow();
+        first.releaseAutomationReservation(oldToken);
+        oldContext.emit('close'); await oldSession.close();
+        expect(reopened.isRunning('a')).toBe(true);
+        expect(reopened.canReserveAutomation('a')).toBe(false);
+        expect(writes).toEqual([]); expect(reads).toEqual([]); expect(events).toEqual([]);
+        expect(await ipc.closeAllBrowserProfilesAndWait(1000)).toBe(true);
     });
 });

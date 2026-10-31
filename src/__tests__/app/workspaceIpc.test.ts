@@ -28,12 +28,23 @@ jest.mock('../../services/event/EventBroadcaster', () => ({ __esModule: true, de
 jest.mock('../../utils/Logger', () => ({ __esModule: true, default: { log: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 
 const mockCloseAllBrowserProfiles = jest.fn();
-jest.mock('../../../electron/ipc/browserProfileIpc', () => ({ closeAllBrowserProfiles: () => mockCloseAllBrowserProfiles() }));
+const mockBrowserDrain = jest.fn(async (_timeoutMs: number) => true);
+const mockPauseBrowser = jest.fn();
+const mockResumeBrowser = jest.fn();
+const mockRetireBrowser = jest.fn();
+jest.mock('../../../electron/ipc/browserProfileIpc', () => ({
+    closeAllBrowserProfiles: () => mockCloseAllBrowserProfiles(),
+    closeAllBrowserProfilesAndWait: (timeoutMs: number) => mockBrowserDrain(timeoutMs),
+    pauseBrowserProfileAdmission: () => mockPauseBrowser(),
+    resumeBrowserProfileAdmission: () => mockResumeBrowser(),
+    retireBrowserProfileGeneration: () => mockRetireBrowser(),
+}));
 
 const mockPoster = {
     cancelAndWait: jest.fn(),
     startScheduler: jest.fn(),
     stopScheduler: jest.fn(),
+    pause: jest.fn(), resume: jest.fn(), retire: jest.fn(), isPaused: jest.fn(() => false),
     isBusy: jest.fn(() => false),
 };
 jest.mock('../../../electron/ipc/facebookPosterIpc', () => ({
@@ -42,13 +53,25 @@ jest.mock('../../../electron/ipc/facebookPosterIpc', () => ({
     startFacebookPosterScheduler: () => mockPoster.startScheduler(),
     stopFacebookPosterScheduler: () => mockPoster.stopScheduler(),
     isFacebookPosterBusy: () => mockPoster.isBusy(),
+    isFacebookJobAdmissionPaused: () => mockPoster.isPaused(),
+    pauseFacebookJobAdmission: () => mockPoster.pause(),
+    resumeFacebookJobAdmission: () => mockPoster.resume(),
+    retireFacebookJobGeneration: () => mockPoster.retire(),
 }));
 
-const mockControl = { stop: jest.fn(async () => undefined), restart: jest.fn(async () => undefined), sync: jest.fn() };
+const mockControl = { stop: jest.fn(async () => undefined), restart: jest.fn(async () => undefined), sync: jest.fn(), drain: jest.fn(async () => true) };
 jest.mock('../../../electron/ipc/controlApiIpc', () => ({
     stopControlApi: () => mockControl.stop(),
+    PAGE_PREPARATION_NOT_STOPPED_ERROR: 'Công việc Page chưa dừng an toàn. Thử lại sau.',
+    stopPagePreparationForWorkspaceSwitch: () => mockControl.drain(),
     restartControlApi: () => mockControl.restart(),
     syncControlEventSink: () => mockControl.sync(),
+}));
+
+const mockResearchDrain = jest.fn(async () => true);
+jest.mock('../../../electron/ipc/researchIpc', () => ({
+    RESEARCH_NOT_STOPPED_ERROR: 'Lượt quét Nghiên cứu chưa dừng được. Thử lại sau.',
+    cancelAndWaitResearch: () => mockResearchDrain(),
 }));
 
 import { registerWorkspaceIpc } from '../../../electron/ipc/workspaceIpc';
@@ -74,16 +97,93 @@ beforeEach(() => {
     mockWm.deleteWorkspace.mockReturnValue({ success: true });
     mockDb.switchToWorkspaceDb.mockResolvedValue(undefined);
     mockPoster.isBusy.mockReturnValue(false);
+    mockPoster.isPaused.mockReturnValue(false);
+    mockControl.drain.mockResolvedValue(true);
 });
 
 describe('workspace:switch', () => {
+    it.each(['workspace:switch', 'workspace:delete'])('refuses a competing paused lifecycle without resuming its admission: %s', async channel => {
+        mockPoster.isPaused.mockReturnValue(true);
+        expect(await call(channel, channel === 'workspace:delete' ? 'old' : 'new')).toEqual({ success: false, error: BUSY });
+        expect(mockPoster.resume).not.toHaveBeenCalled(); expect(mockResumeBrowser).not.toHaveBeenCalled();
+        expect(mockPoster.pause).not.toHaveBeenCalled(); expect(mockControl.drain).not.toHaveBeenCalled();
+        expect(mockDb.switchToWorkspaceDb).not.toHaveBeenCalled(); expect(mockWm.deleteWorkspace).not.toHaveBeenCalled();
+    });
+    it.each(['workspace:switch', 'workspace:delete'])('pauses native admission before the first drain await and resumes without retirement after failure: %s', async channel => {
+        const gate = deferred<boolean>(); mockControl.drain.mockReturnValueOnce(gate.promise);
+        const operation = call(channel, channel === 'workspace:delete' ? 'old' : 'new');
+        const pausedBeforeAwait = mockPauseBrowser.mock.calls.length;
+        const jobsPausedBeforeAwait = mockPoster.pause.mock.calls.length;
+        const resumedBeforeSettlement = mockResumeBrowser.mock.calls.length;
+        gate.resolve(false);
+        expect((await operation).success).toBe(false);
+        expect(pausedBeforeAwait).toBe(1);
+        expect(jobsPausedBeforeAwait).toBe(1);
+        expect(mockPoster.retire).not.toHaveBeenCalled();
+        expect(mockPoster.resume).toHaveBeenCalled();
+        expect(resumedBeforeSettlement).toBe(0);
+        expect(mockPauseBrowser.mock.invocationCallOrder[0]).toBeLessThan(mockControl.drain.mock.invocationCallOrder[0]);
+        expect(mockRetireBrowser).not.toHaveBeenCalled();
+        expect(mockResumeBrowser).toHaveBeenCalled();
+    });
+    it.each(['workspace:switch', 'workspace:delete'])('retires native generation only after confirmed drain and before DB retarget: %s', async channel => {
+        mockPoster.cancelAndWait.mockResolvedValue(true);
+        expect((await call(channel, channel === 'workspace:delete' ? 'old' : 'new')).success).toBe(true);
+        expect(mockRetireBrowser).toHaveBeenCalledTimes(1);
+        expect(mockPoster.retire).toHaveBeenCalledTimes(1);
+        expect(mockPoster.retire.mock.invocationCallOrder[0]).toBeGreaterThan(mockPoster.cancelAndWait.mock.invocationCallOrder[0]);
+        expect(mockPoster.retire.mock.invocationCallOrder[0]).toBeLessThan(mockDb.switchToWorkspaceDb.mock.invocationCallOrder[0]);
+        expect(mockRetireBrowser.mock.invocationCallOrder[0]).toBeGreaterThan(mockBrowserDrain.mock.invocationCallOrder[0]);
+        expect(mockRetireBrowser.mock.invocationCallOrder[0]).toBeLessThan(mockDb.switchToWorkspaceDb.mock.invocationCallOrder[0]);
+        expect(mockResumeBrowser.mock.invocationCallOrder.slice(-1)[0]).toBeGreaterThan(mockDb.switchToWorkspaceDb.mock.invocationCallOrder[0]);
+    });
+    it.each(['workspace:switch', 'workspace:delete'])('does not replace the DB or delete active data until native closes settle: %s', async channel => {
+        mockPoster.cancelAndWait.mockResolvedValue(true);
+        mockBrowserDrain.mockResolvedValueOnce(false);
+        expect((await call(channel, channel === 'workspace:delete' ? 'old' : 'new')).success).toBe(false);
+        expect(mockDb.switchToWorkspaceDb).not.toHaveBeenCalled();
+        expect(mockWm.deleteWorkspace).not.toHaveBeenCalled();
+        mockBrowserDrain.mockResolvedValue(true);
+        expect((await call(channel, channel === 'workspace:delete' ? 'old' : 'new')).success).toBe(true);
+        expect(mockDb.switchToWorkspaceDb).toHaveBeenCalledTimes(1);
+    });
+    it.each(['false', 'reject'])('refuses actual swap/active-delete when protected drain cannot settle: %s', async outcome => {
+        mockWm.getActiveWorkspaceId.mockReturnValueOnce('old').mockReturnValue('new');
+        if (outcome === 'reject') mockControl.drain.mockRejectedValue(new Error('drain failed'));
+        else mockControl.drain.mockResolvedValue(false);
+        expect(await call('workspace:switch', 'new')).toEqual({ success: false, error: 'Công việc Page chưa dừng an toàn. Thử lại sau.' });
+        expect(mockDb.switchToWorkspaceDb).not.toHaveBeenCalled(); expect(mockWm.restoreActiveWorkspace).toHaveBeenCalledWith('old');
+        mockWm.getActiveWorkspaceId.mockReturnValue('old');
+        expect((await call('workspace:delete', 'old')).success).toBe(false);
+        expect(mockWm.deleteWorkspace).not.toHaveBeenCalled(); expect(mockDb.switchToWorkspaceDb).not.toHaveBeenCalled();
+    });
+    it.each(['protected', 'research'])('a %s refusal neither stops the scheduler nor cancels poster jobs, then resumes admission', async stage => {
+        if (stage === 'protected') mockControl.drain.mockResolvedValueOnce(false);
+        else mockResearchDrain.mockResolvedValueOnce(false);
+        mockWm.getActiveWorkspaceId.mockReturnValueOnce('old').mockReturnValue('new');
+        expect((await call('workspace:switch', 'new')).success).toBe(false);
+        expect(mockPoster.stopScheduler).not.toHaveBeenCalled();
+        expect(mockPoster.cancelAndWait).not.toHaveBeenCalled();
+        expect(mockPoster.retire).not.toHaveBeenCalled();
+        expect(mockPoster.resume).toHaveBeenCalled(); expect(mockPoster.startScheduler).toHaveBeenCalled();
+    });
+    it('waits for protected drain before unrelated poster cleanup or DB swap', async () => {
+        const drain = deferred<boolean>(); mockControl.drain.mockReturnValueOnce(drain.promise);
+        mockPoster.cancelAndWait.mockResolvedValue(true);
+        const pending = call('workspace:switch', 'new'); await new Promise(resolve => setImmediate(resolve));
+        expect(mockDb.switchToWorkspaceDb).not.toHaveBeenCalled(); expect(mockPoster.cancelAndWait).not.toHaveBeenCalled();
+        drain.resolve(true); expect((await pending).success).toBe(true);
+        expect(mockControl.drain.mock.invocationCallOrder[0]).toBeLessThan(mockPoster.cancelAndWait.mock.invocationCallOrder[0]);
+        expect(mockControl.drain.mock.invocationCallOrder[0]).toBeLessThan(mockDb.switchToWorkspaceDb.mock.invocationCallOrder[0]);
+    });
     it('keeps DB and event sink on the old workspace until learner cleanup joins poster stop-and-wait', async () => {
         const learnerIdle = deferred<boolean>();
         mockPoster.isBusy.mockReturnValue(true);
         mockPoster.cancelAndWait.mockReturnValueOnce(learnerIdle.promise);
         const switching = call('workspace:switch', 'new');
         await new Promise((r) => setImmediate(r));
-        expect(mockPoster.stopScheduler).toHaveBeenCalledTimes(1);
+        // The scheduler keeps its queue while jobs drain; only retirement (after a confirmed drain) stops it.
+        expect(mockPoster.stopScheduler).not.toHaveBeenCalled();
         expect(mockDb.switchToWorkspaceDb).not.toHaveBeenCalled();
         expect(mockControl.sync).not.toHaveBeenCalled();
         expect(mockControl.stop).not.toHaveBeenCalled();
@@ -103,6 +203,22 @@ describe('workspace:switch', () => {
         expect(mockDb.switchToWorkspaceDb).not.toHaveBeenCalled();
         expect(mockWm.restoreActiveWorkspace).toHaveBeenCalledWith('old');
         expect(mockPoster.startScheduler).toHaveBeenCalled();
+    });
+
+    it('restores retained identity before restarting the scheduler after false drain', async () => {
+        mockPoster.cancelAndWait.mockResolvedValue(false);
+        mockWm.getActiveWorkspaceId.mockReturnValueOnce('old').mockReturnValue('new');
+        expect(await call('workspace:switch', 'new')).toEqual({ success: false, error: NOT_STOPPED });
+        expect(mockWm.restoreActiveWorkspace.mock.invocationCallOrder[0]).toBeLessThan(mockPoster.startScheduler.mock.invocationCallOrder[0]);
+    });
+
+    it('restores workspace identity before constructing restarted jobs after DB retarget fails', async () => {
+        mockPoster.cancelAndWait.mockResolvedValue(true);
+        mockDb.switchToWorkspaceDb.mockRejectedValueOnce(new Error('DB switch failed'));
+        mockWm.getActiveWorkspaceId.mockReturnValueOnce('old').mockReturnValue('new');
+        expect(await call('workspace:switch', 'new')).toEqual({ success: false, error: 'DB switch failed' });
+        expect(mockWm.restoreActiveWorkspace).toHaveBeenCalledWith('old');
+        expect(mockWm.restoreActiveWorkspace.mock.invocationCallOrder[0]).toBeLessThan(mockPoster.startScheduler.mock.invocationCallOrder[0]);
     });
 
     it('switches the database once when the poster job stopped', async () => {

@@ -4,7 +4,7 @@ import type { FbPosterScheduleView } from '../../models/facebookPoster';
 
 const at = (day: number, hour = 0, minute = 0) => new Date(2026, 9, day, hour, minute).getTime();
 const schedule = (patch: Partial<FbPosterScheduleView> = {}): FbPosterScheduleView => ({
-  id: 's1', name: 'Scheduled post', kind: 'once', params: { profiles: [{ profileId: 'p1', targets: [] }] },
+  id: 's1', revision: 1, name: 'Scheduled post', kind: 'once', params: { profiles: [{ profileId: 'p1', targets: [] }] },
   runAt: at(12, 9), days: [], time: '', enabled: true, draft: false, campaignId: null, nextRunAt: at(12, 9), lastRunId: null,
   createdAt: at(1), updatedAt: at(1), lastRun: null, ...patch,
 });

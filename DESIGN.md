@@ -366,10 +366,10 @@ Màn `src/ui/features/facebookPoster/` có ngoại lệ thị giác theo brief G
 - **Soạn bài.** Dialog native bo 24 px giữ focus và Escape; editor trái, preview Facebook phải, xuống một cột trên mobile. Nội dung chưa gửi giữ trong phiên đóng/mở dialog; muốn lưu lâu hơn thì "Lưu nháp" (bản nháp nằm trong DB, xem mục Bản nháp). Màn này không có panel AI; dùng chọn profile, nhóm/Trang, ảnh/video kéo-thả, bình luận đầu và dialog lịch một lần/lặp lại.
 - **Màu nhật ký.** info = `text-gray-400` (secondary), success = `text-green-400`, warning = `text-orange-400`, error = `text-red-400`; giờ `HH:mm:ss` màu `text-gray-500`.
 - **Chip trạng thái profile.** Chờ = gray-400, Đang chạy = blue-400, Xong = green-400, Lỗi = red-400, Đã hủy = orange-400; "Đang mở" của profile = yellow-400 như cảnh báo ở màn Trình duyệt.
-- **Một việc một lúc.** Khi có việc chạy, mọi nút Bắt đầu tắt và nêu lý do ngay cạnh nút; "Hủy" (đỏ) luôn qua `showConfirm`.
+- **Nhiều lượt độc lập.** Tối đa 2 lượt sống (kể cả đang chờ profile). Lượt khác đang chạy không khóa composer hay form Tham gia nhóm/Thu bình luận: nút chỉ tắt khi chính nó đang gửi, dữ liệu chưa hợp lệ hoặc đã đủ 2 lượt, và nêu lý do ngay cạnh nút. Panel Tiến độ liệt kê lượt (loại việc, profile, trạng thái bằng chữ — "Đang chờ" khi mọi profile còn chờ, tiến độ), chọn được bằng chuột và bàn phím; tiến độ, lý do "Chờ profile …" và nhật ký thuộc lượt đang chọn. Mỗi mục có nút "Hủy" (đỏ) riêng, luôn qua `showConfirm` nêu loại việc và profile của lượt đó, và hủy đúng ID của mục. "Kiểm tra đăng nhập" không bị lượt đăng khóa, chỉ tắt khi chính nó đang chạy.
 - **Lưới ảnh (MediaPicker, từ 26.14.0).** Ô 72×72 px, bo góc như thẻ gray hiện có, số thứ tự ở góc, nút Lên/Xuống/Bỏ có `aria-label`; lưới xuống dòng, không cuộn ngang. Vượt giới hạn thì hiện lý do màu đỏ cạnh nút và tắt "Bắt đầu đăng"/"Lên lịch".
 - **Quản lý lịch.** Calendar có chế độ danh sách để quản lý cả lịch ngoài khoảng đang xem. Giữ Bật/Tạm dừng, Sửa giờ, Xoá qua `showConfirm`, liên kết lịch sử; lỗi IPC có nút thử lại. Trạng thái có nhãn chữ, không chỉ màu.
-- **Nhật ký** tự cuộn xuống cuối, trừ khi người dùng đã cuộn lên; giữ tối đa 500 dòng.
+- **Nhật ký** tự cuộn xuống cuối, trừ khi người dùng đã cuộn lên; giữ tối đa 500 dòng mỗi lượt.
 
 ## Dấu hiệu
 

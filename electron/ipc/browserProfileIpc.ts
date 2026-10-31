@@ -17,6 +17,10 @@ const PROGRESS_INTERVAL_MS = 250;
 
 let engineManager: BrowserEngineManager | null = null;
 let profileService: BrowserProfileService | null = null;
+let profileServiceDb: DatabaseService | null = null;
+let profileServiceDbPath: string | null = null;
+let admissionPaused = false;
+const NATIVE_GENERATION_ERROR = 'Trình duyệt đang đổi workspace hoặc chưa đóng xong. Thử lại sau.';
 
 function db(): DatabaseService {
     return DatabaseService.getInstance();
@@ -29,26 +33,64 @@ function getEngineManager(): BrowserEngineManager {
     return engineManager;
 }
 
-/** Browser data lives next to the active workspace's database, so each workspace has its own profiles. */
-function getProfilesDir(): string {
-    return path.join(path.dirname(db().getDbPath()), 'browser-profiles');
-}
-
 function getProfileService(): BrowserProfileService {
+    const boundDb = db();
+    const dbPath = boundDb.getDbPath();
+    if (profileService && (profileServiceDb !== boundDb || profileServiceDbPath !== dbPath)) {
+        // A lifecycle caller must retire the old generation before retargeting the mutable DB facade.
+        throw new Error(NATIVE_GENERATION_ERROR);
+    }
     if (!profileService) {
-        profileService = new BrowserProfileService({
+        if (admissionPaused) throw new Error(NATIVE_GENERATION_ERROR);
+        const profilesDir = path.join(path.dirname(dbPath), 'browser-profiles');
+        let stale = false;
+        const isCurrent = () => {
+            stale ||= profileService !== instance || db() !== boundDb || boundDb.getDbPath() !== dbPath;
+            return !stale;
+        };
+        const assertCurrent = () => { if (!isCurrent()) throw new Error(NATIVE_GENERATION_ERROR); };
+        const instance = new BrowserProfileService({
             store: {
-                getBrowserProfileById: (id) => db().getBrowserProfileById(id),
-                getProxyById: (id) => db().getProxyById(id),
-                touchBrowserProfileOpened: (id) => db().touchBrowserProfileOpened(id),
+                getBrowserProfileById: (id) => { assertCurrent(); return boundDb.getBrowserProfileById(id); },
+                getProxyById: (id) => { assertCurrent(); return boundDb.getProxyById(id); },
+                touchBrowserProfileOpened: (id) => { assertCurrent(); boundDb.touchBrowserProfileOpened(id); },
             },
-            getExecutablePath: () => getEngineManager().getExecutablePath(),
-            getProfilesDir,
+            getExecutablePath: () => { assertCurrent(); return getEngineManager().getExecutablePath(); },
+            getProfilesDir: () => { assertCurrent(); return profilesDir; },
             resolveSandbox: (exe) => getSandboxSupport().get(exe),
-            onStatusChanged: (runningIds) => EventBroadcaster.emit('browserProfile:statusChanged', { runningIds }),
+            onStatusChanged: (runningIds) => {
+                if (isCurrent()) EventBroadcaster.emit('browserProfile:statusChanged', { runningIds });
+            },
         });
+        profileService = instance;
+        profileServiceDb = boundDb;
+        profileServiceDbPath = dbPath;
     }
     return profileService;
+}
+
+/** Pause before the first lifecycle await; existing sessions may still settle against their generation. */
+export function pauseBrowserProfileAdmission(): void {
+    admissionPaused = true;
+    profileService?.pauseAdmission();
+}
+
+/** Resume a retained generation after false drain, or permit a new generation after a completed transition. */
+export function resumeBrowserProfileAdmission(): void {
+    if (profileService && (profileServiceDb !== db() || profileServiceDbPath !== db().getDbPath())) {
+        throw new Error(NATIVE_GENERATION_ERROR);
+    }
+    admissionPaused = false;
+    profileService?.resumeAdmission();
+}
+
+/** Call only after confirmed drain and before changing the workspace DB, including A-to-B-to-A. */
+export function retireBrowserProfileGeneration(): void {
+    pauseBrowserProfileAdmission();
+    profileService?.retire();
+    profileService = null;
+    profileServiceDb = null;
+    profileServiceDbPath = null;
 }
 
 /** Shared with the Facebook poster so both IPC modules use one BrowserProfileService. */
@@ -73,6 +115,15 @@ export async function getBrowserSandboxState(): Promise<'enabled' | 'disabled' |
 /** Closes every running browser. Called on app quit and before the workspace database is switched. */
 export function closeAllBrowserProfiles(): void {
     profileService?.closeAll();
+}
+
+/** A timeout is not confirmation: callers must retain the originating workspace DB. */
+export async function closeAllBrowserProfilesAndWait(timeoutMs: number): Promise<boolean> {
+    pauseBrowserProfileAdmission();
+    const current = profileService;
+    if (!current) return true;
+    current.closeAll();
+    return current.waitUntilIdle(timeoutMs);
 }
 
 // ─── Input validation ────────────────────────────────────────────────────────

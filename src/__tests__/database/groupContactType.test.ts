@@ -44,8 +44,10 @@ describe('group contact_type is kept as group', () => {
   });
 
   test('an empty contactType does not overwrite an existing type', () => {
-    service.updateContactProfile(OWNER, 'group2', 'G2 renamed', '');
-    expect(contactType('group2')).toBe('group');
+    service.updateContactProfile(OWNER, 'group5', 'G5', '', '', 'group');
+    expect(contactType('group5')).toBe('group');
+    service.updateContactProfile(OWNER, 'group5', 'G5 renamed', '');
+    expect(contactType('group5')).toBe('group');
   });
 
   describe('repairZaloGroupContactTypes', () => {

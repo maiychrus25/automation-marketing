@@ -22,6 +22,107 @@ function setup(config: Partial<LeadConfig> = {}, classify?: any) {
   return { store, detector, emitted, logs };
 }
 
+describe('URL alias ingestion with real SQLite', () => {
+  const alias = 'https://m.facebook.com/groups/1/posts/1/?fbclid=x&utm_source=campaign';
+  test('one batch and stale rescans create one lead and retain attribution', async () => {
+    const { store, detector, emitted } = setup();
+    store.createTracking({ resultId: 7, runId: 'r1', scheduleId: null, campaignId: 'c1', variant: 'B', profileId: 'p1', groupUrl: 'g1', groupId: '1', postId: '1', postUrl: alias, postedAt: 1, textHead: '', linkStatus: 'known', removedSuspected: false, lastSeenAt: null, lastCheckedAt: null, checkCount: 0, nextCheckAt: null, statsDone: [] } as any);
+    const snapshots = [store.loadCommentKeys(), store.loadCommentKeys()];
+    expect(snapshots.map((keys) => keys.size)).toEqual([0, 0]);
+    const row = comment(1, 'ib giá', { postUrl: alias });
+    const created = store.insertCommentsReturningNew('p1', [row, { ...row, postUrl: POST }, { ...row, postUrl: `${POST}?fbclid=y` }], 1);
+    expect(created).toHaveLength(1);
+    expect(await detector.process(created, { auto: false })).toMatchObject([{ postUrl: alias, campaignId: 'c1', resultId: 7 }]);
+    for (const postUrl of [POST, alias]) {
+      expect(await detector.process(store.insertCommentsReturningNew('p2', [{ ...row, postUrl, commentedAt: '3 giờ' }], 2), { auto: true })).toEqual([]);
+    }
+    expect(store.listComments({ limit: 10, offset: 0 }).total).toBe(1);
+    expect(store.listLeads({ limit: 10, offset: 0 }).total).toBe(1);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].payload.samples[0].postUrl).toBe(alias);
+  });
+
+  test.each([POST, alias])('legacy raw key remains untouched and rescans stay silent: %s', async (postUrl) => {
+    const db = memoryDb();
+    const store = new FacebookPosterStore(db);
+    store.ensureSchema();
+    const row = comment(1, 'ib giá', { postUrl });
+    const oldKey = `a1\u0000${postUrl}\u0000ib giá`;
+    db.run('INSERT INTO fb_poster_comments (key, profile_id, post_url, author_id, text, collected_at) VALUES (?, ?, ?, ?, ?, ?)', [oldKey, 'original', postUrl, 'a1', row.text, 1]);
+    const events: unknown[] = [];
+    const detector = new LeadDetector({ store, readConfig: () => DEFAULT_LEAD_CONFIG, emit: (_type, payload) => events.push(payload), now: () => 5, log: () => {} });
+    await detector.process([{ ...row, key: oldKey }], { auto: false });
+    events.length = 0;
+    const snapshots = [store.loadCommentKeys(), store.loadCommentKeys()];
+    for (const keys of snapshots) expect(keys.has(`a1\u0000${POST}\u0000ib giá`)).toBe(true);
+    for (const url of [POST, alias]) {
+      const created = store.insertCommentsReturningNew('p2', [{ ...row, postUrl: url }], 2);
+      expect(created).toEqual([]);
+      expect(await detector.process(created, { auto: true })).toEqual([]);
+    }
+    expect(events).toEqual([]);
+    expect(store.listLeads({ limit: 10, offset: 0 }).total).toBe(1);
+    expect(store.listComments({ limit: 10, offset: 0 }).comments).toMatchObject([{ key: oldKey, postUrl, profileId: 'original', collectedAt: 1 }]);
+  });
+
+  test.each([
+    ['https://www.facebook.com/groups/1/posts/AbC/?unknown=a%20b', 'https://m.facebook.com/groups/1/posts/AbC/?unknown=a%20b&fbclid=x'],
+    ['https://www.facebook.com/groups/1/posts/AbC/?unknown=a%20b&unknown=a%2Bb&id=AbC#section', 'https://m.facebook.com/groups/1/posts/AbC/?unknown=a%20b&unknown=a%2Bb&id=AbC&fbclid=x#section'],
+    ['https://www.facebook.com/groups/1/posts/AbC/', 'https://www.facebook.com/groups/1/posts/AbC/?__cft__=synthetic'],
+  ])('legacy query aliases stay silent in both directions: %s', async (plain, tracked) => {
+    for (const [persistedUrl, scannedUrl] of [[plain, tracked], [tracked, plain]]) {
+      const db = memoryDb();
+      const store = new FacebookPosterStore(db);
+      store.ensureSchema();
+      const oldKey = `a1\u0000${persistedUrl}\u0000ib giá`;
+      db.run('INSERT INTO fb_poster_comments (key, profile_id, post_url, author_id, text, collected_at) VALUES (?, ?, ?, ?, ?, ?)', [oldKey, 'original', persistedUrl, 'a1', 'ib giá', 1]);
+      const events: unknown[] = [];
+      const detector = new LeadDetector({ store, readConfig: () => DEFAULT_LEAD_CONFIG, emit: (_type, payload) => events.push(payload), now: () => 5, log: () => {} });
+      await detector.process([comment(1, 'ib giá', { key: oldKey, postUrl: persistedUrl })], { auto: false });
+      events.length = 0;
+      const created = store.insertCommentsReturningNew('rescan', [comment(1, 'ib giá', { postUrl: scannedUrl })], 2);
+      expect(created).toEqual([]);
+      expect(await detector.process(created, { auto: true })).toEqual([]);
+      expect(events).toEqual([]);
+      expect(store.listComments({ limit: 10, offset: 0 })).toMatchObject({ total: 1, comments: [{ key: oldKey, postUrl: persistedUrl, profileId: 'original', collectedAt: 1 }] });
+      expect(store.listLeads({ limit: 10, offset: 0 }).total).toBe(1);
+      if (plain.includes('unknown=a%20b')) {
+        const distinct = store.insertCommentsReturningNew('rescan', [comment(1, 'ib giá', { postUrl: plain.replace('unknown=a%20b', 'unknown=a%2Bb') })], 3);
+        expect(distinct).toHaveLength(1);
+        expect(await detector.process(distinct, { auto: true })).toHaveLength(1);
+      }
+    }
+  });
+
+  test.each([1, 2])('deterministic alias stress round %i', async (round) => {
+    const db = memoryDb();
+    const store = new FacebookPosterStore(db);
+    store.ensureSchema();
+    const events: any[] = [];
+    const detector = new LeadDetector({ store, readConfig: () => DEFAULT_LEAD_CONFIG, emit: (_type, payload) => events.push(payload), now: () => 5, log: () => {} });
+    const rows = Array.from({ length: 120 }, (_, i) => comment(i, `ib ${i % 3}`, { authorId: `a${i % 10}`, postUrl: `https://www.facebook.com/groups/${round}/posts/${i}/` }));
+    for (const row of rows.slice(0, 40)) {
+      const url = row.postUrl.replace('www.', 'm.') + '?fbclid=legacy';
+      db.run('INSERT INTO fb_poster_comments (key, profile_id, post_url, author_id, text, collected_at) VALUES (?, ?, ?, ?, ?, ?)', [`${row.authorId}\u0000${url}\u0000${row.text}`, 'legacy', url, row.authorId, row.text, 1]);
+    }
+    const stale = [store.loadCommentKeys(), store.loadCommentKeys()];
+    expect(stale.map((keys) => keys.size)).toEqual([80, 80]);
+    let inserted = 0;
+    let leads = 0;
+    for (let batch = 0; batch < 8; batch++) {
+      const aliases = rows.flatMap((row) => ['www', 'm', 'mbasic'].map((host) => ({ ...row, postUrl: row.postUrl.replace('www.', `${host}.`) + `?fbclid=${batch}&utm_source=${round}` })));
+      const created = store.insertCommentsReturningNew('new', aliases, 2);
+      inserted += created.length;
+      leads += (await detector.process(created, { auto: true })).length;
+    }
+    expect(inserted).toBe(80);
+    expect(leads).toBe(80);
+    expect(store.listComments({ limit: 200, offset: 0 }).total).toBe(120);
+    expect(events).toHaveLength(1);
+    expect(events[0].count).toBe(80);
+  });
+});
+
 describe('LeadDetector', () => {
   test('chỉ bình luận khớp (và có chữ) thành khách, ai_* NULL khi AI tắt', async () => {
     const { detector, store } = setup();

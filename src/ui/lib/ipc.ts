@@ -1,6 +1,8 @@
 // Typed wrappers quanh window.electronAPI
 // Dùng trong React components thay vì gọi trực tiếp
 
+import type { ScopedKeyPolicy } from '../../services/control/controlAuthorization';
+import type { PageIdentity } from '../../models/dailyBrief';
 import { useAppStore } from '../store/appStore';
 import type { TelegramForumTopicContext } from '../../models/telegram';
 import type { BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
@@ -16,6 +18,7 @@ import type { PostTrackingConfig } from '../../services/facebookPoster/postTrack
 import type { TrackStatus } from '../../services/facebookPoster/PostTracker';
 import type { LeadConfig } from '../../services/facebookPoster/leadRules';
 import type { CommentCollectStatus } from '../../services/facebookPoster/CommentCollector';
+import type { RunSnapshot } from '../../services/facebookPoster/FacebookPosterService';
 
 
 declare global {
@@ -683,15 +686,16 @@ declare global {
         installEngine: () => Promise<{ success: boolean; supported?: boolean; installed?: boolean; version?: string; error?: string }>;
       };
       controlApi: {
-        getConfig:             () => Promise<{ success: boolean; enabled?: boolean; port?: number; allowList?: string[]; fingerprint?: string | null; publicHost?: string | null; detectedPublicHost?: string | null; bridgeSha256?: string | null; running?: boolean; error?: string; warning?: string }>;
-        setConfig:             (config: { enabled: boolean; port: number; allowList: string[] | string }) => Promise<{ success: boolean; enabled?: boolean; port?: number; allowList?: string[]; fingerprint?: string | null; running?: boolean; warning?: string; invalid?: string[]; error?: string }>;
-        createKey:             (name: string) => Promise<{ success: boolean; key?: string; id?: string; name?: string; error?: string }>;
-        listKeys:              () => Promise<{ success: boolean; keys?: { id: string; name: string; createdAt: number; lastUsedAt: number | null; revokedAt: number | null }[]; error?: string }>;
+        getScopeOptions:       () => Promise<{ success: boolean; workspaceId?: string; workspaceGeneration?: number; identities?: PageIdentity[]; error?: string }>;
+        getConfig:             () => Promise<{ success: boolean; workspaceId?: string; workspaceGeneration?: number; protectedWritesEnabled?: boolean; enabled?: boolean; port?: number; allowList?: string[]; fingerprint?: string | null; publicHost?: string | null; detectedPublicHost?: string | null; bridgeSha256?: string | null; running?: boolean; error?: string; warning?: string }>;
+        setConfig:             (config: { enabled: boolean; port: number; allowList: string[] | string; protectedWritesEnabled?: boolean; workspaceId?: string; workspaceGeneration?: number }) => Promise<{ success: boolean; workspaceId?: string; workspaceGeneration?: number; protectedWritesEnabled?: boolean; enabled?: boolean; port?: number; allowList?: string[]; fingerprint?: string | null; running?: boolean; warning?: string; invalid?: string[]; error?: string }>;
+        createKey:             (name: string, policy?: ScopedKeyPolicy) => Promise<{ success: boolean; key?: string; id?: string; name?: string; error?: string }>;
+        listKeys:              () => Promise<{ success: boolean; keys?: { id: string; name: string; createdAt: number; lastUsedAt: number | null; revokedAt: number | null; policy?: ScopedKeyPolicy }[]; error?: string }>;
         revokeKey:             (id: string) => Promise<{ success: boolean; revoked?: boolean; error?: string }>;
         listAudit:             (limit?: number) => Promise<{ success: boolean; audit?: { at: number; keyName: string | null; ip: string | null; method: string | null; paramsSummary: string | null; ok: boolean; errorCode: string | null; durationMs: number | null }[]; error?: string }>;
         firewallCommand:       () => Promise<{ success: boolean; command?: string; error?: string }>;
         regenerateCertificate: () => Promise<{ success: boolean; fingerprint?: string | null; running?: boolean; error?: string }>;
-        createPairing:         (input: { name: string; botIp: string; publicHost: string }) => Promise<{ success: boolean; code?: string; command?: string; firewall?: string; expiresAt?: number; publicHost?: string | null; detectedPublicHost?: string | null; bridgeSha256?: string | null; fingerprint?: string | null; running?: boolean; error?: string }>;
+        createPairing:         (input: { name: string; botIp: string; publicHost: string; policy?: ScopedKeyPolicy }) => Promise<{ success: boolean; code?: string; command?: string; firewall?: string; expiresAt?: number; publicHost?: string | null; detectedPublicHost?: string | null; bridgeSha256?: string | null; fingerprint?: string | null; running?: boolean; error?: string }>;
         cancelPairing:         (botIp: string) => Promise<{ success: boolean; error?: string }>;
       };
       research: {
@@ -727,7 +731,8 @@ declare global {
       };
       facebookPoster: {
         start:          (kind: FbPosterKind, params: Record<string, unknown>) => Promise<{ success: boolean; runId?: string; error?: string }>;
-        cancel:         () => Promise<{ success: boolean; error?: string }>;
+        cancel:         (runId?: string) => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
+        active:         () => Promise<{ success: boolean; runs?: RunSnapshot[]; error?: string }>;
         current:        () => Promise<{ success: boolean; run?: FbPosterRun | null; progress?: { runId: string; done: number; total: number; profiles: { profileId: string; state: 'waiting' | 'running' | 'done' | 'failed' | 'cancelled'; done: number; total: number }[] } | null; error?: string }>;
         listGroups:     (profileIds: string[]) => Promise<{ success: boolean; groups?: Record<string, FbPosterGroup[]>; error?: string }>;
         listRuns:       (params?: { limit?: number; offset?: number; kind?: FbPosterKind }) => Promise<{ success: boolean; runs?: FbPosterRun[]; total?: number; error?: string }>;

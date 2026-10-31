@@ -1,9 +1,57 @@
 import assert from 'node:assert';
+import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
+import { memoryDb } from './helpers';
 import type { LogLevel } from '../../services/facebookPoster/types';
 import {
   collectComments, keyOf, readCommentsInPage, hasCommentAreaInPage, countCommentsInPage, clickLabelInPage,
   MORE_COMMENTS, SORT_TRIGGER, SORT_ALL, type CollectedComment,
 } from '../../services/facebookPoster/collectComments';
+
+describe('comment post URL identity', () => {
+  const key = (postUrl: string) => keyOf({ authorId: 'a', text: 'ib', postUrl });
+  test.each([
+    '/groups/1/posts/pfbidAbC/', '/Page/posts/pfbidAbC/',
+    '/story.php?story_fbid=AbC&id=1', '/permalink.php?story_fbid=AbC&id=1',
+    '/photo.php?fbid=AbC&id=1', '/watch/?v=AbC',
+  ])('mobile and tracking aliases share identity for %s', (path) => {
+    const url = `https://www.facebook.com${path}`;
+    const separator = path.includes('?') ? '&' : '?';
+    expect(key(`https://m.facebook.com${path}${separator}fbclid=tracking&utm_source=test&__cft__[0]=x`)).toBe(key(url));
+  });
+  test.each([
+    ['?unknown=a%20b', '?unknown=a%20b&fbclid=x'],
+    ['?unknown=a%20b&unknown=a%2Bb&id=AbC#section', '?unknown=a%20b&unknown=a%2Bb&id=AbC&fbclid=x#section'],
+    ['', '?__cft__=synthetic'],
+  ])('retained query is consistent with tracking: %s', (plain, tracked) => {
+    expect(key(`https://m.facebook.com/groups/1/posts/AbC/${tracked}`)).toBe(key(`https://www.facebook.com/groups/1/posts/AbC/${plain}`));
+  });
+  test.each([
+    ['?unknown=a%20b', '?unknown=a%2Bb'],
+    ['?unknown=a%20b&unknown=c', '?unknown=c&unknown=a%20b'],
+    ['?unknown=a%20b&unknown=a%20b', '?unknown=a%20b'],
+    ['?unknown=a%20b#first', '?unknown=a%20b#second'],
+  ])('preserves retained query values, order, multiplicity and fragment: %s', (a, b) => {
+    expect(key(`https://www.facebook.com/groups/1/posts/AbC/${a}`)).not.toBe(key(`https://www.facebook.com/groups/1/posts/AbC/${b}`));
+  });
+  test('post permalinks without a trailing slash share identity and strip known navigation tracking', () => {
+    expect(key('https://m.facebook.com/groups/1/posts/pfbidAbC?__tn__=R&ref=share&mibextid=x')).toBe(key('https://www.facebook.com/groups/1/posts/pfbidAbC/'));
+  });
+  test.each([
+    ['/story.php?story_fbid=1&id=2', '/story.php?story_fbid=2&id=2'],
+    ['/story.php?story_fbid=1&id=2', '/story.php?story_fbid=1&id=3'],
+    ['/photo.php?fbid=1', '/photo.php?fbid=2'],
+    ['/watch/?v=1', '/watch/?v=2'],
+    ['/groups/1/posts/AbC/', '/groups/2/posts/AbC/'],
+    ['/Page/posts/AbC/', '/Page/posts/abc/'],
+    ['/Page/posts/1/?unknown=1', '/Page/posts/1/?unknown=2'],
+    ['/unknown?fbclid=1', '/unknown?fbclid=2'],
+  ])('preserves distinct semantic or unknown URLs %s', (a, b) => {
+    expect(key(`https://www.facebook.com${a}`)).not.toBe(key(`https://www.facebook.com${b}`));
+  });
+  test.each(['not a URL', 'https://example.com/posts/1/?fbclid=x', 'https://evil.facebook.com/posts/1/?fbclid=x'])('keeps unsupported input unchanged: %s', (url) => {
+    expect(key(url)).toBe(`a\u0000${url}\u0000ib`);
+  });
+});
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -380,6 +428,30 @@ function makeDeps(fake: ReturnType<typeof fakeBrowser>, store: ReturnType<typeof
 // settleMs: 0 làm MỌI khoảng chờ trong collectFromPost sập về 0. Thiếu nó thì mỗi
 // bài trong test chờ thật 3 giây.
 const NO_WAIT = { minDelay: 0, maxDelay: 0, settleMs: 0 };
+
+test.each([false, true])('scanner uses stale snapshots with authoritative SQLite insertion (legacy=%s)', async (legacy) => {
+  const plain = 'https://www.facebook.com/groups/1/posts/AbC/?unknown=a%20b';
+  const alias = 'https://m.facebook.com/groups/1/posts/AbC/?unknown=a%20b&fbclid=x';
+  const db = memoryDb();
+  const store = new FacebookPosterStore(db);
+  store.ensureSchema();
+  if (legacy) db.run('INSERT INTO fb_poster_comments (key, profile_id, post_url, author_id, text, collected_at) VALUES (?, ?, ?, ?, ?, ?)', [`100\u0000${plain}\u0000bình luận 0`, 'original', plain, '100', 'bình luận 0', 1]);
+  const snapshots = [store.loadCommentKeys(), store.loadCommentKeys()];
+  const added: number[] = [];
+  for (const [i, postUrl] of [plain, alias].entries()) {
+    const browser = fakeBrowser({ [postUrl]: postPage({ commentCount: 1 }) });
+    const result = await collectComments({ posts: [{ postUrl }], ...NO_WAIT }, {
+      launch: browser.launch, getIsStopping: () => false, sendLog: () => {}, updateProgress: () => {},
+      loadKeys: async () => snapshots[i],
+      saveComments: async (rows) => store.saveComments('scanner', rows, 2),
+    });
+    expect(result.scanned).toBe(1);
+    expect(result.failed).toBe(0);
+    added.push(result.added);
+  }
+  expect(added).toEqual(legacy ? [0, 0] : [1, 0]);
+  expect(store.listComments({ limit: 10, offset: 0 })).toMatchObject({ total: 1, comments: [{ postUrl: plain }] });
+});
 
 test('thu một bài, lưu bình luận, trả outcome done', async () => {
   const url = 'https://www.facebook.com/groups/1/posts/2/';

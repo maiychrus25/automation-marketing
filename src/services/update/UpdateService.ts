@@ -22,7 +22,7 @@ export interface UpdaterLike {
     /** electron-updater resolves null when inactive, or a result whose isUpdateAvailable says whether latest*.yml offers a newer build. */
     checkForUpdates(): Promise<{ isUpdateAvailable?: boolean } | null | unknown>;
     downloadUpdate(): Promise<unknown>;
-    quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
+    quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void | boolean | Promise<void | boolean>;
     on(event: string, listener: (...args: any[]) => void): unknown;
 }
 
@@ -34,6 +34,8 @@ export interface UpdateServiceDeps {
     updater: UpdaterLike | null;
     /** True while a Facebook posting job runs: restarting then would lose the job. */
     isBusy: () => boolean;
+    prepareInstall?: () => Promise<boolean>;
+    cancelInstall?: () => void | Promise<void>;
     openExternal: (url: string) => void;
     emit: (state: UpdateState) => void;
     log?: (message: string) => void;
@@ -60,6 +62,10 @@ export class UpdateService {
     private latest: { version: string; url: string } | null = null;
     /** The check in progress, shared by overlapping callers. No intermediate state is emitted, so the card never flickers. */
     private inFlight: Promise<UpdateState> | null = null;
+    private installFlight: Promise<ActionResult> | null = null;
+    private installing = false;
+    private installCallPending = false;
+    private installError: Error | null = null;
 
     constructor(private readonly deps: UpdateServiceDeps) {
         const updater = deps.updater;
@@ -73,6 +79,11 @@ export class UpdateService {
             this.setState({ status: 'downloaded', version: this.state.version });
         });
         updater.on('error', (err: Error) => {
+            if (this.installing) {
+                this.installError = err;
+                if (!this.installCallPending) void this.cancelInstallation();
+                return;
+            }
             if (this.state.status !== 'downloading') return;
             this.fail(err);
         });
@@ -144,13 +155,45 @@ export class UpdateService {
     }
 
     /** Quits and installs the downloaded update, then relaunches. Refused while a posting job runs. */
-    public install(): ActionResult {
-        if (this.state.status !== 'downloaded' || !this.deps.updater) {
-            return { success: false, error: 'Chưa tải xong bản cập nhật' };
+    public install(): Promise<ActionResult> {
+        if (this.installFlight) return this.installFlight;
+        if (this.state.status !== 'downloaded' || !this.deps.canInstall || !this.deps.updater) {
+            return Promise.resolve({ success: false, error: 'Chưa tải xong bản cập nhật' });
         }
-        if (this.deps.isBusy()) return { success: false, error: BUSY_MESSAGE };
-        this.deps.updater.quitAndInstall(false, true);
-        return { success: true };
+        if (this.deps.isBusy()) return Promise.resolve({ success: false, error: BUSY_MESSAGE });
+        this.installFlight = this.installPrepared().then(result => {
+            if (!result.success) this.installFlight = null;
+            return result;
+        });
+        return this.installFlight;
+    }
+
+    private async installPrepared(): Promise<ActionResult> {
+        try {
+            if (this.deps.prepareInstall && !(await this.deps.prepareInstall())) {
+                await this.cancelInstallation();
+                return { success: false, error: 'Công việc chưa dừng an toàn. Thử lại sau.' };
+            }
+            this.installError = null;
+            this.installing = true;
+            this.installCallPending = true;
+            const accepted = await this.deps.updater!.quitAndInstall(false, true);
+            if (accepted === false || this.installError) throw this.installError ?? new Error('Trình cài đặt từ chối cập nhật');
+            // Retain the successful attempt until quit, so repeated clicks cannot invoke the installer twice.
+            return { success: true };
+        } catch (error: any) {
+            await this.cancelInstallation();
+            const message = String(error?.message || error).split(/\r?\n/)[0].slice(0, ERROR_MAX_CHARS);
+            this.deps.log?.(`[AutoUpdate] Không cài được bản cập nhật: ${message}`);
+            return { success: false, error: `Không cài được bản cập nhật: ${message}` };
+        } finally { this.installCallPending = false; }
+    }
+
+    private async cancelInstallation(): Promise<void> {
+        this.installing = false;
+        try { await this.deps.cancelInstall?.(); }
+        catch (error: any) { this.deps.log?.(`[AutoUpdate] Không khôi phục được công việc: ${error?.message || error}`); }
+        this.installFlight = null;
     }
 
     private fail(err: any): void {

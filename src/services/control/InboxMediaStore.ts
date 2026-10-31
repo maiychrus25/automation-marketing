@@ -131,6 +131,12 @@ export class InboxMediaStore {
         });
     }
 
+    /** Trusted caller only: remove its newly saved, unlinked attempt, never an arbitrary path. */
+    remove(mediaId: string): void {
+        const [file] = this.resolve([mediaId]);
+        fs.rmSync(file, { force: true });
+    }
+
     /** Xoá tệp (kể cả `.part` bỏ dở) cũ hơn `maxAgeMs`; trả số tệp đã xoá. */
     cleanup(now: number, maxAgeMs: number = INBOX_MAX_AGE_MS): number {
         let removed = 0;

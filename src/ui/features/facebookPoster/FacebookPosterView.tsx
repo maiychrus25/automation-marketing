@@ -10,11 +10,11 @@ import CampaignsTab from './CampaignsTab';
 import VideoTab from './VideoTab';
 import LeadsTab from './LeadsTab';
 import ResearchTab from './ResearchTab';
-import RunPanel, { PosterLog, PosterProgress } from './RunPanel';
+import RunPanel from './RunPanel';
 import ChannelsPanel, { type PosterChannel } from './ChannelsPanel';
+import { initialRunState, reduceRunState, MAX_LIVE_RUNS, type PosterLog, type PosterRunAction, type ProgressSnapshot, type RunSnapshot } from './runState';
 import type { FbPosterRun, FbPosterSchedule } from '../../../models/facebookPoster';
 
-const MAX_LOGS = 500;
 const SECTIONS: Record<FacebookPosterSection, { label: string; description?: string }> = {
   schedule: { label: 'Lịch đăng' },
   campaigns: { label: 'Chiến dịch', description: 'Gom lịch đăng theo chiến dịch, đặt khoảng ngày và so sánh hiệu quả.' },
@@ -30,9 +30,15 @@ const FACEBOOK_PROVIDER = { id: 'facebook', name: 'Facebook', badge: 'f' };
 export default function FacebookPosterView() {
   const section = useAppStore(s => s.facebookPosterSection);
   const openFacebookPoster = useAppStore(s => s.openFacebookPoster);
-  const [run, setRun] = useState<FbPosterRun | null>(null);
-  const [progress, setProgress] = useState<PosterProgress | null>(null);
-  const [logs, setLogs] = useState<PosterLog[]>([]);
+  // Per-run cache (bounded in runState); unmounting the view frees it.
+  const [runState, setRunState] = useState(initialRunState);
+  const stateRef = useRef(runState);
+  stateRef.current = runState;
+  const dispatch = useCallback((action: PosterRunAction) => setRunState((s) => reduceRunState(s, action)), []);
+  const [runsLoad, setRunsLoad] = useState({ loading: true, error: '' });
+  // Bumped by retry and workspace switch; each value is one bootstrap generation.
+  const [bootstrapSeq, setBootstrapSeq] = useState(0);
+  const resolveRunRef = useRef<(runId: string) => void>(() => {});
   const [profileNames, setProfileNames] = useState<Map<string, string>>(new Map());
   const [channels, setChannels] = useState<PosterChannel[]>([]);
   const [selectedChannels, setSelectedChannels] = useState<string[] | null>(null);
@@ -52,7 +58,6 @@ export default function FacebookPosterView() {
   const showNotification = useAppStore(s => s.showNotification);
   const [showProgress, setShowProgress] = useState(false);
   const setView = useAppStore(s => s.setView);
-  const runIdRef = useRef<string | null>(null);
 
   const loadChannels = useCallback(async () => {
     setChannelsLoading(true);
@@ -98,54 +103,84 @@ export default function FacebookPosterView() {
     setComposeMediaPaths(null);
   }, [composeMediaPaths]);
 
-  // Reads the run record for a runId the panel has not seen; a run that already finished is no longer "current".
-  const syncRun = (runId: string) => {
+  // Tabs pass the runId returned by start(); current() is only the oldest live run, not necessarily this one.
+  const onStarted = (runId: string) => {
     setShowProgress(true);
-    ipc.facebookPoster?.current().then((res) => {
-      if (res?.success && res.run?.id === runId) { setRun(res.run); return; }
-      return ipc.facebookPoster?.getRun(runId).then((r) => { if (r?.success && runIdRef.current === runId) setRun(r.run); });
-    }).catch(() => {});
-  };
-
-  // Tabs call this right after start() resolves, so Start stays disabled until the first event arrives.
-  const onStarted = () => {
-    setShowProgress(true);
-    ipc.facebookPoster?.current().then((res) => { if (res?.success && res.run) setRun(res.run); }).catch(() => {});
+    dispatch({ type: 'select', runId });
   };
 
   useEffect(() => {
     loadChannels();
-    ipc.facebookPoster?.current().then((res) => {
-      if (!res?.success) return;
-      runIdRef.current = res.run?.id ?? null;
-      setRun(res.run ?? null);
-      setProgress(res.progress ?? null);
-      if (res.run) setShowProgress(true);
-    }).catch(() => {});
-    const offLog = ipc.on?.('facebookPoster:log', (data: PosterLog) => {
-      // A new runId means a new run started: reset the panel, then fetch its record.
-      if (data.runId !== runIdRef.current) {
-        runIdRef.current = data.runId;
-        setLogs([]);
-        syncRun(data.runId);
-      }
-      setLogs((prev) => [...prev, data].slice(-MAX_LOGS));
-    });
-    const offProgress = ipc.on?.('facebookPoster:progress', (data: PosterProgress) => {
-      if (data.runId !== runIdRef.current) {
-        runIdRef.current = data.runId;
-        setLogs([]);
-        syncRun(data.runId);
-      }
-      setProgress(data);
-    });
-    const offFinished = ipc.on?.('facebookPoster:runFinished', (data: { runId: string; status: FbPosterRun['status'] }) => {
-      setRun((prev) => (prev && prev.id === data.runId ? { ...prev, status: data.status } : prev));
-    });
-    return () => { offLog?.(); offProgress?.(); offFinished?.(); };
-  }, []);
+  }, [loadChannels]);
 
-  const busy = run?.status === 'running';
+  // Subscribe before reading active(): events that land during the request are buffered, then replayed after the snapshot.
+  useEffect(() => {
+    let alive = true;
+    let buffer: PosterRunAction[] | null = [];
+    const requested = new Set<string>();
+    // Metadata for a run first seen through an event: the live snapshot (with progress) first, else the stored record.
+    const resolveRun = (runId: string) => {
+      if (!alive || buffer || requested.has(runId) || stateRef.current.runs[runId]) return;
+      requested.add(runId);
+      setShowProgress(true);
+      (async () => {
+        const live = await ipc.facebookPoster?.active();
+        if (!alive) return;
+        const runs = live?.success ? live.runs ?? [] : [];
+        if (runs.length) dispatch({ type: 'reconcile', runs });
+        if (runs.some((s) => s.run.id === runId)) { requested.delete(runId); return; }
+        const stored = await ipc.facebookPoster?.getRun(runId);
+        if (!alive || !stored?.success || !stored.run) return;
+        dispatch({ type: 'reconcile', runs: [{ run: stored.run, progress: { runId, done: 0, total: 0, profiles: [] } }] });
+        requested.delete(runId);
+      })().catch(() => { /* Kept in `requested`: an unknown ID is not refetched on every event. */ });
+    };
+    resolveRunRef.current = resolveRun;
+    const push = (action: PosterRunAction) => {
+      if (!alive) return;
+      if (buffer) buffer.push(action); else dispatch(action);
+    };
+    const offLog = ipc.on?.('facebookPoster:log', (entry: PosterLog) => push({ type: 'log', entry }));
+    const offProgress = ipc.on?.('facebookPoster:progress', (progress: ProgressSnapshot) => {
+      push({ type: 'progress', progress });
+      resolveRun(progress.runId);
+    });
+    const offFinished = ipc.on?.('facebookPoster:runFinished', (data: { runId: string; status: FbPosterRun['status'] }) => push({ type: 'finished', runId: data.runId, status: data.status }));
+    setRunsLoad({ loading: true, error: '' });
+    Promise.resolve(ipc.facebookPoster?.active()).then((res) => {
+      if (!res?.success) throw new Error(res?.error || 'Không tải được lượt đang chạy');
+      return { runs: res.runs ?? [], error: '' };
+    }).catch((error: unknown) => ({ runs: [] as RunSnapshot[], error: error instanceof Error && error.message ? error.message : 'Không tải được lượt đang chạy' }))
+      .then(({ runs, error }) => {
+        if (!alive) return;
+        const replay = buffer ?? [];
+        buffer = null;
+        setRunState((s) => [{ type: 'reconcile', runs } as PosterRunAction, ...replay].reduce(reduceRunState, s));
+        setRunsLoad({ loading: false, error });
+        if (runs.length) setShowProgress(true);
+      });
+    return () => { alive = false; offLog?.(); offProgress?.(); offFinished?.(); };
+  }, [bootstrapSeq, dispatch]);
+
+  // A run known only by its logs or selection (started elsewhere, or just started here) gets its metadata by ID.
+  useEffect(() => {
+    if (runsLoad.loading) return;
+    const { runs, logs, selectedRunId } = runState;
+    for (const id of [...Object.keys(logs), ...(selectedRunId ? [selectedRunId] : [])]) if (!runs[id]) resolveRunRef.current(id);
+  }, [runState, runsLoad.loading]);
+
+  // A new workspace has its own runs: drop the cache and bootstrap again (stale responses are ignored by `alive`).
+  useEffect(() => ipc.on?.('workspace:switched', () => {
+    setRunState(initialRunState);
+    setBootstrapSeq((n) => n + 1);
+  }), []);
+
+  const selectedRunId = runState.selectedRunId;
+  const selected = selectedRunId ? runState.runs[selectedRunId] : undefined;
+  const cachedRuns = Object.values(runState.runs);
+  const liveCount = cachedRuns.filter((s) => s.run.status === 'running').length;
+  const busy = liveCount > 0;
+  const atCapacity = liveCount >= MAX_LIVE_RUNS;
 
   return (
     <div className="poster-workspace">
@@ -167,18 +202,20 @@ export default function FacebookPosterView() {
               <p className="poster-muted mb-6">{SECTIONS[section].description}</p>
               {section === 'campaigns' && <CampaignsTab />}
               {section === 'video' && <VideoTab />}
-              {section === 'join' && <JoinTab busy={busy} onStarted={onStarted} />}
-              {section === 'comments' && <CommentsTab busy={busy} onStarted={onStarted} />}
+              {section === 'join' && <JoinTab atCapacity={atCapacity} onStarted={onStarted} />}
+              {section === 'comments' && <CommentsTab atCapacity={atCapacity} onStarted={onStarted} />}
               {section === 'leads' && <LeadsTab />}
               {section === 'research' && <ResearchTab />}
               {section === 'history' && <HistoryTab />}
             </div>}
           </main>
         </div>
-        {showProgress && <aside aria-label="Tiến độ" className="poster-run-panel"><RunPanel run={run} progress={progress} logs={logs} profileNames={profileNames} /></aside>}
+        {showProgress && <aside aria-label="Tiến độ" className="poster-run-panel"><RunPanel runs={cachedRuns} run={selected?.run ?? null} progress={selected?.progress ?? null}
+          logs={selectedRunId ? runState.logs[selectedRunId] ?? [] : []} profileNames={profileNames} onSelect={(runId) => dispatch({ type: 'select', runId })}
+          loading={runsLoad.loading} error={runsLoad.error} onRetry={() => setBootstrapSeq((n) => n + 1)} /></aside>}
       </div>
       {composerMounted && <PostTab key={editingDraft ? `${editingDraft.schedule.id}:${draftOpenSeq}` : composeSeq ? `new:${composeSeq}` : 'new'} draft={editingDraft ?? undefined} initialMediaPaths={composeMedia} open={composerOpen} onClose={() => setComposerOpen(false)} initialProfileIds={selectedChannels ?? []} initialRunAt={composeAt}
-        busy={busy} profileNames={profileNames} onStarted={onStarted} />}
+        atCapacity={atCapacity} profileNames={profileNames} onStarted={onStarted} />}
     </div>
   );
 }

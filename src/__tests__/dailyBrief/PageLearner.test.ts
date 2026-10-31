@@ -22,8 +22,8 @@ function setup() {
     const session = { context: { pages: () => [], newPage }, close };
     const deps = {
         store: jest.fn(() => store), openForAutomation: jest.fn(async (_id: string) => session),
-        slot: { acquire: jest.fn(), release: jest.fn() }, shouldYield: jest.fn(() => false),
-        isResearchRunning: jest.fn(() => false), observeLogin: jest.fn(), onFinished: jest.fn(),
+        assertCurrent: jest.fn(), shouldYield: jest.fn(() => false),
+        observeLogin: jest.fn(), onFinished: jest.fn(),
         read: jest.fn(async () => page), now: () => NOW, sleep: jest.fn(async (_ms: number) => undefined),
         random: () => 0.5, newId: () => 'j1',
     };
@@ -37,7 +37,7 @@ test('constants match the brief verbatim', () => {
     expect([LEARN_FRESH_MS, LEARN_PAUSE_MIN_MS, LEARN_PAUSE_MAX_MS]).toEqual([86400000, 20000, 60000]);
 });
 
-test('an empty workspace finishes asynchronously and releases its slot once', async () => {
+test('an empty workspace finishes asynchronously and releases local admission', async () => {
     const { learner, deps, results } = setup();
     learner.learn([], false);
     expect(deps.onFinished).not.toHaveBeenCalled();
@@ -45,7 +45,7 @@ test('an empty workspace finishes asynchronously and releases its slot once', as
     expect(results()).toEqual([]);
     expect(deps.openForAutomation).not.toHaveBeenCalled();
     expect(deps.sleep).not.toHaveBeenCalled();
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
     expect(deps.onFinished).toHaveBeenCalledTimes(1);
 });
 
@@ -65,7 +65,7 @@ test('learns Page/person and preserves learned checkpoint metadata, then continu
     expect(deps.observeLogin).toHaveBeenCalledWith('p3', 'checkpoint');
     expect(results().map((r: any) => r.kind)).toEqual(['page', 'person', 'unknown', 'page']);
     expect(close).toHaveBeenCalledTimes(4);
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
 });
 
 test('logged_out maps only the stored code to not_logged_in', async () => {
@@ -101,25 +101,22 @@ test.each([{ errorCode: 'checkpoint' }, { kind: 'unknown' }, { learnedAt: NOW + 
     expect(deps.read).toHaveBeenCalledTimes(1);
 });
 
-test('BUSY is synchronous for research, a second learn and the shared slot', async () => {
+test('BUSY is synchronous only for a second learn; denied admission stays idle', async () => {
     const { learner, deps } = setup();
-    deps.isResearchRunning.mockReturnValueOnce(true);
-    expect(() => learner.learn(['p1'], false)).toThrow(BUSY_ERROR);
-    expect(deps.slot.acquire).not.toHaveBeenCalled();
-    deps.slot.acquire.mockImplementationOnce(() => { throw new Error(BUSY_ERROR); });
-    expect(() => learner.learn(['p1'], false)).toThrow(BUSY_ERROR);
+    deps.assertCurrent.mockImplementationOnce(() => { throw new Error('retired'); });
+    expect(() => learner.learn(['p1'], false)).toThrow('retired');
     expect(learner.isRunning()).toBe(false);
-    expect(deps.slot.release).not.toHaveBeenCalled();
+    expect(deps.openForAutomation).not.toHaveBeenCalled();
     learner.learn(['p1'], false);
     expect(() => learner.learn(['p2'], false)).toThrow(BUSY_ERROR);
     await learner.whenIdle();
 });
 
-test.each(['store', 'newId'] as const)('releases a reserved slot if %s throws', async (key) => {
+test.each(['store', 'newId'] as const)('releases local admission if %s throws', async (key) => {
     const { learner, deps } = setup();
     deps[key] = jest.fn(() => { throw new Error('setup failed'); });
     expect(() => learner.learn(['p1'], false)).toThrow('setup failed');
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
     expect(deps.onFinished).not.toHaveBeenCalled();
     expect(learner.isRunning()).toBe(false);
 });
@@ -145,7 +142,7 @@ test('yields after the first profile and skips the remainder, releasing once', a
     await learner.whenIdle();
     expect(results().map((r: any) => r.kind)).toEqual(['page', 'skipped', 'skipped']);
     expect(deps.openForAutomation).toHaveBeenCalledTimes(1);
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
 });
 
 test('manual-open profiles skip without overwriting metadata', async () => {
@@ -253,14 +250,14 @@ test('unproven unknown never gains a successful freshness timestamp', async () =
     expect(deps.read).toHaveBeenCalledTimes(2);
 });
 
-test.each(['shouldYield', 'sleep', 'observeLogin', 'onFinished'] as const)('%s throwing never leaks the slot or completion', async (key) => {
+test.each(['shouldYield', 'sleep', 'observeLogin', 'onFinished'] as const)('%s throwing never leaks local admission or completion', async (key) => {
     const { learner, deps } = setup();
     deps[key] = jest.fn(() => { throw new Error('callback failed'); }) as any;
     if (key === 'observeLogin') deps.read.mockRejectedValueOnce(new PageLoginProblem('checkpoint'));
     learner.learn(['p1', 'p2'], false);
     await expect(learner.whenIdle()).resolves.toBeUndefined();
     expect(learner.isRunning()).toBe(false);
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
     expect(deps.onFinished).toHaveBeenCalledTimes(1);
 });
 
@@ -274,7 +271,7 @@ test('a finish callback may start a new job without the old finalizer resetting 
     expect(learner.isRunning()).toBe(true);
     readGate.resolve(page); await learner.whenIdle();
     expect(deps.onFinished).toHaveBeenCalledTimes(2);
-    expect(deps.slot.release).toHaveBeenCalledTimes(2);
+    expect(learner.isRunning()).toBe(false);
 });
 
 test('read/login error retains priority if session close also rejects', async () => {
@@ -284,7 +281,7 @@ test('read/login error retains priority if session close also rejects', async ()
     learner.learn(['p1'], false); await learner.whenIdle();
     expect(store.getIdentity('p1')?.errorCode).toBe('not_logged_in');
     expect(deps.observeLogin).toHaveBeenCalledWith('p1', 'logged_out');
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
 });
 
 test('stopping an owned timer clears it and a subsequent job can run', async () => {
@@ -302,12 +299,12 @@ test('stopping an owned timer clears it and a subsequent job can run', async () 
     } finally { jest.useRealTimers(); }
 });
 
-test('a throwing slot release still clears active and calls onFinished once', async () => {
-    const { learner, deps } = setup();
-    deps.slot.release.mockImplementationOnce(() => { throw new Error('release failed'); });
+test('a throwing session close still clears active and calls onFinished once', async () => {
+    const { learner, deps, close } = setup();
+    close.mockRejectedValueOnce(new Error('close failed'));
     learner.learn(['p1'], false); await learner.whenIdle();
     expect(learner.isRunning()).toBe(false);
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
     expect(deps.onFinished).toHaveBeenCalledTimes(1);
 });
 
@@ -332,7 +329,7 @@ test('50 fresh identities complete without browser attempts or pauses, looking u
     expect(results()).toEqual(ids.map((profileId) => ({ profileId, kind: 'skipped', pageName: profileId })));
     expect(lookup.mock.calls).toEqual(ids.map((id) => [id]));
     expect(deps.onFinished).toHaveBeenCalledTimes(1);
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
     expect(learner.isRunning()).toBe(false);
 });
 
@@ -358,7 +355,7 @@ test.each([
     expect(results().map((r: any) => r.kind)).toEqual(ids.map((id) => id.startsWith('fresh-') ? 'skipped' : 'page'));
     expect(lookup.mock.calls).toEqual(ids.map((id) => [id]));
     expect(deps.onFinished).toHaveBeenCalledTimes(1);
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
 });
 
 test('failed opens and manual-open refusals still count as attempts for pacing', async () => {
@@ -378,7 +375,7 @@ test('failed opens and manual-open refusals still count as attempts for pacing',
     expect(results().map((r: any) => r.profileId)).toEqual(ids);
     expect(results().map((r: any) => r.kind)).toEqual(['skipped', 'unknown', 'skipped', 'skipped', 'skipped', 'page', 'skipped']);
     expect(deps.onFinished).toHaveBeenCalledTimes(1);
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
 });
 
 test('force retains pacing between every browser attempt even for fresh profiles', async () => {
@@ -394,7 +391,7 @@ test('force retains pacing between every browser attempt even for fresh profiles
     expect(results().map((r: any) => r.profileId)).toEqual(ids);
     expect(results().every((r: any) => r.kind === 'page')).toBe(true);
     expect(lookup.mock.calls).toEqual(ids.map((id) => [id]));
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
 });
 
 
@@ -410,5 +407,5 @@ test('observes ok only after successful read, close and storage; listener failur
     expect(observed).toEqual([{ state: 'ok', closed: 1, identity: expect.objectContaining({ kind: 'page', errorCode: '' }) }]);
     expect(results()).toEqual([{ profileId: 'p1', kind: 'page', pageName: 'Page' }]);
     expect(store.getIdentity('p1')?.errorCode).toBe('');
-    expect(deps.slot.release).toHaveBeenCalledTimes(1);
+    expect(learner.isRunning()).toBe(false);
 });

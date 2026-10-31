@@ -31,6 +31,7 @@ export interface FbPosterRun {
 
 export interface FbPosterSchedule {
     id: string;
+    revision: number;
     name: string;
     kind: 'once' | 'recurring';
     params: Record<string, unknown>; // StartParams kiểu 'post'; mediaPaths là tên tệp đã lưu
@@ -40,6 +41,8 @@ export interface FbPosterSchedule {
     enabled: boolean;
     /** Bản nháp: luôn enabled = false, nextRunAt = null; chỉ thành lịch thật khi được duyệt. */
     draft: boolean;
+    /** Server provenance only; optional for legacy in-memory shapes, required on persisted rows. */
+    authorityKind?: 'owner' | 'autonomy';
     campaignId: string | null;
     nextRunAt: number | null;
     lastRunId: string | null;

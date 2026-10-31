@@ -31,7 +31,7 @@ const fakeMethods: ControlMethod[] = [
   { name: 'crash', description: 'x', destructive: false, paramsSchema: obj, resultSchema: obj, run: async () => { throw new TypeError('secret internal detail'); } },
 ];
 
-async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any; poster?: any; isBlocked?: () => boolean; bridgeScript?: () => Buffer | null; openVideoFile?: any } = {}) {
+async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: any; poster?: any; isBlocked?: () => boolean; bridgeScript?: () => Buffer | null; openVideoFile?: any; authorizationResources?: any; methods?: ControlMethod[] } = {}) {
   const db = memoryDb();
   db.exec(CONTROL_SCHEMA_SQL);
   const store = new ControlStore(db);
@@ -62,8 +62,8 @@ async function setup(opts: { allowList?: string[]; rate?: number; saveMedia?: an
   const server = new ControlApiServer({
     tls: { key: cert.key, cert: cert.cert }, port: 0, host: '127.0.0.1',
     allowList: opts.allowList ?? ['127.0.0.1'],
-    store, methods: [...real, ...fakeMethods], idempotency: new IdempotencyCache(store),
-    rateLimiter: new RateLimiter(opts.rate ?? 60), lockout, saveMedia, isBlocked: opts.isBlocked, openVideoFile: opts.openVideoFile,
+    store, methods: [...real, ...fakeMethods, ...(opts.methods ?? [])], idempotency: new IdempotencyCache(store),
+    rateLimiter: new RateLimiter(opts.rate ?? 60), lockout, saveMedia, isBlocked: opts.isBlocked, openVideoFile: opts.openVideoFile, authorizationResources: opts.authorizationResources,
     pairing: { consume: (t, ip) => tickets.consume(t, ip), onPaired: (i) => { paired.push(i); } },
     bridgeScript: opts.bridgeScript,
   });
@@ -593,6 +593,32 @@ describe('ControlApiServer hardening', () => {
     expect(spy.mock.calls.some((a) => String(a[0]).includes('runs.current') && typeof a[1] === 'string')).toBe(true);
   });
 
+  it('runs.active returns a bare snapshot array; a reused legacy idempotencyKey replays instead of cancelling a second run', async () => {
+    const snapshot = { run: { id: 'r1' }, progress: { runId: 'r1' } };
+    const cancel = jest.fn((input?: any) => ({ cancelled: input?.runId === 'live' }));
+    ctx = await setup({ poster: { active: () => ({ runs: [snapshot] }), cancel } });
+    const active = await ctx.call('runs.active');
+    expect([active.status, active.body.result]).toEqual([200, [snapshot]]);
+    const live = await ctx.call('runs.cancel', { confirm: true, runId: 'live' }, { idempotencyKey: 'same' });
+    expect(live.body.result).toEqual({ cancelled: true });
+    const replay = await ctx.call('runs.cancel', { confirm: true, runId: 'other' }, { idempotencyKey: 'same' });
+    expect([replay.status, replay.body.result]).toEqual([200, { cancelled: true }]);
+    expect(cancel.mock.calls).toEqual([[{ runId: 'live' }]]);
+    const fresh = await ctx.call('runs.cancel', { confirm: true, runId: 'other' }, { idempotencyKey: 'different' });
+    expect(fresh.body.result).toEqual({ cancelled: false });
+    expect(cancel.mock.calls).toEqual([[{ runId: 'live' }], [{ runId: 'other' }]]);
+  });
+
+  it('runs.cancel selection errors become CONFLICT 409 and NOT_FOUND 404 without leaking internals', async () => {
+    const { PosterRunSelectionError } = require('../../services/facebookPoster/FacebookPosterCoordinator');
+    ctx = await setup({ poster: { cancel: (input?: any) => { throw new PosterRunSelectionError(input?.runId ? 'NOT_FOUND' : 'CONFLICT'); } } });
+    const conflict = await ctx.call('runs.cancel', { confirm: true });
+    expect([conflict.status, conflict.body.error.code]).toEqual([409, 'CONFLICT']);
+    const missing = await ctx.call('runs.cancel', { confirm: true, runId: 'gone' });
+    expect([missing.status, missing.body.error.code]).toEqual([404, 'NOT_FOUND']);
+    expect((await ctx.call('runs.cancel', { runId: 'gone' })).body.error.code).toBe('CONFIRMATION_REQUIRED');
+  });
+
   it('caps concurrent events.wait long-polls per key at 4', async () => {
     ctx = await setup();
     const waits = Array.from({ length: 4 }, () => new Promise<void>((resolve) => {
@@ -642,6 +668,25 @@ describe('ControlApiServer pairing and bridge script', () => {
     const d = await ctx.send('GET', '/v1/describe', { key: r.body.result.apiKey });
     expect(d.status).toBe(200);
     expect(ctx.paired).toEqual([expect.objectContaining({ keyName: 'Bot Một', ip: '127.0.0.1' })]);
+  });
+
+  it('pairBodyCannotUpgradeRunnerRole', async () => {
+    ctx = await setup();
+    const policy = { kind: 'page_runner' as const, workspaceId: 'ws-a', assignments: [{ pageId: '123', profileIds: ['p1'] }] };
+    const { ticket } = ctx.tickets.create('runner', '127.0.0.1', policy);
+    const res = await pair(JSON.stringify({ ticket, policy: { ...policy, kind: 'page_receiver', ownerChatId: '-123', ownerSenderId: '456' } }));
+    expect(res.status).toBe(200);
+    expect(ctx.store.listKeys().find(k => k.name === 'runner')?.policy).toEqual(policy);
+  });
+
+  it('legacyPairingStillWorks without accepting body policy', async () => {
+    ctx = await setup();
+    const { ticket } = ctx.tickets.create('legacy', '127.0.0.1');
+    const res = await pair(JSON.stringify({ ticket, policy: { kind: 'page_runner', workspaceId: 'injected' } }));
+    expect(res.status).toBe(200);
+    const key = ctx.store.listKeys().find(k => k.name === 'legacy')!;
+    expect(key).not.toHaveProperty('policy');
+    expect(ctx.db.queryOne('SELECT policy_json FROM control_keys WHERE id=?', [key.id])).toEqual({ policy_json: null });
   });
 
   it('pair: reused or wrong-ip ticket is 401 and counts toward lockout', async () => {
@@ -811,4 +856,172 @@ describe('ControlApiServer /v1/videos/file', () => {
     expect((await ctx.send('GET', '/v1/videos/file?videoId=v1')).status).toBe(503);
     expect(openVideoFile).not.toHaveBeenCalled();
   });
+});
+
+describe('scoped Control API boundaries', () => {
+  const policy = { kind: 'page_runner', workspaceId: 'ws1', assignments: [{ pageId: 'page1', profileIds: ['p1'] }] };
+  const resources = () => ({ workspaceId: 'ws1', assertCurrent: () => {}, getPageIdentity: () => ({ profileId: 'p1', kind: 'page', pageId: 'page1' }), getWork: () => null, getResourceOwner: () => null });
+  const runner = () => (ctx.store.createKey as any)('Claude bot', policy).key as string;
+  it('scopedRunnerRejectsEveryNonAllowlistedMethod even confirm true', async () => {
+    ctx = await setup({ authorizationResources: resources, rate: 1000 });
+    const key = runner();
+    const description = (await ctx.send('GET', '/v1/describe')).body.result;
+    const names = description.methods.map((m: any) => m.name);
+    for (const name of names.filter((n: string) => !['profiles.list', 'pages.list', 'pages.learn'].includes(n))) {
+      const reply = await ctx.call(name, { confirm: true, when: 'now', workspaceId: 'ws1' }, {}, { key });
+      expect([name, reply.status, reply.body.error?.code]).toEqual([name, 403, 'FORBIDDEN']);
+    }
+    for (const when of ['now', 'later']) expect((await ctx.call('drafts.approve', { id: 'd1', when, confirm: true }, {}, { key })).status).toBe(403);
+  });
+  it('hiddenMethodsAreAbsentFromDescribe and missing resolver denies scoped calls', async () => {
+    ctx = await setup();
+    const key = runner();
+    const reply = await ctx.send('GET', '/v1/describe', { key });
+    expect(reply.status).toBe(403);
+    expect((await ctx.call('profiles.list', {}, {}, { key })).status).toBe(403);
+  });
+  it('describes only visible methods with a bound resolver', async () => {
+    ctx = await setup({ authorizationResources: resources });
+    const reply = await ctx.send('GET', '/v1/describe', { key: runner() });
+    expect(reply.status).toBe(200);
+    expect(reply.body.result.methods.map((m: any) => m.name)).toEqual(['profiles.list', 'pages.learn', 'pages.list']);
+  });
+  it('uploadDeniedBeforeReadingBody and videoDeniedBeforeOpenFile', async () => {
+    const saveMedia = jest.fn();
+    const openVideoFile = jest.fn();
+    ctx = await setup({ authorizationResources: resources, saveMedia, openVideoFile });
+    const key = runner();
+    expect((await ctx.send('POST', '/v1/media', { key, body: 'x' })).status).toBe(403);
+    expect(saveMedia).not.toHaveBeenCalled();
+    expect((await ctx.send('GET', '/v1/videos/file?videoId=video1', { key })).status).toBe(403);
+    expect(openVideoFile).not.toHaveBeenCalled();
+  });
+  it('authorizationRunsBeforeCachedResult and revokedKeyCannotReplay', async () => {
+    let current = true;
+    const bound = () => ({ ...resources(), assertCurrent: () => { if (!current) throw new ControlError('FORBIDDEN', 'Không có quyền'); } });
+    ctx = await setup({ authorizationResources: bound });
+    const key = runner();
+    expect((await ctx.call('profiles.list', {}, { idempotencyKey: 'i' }, { key })).status).toBe(200);
+    current = false;
+    expect((await ctx.call('profiles.list', {}, { idempotencyKey: 'i' }, { key })).status).toBe(403);
+    current = true;
+    const info = ctx.store.findActiveKeyByHash(require('../../services/control/controlSecurity').hashKey(key))!;
+    ctx.store.revokeKey(info.id);
+    expect((await ctx.call('profiles.list', {}, { idempotencyKey: 'i' }, { key })).status).toBe(401);
+  });
+  it('post-await revocation denies both original and in-flight replay and does not cache stale data', async () => {
+    let release!: (v: unknown) => void;
+    const run = jest.fn(() => new Promise((r) => { release = r; }));
+    ctx = await setup({ authorizationResources: resources, methods: [{ name: 'pageWork.list', description: '', destructive: false, paramsSchema: obj, resultSchema: obj, run }] });
+    const key = runner();
+    const first = ctx.call('pageWork.list', {}, { idempotencyKey: 'pending' }, { key });
+    while (!release) await new Promise((r) => setImmediate(r));
+    const second = ctx.call('pageWork.list', {}, { idempotencyKey: 'pending' }, { key });
+    await new Promise((r) => setImmediate(r));
+    const info = ctx.store.findActiveKeyByHash(require('../../services/control/controlSecurity').hashKey(key))!;
+    ctx.store.revokeKey(info.id);
+    release({ items: ['private'] });
+    expect((await first).status).toBe(403);
+    expect([401, 403]).toContain((await second).status);
+    expect(ctx.store.getIdempotent(info.id, 'pending')).toBeNull();
+  });
+  it('sameIdempotencyKeyDifferentPayloadConflicts through HTTP', async () => {
+    ctx = await setup({ authorizationResources: resources });
+    const key = runner();
+    expect((await ctx.call('profiles.list', { a: 1 }, { idempotencyKey: 'same' }, { key })).status).toBe(200);
+    expect((await ctx.call('profiles.list', { a: 2 }, { idempotencyKey: 'same' }, { key })).status).toBe(409);
+  });
+  it('destroys an opened stream when scope changes during open before exposing bytes', async () => {
+    let current = true;
+    const stream = Readable.from(['secret']);
+    ctx = await setup({ authorizationResources: () => ({ ...resources(), assertCurrent: () => { if (!current) throw new ControlError('FORBIDDEN', 'Không có quyền'); }, getResourceOwner: () => ({ workspaceId: 'ws1', pageId: 'page1', workId: 'pruned' }) }), openVideoFile: async () => { current = false; return { stream, size: 6 }; } });
+    const reply = await ctx.send('GET', '/v1/videos/file?videoId=video1', { key: runner() });
+    expect(reply.status).toBe(403);
+    expect(reply.raw).not.toContain('secret');
+    expect(stream.destroyed).toBe(true);
+  });
+  it('streams linked videos even after work pruning and stops bytes after revocation', async () => {
+    let current = true;
+    const stream = new Readable({ read() {} });
+    ctx = await setup({ authorizationResources: () => ({ ...resources(), assertCurrent: () => { if (!current) throw new ControlError('FORBIDDEN', 'Không có quyền'); }, getResourceOwner: () => ({ workspaceId: 'ws1', pageId: 'page1', workId: 'pruned' }) }), openVideoFile: async () => { stream.push('allowed'); return { stream, size: 13 }; } });
+    const key = runner();
+    const raw = await new Promise<string>((resolve, reject) => {
+      const req = https.request({ host: '127.0.0.1', port: ctx.port, path: '/v1/videos/file?videoId=video1', headers: { authorization: `Bearer ${key}` }, rejectUnauthorized: false, agent: false }, (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk.toString();
+          if (current) { current = false; stream.push('secret'); stream.push(null); }
+        });
+        res.on('end', () => resolve(body));
+        res.on('aborted', () => resolve(body));
+        res.on('error', () => resolve(body));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    expect(raw).toBe('allowed');
+    expect(stream.destroyed).toBe(true);
+  });
+  it('does not write audit into a workspace that changed during an awaited method', async () => {
+    let current = true;
+    ctx = await setup({ authorizationResources: () => ({ ...resources(), assertCurrent: () => { if (!current) throw new ControlError('FORBIDDEN', 'Không có quyền'); } }), methods: [{ name: 'pageWork.list', description: '', destructive: false, paramsSchema: obj, resultSchema: obj, run: async () => { current = false; return { items: [] }; } }] });
+    expect((await ctx.call('pageWork.list', {}, {}, { key: runner() })).status).toBe(403);
+    expect(ctx.store.listAudit(10)).toEqual([]);
+  });
+
+  it.each(['method', 'file'])('does not expose stale rejection details after %s await', async (operation) => {
+    let current = true;
+    ctx = await setup({ authorizationResources: () => ({ ...resources(), assertCurrent: () => { if (!current) throw new ControlError('FORBIDDEN', 'Không có quyền'); }, getResourceOwner: () => ({ workspaceId: 'ws1', pageId: 'page1', workId: 'pruned' }) }), methods: [{ name: 'pageWork.list', description: '', destructive: false, paramsSchema: obj, resultSchema: obj, run: async () => { current = false; throw new ControlError('NOT_FOUND', 'stale secret'); } }], openVideoFile: async () => { current = false; throw new ControlError('NOT_FOUND', 'stale secret'); } });
+    const key = runner();
+    const reply = operation === 'method' ? await ctx.call('pageWork.list', {}, {}, { key }) : await ctx.send('GET', '/v1/videos/file?videoId=video1', { key });
+    expect(reply.status).toBe(403);
+    expect(reply.raw).not.toContain('stale secret');
+  });
+
+  it('denies a valid upload from headers without waiting for any body bytes', async () => {
+    ctx = await setup({ authorizationResources: resources });
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = https.request({ host: '127.0.0.1', port: ctx.port, method: 'POST', path: '/v1/media', headers: { authorization: `Bearer ${runner()}`, 'content-type': 'image/png', 'x-filename': 'image.png', 'content-length': '1000000' }, rejectUnauthorized: false, agent: false }, (res) => {
+        res.resume();
+        res.on('end', () => { req.destroy(); resolve(res.statusCode!); });
+      });
+      req.on('error', reject);
+      req.flushHeaders();
+    });
+    expect(status).toBe(403);
+    expect(ctx.saved).toEqual([]);
+  });
+
+  it.each([
+    ['positive', '{"value":null}', '{"value":1e400}'],
+    ['negative', '{"value":null}', '{"value":-1e400}'],
+    ['nested object positive', '{"outer":{"value":null}}', '{"outer":{"value":1e400}}'],
+    ['nested object negative', '{"outer":{"value":null}}', '{"outer":{"value":-1e400}}'],
+    ['nested array positive', '{"outer":[null]}', '{"outer":[1e400]}'],
+    ['nested array negative', '{"outer":[null]}', '{"outer":[-1e400]}'],
+  ])('rejects raw JSON %s overflow before scoped cache lookup', async (_label, seedParams, invalidParams) => {
+    let executions = 0;
+    ctx = await setup({ authorizationResources: resources, methods: [{ name: 'pageWork.list', description: '', destructive: false, paramsSchema: obj, resultSchema: obj, run: async () => ({ execution: ++executions }) }] });
+    const key = runner();
+    const sendRaw = (params: string) => ctx.send('POST', '/v1/call', { key, body: `{"method":"pageWork.list","params":${params},"idempotencyKey":"overflow"}` });
+    const seeded = await sendRaw(seedParams);
+    expect(seeded.status).toBe(200);
+    expect(seeded.body.result).toEqual({ execution: 1 });
+    const lookup = jest.spyOn(ctx.store, 'getIdempotent');
+    const rejected = await sendRaw(invalidParams);
+    expect(rejected.status).toBe(400);
+    expect(rejected.body).toMatchObject({ ok: false, error: { code: 'INVALID_PARAMS' } });
+    expect(rejected.body.result).toBeUndefined();
+    expect(lookup).not.toHaveBeenCalled();
+    expect(executions).toBe(1);
+    expect((await sendRaw(seedParams)).body.result).toEqual({ execution: 1 });
+    expect(executions).toBe(1);
+  });
+  it('preserves legacy raw JSON overflow handling', async () => {
+    ctx = await setup();
+    const reply = await ctx.send('POST', '/v1/call', { body: '{"method":"echo","params":{"value":1e400}}' });
+    expect(reply.status).toBe(200);
+    expect(reply.body.result.p).toEqual({ value: null });
+  });
+
 });

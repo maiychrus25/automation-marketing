@@ -1,4 +1,5 @@
 import type { NetworkInterfaceInfo } from 'os';
+import type { ScopedKeyPolicy } from './controlAuthorization';
 import { DEFAULT_CONTROL_PORT } from './ControlApiServer';
 import { parseAllowList } from './controlSecurity';
 
@@ -9,9 +10,9 @@ export const MAX_CONTROL_PORT = 65535;
 export const FIREWALL_RULE_NAME = 'MaiHub Control API';
 
 /** `publicHost`: địa chỉ bot dùng để tới MaiHub (IP công khai hoặc tên miền); null = chưa đặt. */
-export interface ControlConfig { enabled: boolean; port: number; allowList: string[]; publicHost: string | null }
+export interface ControlConfig { enabled: boolean; port: number; allowList: string[]; publicHost: string | null; protectedWritesEnabled: boolean }
 
-export const DEFAULT_CONTROL_CONFIG: ControlConfig = { enabled: false, port: DEFAULT_CONTROL_PORT, allowList: [], publicHost: null };
+export const DEFAULT_CONTROL_CONFIG: ControlConfig = { enabled: false, port: DEFAULT_CONTROL_PORT, allowList: [], publicHost: null, protectedWritesEnabled: false };
 
 /** Lỗi kiểm tra cấu hình; `invalid` là các mục IP sai để UI tô đỏ. */
 export class ControlConfigError extends Error {
@@ -32,14 +33,18 @@ export function parseStoredConfig(raw: string | null): ControlConfig {
         if (typeof v?.publicHost === 'string') {
             try { publicHost = validatePublicHost(v.publicHost); } catch { /* giá trị hỏng thì coi như chưa đặt */ }
         }
-        return { enabled: v?.enabled === true && allowList.length > 0, port, allowList, publicHost };
+        return { enabled: v?.enabled === true && allowList.length > 0, port, allowList, publicHost, protectedWritesEnabled: v?.protectedWritesEnabled === true };
     } catch {
         return { ...DEFAULT_CONTROL_CONFIG, allowList: [] };
     }
 }
 
 /** Kiểm tra đầu vào `controlApi:setConfig`. `allowList` là mảng hoặc chuỗi (phân cách phẩy/khoảng trắng). Bật mà danh sách rỗng bị từ chối. */
-export function validateConfigInput(input: any): ControlConfig {
+export function validateConfigInput(input: any, storedProtectedWritesEnabled = false): ControlConfig {
+    if (input?.protectedWritesEnabled !== undefined && typeof input.protectedWritesEnabled !== 'boolean') {
+        throw new ControlConfigError('Cờ cho phép ghi được bảo vệ phải là boolean');
+    }
+    const protectedWritesEnabled = input?.protectedWritesEnabled ?? storedProtectedWritesEnabled;
     const port = Number(input?.port);
     if (!Number.isInteger(port) || port < MIN_CONTROL_PORT || port > MAX_CONTROL_PORT) {
         throw new ControlConfigError(`Cổng phải là số nguyên từ ${MIN_CONTROL_PORT} đến ${MAX_CONTROL_PORT}`);
@@ -50,7 +55,7 @@ export function validateConfigInput(input: any): ControlConfig {
     const enabled = input?.enabled === true;
     if (enabled && entries.length === 0) throw new ControlConfigError('Phải nhập ít nhất một địa chỉ IP được phép trước khi bật');
     const hostText = typeof input?.publicHost === 'string' ? input.publicHost.trim() : '';
-    return { enabled, port, allowList: [...new Set(entries)], publicHost: hostText ? validatePublicHost(hostText) : null };
+    return { enabled, port, protectedWritesEnabled, allowList: [...new Set(entries)], publicHost: hostText ? validatePublicHost(hostText) : null };
 }
 
 function isPublicIpv4(ip: string): boolean {
@@ -105,9 +110,10 @@ export function buildPairingCode(input: { url: string; fingerprint: string; tick
     return `mhp1.${Buffer.from(json, 'utf8').toString('base64url')}`;
 }
 
-/** Lệnh cài một dòng để chạy bằng root trên VPS bot (spec §2.4). Mã base64url không chứa `'` nên bọc nháy đơn là an toàn. */
-export function buildInstallCommand(input: { host: string; port: number; sha256: string; code: string }): string {
-    return `curl -fsSk https://${input.host}:${input.port}/v1/bridge.py -o /root/maihub_bridge.py && echo "${input.sha256}  /root/maihub_bridge.py" | sha256sum -c - && python3 -I /root/maihub_bridge.py pair '${input.code}' --install`;
+/** Legacy installs unchanged; scoped roles only stage into separate root-private directories, never the bot environment. */
+export function buildInstallCommand(input: { host: string; port: number; sha256: string; code: string; kind?: ScopedKeyPolicy['kind'] }): string {
+    const destination = input.kind ? `--dir /root/maihub-page-${input.kind === 'page_runner' ? 'runner' : 'receiver'}` : '--install';
+    return `curl -fsSk https://${input.host}:${input.port}/v1/bridge.py -o /root/maihub_bridge.py && echo "${input.sha256}  /root/maihub_bridge.py" | sha256sum -c - && python3 -I /root/maihub_bridge.py pair '${input.code}' ${destination}`;
 }
 
 /** Lệnh cho Windows; chuỗi để người dùng tự chạy trong PowerShell quản trị, app không chạy hộ. Dòng đầu xoá luật cũ cùng tên (đổi cổng/IP không để lại luật thừa); báo "No rules match" lần đầu là bình thường. */

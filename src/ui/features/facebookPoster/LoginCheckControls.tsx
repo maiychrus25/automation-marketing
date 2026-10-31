@@ -9,27 +9,21 @@ export default function LoginCheckControls({ selected }: { selected: string[] })
   const showNotification = useAppStore((s) => s.showNotification);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [starting, setStarting] = useState(false);
-  const [runActive, setRunActive] = useState(false);
   const [open, setOpen] = useState(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [saving, setSaving] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const gearRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const sawEventRef = useRef(false);
 
+  // Poster runs do not gate the check: the backend only enforces lifecycle admission and its own one-job limit.
   useEffect(() => {
     let cancelled = false;
-    ipc.facebookPoster?.current().then((res) => {
-      if (!cancelled && !sawEventRef.current && res?.success) setRunActive(res.run?.status === 'running');
-    }).catch(() => {});
     ipc.facebookPoster?.getLoginCheckConfig().then((res) => {
       if (!cancelled && res?.success && res.config) setConfig(res.config);
     }).catch(() => {});
-    const offProgress = ipc.on?.('facebookPoster:progress', () => { sawEventRef.current = true; setRunActive(true); });
-    const offFinished = ipc.on?.('facebookPoster:runFinished', () => { sawEventRef.current = true; setRunActive(false); });
     const offCheck = ipc.on?.('facebookPoster:loginCheckProgress', (data: { done: number; total: number } | null) => setProgress(data ?? null));
-    return () => { cancelled = true; offProgress?.(); offFinished?.(); offCheck?.(); };
+    return () => { cancelled = true; offCheck?.(); };
   }, []);
 
   useEffect(() => {
@@ -78,8 +72,8 @@ export default function LoginCheckControls({ selected }: { selected: string[] })
 
   return (
     <div ref={wrapRef} className="relative flex items-center gap-1">
-      <button type="button" onClick={start} disabled={checking || runActive}
-        title={runActive ? 'Đang có lượt đăng chạy' : selected.length ? 'Kiểm tra các profile đã chọn' : 'Kiểm tra tất cả profile'}
+      <button type="button" onClick={start} disabled={checking}
+        title={selected.length ? 'Kiểm tra các profile đã chọn' : 'Kiểm tra tất cả profile'}
         className={`px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-50 whitespace-nowrap ${FOCUS}`}>
         {checking ? `Đang kiểm tra… (${progress?.done ?? 0}/${progress?.total ?? 0})` : 'Kiểm tra đăng nhập'}
       </button>

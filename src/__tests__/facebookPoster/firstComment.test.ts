@@ -309,6 +309,42 @@ test('postFirstComment: nút gửi bị che thì nhấn Enter trong ô (Facebook
   assert.deepStrictEqual(calls, ['box-focus', 'type', 'send-blocked', 'press:Enter']);
 });
 
+test('autonomousRejectedClickDoesNotResendThroughEnter',async()=>{
+  const calls:string[]=[]; const postUrl='https://www.facebook.com/groups/1/posts/2/';
+  const page=commentPage({},calls) as any;
+  page.locator=()=>({focus:async()=>{},first:()=>({click:async()=>{calls.push('send-attempt'); throw new Error('ack lost after dispatch');}})});
+  page.keyboard.press=async(key:string)=>{calls.push(key);};
+  const guard={variantIndex:0,assertPost:()=>{},assertCurrent:()=>{},beforeEffect:async()=>{},settle:()=>{}};
+  const out=await runWithFakeTimers(()=>postFirstComment(page,{postUrl,comment:'hi',text:'Post'},{autonomyGuard:guard}));
+  expect(calls.filter(c=>c==='send-attempt')).toHaveLength(1); expect(calls).not.toContain('Enter');
+  expect(out.status).toBe('failed');
+});
+test.each(['navigation','barrier'])('autonomousCommentCannotFollowTargetRedirect(%s)',async phase=>{
+  const calls:string[]=[]; const postUrl='https://www.facebook.com/groups/1/posts/2/'; let actual=postUrl;
+  const page=commentPage({},calls) as any;
+  page.url=()=>actual; page.goto=async()=>{actual=phase==='navigation'?'https://www.facebook.com/groups/1/posts/1/':postUrl;};
+  const guard={variantIndex:0,assertPost:()=>{},assertCurrent:()=>{},beforeEffect:async()=>{if(phase==='barrier') actual='https://www.facebook.com/groups/1/posts/1/';},settle:()=>{}};
+  const out=await runWithFakeTimers(()=>postFirstComment(page,{postUrl,comment:'hi',text:'Same prefix'},{autonomyGuard:guard}));
+  expect(calls).not.toContain('send'); expect(out.status).toBe('failed');
+});
+test('autonomousCommentDeniedAtEntryDoesNotNavigateOrType',async()=>{
+  const calls:string[]=[]; const page=commentPage({},calls) as any; page.goto=async()=>{calls.push('navigate');};
+  const guard={variantIndex:0,assertPost:()=>{},assertCurrent:()=>{},beforeEffect:async()=>{throw new Error('no exact post authority');},settle:()=>{}};
+  const out=await runWithFakeTimers(()=>postFirstComment(page,{postUrl:'https://www.facebook.com/groups/1/posts/2/',comment:'hi',text:'Post'},{autonomyGuard:guard}));
+  expect(out.status).toBe('failed'); expect(calls).toEqual([]);
+});
+
+test.each(['click','Enter'])('firstCommentAuthorityIsRecheckedBeforeEachSubmit(%s)',async route=>{
+  const calls:string[]=[]; let revoked=false;
+  const page=commentPage({markCommentSendButtonInPage:()=>{if(route==='click') revoked=true; return true;}},calls) as any;
+  page.url=()=> 'https://www.facebook.com/posts/1';
+  if(route==='Enter') page.locator=()=>({focus:async()=>{},first:()=>({click:async()=>{revoked=true; throw new Error('intercepted');}})});
+  page.keyboard.press=async(key:string)=>{calls.push(key);};
+  const guard={variantIndex:0,assertCurrent:()=>{if(revoked) throw new Error('revoked');},beforeEffect:async()=>{if(revoked) throw new Error('revoked');},settle:()=>{}};
+  const out=await runWithFakeTimers(()=>postFirstComment(page,{postUrl:'https://www.facebook.com/posts/1',comment:'hi',text:'Post'},{autonomyGuard:guard} as any));
+  expect(out.status).toBe('failed'); expect(calls).not.toContain('send'); expect(calls).not.toContain('Enter');
+});
+
 test('postFirstComment: bấm được nút gửi thì KHÔNG nhấn thêm Enter', async () => {
   const calls: string[] = [];
   const page = commentPage({}, calls) as unknown as Record<string, any>;

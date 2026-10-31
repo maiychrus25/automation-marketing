@@ -7,6 +7,88 @@ import {
 
 const fx = (name: string) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
 
+describe('Story provenance boundaries', () => {
+    const outer = '12345';
+    const foreign = { __typename: 'Story', post_id: '99999', url: 'https://www.facebook.com/67890/posts/99999',
+        actors: [{ __typename: 'Page', id: '67890' }], creation_time: 100,
+        feedback: { reaction_count: { count: 10 }, comment_count: { total_count: 2 }, share_count: { count: 3 } } };
+    const read = (story: object, group: boolean) => group
+        ? parseGroupFeed(JSON.stringify({ data: { node: { group_feed: { edges: [{ node: story }] } } } })).items
+        : parseSearchPosts(JSON.stringify({ data: { serpResponse: { results: { edges: [
+            { rendering_strategy: { view_model: { click_model: { story } } } },
+        ] } } } })).items;
+    it.each([false, true])('does not borrow identity, counts or time from embedded posts (group=%s)', group => {
+        const [item] = read({ post_id: outer, url: 'https://www.facebook.com/67890/posts/12345', attachments: [{ target: foreign }] }, group);
+        expect(item).toMatchObject({ fbId: outer, authorKind: 'unknown', authorId: '', reactions: null, comments: null, shares: null, postedAt: null });
+        const [owned] = read({ post_id: outer, actors: [{ __typename: 'Page', id: '67890' }], attachments: [{ target: foreign }] }, group);
+        expect(owned).toMatchObject({ fbId: outer, url: '', authorId: '67890', reactions: null, comments: null, shares: null });
+    });
+    it('does not borrow comment feedback but preserves same-story comet fragments', () => {
+        const [item] = read({ post_id: outer, comet_sections: {
+            context_layout: { story: { post_id: outer, actors: [{ __typename: 'Page', id: '67890' }] } },
+            feedback: { story: { post_id: outer, feedback: { comment_rendering_instance: { comments: {
+                total_count: 0, edges: [{ node: { __typename: 'Comment', feedback: foreign.feedback } }],
+            } } } } },
+            timestamp: { story: { post_id: outer, creation_time: 123 } },
+        } }, false);
+        expect(item).toMatchObject({ authorKind: 'page', authorId: '67890', reactions: null, comments: 0, shares: null, postedAt: 123000 });
+    });
+    it('keeps an exact Page-prefixed ID and its same-story URL/fragments',()=>{
+        const [item]=read({post_id:'67890_12345',url:'https://www.facebook.com/67890/posts/12345',actors:[{__typename:'Page',id:'67890'}],
+            comet_sections:{feedback:{story:{post_id:'12345',feedback:{reaction_count:{count:0}}}}}},false);
+        expect(item).toMatchObject({fbId:'67890_12345',authorId:'67890',reactions:0});
+    });
+    it('comment feedback without a typed node cannot fill missing post metrics', () => {
+        const [item]=read({post_id:outer,feedback:{comments:{total_count:2,feedback:foreign.feedback,actors:foreign.actors,creation_time:100}}},false);
+        expect(item).toMatchObject({authorKind:'unknown',authorId:'',reactions:null,shares:null,postedAt:null});
+    });
+    const references = [
+        ['posts', (id: string) => `https://www.facebook.com/67890/posts/${id}`],
+        ['permalink', (id: string) => `https://www.facebook.com/67890/permalink/${id}/`],
+        ['story_query', (id: string) => `https://www.facebook.com/story.php?id=67890&story_fbid=${id}`],
+        ['permalink_query', (id: string) => `https://www.facebook.com/permalink.php?story_fbid=${id}&id=67890`],
+    ] as const;
+    const referenceCases = [false, true].flatMap(group => ['url', 'permalink_url', 'wwwURL'].flatMap(key =>
+        references.map(([form, makeUrl]) => ({ group, key, form, makeUrl }))));
+    const evidence = { __typename: 'Story', actors: [{ __typename: 'Page', id: '67890' }], creation_time: 123,
+        feedback: { reaction_count: { count: 10 }, comment_count: { total_count: 2 }, share_count: { count: 3 } } };
+    it.each(referenceCases)('rejects foreign pfbid without post_id: $form/$key group=$group', ({group,key,makeUrl}) => {
+        const [item] = read({ post_id: outer, url: 'https://www.facebook.com/67890/posts/12345',
+            comet_sections: { feedback: { story: { ...evidence, [key]: makeUrl('pfbidForeignPost') } } } }, group);
+        expect(item).toMatchObject({fbId:outer,url:'https://www.facebook.com/67890/posts/12345',authorKind:'unknown',authorId:'',
+            reactions:null,comments:null,shares:null,postedAt:null});
+    });
+    it.each(referenceCases)('preserves same-target pfbid URL and comet evidence: $form/$key group=$group', ({group,key,makeUrl}) => {
+        const [item] = read({ [key]: makeUrl('pfbidExpectedPost'),
+            comet_sections: { feedback: { story: { ...evidence, [key]: makeUrl('pfbidExpectedPost') } } } }, group);
+        expect(item).toMatchObject({fbId:'pfbidExpectedPost',url:makeUrl('pfbidExpectedPost'),authorKind:'page',authorId:'67890',
+            reactions:10,comments:2,shares:3,postedAt:123000});
+    });
+    const conflictingReferences = [
+        {url:'https://www.facebook.com/67890/posts/12345foreign'},
+        {url:'https://www.facebook.com/story.php?id=67890&story_fbid=12345foreign'},
+        {url:'https://www.facebook.com/67890/posts/12345',permalink_url:'https://www.facebook.com/67890/posts/pfbidForeignPost'},
+        {url:'https://www.facebook.com/67890/posts/12345',wwwURL:'https://www.facebook.com/67890/permalink/pfbidForeignPost'},
+        {url:'https://www.facebook.com/profile.php?id=67890',permalink_url:'https://www.facebook.com/story.php?id=67890&story_fbid=pfbidForeignPost'},
+        {url:'https://www.facebook.com/67890/posts/12345?story_fbid=pfbidForeignPost'},
+        {url:'https://www.facebook.com/story.php?id=67890&story_fbid=12345&story_fbid=pfbidForeignPost'},
+        {url:'https://www.facebook.com/67890/posts/12345/foreign'},
+    ];
+    it.each([false,true].flatMap(group=>conflictingReferences.map(refs=>({group,refs}))))('checks complete IDs and every reference group=$group refs=$refs',({group,refs})=>{
+        const [item]=read({post_id:outer,url:'https://www.facebook.com/67890/posts/12345',
+            comet_sections:{feedback:{story:{...evidence,...refs}}}},group);
+        expect(item).toMatchObject({fbId:outer,authorKind:'unknown',authorId:'',reactions:null,comments:null,shares:null,postedAt:null});
+    });
+    it.each([false,true])('does not treat an opaque ID prefix as the same post group=%s',group=>{
+        const [item]=read({post_id:'pfbidExpected',url:'https://www.facebook.com/67890/posts/pfbidExpected',
+            comet_sections:{feedback:{story:{...evidence,url:'https://www.facebook.com/67890/posts/pfbidExpectedExtra'}}}},group);
+        expect(item).toMatchObject({fbId:'pfbidExpected',authorKind:'unknown',reactions:null,postedAt:null});
+    });
+    it('does not manufacture an outer post ID from an attached Story', () => {
+        expect(read({ attachments: [{ target: foreign }] }, false)).toEqual([]);
+    });
+});
+
 describe('parseCompactNumber', () => {
     it.each([
         ['1,2K', 1200], ['1.2K', 1200], ['12 N', 12000], ['12 nghìn', 12000], ['1,5M', 1500000],

@@ -5,11 +5,11 @@ import DatabaseService from '../../src/services/database/DatabaseService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import { FacebookPosterStore } from '../../src/services/facebookPoster/FacebookPosterStore';
-import { BUSY_ERROR } from '../../src/services/facebookPoster/FacebookPosterService';
 import { ResearchService } from '../../src/services/research/ResearchService';
 import { MAX_LIMIT, ResearchStore } from '../../src/services/research/ResearchStore';
 import { parseTrendingParams, rankTrending } from '../../src/services/research/trending';
 import { GraphqlSession } from '../../src/services/research/graphqlSession';
+import { readPageIdentity } from '../../src/services/dailyBrief/pageIdentity';
 import {
     RESEARCH_CONFIG_SETTING_KEY, parseResearchConfig, validateResearchConfig,
 } from '../../src/services/research/researchConfig';
@@ -21,7 +21,7 @@ import { buildResearchFinished, emitControlEvent } from '../../src/services/cont
 import { getBrowserProfileService } from './browserProfileIpc';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
 import {
-    isFacebookPosterEmployeeBlocked, isPageLearnerRunning, listFacebookLoginStates, listFacebookPosterRunProfileIds, observeFacebookLogin,
+    assertFacebookJobAdmission, getProfileJobBinding, getBoundFacebookLoginObserver, isFacebookPosterEmployeeBlocked, listFacebookLoginStates, listFacebookPosterRunProfileIds,
 } from './facebookPosterIpc';
 
 export const WORKSPACE_SWITCHING_ERROR = 'Đang đổi workspace, thử lại sau';
@@ -33,8 +33,6 @@ const STOP_GRACE_MS = 20000;
 
 let service: ResearchService | null = null;
 let preparedDbPath: string | null = null;
-// Profile do chính lượt quét đang mở: không tính là "bận" khi chọn profile kế tiếp.
-const openedByResearch = new Set<string>();
 
 function db(): DatabaseService {
     return DatabaseService.getInstance();
@@ -68,51 +66,97 @@ function profileList(): { id: string; name: string }[] {
 }
 
 function isBusy(id: string): boolean {
-    return (getBrowserProfileService().isRunning(id) && !openedByResearch.has(id)) || listFacebookPosterRunProfileIds().includes(id);
+    return getBrowserProfileService().isRunning(id) || listFacebookPosterRunProfileIds().includes(id);
 }
 
 function readConfig() {
     return parseResearchConfig(db().getSetting(RESEARCH_CONFIG_SETTING_KEY));
 }
 
-function getService(): ResearchService {
+/** Trusted main-process consumers only; ownership controls never come from request payloads. */
+export function getResearchService(): ResearchService {
+    if (!service) assertFacebookJobAdmission();
     const researchStore = store();
     if (!service) {
-        service = new ResearchService({
+        assertFacebookJobAdmission();
+        const boundDb = db();
+        const boundPath = boundDb.getDbPath();
+        const binding = getProfileJobBinding();
+        const boundProfiles = () => boundDb.getBrowserProfiles().map(p => ({ id: p.id, name: p.name }));
+        const posterStore = new FacebookPosterStore(boundDb);
+        const observer = getBoundFacebookLoginObserver();
+        let stale = false;
+        let instance: ResearchService;
+        const assertCurrent = () => {
+            if (service !== instance) throw new Error(WORKSPACE_SWITCHING_ERROR);
+            binding.assertCurrent();
+            stale ||= db() !== boundDb || db().getDbPath() !== boundPath || isWorkspaceSwitchInProgress();
+            if (stale) throw new Error(WORKSPACE_SWITCHING_ERROR);
+            if (isFacebookPosterEmployeeBlocked()) throw new Error('Nghiên cứu không khả dụng ở chế độ nhân viên.');
+        };
+        instance = new ResearchService({
             store: researchStore,
-            openSession: async (profileId) => {
-                openedByResearch.add(profileId);
+            assertCanStart: assertFacebookJobAdmission,
+            assertCurrent,
+            openSession: async (profileId, guard, context) => {
+                guard();
+                let session: Awaited<ReturnType<ReturnType<typeof getBrowserProfileService>['openForAutomation']>> | undefined;
                 try {
-                    const session = await getBrowserProfileService().openForAutomation(profileId);
+                    session = await binding.openForAutomation(profileId, context);
+                    guard();
                     const page = session.context.pages()[0] ?? await session.context.newPage();
+                    guard();
+                    const opened = session;
                     return {
-                        session: new GraphqlSession(page, researchStore),
-                        close: async () => { try { await session.close(); } finally { openedByResearch.delete(profileId); } },
+                        session: new GraphqlSession(page, {
+                            getQuery: (...args) => { guard(); return researchStore.getQuery(...args); },
+                            saveQuery: (...args) => { guard(); return researchStore.saveQuery(...args); },
+                        }, { assertCurrent: guard }),
+                        readIdentity: async () => {
+                            guard();
+                            const identity = await readPageIdentity(page, { assertCurrent: guard });
+                            guard();
+                            return identity;
+                        },
+                        close: () => opened.close(),
                     };
                 } catch (err) {
-                    openedByResearch.delete(profileId);
+                    try { await session?.close(); } catch { /* startup cleanup must preserve the original error */ }
                     throw err;
                 }
             },
-            listProfiles: profileList,
-            // Bận = đang mở trình duyệt (kể cả đang kiểm tra đăng nhập, vì kiểm tra cũng mở profile) hoặc nằm trong lượt Đăng Facebook hiện tại.
-            isProfileBusy: isBusy,
-            loginStates: listFacebookLoginStates,
+            listProfiles: boundProfiles,
+            isProfileBusy: binding.isProfileBusy,
+            loginStates: () => posterStore.listLoginStates(),
             groupMembership: () => {
-                const groups = new FacebookPosterStore(db()).listGroups(profileList().map((p) => p.id));
+                const groups = posterStore.listGroups(boundProfiles().map((p) => p.id));
                 const out: Record<string, { url: string; scannedAt: number | null }[]> = {};
                 for (const [id, rows] of Object.entries(groups)) out[id] = rows.map((g) => ({ url: g.url, scannedAt: g.scannedAt ?? null }));
                 return out;
             },
-            observeLogin: observeFacebookLogin,
-            readConfig,
+            observeLogin: observer,
+            readConfig: () => parseResearchConfig(boundDb.getSetting(RESEARCH_CONFIG_SETTING_KEY)),
             emit: (channel, data) => {
+                try { assertCurrent(); } catch { return; }
                 EventBroadcaster.emit(channel, data);
                 if (channel === 'research:finished') emitControlEvent('research.finished', buildResearchFinished(data as any));
             },
         });
+        service = instance;
     }
     return service;
+}
+
+/** Called by the aggregate only after every owner has settled, before DB retarget. */
+export function retireResearchService(): void {
+    if (service?.isRunning()) throw new Error(RESEARCH_NOT_STOPPED_ERROR);
+    service = null;
+    preparedDbPath = null;
+}
+
+/** Cleanup must not create a service after admission has paused, including historical persisted scan IDs. */
+export function cancelOwnedResearchScan(scanId: string): boolean {
+    return service?.cancelOwned(scanId) ?? false;
 }
 
 /** Huỷ lượt quét đang chạy (khi thoát app). */
@@ -123,13 +167,19 @@ export function cancelResearch(): void {
 /** Huỷ và chờ (tối đa 20 giây) để lượt quét không ghi vào DB workspace kế tiếp. True = không còn lượt nào chạy. Không ném lỗi. */
 export async function cancelAndWaitResearch(): Promise<boolean> {
     const current = service;
-    if (!current?.isRunning()) return true;
-    current.cancel();
+    if (!current?.isRunning()) { service = null; return true; }
     let timer: NodeJS.Timeout | undefined;
-    const timedOut = new Promise<void>((resolve) => { timer = setTimeout(resolve, STOP_GRACE_MS); timer.unref?.(); });
-    await Promise.race([current.whenIdle().catch(() => undefined), timedOut]);
-    clearTimeout(timer);
-    return !current.isRunning();
+    try {
+        current.cancel();
+        const settled = await Promise.race([
+            current.whenIdle().then(() => true, () => false),
+            new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), STOP_GRACE_MS); timer.unref?.(); }),
+        ]);
+        const idle = settled && !current.isRunning();
+        if (idle && service === current) service = null;
+        return idle;
+    } catch { return false; }
+    finally { clearTimeout(timer); }
 }
 
 /** Handler bodies dùng chung cho IPC và Control API. Người gọi lo chặn chế độ nhân viên và phong bì kết quả. */
@@ -143,20 +193,20 @@ export const researchOperations = {
     },
 
     search: (params: any, origin: ResearchOrigin) => {
+        assertFacebookJobAdmission();
         if (isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
-        if (isPageLearnerRunning()) throw new Error(BUSY_ERROR);
         const profileIds = checkProfileIds(params?.profileIds, profileList().map((p) => p.id));
-        return getService().search({
+        return getResearchService().search({
             source: params?.source, query: params?.query, recent: params?.recent, year: params?.year,
             limit: params?.limit, profileIds, origin,
         });
     },
 
     scanGroupFeeds: (params: any, origin: ResearchOrigin) => {
+        assertFacebookJobAdmission();
         if (isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
-        if (isPageLearnerRunning()) throw new Error(BUSY_ERROR);
         const profileIds = checkProfileIds(params?.profileIds, profileList().map((p) => p.id));
-        return getService().scanGroupFeeds({
+        return getResearchService().scanGroupFeeds({
             groupUrls: params?.groupUrls, sinceDays: params?.sinceDays, limitPerGroup: params?.limitPerGroup, profileIds, origin,
         });
     },

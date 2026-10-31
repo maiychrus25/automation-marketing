@@ -29,7 +29,7 @@ function item(fbId: string, postedAt: number, over: Record<string, unknown> = {}
 }
 const page = (items: any[], endCursor: string | null = null) => ({ items, endCursor, errorCode: null });
 
-function setup(opts: { sessionFor?: (profileId: string) => any; busyOnAcquire?: boolean; random?: () => number } = {}) {
+function setup(opts: { sessionFor?: (profileId: string) => any; rejectAdmission?: boolean; random?: () => number } = {}) {
     const store = new FacebookPosterStore(memoryDb());
     store.ensureSchema();
     const events: { type: string; payload: any }[] = [];
@@ -37,7 +37,7 @@ function setup(opts: { sessionFor?: (profileId: string) => any; busyOnAcquire?: 
     const closes: string[] = [];
     const opened: string[] = [];
     const calls: string[] = [];
-    const slot = { acquire: jest.fn(() => { if (opts.busyOnAcquire) throw new Error(BUSY_ERROR); }), release: jest.fn() };
+    const assertCurrent = jest.fn(() => { if (opts.rejectAdmission) throw new Error('retired'); });
     const observeLogin = jest.fn();
     const sleep = jest.fn(async (ms: number) => { sleeps.push(ms); });
     const tracker = new PostTracker({
@@ -62,7 +62,7 @@ function setup(opts: { sessionFor?: (profileId: string) => any; busyOnAcquire?: 
             };
             return { session, close: async () => { closes.push(profileId); } };
         },
-        slot,
+        assertCurrent,
         observeLogin,
         emit: (type, payload) => { events.push({ type, payload }); },
         now: () => NOW,
@@ -70,7 +70,7 @@ function setup(opts: { sessionFor?: (profileId: string) => any; busyOnAcquire?: 
         random: opts.random ?? (() => 0),
         newId: () => 'job1',
     });
-    return { store, tracker, events, sleeps, closes, opened, calls, slot, observeLogin, sleep };
+    return { store, tracker, events, sleeps, closes, opened, calls, assertCurrent, observeLogin, sleep };
 }
 
 let seq = 0;
@@ -93,6 +93,21 @@ async function run(h: ReturnType<typeof setup>, params: any = {}) {
 }
 
 beforeEach(() => { for (const k of Object.keys(feeds)) delete feeds[k]; });
+
+test('reserves local tracker admission before row-selection reentry', async () => {
+    const h = setup();
+    let attempted = false;
+    let error: unknown;
+    const original = h.store.listTracking.bind(h.store);
+    jest.spyOn(h.store, 'listTracking').mockImplementation((opts) => {
+        if (!attempted) { attempted = true; try { h.tracker.track(); } catch (caught) { error = caught; } }
+        return original(opts);
+    });
+    h.tracker.track();
+    await h.tracker.whenIdle();
+    expect(error).toEqual(new Error(BUSY_ERROR));
+    expect(finished(h.events)).toHaveLength(1);
+});
 
 describe('matching and linking', () => {
     test('links a pending-approval post by author, time and first 60 chars', async () => {
@@ -369,24 +384,32 @@ describe('errors', () => {
     });
 });
 
-describe('slot, status, events and cancel', () => {
-    test('holds the slot for the whole job; second track and poster-busy both throw BUSY', async () => {
+describe('local admission, status, events and cancel', () => {
+    test('preserves stop requested while selecting rows', async () => {
+        const h = setup(); addRow(h.store);
+        const original = h.store.listTracking.bind(h.store);
+        jest.spyOn(h.store, 'listTracking').mockImplementation((...args) => { h.tracker.stop(); return original(...args); });
+        h.tracker.track(); await h.tracker.whenIdle();
+        expect(h.opened).toEqual([]);
+        expect(h.tracker.status().last?.cancelled).toBe(true);
+    });
+    test('holds local admission for the whole job; reentry and retired contexts are rejected', async () => {
         const h = setup();
         addRow(h.store);
         feeds['111|null'] = page([item('a', NOW - 3 * HOUR)]);
         h.tracker.track();
-        expect(h.slot.acquire).toHaveBeenCalledTimes(1);
-        expect(h.slot.release).not.toHaveBeenCalled();
+        expect(h.assertCurrent).toHaveBeenCalledTimes(1);
+        expect(h.tracker.isRunning()).toBe(true);
         expect(h.tracker.isRunning()).toBe(true);
         expect(() => h.tracker.track()).toThrow(BUSY_ERROR);
         await h.tracker.whenIdle();
-        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(h.tracker.isRunning()).toBe(false);
         expect(h.tracker.isRunning()).toBe(false);
 
-        const busy = setup({ busyOnAcquire: true });
-        expect(() => busy.tracker.track()).toThrow(BUSY_ERROR);
+        const busy = setup({ rejectAdmission: true });
+        expect(() => busy.tracker.track()).toThrow('retired');
         expect(busy.tracker.isRunning()).toBe(false);
-        expect(busy.slot.release).not.toHaveBeenCalled();
+        expect(busy.opened).toEqual([]);
     });
 
     test('status and events: progress, finished exactly once with auto flag', async () => {
@@ -418,7 +441,7 @@ describe('slot, status, events and cancel', () => {
         await new Promise((r) => setImmediate(r));
         process.off('unhandledRejection', unhandled);
         expect(unhandled).not.toHaveBeenCalled();
-        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(h.tracker.isRunning()).toBe(false);
         expect(finished(h.events)).toHaveLength(1);
         expect(h.tracker.status().last!.errors.map((e) => e.error)).toContain('sleep broke');
         expect(h.tracker.isRunning()).toBe(false);
@@ -430,7 +453,7 @@ describe('slot, status, events and cancel', () => {
         addRow(h.store);
         await run(h);
         expect(h.tracker.status().last).not.toBeNull();
-        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(h.tracker.isRunning()).toBe(false);
     });
 
     test('cancel stops after the current page, closes the session, finishes once with cancelled', async () => {
@@ -481,12 +504,12 @@ describe('selection', () => {
         await g.tracker.whenIdle();
     });
 
-    test('validates sinceDays and groupUrls and releases the slot when rejecting', () => {
+    test('validates sinceDays and groupUrls before admission', () => {
         const h = setup();
         expect(() => h.tracker.track({ sinceDays: 0 })).toThrow();
         expect(() => h.tracker.track({ sinceDays: 15 })).toThrow();
         expect(() => h.tracker.track({ groupUrls: Array.from({ length: 31 }, (_, i) => `https://www.facebook.com/groups/${i}`) })).toThrow();
-        expect(h.slot.acquire).not.toHaveBeenCalled();
+        expect(h.assertCurrent).not.toHaveBeenCalled();
     });
 
     test('sinceDays limits rows by posted_at; explicit pairs reach rows up to 14 days', async () => {
@@ -597,6 +620,6 @@ describe('backing off failed, stale and unseen rows (final review C1/I1/I3)', ()
         expect(finished(h.events)).toHaveLength(0);
         await h.tracker.whenIdle();
         expect(finished(h.events)).toHaveLength(1);
-        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(h.tracker.isRunning()).toBe(false);
     });
 });

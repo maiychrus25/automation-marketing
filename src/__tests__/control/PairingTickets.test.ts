@@ -89,3 +89,23 @@ describe('PairingTickets', () => {
     expect(tickets.consume(again.ticket, '::ffff:1.2.3.4')).not.toBeNull();
   });
 });
+
+
+describe('scoped pairing tickets', () => {
+  test('ticketPreservesWorkspaceAndAssignments', () => {
+    const { tickets } = make();
+    const policy = { kind: 'page_runner' as const, workspaceId: 'ws-a', assignments: [{ pageId: '123', profileIds: ['p1'] }] };
+    const { ticket } = tickets.create('runner', '203.0.113.5', policy);
+    policy.assignments[0].profileIds.push('injected');
+    policy.workspaceId = 'changed';
+    expect(tickets.consume(ticket, '203.0.113.5')).toEqual({ name: 'runner', botIp: '203.0.113.5', policy: {
+      kind: 'page_runner', workspaceId: 'ws-a', assignments: [{ pageId: '123', profileIds: ['p1'] }],
+    } });
+  });
+  test('invalid policy does not replace an existing ticket', () => {
+    const { tickets } = make();
+    const { ticket } = tickets.create('legacy', '203.0.113.5');
+    expect(() => tickets.create('bad', '203.0.113.5', { kind: 'legacy' } as any)).toThrow();
+    expect(tickets.consume(ticket, '203.0.113.5')).toEqual({ name: 'legacy', botIp: '203.0.113.5' });
+  });
+});

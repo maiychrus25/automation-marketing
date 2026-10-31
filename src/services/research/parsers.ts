@@ -220,9 +220,22 @@ const emptyItem = (kind: ParsedItem['kind'], fbId: string, url: string, title: s
 
 // ---------- Bài viết ----------
 
+function postReferencesFromUrl(raw: string): string[] {
+    if (!raw) return [];
+    try {
+        const url = new URL(raw);
+        const path = /\/(?:posts|permalink)\/(.*)$/.exec(url.pathname);
+        // Keep complete references, including malformed/conflicting values, for the Story boundary.
+        const refs = [...(path ? [path[1].replace(/\/+$/, '')] : []), ...url.searchParams.getAll('story_fbid')];
+        if (refs.length && (url.protocol !== 'https:' || !['facebook.com', 'www.facebook.com', 'm.facebook.com'].includes(url.hostname)
+            || url.username || url.password || url.port)) return ['invalid_post_reference'];
+        return refs;
+    } catch { return []; }
+}
+
 function postIdFromUrl(url: string): string {
-    const m = /\/(?:posts|permalink)\/(\d+)/.exec(url) ?? /story_fbid=(\d+)/.exec(url);
-    return m ? m[1] : '';
+    const refs = postReferencesFromUrl(url);
+    return refs.length && refs.every(id => id === refs[0]) && /^(?:\d+|pfbid[A-Za-z0-9]+)$/.test(refs[0]) ? refs[0] : '';
 }
 
 function placeKindOf(typename: unknown): ParsedItem['placeKind'] {
@@ -230,6 +243,28 @@ function placeKindOf(typename: unknown): ParsedItem['placeKind'] {
 }
 
 function parseStory(story: Obj, ctx?: GroupFeedContext): ParsedItem | null {
+    const ownUrl = ['url', 'wwwURL', 'permalink_url'].map(k => str(story[k])).find(u => u.startsWith(FB_ORIGIN)) ?? '';
+    const ownId = str(story.post_id) || postIdFromUrl(ownUrl);
+    if (!ownId) return null;
+    const urlPostId = postIdFromUrl(ownUrl);
+    const logicalId = /^\d+_\d+$/.test(ownId) && ownId.endsWith('_' + urlPostId) ? urlPostId : ownId;
+    // Comet fragments belong to this Story; attachments and comment connections do not.
+    const bounded = (value: unknown, depth: number): unknown => {
+        if (depth > MAX_DEPTH) return undefined;
+        if (Array.isArray(value)) return value.map(v => bounded(v, depth + 1)).filter(v => v !== undefined);
+        if (!isObj(value)) return value;
+        const id = str(value.post_id);
+        const urlIds = ['url', 'permalink_url', 'wwwURL'].flatMap(key => postReferencesFromUrl(str(value[key])));
+        if ((id && id !== ownId && id !== logicalId) || urlIds.some(urlId => urlId !== logicalId) || value.__typename === 'Comment') return undefined;
+        const out: Obj = {};
+        for (const [key, child] of Object.entries(value)) {
+            if (['attachments', 'attached_story', 'shared_story', 'quoted_story', 'edges', 'nodes', 'replies'].includes(key)) continue;
+            out[key] = key === 'comments' && isObj(child) ? { total_count: child.total_count } : bounded(child, depth + 1);
+        }
+        return out;
+    };
+    story = bounded(story, 0) as Obj;
+    if (!story) return null;
     let url = ['url', 'wwwURL', 'permalink_url'].map((k) => str(story[k])).find((u) => u.startsWith(FB_ORIGIN)) ?? '';
     if (!url) {
         url = findString(story, (s) => s.startsWith(FB_ORIGIN) && /\/posts\/|\/permalink\/|story_fbid/.test(s)) ?? '';

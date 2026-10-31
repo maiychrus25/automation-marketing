@@ -25,6 +25,8 @@ export interface SqlDatabase {
     queryOne<T>(sql: string, params?: any[]): T | undefined;
 }
 
+type ScheduleFields = Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId' | 'kind' | 'draft' | 'params' | 'campaignId'>>;
+
 const INTERRUPTED_RUN_ERROR = 'App đóng khi việc đang chạy. Đích đang đăng dở (nếu có) cần kiểm tra trên Facebook.';
 
 function mapRun(row: any): FbPosterRun {
@@ -54,6 +56,7 @@ function mapCampaign(row: any): FbPosterCampaign {
 function mapSchedule(row: any): FbPosterSchedule {
     return {
         id: row.id,
+        revision: row.revision,
         name: row.name,
         kind: row.kind,
         params: JSON.parse(row.params_json),
@@ -62,6 +65,7 @@ function mapSchedule(row: any): FbPosterSchedule {
         time: row.time,
         enabled: row.enabled === 1,
         draft: row.draft === 1,
+        authorityKind: row.authority_kind,
         campaignId: row.campaign_id ?? null,
         nextRunAt: row.next_run_at ?? null,
         lastRunId: row.last_run_id ?? null,
@@ -188,11 +192,24 @@ function mapComment(row: any): FbPosterComment {
 export class FacebookPosterStore {
     constructor(private readonly db: SqlDatabase) {}
 
+    /** Trusted same-handle composition only, never a public payload or a second connection. */
+    transaction<T>(body:(db:SqlDatabase)=>T):T {return this.db.transaction(() => body(this.db));}
+
     ensureSchema(): void {
         this.db.exec(FB_POSTER_SCHEMA_SQL);
         for (const sql of FB_POSTER_MIGRATIONS) {
             try { this.db.exec(sql); } catch { /* cột đã có */ }
         }
+    }
+
+    /** Ownership survives journal retention; neither origin nor profile proves ownership. */
+    isWorkOwnedDraft(id: string): boolean {
+        const schema = this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'page_work_resources'");
+        if (!schema) throw new Error('Không đọc được quyền sở hữu bản nháp');
+        if (!schema.n) return false;
+        const row = this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM page_work_resources WHERE resource_kind = 'draft' AND resource_id = ?", [id]);
+        if (!row) throw new Error('Không đọc được quyền sở hữu bản nháp');
+        return row.n > 0;
     }
 
     // ─── Runs ────────────────────────────────────────────────────────────────
@@ -275,7 +292,7 @@ export class FacebookPosterStore {
 
     // ─── Schedules ───────────────────────────────────────────────────────────
 
-    createSchedule(s: Omit<FbPosterSchedule, 'lastRunId' | 'updatedAt' | 'draft' | 'campaignId'> & { draft?: boolean; campaignId?: string | null }): void {
+    createSchedule(s: Omit<FbPosterSchedule, 'lastRunId' | 'updatedAt' | 'draft' | 'campaignId' | 'revision'> & { draft?: boolean; campaignId?: string | null }): void {
         this.db.run(
             `INSERT INTO fb_poster_schedules
                 (id, name, kind, params_json, run_at, days, time, enabled, draft, campaign_id, next_run_at, last_run_id, created_at, updated_at)
@@ -305,12 +322,24 @@ export class FacebookPosterStore {
         }));
     }
 
-    updateSchedule(
-        id: string,
-        fields: Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId' | 'kind' | 'draft' | 'params' | 'campaignId'>>,
-        updatedAt: number,
-    ): void {
-        const sets: string[] = [];
+    updateSchedule(id: string, fields: ScheduleFields, updatedAt: number, expectedRevision?: number): void {
+        this.db.transaction(() => this.writeSchedule(id, fields, updatedAt, expectedRevision, false));
+    }
+
+    /** Internal promotion/CAS seam; never accept provenance from a public payload. */
+    updateAutonomySchedule(id: string, fields: ScheduleFields, updatedAt: number, expectedRevision: number): void {
+        this.writeSchedule(id, fields, updatedAt, expectedRevision, true);
+    }
+
+    private writeSchedule(id: string, fields: ScheduleFields, updatedAt: number, expectedRevision: number | undefined, autonomy: boolean): void {
+        if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1))
+            throw new Error('Phiên bản bản nháp không hợp lệ');
+        const existing = this.getSchedule(id);
+        const changesAuthority = Object.keys(fields).some(key => !['name', 'nextRunAt', 'lastRunId'].includes(key));
+        if (!autonomy && changesAuthority && existing?.authorityKind === 'autonomy') this.invalidateAutonomySchedule(id);
+        const sets: string[] = ['revision = revision + 1'];
+        if (autonomy) sets.push("authority_kind = 'autonomy'");
+        else if (changesAuthority && existing?.authorityKind === 'autonomy') sets.push("authority_kind = 'owner'");
         const values: any[] = [];
         const set = (column: string, value: any) => { sets.push(`${column} = ?`); values.push(value); };
         if (fields.name !== undefined) set('name', fields.name);
@@ -325,11 +354,28 @@ export class FacebookPosterStore {
         if (fields.params !== undefined) set('params_json', JSON.stringify(fields.params));
         if (fields.campaignId !== undefined) set('campaign_id', fields.campaignId);
         set('updated_at', updatedAt);
-        this.db.run(`UPDATE fb_poster_schedules SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
+        this.db.run(`UPDATE fb_poster_schedules SET ${sets.join(', ')} WHERE id = ?${expectedRevision === undefined ? '' : ` AND revision = ?${autonomy ? '' : ' AND draft = 1'}`}`,
+            [...values, id, ...(expectedRevision === undefined ? [] : [expectedRevision])]);
+        if (expectedRevision !== undefined && this.db.queryOne<{ n: number }>('SELECT changes() AS n')?.n !== 1)
+            throw new Error('Bản nháp đã thay đổi, vui lòng tải lại');
+    }
+
+    private invalidateAutonomySchedule(id: string): void {
+        const execution = this.db.queryOne<{status:string;revision:number}>('SELECT status,revision FROM page_campaign_executions WHERE schedule_id=?',[id]);
+        if (!execution || execution.status === 'submitting' || execution.status === 'uncertain')
+            throw new Error('Lịch tự động thiếu quyền hoặc chưa rõ kết quả, cần đối soát');
+        if (execution.status === 'reserved') {
+            this.db.run(`UPDATE page_campaign_executions SET status='cancelled', revision=revision+1,
+                execution_json=json_set(execution_json,'$.status','cancelled','$.revision',revision+1) WHERE schedule_id=? AND revision=? AND status='reserved'`,[id,execution.revision]);
+            if (this.db.queryOne<{n:number}>('SELECT changes() AS n')?.n !== 1) throw new Error('Lịch tự động đã thay đổi');
+        }
     }
 
     deleteSchedule(id: string): void {
-        this.db.run('DELETE FROM fb_poster_schedules WHERE id = ?', [id]);
+        this.db.transaction(() => {
+            if (this.getSchedule(id)?.authorityKind === 'autonomy') this.invalidateAutonomySchedule(id);
+            this.db.run('DELETE FROM fb_poster_schedules WHERE id = ?', [id]);
+        });
     }
 
     /** Số lượt đã thực sự bắt đầu của lịch (running / done / cancelled; bỏ missed / failed). */
@@ -445,7 +491,14 @@ export class FacebookPosterStore {
     // ─── Comments ────────────────────────────────────────────────────────────
 
     loadCommentKeys(): Set<string> {
-        return new Set(this.db.query<{ key: string }>('SELECT key FROM fb_poster_comments').map((row) => row.key));
+        const keys = new Set<string>();
+        for (const row of this.db.query<{ key: string; authorId: string; postUrl: string; text: string }>(
+            'SELECT key, author_id AS authorId, post_url AS postUrl, text FROM fb_poster_comments',
+        )) {
+            keys.add(row.key);
+            keys.add(keyOf(row)); // Recognize legacy raw keys without rewriting persisted rows.
+        }
+        return keys;
     }
 
     /** Trả số dòng thật sự thêm mới (dòng trùng khoá bị bỏ qua). */
@@ -455,10 +508,14 @@ export class FacebookPosterStore {
 
     /** Ghi bình luận (kèm commented_at_ms ước tính) và trả các dòng thật sự mới, theo thứ tự đầu vào. */
     insertCommentsReturningNew(profileId: string, rows: CollectedComment[], collectedAt: number): FbPosterComment[] {
+        if (rows.length === 0) return [];
         return this.db.transaction(() => {
+            // Refresh once per batch inside the transaction: caller snapshots can be stale.
+            const knownKeys = this.loadCommentKeys();
             const created: FbPosterComment[] = [];
             for (const c of rows) {
                 const key = keyOf(c);
+                if (knownKeys.has(key)) continue;
                 const commentedAtMs = parseCommentTime(c.commentedAt, collectedAt);
                 this.db.run(
                     `INSERT OR IGNORE INTO fb_poster_comments
@@ -467,6 +524,7 @@ export class FacebookPosterStore {
                     [key, profileId, c.postUrl, c.authorId, c.authorName, c.authorUrl, c.text, c.commentedAt, commentedAtMs, collectedAt],
                 );
                 if (this.count('SELECT changes() AS n') > 0) { // INSERT OR IGNORE: 0 = trùng khoá, không quét cả bảng
+                    knownKeys.add(key);
                     created.push({
                         key, profileId, postUrl: c.postUrl, authorId: c.authorId, authorName: c.authorName, authorUrl: c.authorUrl,
                         text: c.text, commentedAt: c.commentedAt, commentedAtMs, collectedAt,

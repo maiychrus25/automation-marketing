@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { ProfileTaskContext } from '../browser/ProfileJobQueue';
 import type { LinkStatus, PostTrackingRow } from '../../models/facebookPoster';
 import type { ParsedItem } from '../../models/research';
 import { ResearchError, type GraphqlSession } from '../research/graphqlSession';
@@ -67,8 +68,8 @@ export type TrackSession = Pick<GraphqlSession, 'open' | 'ensureQuery' | 'call' 
 export interface PostTrackerDeps {
     store: Pick<FacebookPosterStore,
         'listTracking' | 'listTrackingForPair' | 'updateTracking' | 'addPostStats' | 'updateCommentSchedule'>;
-    openSession(profileId: string): Promise<{ session: TrackSession; close(): Promise<void> }>;
-    slot: { acquire(): void; release(): void };
+    openSession(profileId: string, context: ProfileTaskContext): Promise<{ session: TrackSession; close(): Promise<void> }>;
+    assertCurrent?: () => void;
     observeLogin(profileId: string, state: 'logged_out' | 'checkpoint'): void;
     emit(type: string, payload: unknown): void;
     /** Cấu hình mốc kiểm tra; thiếu thì dùng mặc định. */
@@ -90,6 +91,7 @@ export class PostTracker {
     private running: Promise<void> = Promise.resolve();
     private active = false;
     private cancelled = false;
+    private abort = new AbortController();
     private wake: (() => void) | null = null;
     private jobId: string | null = null;
     private progress = { done: 0, total: 0 };
@@ -104,7 +106,7 @@ export class PostTracker {
         this.sleepFn = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     }
 
-    /** Đồng bộ đến khi giành được khe (ném BUSY nếu không được), sau đó chạy nền. */
+    /** Giữ admission riêng đồng bộ (ném BUSY khi job trước còn sống), sau đó chạy nền. */
     track(params: TrackParams = {}): { jobId: string; pairs: TrackPair[] } {
         if (this.active) throw new Error(BUSY_ERROR);
         const sinceDays = params.sinceDays ?? DEFAULT_TRACK_SINCE_DAYS;
@@ -115,18 +117,19 @@ export class PostTracker {
             || params.groupUrls.some((u) => typeof u !== 'string'))) {
             throw new Error(`groupUrls tối đa ${MAX_TRACK_GROUPS} link nhóm`);
         }
-        this.deps.slot.acquire();
+        this.active = true;
+        this.cancelled = false;
+        this.abort = new AbortController();
         let jobId: string;
         let pairs: TrackPair[];
         try {
+            this.deps.assertCurrent?.();
             jobId = (this.deps.newId ?? randomUUID)();
             pairs = this.selectPairs(params, sinceDays);
         } catch (e) {
-            this.deps.slot.release();
+            this.active = false;
             throw e;
         }
-        this.active = true;
-        this.cancelled = false;
         this.jobId = jobId;
         this.progress = { done: 0, total: pairs.length };
         // Cặp của bộ hẹn giờ nạp mọi dòng đến hạn (trackPair làm nguội dòng quá cũ), không giới hạn theo ngày.
@@ -144,6 +147,7 @@ export class PostTracker {
     cancel(): boolean {
         if (!this.active) return false;
         this.cancelled = true;
+        this.abort.abort();
         this.wake?.();
         return true;
     }
@@ -236,7 +240,6 @@ export class PostTracker {
             };
             this.active = false;
             this.jobId = null;
-            this.deps.slot.release();
             this.emit('posts.trackFinished', {
                 jobId, auto, cancelled, groups: pairs.length, ...totals, errors: errors.length,
             });
@@ -251,8 +254,11 @@ export class PostTracker {
         this.settleUnread(all.filter((r) => r.postedAt < staleBefore && this.isDue(r)), totals);
         const rows = all.filter((r) => r.postedAt >= staleBefore);
         if (rows.length === 0) return;
-        const opened = await this.deps.openSession(pair.profileId);
+        const opened = await this.deps.openSession(pair.profileId, { jobId: this.jobId!, signal: this.abort.signal,
+            priority: 'background', assertCurrent: () => { this.deps.assertCurrent?.(); } });
         try {
+            this.deps.assertCurrent?.();
+            if (this.cancelled) return;
             const reading = await this.readFeed(opened.session, pair, rows, shape);
             this.applyReading(rows, reading, totals);
         } finally {

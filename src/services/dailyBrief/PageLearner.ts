@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { AutomationSession } from '../browser/BrowserProfileService';
+import type { ProfileTaskContext } from '../browser/ProfileJobQueue';
 import type { PageIdentity, PageIdentityKind } from '../../models/dailyBrief';
 import type { DailyBriefStore } from './DailyBriefStore';
 import { PageLoginProblem, readPageIdentity } from './pageIdentity';
@@ -13,10 +14,9 @@ export const LEARN_PAUSE_MAX_MS = 60000;
 export interface LearnResult { profileId: string; kind: PageIdentityKind | 'skipped'; pageName: string; error?: string }
 export interface PageLearnerDeps {
     store: () => DailyBriefStore;
-    openForAutomation: (id: string) => Promise<AutomationSession>;
-    slot: { acquire(): void; release(): void };
+    openForAutomation: (id: string, context: ProfileTaskContext) => Promise<AutomationSession>;
     shouldYield: () => boolean;
-    isResearchRunning: () => boolean;
+    assertCurrent?: () => void;
     observeLogin: (id: string, state: 'ok' | 'checkpoint' | 'logged_out') => void;
     onFinished: (e: { jobId: string; results: LearnResult[] }) => void;
     read: typeof readPageIdentity;
@@ -26,38 +26,38 @@ export interface PageLearnerDeps {
     newId?: () => string;
 }
 
-/** Learns sequentially in the poster's shared slot; each job keeps its original workspace store. */
+/** Learns sequentially through the profile queue; each job keeps its original workspace store. */
 export class PageLearner {
     private running: Promise<void> = Promise.resolve();
     private active = false;
     private stopping = false;
+    private abort = new AbortController();
     private wake: (() => void) | null = null;
 
     constructor(private readonly deps: PageLearnerDeps) {}
 
-    learn(profileIds: string[], force: boolean): { jobId: string; profileIds: string[] } {
+    learn(profileIds: string[], force: boolean, assertCurrent?: () => void): { jobId: string; profileIds: string[] } {
         if (this.active) throw new Error(BUSY_ERROR);
         // Reserve locally before calling injected code, which can reenter learn().
         this.active = true;
         this.stopping = false;
-        let acquired = false;
+        this.abort = new AbortController();
         try {
-            if (this.deps.isResearchRunning()) throw new Error(BUSY_ERROR);
-            this.deps.slot.acquire();
-            acquired = true;
+            const ids = [...profileIds];
+            const guard = () => { this.deps.assertCurrent?.(); assertCurrent?.(); };
+            guard();
             const store = this.deps.store();
             const jobId = (this.deps.newId ?? randomUUID)();
-            const ids = [...profileIds];
-            this.running = Promise.resolve().then(() => this.run(store, jobId, ids, force));
+            this.running = Promise.resolve().then(() => this.run(store, jobId, ids, force, guard));
             return { jobId, profileIds: [...ids] };
         } catch (error) {
-            try { if (acquired) this.deps.slot.release(); } finally { this.active = false; }
+            this.active = false;
             throw error;
         }
     }
 
     isRunning(): boolean { return this.active; }
-    stop(): void { this.stopping = true; this.wake?.(); }
+    stop(): void { this.stopping = true; this.abort.abort(); this.wake?.(); }
     whenIdle(): Promise<void> { return this.running; }
 
     private async pause(): Promise<void> {
@@ -71,11 +71,12 @@ export class PageLearner {
         } finally { clearTimeout(timer); this.wake = null; }
     }
 
-    private async run(store: DailyBriefStore, jobId: string, ids: string[], force: boolean): Promise<void> {
+    private async run(store: DailyBriefStore, jobId: string, ids: string[], force: boolean, assertCurrent?: () => void): Promise<void> {
         const results: LearnResult[] = [];
         let attempted = false;
         try {
             for (const profileId of ids) {
+                assertCurrent?.();
                 if (this.stopping || this.deps.shouldYield()) break;
                 const previous = store.getIdentity(profileId);
                 const now = (this.deps.now ?? Date.now)();
@@ -84,45 +85,56 @@ export class PageLearner {
                     results.push({ profileId, kind: 'skipped', pageName: previous.pageName });
                     continue;
                 }
-                if (attempted) await this.pause();
+                if (attempted) {
+                    try { await this.pause(); } finally { assertCurrent?.(); }
+                }
+                assertCurrent?.();
                 if (this.stopping || this.deps.shouldYield()) break;
                 attempted = true;
-                results.push(await this.learnOne(store, profileId, previous));
+                results.push(await this.learnOne(store, profileId, previous, { jobId, signal: this.abort.signal,
+                    priority: 'interactive', assertCurrent: () => { assertCurrent?.(); } }));
             }
         } catch {
-            // An injected dependency failure still completes the job and releases the shared slot.
+            // An injected dependency failure still completes the job and releases local admission.
         } finally {
             for (const profileId of ids.slice(results.length)) results.push({ profileId, kind: 'skipped', pageName: '' });
-            try { this.deps.slot.release(); } catch { /* completion must survive a broken release callback */ }
             this.active = false;
-            try { this.deps.onFinished({ jobId, results }); } catch { /* listeners cannot reject the background job */ }
+            try { assertCurrent?.(); this.deps.onFinished({ jobId, results }); } catch { /* listeners cannot reject the background job */ }
         }
     }
 
-    private async learnOne(store: DailyBriefStore, profileId: string, previous: PageIdentity | undefined): Promise<LearnResult> {
+    private async learnOne(store: DailyBriefStore, profileId: string, previous: PageIdentity | undefined, context: ProfileTaskContext): Promise<LearnResult> {
+        const assertCurrent = context.assertCurrent;
         const skipped: LearnResult = { profileId, kind: 'skipped', pageName: previous?.pageName ?? '' };
         let session: AutomationSession | null = null;
         try {
-            session = await this.deps.openForAutomation(profileId);
+            assertCurrent?.();
+            session = await this.deps.openForAutomation(profileId, context);
             let reading: Awaited<ReturnType<typeof readPageIdentity>>;
             let readFailed = false;
             try {
+                assertCurrent?.();
                 if (this.stopping) return skipped;
                 const page = session.context.pages()[0] ?? await session.context.newPage();
+                assertCurrent?.();
                 if (this.stopping) return skipped;
-                reading = await this.deps.read(page);
+                reading = assertCurrent ? await this.deps.read(page, { assertCurrent }) : await this.deps.read(page);
+                assertCurrent?.();
             } catch (error) {
                 readFailed = true;
+                assertCurrent?.();
                 throw error;
             } finally {
                 try { await session.close(); } catch (error) { if (!readFailed) throw error; }
             }
+            assertCurrent?.();
             if (this.stopping) return skipped;
             if (reading.kind === 'unknown') return this.failed(store, profileId, previous, 'unknown', 'Chưa xác định được danh tính Page');
             store.upsertIdentity({ ...reading, profileId, learnedAt: (this.deps.now ?? Date.now)(), errorCode: '', error: '' });
             try { this.deps.observeLogin(profileId, 'ok'); } catch { /* login listeners cannot corrupt successful learning */ }
             return { profileId, kind: reading.kind, pageName: reading.pageName };
         } catch (error) {
+            try { assertCurrent?.(); } catch { return skipped; }
             if (this.stopping) return skipped;
             if (!session && error instanceof Error && error.message.startsWith(PROFILE_OPEN_PREFIX)) return skipped;
             if (error instanceof PageLoginProblem) {

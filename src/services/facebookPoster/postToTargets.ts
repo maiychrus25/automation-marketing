@@ -554,7 +554,7 @@ async function postToSingleTarget(
   ctx: BrowserContext,
   target: { url: string; kind: 'group' | 'page' },
   { text, mediaPaths, comment, commentDelayMin = 0 }: { text: string; mediaPaths: string[]; comment: string | null; commentDelayMin?: number },
-  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog' | 'enterCritical'> & {
+  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog' | 'enterCritical' | 'autonomyGuard'> & {
     attachShortfall?: () => boolean;
     /** Lần thử thứ mấy (1-based). Từ lần 2 phải xoá bản nháp cũ trước khi gõ. */
     attempt?: number;
@@ -564,6 +564,7 @@ async function postToSingleTarget(
 ): Promise<SingleTargetOutcome> {
   const { url, kind } = target;
   const { getIsStopping, sendLog } = deps;
+  deps.autonomyGuard?.assertPost({text,mediaPaths,comment,targetUrl:url});
   let identity = '';
   const failed = (errorCode: PostErrorCode, error: string, afterSubmit = false): SingleTargetOutcome =>
     ({ ok: false, postUrl: null, identity, errorCode, error, afterSubmit });
@@ -807,7 +808,7 @@ async function postToSingleTarget(
     // Lần kiểm cuối: Hủy bấm trong lúc chờ ở trên thì không được bấm Đăng.
     if (getIsStopping()) return stopped();
     // Từ đây là điểm không quay lại: Hủy không được đóng trình duyệt tới khi có kết quả.
-    deps.enterCritical?.();
+    if (!deps.autonomyGuard) deps.enterCritical?.();
     sendLog('[Đăng Bài] Đang click nút Đăng bài...', 'info');
     try {
       published = await page.evaluate(markPublishButtonInPage, PUBLISH_LABELS);
@@ -815,6 +816,13 @@ async function postToSingleTarget(
       sendLog(`Lỗi tìm nút Đăng bằng evaluate: ${(e as Error).message}`, 'warning');
     }
     if (published) {
+      if (deps.autonomyGuard) {
+        deps.autonomyGuard.assertPost({text,mediaPaths,comment,targetUrl:url});
+        await deps.autonomyGuard.beforeEffect(page,'publish');
+        if (getIsStopping()) return stopped();
+        deps.enterCritical?.();
+        deps.autonomyGuard.assertCurrent();
+      }
       // Click tin cậy qua locator. Nếu click ném lỗi thì published vẫn là true:
       // không có bằng chứng nào ở đây cả, quyết định nằm ở phép chờ dialog đóng
       // / rời /post/create bên dưới (bằng chứng dương), không phải ở việc click.
@@ -835,11 +843,19 @@ async function postToSingleTarget(
         .waitForSelector(fallback, { state: 'visible', timeout: 20000 })
         .catch(() => null);
       if (fallbackButton) {
+        if (deps.autonomyGuard) {
+          deps.autonomyGuard.assertPost({text,mediaPaths,comment,targetUrl:url});
+          await deps.autonomyGuard.beforeEffect(page,'publish');
+          if (getIsStopping()) return stopped();
+          deps.enterCritical?.();
+          deps.autonomyGuard.assertCurrent();
+        }
         // Từ lúc gọi humanClick, ngoại lệ nào cũng có thể đến sau mouse.down()/click:
         // coi như cú bấm đã đi và để phép chờ dialog đóng quyết định.
         published = true;
         try {
-          await humanClick(page, fallback);
+          if (deps.autonomyGuard) await fallbackButton.click({timeout:10000});
+          else await humanClick(page, fallback);
         } catch (e) {
           sendLog(`[${kind}] Bấm nút Đăng bằng selector dự phòng bị lỗi: ${(e as Error).message}`, 'warning');
         }
@@ -892,6 +908,13 @@ async function postToSingleTarget(
     page.off('response', listenToResponse);
   }
 
+  // Neither the response-window capture nor an own-feed match binds a post to this publish request.
+  if (deps.autonomyGuard) {
+    const requested=!!String(comment ?? '').trim();
+    if (requested) sendLog('[Đăng Bài] Đã đăng; chưa có bằng chứng định danh đúng bài vừa gửi nên không tự bình luận.', 'warning');
+    return {ok:true,postUrl:null,commentStatus:requested?'no_post_url':'not_requested',identity,waitedMs:0};
+  }
+
   let postUrl = buildPostUrl({ url }, capturedId, capturedOwner);
   if (!postUrl) {
     postUrl = await findOwnPostUrl(page, ctx);
@@ -921,7 +944,7 @@ async function postToSingleTarget(
       return { ok: true, postUrl, commentStatus: 'failed', identity, waitedMs, pendingApproval };
     }
   }
-  const outcome = await postFirstComment(page, { postUrl, comment, text }, { sendLog, getIsStopping });
+  const outcome = await postFirstComment(page, { postUrl, comment, text }, { sendLog, getIsStopping, autonomyGuard: deps.autonomyGuard });
   if (outcome.status !== 'not_requested' && outcome.status !== 'posted') {
     sendLog(`[${kind}] Bình luận chưa vào được (${url}): ${outcome.reason}`, 'warning');
   }
@@ -1075,7 +1098,7 @@ export async function postToTargets(
           }
           try {
             const single = await postToSingleTarget(page, ctx, target, { text: textFor?.(target.url) ?? text, mediaPaths: files, comment, commentDelayMin },
-              { getIsStopping, sendLog, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall, attempt, onNavigated: dropDialogHandler });
+              { getIsStopping, sendLog, autonomyGuard: deps.autonomyGuard, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall, attempt, onNavigated: dropDialogHandler });
             // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
             // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
             ok = single.ok;

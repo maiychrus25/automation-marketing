@@ -458,6 +458,39 @@ function fakePage(url = finalUrl, error?: Error, status: number | null = 200) {
     return { page: fake as unknown as Page, calls };
 }
 
+describe('readPageIdentity ownership guards', () => {
+    it('denies before navigating', async () => {
+        const { page, calls } = fakePage(); const error = new Error('revoked');
+        await expect(readPageIdentity(page, { assertCurrent: () => { throw error; } })).rejects.toBe(error);
+        expect(calls).toEqual([]);
+    });
+    it.each([false, true])('guards navigation resolve/reject=%s before content or redirect fallback', async (rejects) => {
+        const { page } = fakePage(); let current = true; const error = new Error('revoked');
+        page.goto = async () => { current = false; if (rejects) throw new Error('navigation'); return null; };
+        page.url = () => 'https://www.facebook.com/checkpoint/';
+        const content = jest.fn(async () => pageHtml); page.content = content;
+        await expect(readPageIdentity(page, { assertCurrent: () => { if (!current) throw error; } })).rejects.toBe(error);
+        expect(content).not.toHaveBeenCalled();
+    });
+    it.each([false, true])('guards content resolve/reject=%s before identity exposure or login fallback', async (rejects) => {
+        const { page } = fakePage(); let current = true; const error = new Error('revoked');
+        page.content = async () => { current = false; if (rejects) throw new Error('content'); return pageHtml; };
+        page.url = () => current ? finalUrl : 'https://www.facebook.com/login/';
+        await expect(readPageIdentity(page, { assertCurrent: () => { if (!current) throw error; } })).rejects.toBe(error);
+    });
+    it.each(['goto', 'content'] as const)('preserves legacy redirect classification when %s throws synchronously', async (method) => {
+        const { page } = fakePage(); let redirected = false;
+        page[method] = () => { redirected = true; throw new Error('closed'); };
+        page.url = () => redirected ? 'https://www.facebook.com/checkpoint/' : finalUrl;
+        await expect(readPageIdentity(page)).rejects.toBeInstanceOf(PageLoginProblem);
+    });
+    it('never masks a guard failure with redirect classification even if guard throws only once', async () => {
+        const { page } = fakePage(); const error = new Error('revoked'); let checks = 0;
+        page.url = () => 'https://www.facebook.com/checkpoint/';
+        await expect(readPageIdentity(page, { assertCurrent: () => { if (++checks === 2) throw error; } })).rejects.toBe(error);
+    });
+});
+
 describe('readPageIdentity', () => {
     it.each([
         ['/checkpoint/required', 'checkpoint', false], ['/checkpoint/required', 'checkpoint', true],

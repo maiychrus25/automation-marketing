@@ -11,6 +11,18 @@ function make() {
 const audit = (at: number) => ({ at, keyName: 'k', ip: '1.1.1.1', method: 'm', paramsSummary: '{}', ok: true, errorCode: null, durationMs: 5 });
 
 describe('ControlStore keys', () => {
+  it('active ID reader never exposes key material and fails closed on corrupt or revoked policies', () => {
+    const {db, store} = make();
+    expect(typeof (store as any).findActiveKeyById).toBe('function');
+    const policy = {kind:'page_runner' as const, workspaceId:'workspace', assignments:[{pageId:'page', profileIds:['profile']}]};
+    const key = store.createKey('Scoped', policy);
+    expect((store as any).findActiveKeyById(key.id)).toEqual({id:key.id, policy});
+    db.run('UPDATE control_keys SET policy_json = ? WHERE id = ?', ['{}', key.id]);
+    expect((store as any).findActiveKeyById(key.id)).toBeNull();
+    const legacy = store.createKey('Legacy'); expect((store as any).findActiveKeyById(legacy.id)).toEqual({id:legacy.id});
+    store.revokeKey(legacy.id); expect((store as any).findActiveKeyById(legacy.id)).toBeNull();
+    expect((store as any).findActiveKeyById('missing')).toBeNull();
+  });
   it('createKey returns raw key once; only hash stored', () => {
     const { db, store } = make();
     const k = store.createKey('bot');
@@ -73,6 +85,7 @@ describe('ControlStore audit/events/idempotency', () => {
     const old = memoryDb();
     old.exec("CREATE TABLE control_idempotency (key_id TEXT NOT NULL, idem_key TEXT NOT NULL, result TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (key_id, idem_key))");
     old.run("INSERT INTO control_idempotency VALUES ('k','i','7',5)");
+    old.exec("CREATE TABLE control_keys (id TEXT PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, last_used_at INTEGER, revoked_at INTEGER)");
     for (const sql of CONTROL_MIGRATIONS) old.exec(sql);
     expect(new ControlStore(old).getIdempotent('k', 'i')).toEqual({ result: '7', createdAt: 5, method: '' });
     expect(() => old.exec(CONTROL_MIGRATIONS[0])).toThrow();
@@ -96,5 +109,43 @@ describe('ControlStore audit/events/idempotency', () => {
     const rows = store.listEventsAfter(0, 10000);
     expect(rows).toHaveLength(5000);
     expect(rows[rows.length - 1].seq).toBeGreaterThan(5100);
+  });
+});
+
+describe('ControlStore scoped policies', () => {
+  const policy = () => ({ kind: 'page_runner', workspaceId: 'ws1', assignments: [{ pageId: 'page1', profileIds: ['p1'] }] });
+  it('persists a detached scoped policy without changing the legacy key response', () => {
+    const { db, store } = make();
+    const input = policy();
+    const key = (store.createKey as any)('same name', input);
+    input.assignments[0].profileIds.push('other');
+    expect(store.findActiveKeyByHash(hashKey(key.key))).toEqual({ id: key.id, name: 'same name', policy: policy() });
+    expect(store.listKeys()[0]).toMatchObject({ policy: policy() });
+    expect(JSON.stringify(db.query('SELECT * FROM control_keys'))).not.toContain(key.key);
+  });
+  it.each([
+    { ...policy(), workspaceId: '' },
+    { ...policy(), assignments: [] },
+    { ...policy(), assignments: [{ pageId: 'page1', profileIds: [] }] },
+    { ...policy(), assignments: [{ pageId: 'page1', profileIds: ['p1', 'p1'] }] },
+    { ...policy(), assignments: [{ pageId: 'page1', profileIds: ['p1'] }, { pageId: 'page2', profileIds: ['p1'] }] },
+    { ...policy(), ownerChatId: '1', ownerSenderId: '2' },
+    { ...policy(), keyId: 'forged' },
+    { ...policy(), kind: 'page_receiver', ownerChatId: '-100', ownerSenderId: 123 },
+    { ...policy(), kind: 'page_receiver', ownerChatId: '-100', ownerSenderId: '1.2' },
+  ])('rejects invalid policy before inserting a key: %j', (bad) => {
+    const { store } = make();
+    expect(() => (store.createKey as any)('bad', bad)).toThrow();
+    expect(store.listKeys()).toEqual([]);
+  });
+  it('retains exact large Telegram IDs and fails closed on malformed stored policies', () => {
+    const { db, store } = make();
+    const input = { ...policy(), kind: 'page_receiver', ownerChatId: '-1009007199254740993123', ownerSenderId: '9007199254740993123' };
+    const key = (store.createKey as any)('receiver', input);
+    expect(store.findActiveKeyByHash(hashKey(key.key))).toMatchObject({ policy: input });
+    for (const value of ['{', '{}', 'null', '"legacy"']) {
+      db.run('UPDATE control_keys SET policy_json = ? WHERE id = ?', [value, key.id]);
+      expect(store.findActiveKeyByHash(hashKey(key.key))).toBeNull();
+    }
   });
 });

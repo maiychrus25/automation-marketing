@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { ProfileJobQueue } from '../../services/browser/ProfileJobQueue';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -51,7 +52,16 @@ interface Harness {
   run: (runId: string) => any;
 }
 
-function harness(tasks: Record<string, any> = {}, over: Partial<FacebookPosterServiceDeps> = {}): Harness {
+type TestDeps = Omit<FacebookPosterServiceDeps, 'acquireProfile'> & Partial<Pick<FacebookPosterServiceDeps, 'acquireProfile'>> & {
+  openForAutomation: (profileId: string) => Promise<import('../../services/browser/BrowserProfileService').AutomationSession>;
+};
+function makeService(deps: TestDeps): FacebookPosterService {
+  return new FacebookPosterService({ ...deps, acquireProfile: deps.acquireProfile ?? (async profileId => ({
+    profileId, open: () => deps.openForAutomation(profileId), release: () => {},
+  })) });
+}
+
+function harness(tasks: Record<string, any> = {}, over: Partial<TestDeps> = {}): Harness {
   const store = new FacebookPosterStore(memoryDb());
   store.ensureSchema();
   const emitted: Harness['emitted'] = [];
@@ -72,7 +82,7 @@ function harness(tasks: Record<string, any> = {}, over: Partial<FacebookPosterSe
   jest.spyOn(store, 'createRun').mockImplementation((r) => { order.push('createRun'); createRun(r); });
   jest.spyOn(store, 'finishRun').mockImplementation((...a) => { order.push(`finishRun:${a[1]}`); finishRun(...a); });
 
-  const service = new FacebookPosterService({
+  const service = makeService({
     store,
     getProfile: (id) => (id === 'ghost' ? null : { id, name: `Name ${id}` }),
     openForAutomation: async (profileId) => {
@@ -115,6 +125,100 @@ function harness(tasks: Record<string, any> = {}, over: Partial<FacebookPosterSe
   };
 }
 
+test('waits for one lease before task effects and releases after session cleanup', async () => {
+  const gate = deferred(); const events: string[] = [];
+  const h = harness({ scanGroups: async () => { events.push('task'); return { groups: [], complete: true }; } }, {
+    acquireProfile: async (profileId, context) => {
+      context.onWaiting?.('Đang chờ profile khả dụng'); await gate.promise;
+      return { profileId, open: async () => { throw new Error('unused'); }, release: () => { events.push('release'); } };
+    },
+  });
+  h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 0, staggerMaxSec: 0 });
+  await tick(); expect(events).toEqual([]);
+  expect(h.service.current()!.progress.profiles[0]).toMatchObject({ state: 'waiting', waitingReason: 'Đang chờ profile khả dụng' });
+  gate.resolve(); await h.service.whenIdle(); expect(events).toEqual(['task', 'release']);
+});
+
+test('real queue retains profile lease across transient browser launch retry', async () => {
+  let held = false; let opens = 0;
+  const queue = new ProfileJobQueue({ browser: {
+    onAvailabilityChanged: () => () => {}, isRunning: () => false,
+    tryReserveAutomation: (profileId: string) => { if (held) return null; held = true; return { profileId }; },
+    releaseAutomationReservation: () => { held = false; },
+    openForAutomation: async () => {
+      opens++; if (opens === 1) throw new Error('transient launch');
+      return { context: { cookies: async () => [{ name: 'c_user', value: '1' }], pages: () => [{}] }, close: async () => {} };
+    },
+  } as any });
+  const h = harness({ scanGroups: async (deps: any) => { await deps.launch(); return { groups: [], complete: true }; } }, {
+    acquireProfile: (profileId, context) => queue.acquire({ ...context, profileId, owner: { workspaceId: 'test', generation: 1, jobId: context.jobId } }),
+  });
+  h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 0, staggerMaxSec: 0 });
+  await h.service.whenIdle(); expect(opens).toBe(2); expect(h.sleeps).toEqual([10000]); expect(held).toBe(false); queue.retire();
+});
+
+test('cancel aborts a waiting lease without retry or task effects', async () => {
+  const effects: string[] = [];
+  const h = harness({ scanGroups: async () => { effects.push('task'); } }, {
+    acquireProfile: async (_id, context) => new Promise((_resolve, reject) => {
+      context.signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { code: 'profile_wait_cancelled' })), { once: true });
+    }),
+  });
+  h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 0, staggerMaxSec: 0 });
+  h.service.cancel(); await h.service.whenIdle();
+  expect(effects).toEqual([]); expect(h.sleeps).toEqual([]); expect(h.run('run-1').status).toBe('cancelled');
+});
+
+test('scheduled second profile retains the occurrence deadline after the first profile finishes', async () => {
+  let now = 1; const second = deferred();
+  const contexts: { profileId: string; priority: string; deadlineAt: number | undefined }[] = [];
+  let effects = 0, releases = 0;
+  const h = harness({ scanGroups: async () => { effects++; now = 100; return { groups: [], complete: true }; } }, {
+    now: () => now,
+    acquireProfile: async (profileId, context) => {
+      contexts.push({ profileId, priority: context.priority, deadlineAt: context.deadlineAt });
+      if (profileId === 'p2') await second.promise;
+      return { profileId, open: async () => { throw new Error('unused'); }, release: () => { releases++; } };
+    },
+  });
+  h.store.createSchedule({ id: 'scheduled', name: 'Scheduled', kind: 'once', params: {}, runAt: 1,
+    days: [], time: '', enabled: true, draft: false, nextRunAt: 1, createdAt: 1 });
+  h.service.start({ kind: 'scan_groups', profileIds: ['p1', 'p2'], concurrency: 1, staggerMinSec: 0, staggerMaxSec: 0 }, 'scheduled', { priority: 'scheduled', deadlineAt: 200 });
+  await tick();
+  expect(contexts).toEqual([
+    { profileId: 'p1', priority: 'scheduled', deadlineAt: 200 },
+    { profileId: 'p2', priority: 'scheduled', deadlineAt: 200 },
+  ]);
+  now = 200; second.resolve(); await h.service.whenIdle();
+  expect(effects).toBe(1); expect(releases).toBe(2);
+  expect(h.results('run-1').find(result => result.profileId === 'p2')?.errorCode).toBe('profile_wait_timeout');
+});
+
+test('expired grant is released without launch, retry or task effects', async () => {
+  let now = 1; const gate = deferred(); const release = jest.fn(); const task = jest.fn();
+  const h = harness({ scanGroups: task }, { now: () => now, acquireProfile: async profileId => {
+    await gate.promise; return { profileId, open: async () => { throw new Error('must not open'); }, release };
+  } });
+  h.service.start({ kind: 'scan_groups', profileIds: ['p1'], concurrency: 1, staggerMinSec: 0, staggerMaxSec: 0 }, undefined, { deadlineAt: 10 });
+  now = 10; gate.resolve(); await h.service.whenIdle();
+  expect(task).not.toHaveBeenCalled(); expect(release).toHaveBeenCalledTimes(1); expect(h.sleeps).toEqual([]);
+  expect(h.results('run-1')[0].errorCode).toBe('profile_wait_timeout');
+});
+
+test('join reopens using one lease and releases only after both sessions close', async () => {
+  const events: string[] = []; let acquisitions = 0;
+  const h = harness({ searchAndJoinGroups: async (_input: unknown, deps: any) => { await deps.launch(); await deps.launch(); } }, {
+    acquireProfile: async profileId => {
+      acquisitions++; return { profileId, release: () => { events.push('release'); }, open: async () => ({
+        context: { cookies: async () => [{ name: 'c_user', value: '1' }], pages: () => [{}] } as any,
+        close: async () => { events.push('close'); },
+      }) };
+    },
+  });
+  h.service.start({ kind: 'join', profileId: 'p1', keywords: ['test'], limit: 2, minDelaySec: 0, maxDelaySec: 0 });
+  await h.service.whenIdle(); expect(acquisitions).toBe(1); expect(events).toEqual(['close', 'close', 'release']);
+});
+
 function postParams(over: Partial<Extract<StartParams, { kind: 'post' }>> = {}): StartParams {
   return {
     kind: 'post', mode: 'group', text: 'xin chào', mediaPaths: [], comment: null,
@@ -137,7 +241,35 @@ function postAll(extra?: (deps: any, input: any) => Promise<void> | void) {
 
 afterEach(() => jest.restoreAllMocks());
 
+test('autonomyServiceDispatchesAuthorizedVariantAndSettlesPostedResult',async()=>{
+  let selected=''; const settled:any[]=[];
+  const guard={variantIndex:1,assertCurrent:()=>{},beforeEffect:async()=>{},settle:(...args:any[])=>settled.push(args)};
+  const task=postAll((_deps,input)=>{selected=input.textFor(HOME);});
+  const h=harness({postToTargets:task},{createExecutionGuard:()=>guard} as any);
+  const params=postParams({mode:'page',variants:['authorized'],profiles:[{profileId:'p1',targets:[HOME]}]});
+  h.store.createSchedule({id:'auto',name:'Auto',kind:'once',params:params as any,runAt:1000000,days:[],time:'',enabled:true,nextRunAt:1000000,createdAt:1});
+  h.store.updateAutonomySchedule('auto',{},1000000,1);
+  const {runId}=h.service.start(params,'auto'); await h.service.whenIdle();
+  expect(selected).toBe('authorized'); expect(settled).toEqual([['posted',h.results(runId)[0].id]]);
+});
+
 describe('FacebookPosterService', () => {
+  test('autonomyFailsClosedBeforeRunOrBrowserWithoutTask4Guard', () => {
+    const h = harness({postToTargets:postAll()});
+    h.store.createSchedule({id:'autonomy', name:'Pilot', kind:'once', params:{}, runAt:1000000, days:[], time:'', enabled:true, nextRunAt:1000000, createdAt:1});
+    const row = h.store.getSchedule('autonomy')!;
+    jest.spyOn(h.store, 'getSchedule').mockReturnValue({...row, authorityKind:'autonomy'} as any);
+    expect(() => h.service.start(postParams(), 'autonomy')).toThrow('tự động');
+    expect(h.store.listRuns({limit:10, offset:0}).total).toBe(0);
+    expect(h.opened).toEqual([]);
+  });
+  test.each(['throw', 'missing'])('scheduleAuthorityLookupFailsClosed(%s)', failure => {
+    const h = harness({postToTargets:postAll()});
+    jest.spyOn(h.store, 'getSchedule').mockImplementation(() => {if (failure === 'throw') throw new Error('read failure'); return null;});
+    expect(() => h.service.start(postParams(), 'unreadable')).toThrow();
+    expect(h.store.listRuns({limit:10, offset:0}).total).toBe(0);
+    expect(h.opened).toEqual([]);
+  });
   // 1
   test('start khi đang có việc thì ném "Đang có việc chạy", xong việc thì start lại được', async () => {
     const gate = deferred();
@@ -792,7 +924,7 @@ describe('FacebookPosterService', () => {
     try {
       const store = new FacebookPosterStore(memoryDb());
       store.ensureSchema();
-      const service = new FacebookPosterService({
+      const service = makeService({
         store, getProfile: (id) => ({ id, name: id }), emit: () => {},
         openForAutomation: async () => ({ context: { cookies: async () => [{ name: 'c_user', value: '1' }], pages: () => [{}], newPage: async () => ({}) } as any, close: async () => {} }),
         tasks: { postToTargets: postAll() as any },
@@ -819,6 +951,7 @@ describe('FacebookPosterService', () => {
 describe('FacebookPosterService scheduleId', () => {
   test('start(params, scheduleId) lưu scheduleId; start(params) lưu null', async () => {
     const h = harness({ postToTargets: postAll() });
+    h.store.createSchedule({id:'sch-1', name:'Owner', kind:'once', params:postParams() as any, runAt:1_000_000, days:[], time:'', enabled:true, nextRunAt:1_000_000, createdAt:1});
     const first = h.service.start(postParams(), 'sch-1');
     await h.service.whenIdle();
     expect(h.run(first.runId).scheduleId).toBe('sch-1');
@@ -840,7 +973,7 @@ describe('FacebookPosterService cancel closes sessions', () => {
     const killers: ((err: Error) => void)[] = [];
     const hang = () => new Promise<never>((_, reject) => { killers.push(reject); });
     let idSeq = 0;
-    const service = new FacebookPosterService({
+    const service = makeService({
       store,
       getProfile: (id) => ({ id, name: id }),
       openForAutomation: async (profileId) => {
@@ -1453,6 +1586,7 @@ describe('FacebookPosterService post tracking rows', () => {
 
   test('known link creates a known row with ids, head and next check', async () => {
     const h = harness({ postToTargets: one({ postUrl: 'https://www.facebook.com/groups/123/posts/456/' }) });
+    h.store.createSchedule({id:'sch-1', name:'Owner', kind:'once', params:params() as any, runAt:1_000_000, days:[], time:'', enabled:true, nextRunAt:1_000_000, createdAt:1});
     h.service.start(params({ text: '  Xin   CHÀO ' }), 'sch-1');
     await h.service.whenIdle();
     const rows = h.store.listTracking({});
@@ -1564,6 +1698,7 @@ describe('FacebookPosterService campaigns and variants', () => {
 
   test('lịch đã có 1 lượt done thì offset = 1; lượt missed không tính', async () => {
     const h = harness({ postToTargets: postAll() });
+    h.store.createSchedule({id:'sch-1', name:'Owner', kind:'once', params:postParams() as any, runAt:1_000_000, days:[], time:'', enabled:true, nextRunAt:1_000_000, createdAt:1});
     for (const [id, status] of [['old-1', 'done'], ['old-2', 'missed']] as const) {
       h.store.createRun({ id, kind: 'post', mode: 'group', params: {}, startedAt: 1, scheduleId: 'sch-1' });
       h.store.finishRun(id, status, '', 2);

@@ -9,7 +9,7 @@ import { loadAhvSettings, saveAhvSettings } from '../../src/services/video/ahvSe
 import { RenderClient } from '../../src/services/video/RenderClient';
 import { VideoService } from '../../src/services/video/VideoService';
 import { VideoStore } from '../../src/services/video/VideoStore';
-import { createVideoOperations, routeVideoEvent } from '../../src/services/video/videoOperations';
+import { createVideoOperations, routeVideoEvent, type VideoOperationsDeps } from '../../src/services/video/videoOperations';
 import { createSafeStorageCrypto, loadVideoSettings, saveVideoSettings } from '../../src/services/video/videoSettings';
 import { getInboxMediaStore } from './inboxMedia';
 import { isFacebookPosterEmployeeBlocked } from './facebookPosterIpc';
@@ -54,7 +54,7 @@ function getVideoService(): VideoService {
 }
 
 /** Handler bodies dùng chung cho IPC `video:*` và Control API `videos.*` (kiểm tra tham số nằm ở createVideoOperations). */
-export const videoOperations = createVideoOperations({
+const videoDeps: VideoOperationsDeps = {
     service: getVideoService,
     loadSettings: () => loadVideoSettings(db(), crypto),
     saveSettings: (input) => saveVideoSettings(db(), crypto, input),
@@ -67,7 +67,15 @@ export const videoOperations = createVideoOperations({
         const result = await dialog.showSaveDialog({ defaultPath: defaultName, filters: [{ name: 'Video MP4', extensions: ['mp4'] }] });
         return result.canceled || !result.filePath ? null : result.filePath;
     },
-});
+};
+export const videoOperations = createVideoOperations(videoDeps);
+
+/** Capture this workspace's library; owned polling must never follow the active workspace getter. */
+export function getPageWorkVideoOperations() {
+    const bound = getVideoService();
+    const operations = createVideoOperations({ ...videoDeps, service: () => bound });
+    return { status: operations.status, openFile: operations.openFile };
+}
 
 /** App sẵn sàng hoặc sau khi đổi workspace: theo dõi tiếp các việc dở của DB hiện tại (không chạy ở chế độ nhân viên). */
 export function startVideoPolling(): void {

@@ -16,16 +16,17 @@ import { registerAIAssistantIpc } from './ipc/aiAssistantIpc';
 import { registerUtilIpc } from './ipc/utilIpc';
 import { registerEmployeeIpc } from './ipc/employeeIpc';
 import { registerRelayIpc } from './ipc/relayIpc';
-import { registerWorkspaceIpc } from './ipc/workspaceIpc';
-import { registerControlApiIpc, startControlApi, shutdownControlApi, syncControlEventSink } from './ipc/controlApiIpc';
+import { registerWorkspaceIpc, isWorkspaceSwitchInProgress } from './ipc/workspaceIpc';
+import { registerControlApiIpc, startControlApi, shutdownControlApi, syncControlEventSink, stopPagePreparationForWorkspaceSwitch, restartControlApi } from './ipc/controlApiIpc';
 import { registerFacebookIpc, reconnectAllFBAccounts } from './ipc/facebookIpc';
 import { registerTelegramIpc } from './ipc/telegramIpc';
 import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
 import { registerProxyIpc } from './ipc/proxyIpc';
-import { registerBrowserProfileIpc, closeAllBrowserProfiles } from './ipc/browserProfileIpc';
-import { registerResearchIpc, cancelResearch } from './ipc/researchIpc';
+import { registerBrowserProfileIpc, closeAllBrowserProfiles, closeAllBrowserProfilesAndWait, pauseBrowserProfileAdmission, resumeBrowserProfileAdmission, retireBrowserProfileGeneration } from './ipc/browserProfileIpc';
+import { registerResearchIpc } from './ipc/researchIpc';
 import { registerVideoIpc, startVideoPolling, stopVideoPolling } from './ipc/videoIpc';
-import { registerFacebookPosterIpc, cancelFacebookPosterJobs, startFacebookPosterScheduler, stopFacebookPosterScheduler } from './ipc/facebookPosterIpc';
+import { registerFacebookPosterIpc, startFacebookPosterScheduler, stopFacebookPosterScheduler, cancelFacebookPosterJobs, cancelAndWaitFacebookPosterJobs, pauseFacebookJobAdmission, resumeFacebookJobAdmission, retireFacebookJobGeneration, isFacebookJobAdmissionPaused, POSTER_NOT_STOPPED_ERROR } from './ipc/facebookPosterIpc';
+import { createQuitGuard } from '../src/services/app/quitGuard';
 import { registerUpdateIpc } from './ipc/updateIpc';
 import { registerErpTaskIpc } from './ipc/erpTaskIpc';
 import { registerErpCalendarIpc } from './ipc/erpCalendarIpc';
@@ -78,7 +79,135 @@ function decryptCookiesForStartup(encrypted: string): string {
 }
 
 const isDev = IS_DEV_BUILD;
+const NATIVE_DRAIN_TIMEOUT_MS = 45000;
 let isQuitting = false;
+let quitReady = false;
+let quitCleanupStarted = false;
+let quitOwner: 'quit' | 'update' | null = null;
+let ownsQuitPause = false;
+let quitRecovery: Promise<void> | null = null;
+
+async function resumeOwnedQuit(): Promise<void> {
+  if (!ownsQuitPause) return;
+  if (quitRecovery) return quitRecovery;
+  quitRecovery = (async () => {
+    quitReady = false;
+    try { await restartControlApi(); }
+    catch (error: any) { Logger.warn(`[Quit] Không khôi phục được Control API: ${error?.message}`); }
+    resumeBrowserProfileAdmission();
+    resumeFacebookJobAdmission();
+    startFacebookPosterScheduler();
+    ownsQuitPause = false;
+  })().finally(() => { quitRecovery = null; });
+  return quitRecovery;
+}
+
+function buildQuitGuard() {
+  return createQuitGuard({
+    drain: async () => {
+      // The check and both pauses are synchronous: workspace/quit/update cannot steal each other's rollback.
+      if (isWorkspaceSwitchInProgress() || isFacebookJobAdmissionPaused()) return false;
+      ownsQuitPause = true;
+      let drained = false;
+      try {
+        pauseBrowserProfileAdmission();
+        pauseFacebookJobAdmission();
+        stopFacebookPosterScheduler();
+        if (!(await stopPagePreparationForWorkspaceSwitch())) return false;
+        if (!(await cancelAndWaitFacebookPosterJobs())) return false;
+        if (!(await closeAllBrowserProfilesAndWait(NATIVE_DRAIN_TIMEOUT_MS))) return false;
+        drained = true;
+        return true;
+      } finally { if (!drained) await resumeOwnedQuit(); }
+    },
+    onReady: () => {
+      quitReady = true;
+      // Update owns its next quit: installation must be invoked before Electron receives app.quit().
+      if (quitOwner === 'quit') app.quit();
+    },
+    onBlocked: () => {
+      const owner = quitOwner;
+      quitOwner = null;
+      Logger.warn(`[Quit] ${POSTER_NOT_STOPPED_ERROR}`);
+      // A blocked update install reports its own error to the renderer (UpdateService); only a quit gets this dialog.
+      if (owner !== 'update') void offerForceQuit();
+    },
+  });
+}
+let quitGuard = buildQuitGuard();
+
+function showWarning(options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
+  // A sheet on a window hidden in the tray is invisible on macOS (and ownerless on Windows): parent only to a shown window.
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized()) return dialog.showMessageBox(mainWindow, options);
+  if (process.platform === 'darwin') {
+    try { app.focus({ steal: true }); } catch (error: any) { Logger.warn(`[Quit] Không đưa app lên trước được: ${error?.message}`); }
+  }
+  return dialog.showMessageBox(options);
+}
+
+/** One blocked-quit prompt at a time; later blocked quits while it is open do not stack another dialog. */
+let forceQuitPromptOpen = false;
+
+/** Blocked quit: the owned pause is already resumed; "Để sau" leaves the app running, "Thoát ngay" exits after a confirmation. */
+async function offerForceQuit(): Promise<void> {
+  if (forceQuitPromptOpen || quitCleanupStarted) return;
+  forceQuitPromptOpen = true;
+  try {
+    const choice = await showWarning({
+      type: 'warning', title: 'Chưa thể thoát', message: 'Công việc hoặc trình duyệt chưa dừng an toàn.',
+      detail: 'Thử lại sau khi công việc dừng hẳn, hoặc chọn "Thoát ngay" để buộc thoát.',
+      buttons: ['Để sau', 'Thoát ngay'], defaultId: 0, cancelId: 0,
+    });
+    if (choice.response !== 1 || quitCleanupStarted) return;
+    const confirm = await showWarning({
+      type: 'warning', title: 'Chưa thể thoát', message: 'Thoát ngay khi công việc chưa dừng?',
+      detail: 'Các việc đang chạy sẽ bị gián đoạn. Bài đang gửi dở có thể đã lên hoặc chưa: lần mở sau app đánh dấu cần kiểm tra và không gửi lại. '
+        + 'Trình duyệt đang mở sẽ được yêu cầu đóng; nếu còn cửa sổ nào, hãy đóng bằng tay.',
+      buttons: ['Huỷ', 'Thoát ngay'], defaultId: 0, cancelId: 0,
+    });
+    if (confirm.response === 1) forceQuit();
+  } catch (error: any) {
+    Logger.warn(`[Quit] Không hiện được lựa chọn thoát: ${error?.message}`);
+  } finally { forceQuitPromptOpen = false; }
+}
+
+/** One-shot exit without waiting for jobs/browsers to confirm; never races a normal cleanup already started. */
+function forceQuit(): void {
+  if (quitCleanupStarted) return;
+  quitCleanupStarted = true;
+  isQuitting = true;
+  const step = (label: string, fn: () => void) => {
+    try { fn(); } catch (error: any) { Logger.warn(`[Quit] Thoát ngay: ${label} lỗi: ${error?.message}`); }
+  };
+  step('pause browser', pauseBrowserProfileAdmission);
+  step('pause jobs', pauseFacebookJobAdmission);
+  step('stop scheduler', stopFacebookPosterScheduler);
+  step('cancel jobs', cancelFacebookPosterJobs);
+  step('close browsers', closeAllBrowserProfiles);
+  // No retirement: it refuses while jobs are still busy. Interrupted runs are recovered on the next start.
+  step('stop services', stopServicesAndCloseDatabase);
+  app.exit(0);
+}
+
+function requestQuit(): Promise<boolean> {
+  if (quitOwner === 'update') return Promise.resolve(false);
+  quitOwner = 'quit';
+  return quitGuard();
+}
+
+function prepareUpdateInstall(): Promise<boolean> {
+  if (quitOwner === 'quit') return Promise.resolve(false);
+  quitOwner = 'update';
+  return quitGuard();
+}
+
+async function cancelUpdateInstall(): Promise<void> {
+  if (quitOwner !== 'update' || quitCleanupStarted) return;
+  quitReady = false;
+  await resumeOwnedQuit();
+  quitOwner = null;
+  quitGuard = buildQuitGuard();
+}
 
 // ─── Hardware acceleration ────────────────────────────────────────────────────
 // Giữ GPU acceleration BẬT: tắt hardware acceleration khiến CPU render toàn bộ UI,
@@ -324,7 +453,6 @@ function createWindow() {
       }, 1500);
     } else {
       console.error(`[main] Renderer crashed ${crashCount} times - quitting app`);
-      isQuitting = true;
       app.quit();
     }
   });
@@ -454,14 +582,7 @@ function createTray() {
     { type: 'separator' },
     {
       label: 'Thoát hoàn toàn',
-      click: () => {
-        isQuitting = true;
-        app.quit();
-        setTimeout(() => {
-          console.warn('[main] Force-exit after 5s timeout (tray)');
-          process.exit(0);
-        }, 5000).unref();
-      },
+      click: () => { app.quit(); },
     },
   ]);
 
@@ -509,16 +630,7 @@ function registerWindowControls() {
   });
 
   // Nút thoát hoàn toàn từ tray menu hoặc renderer
-  ipcMain.on('window:quit', () => {
-    isQuitting = true;
-    app.quit();
-    // Force-exit: DB close() đã chạy trong before-quit (sync, ~1ms).
-    // 5s đủ cho socket disconnect + service stop. Nếu vẫn kẹt → force kill.
-    setTimeout(() => {
-      console.warn('[main] Force-exit after 5s timeout — background service may be stuck');
-      process.exit(0);
-    }, 5000).unref();
-  });
+  ipcMain.on('window:quit', () => { app.quit(); });
 
   ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
 
@@ -1285,16 +1397,12 @@ app.whenReady().then(async () => {
   console.log('[MediaCleanup] Scheduler initialized - runs daily at 3:00 AM');
 
   // Tự cập nhật từ GitHub Releases: xem electron/ipc/updateIpc.ts và docs/specs/2026-10-03-auto-update.md
-  registerUpdateIpc(() => mainWindow, isDev);
+  registerUpdateIpc(() => mainWindow, isDev, { prepareInstall: prepareUpdateInstall, cancelInstall: cancelUpdateInstall });
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
-    setTimeout(() => {
-      console.warn('[main] Force-exit after 5s timeout (window-all-closed)');
-      process.exit(0);
-    }, 5000).unref();
   }
 });
 
@@ -1303,9 +1411,17 @@ app.on('activate', () => {
   else { mainWindow.show(); mainWindow.focus(); }
 });
 
-app.on('before-quit', () => {
+function cleanupBeforeQuit(): void {
+  if (quitCleanupStarted) return;
+  retireFacebookJobGeneration();
+  retireBrowserProfileGeneration();
+  quitCleanupStarted = true;
   isQuitting = true;
+  stopServicesAndCloseDatabase();
+}
 
+/** Shared by graceful cleanup (after retirement) and force quit. */
+function stopServicesAndCloseDatabase(): void {
   // ── Cleanup background services giữ event loop ──────────────────────
   // Nếu không dọn, CRM timers / cron / webhook server giữ process sống,
   // app "tắt" rồi nhưng vẫn chạy ngầm trong Task Manager.
@@ -1342,28 +1458,11 @@ app.on('before-quit', () => {
   } catch {}
 
   try {
-    stopFacebookPosterScheduler();
-  } catch {}
-
-  try {
-    cancelFacebookPosterJobs();
-  } catch {}
-
-  try {
     stopVideoPolling(); // trước DatabaseService.close(): không hỏi máy chủ render nữa; việc dở được theo dõi tiếp ở lần mở sau
-  } catch {}
-
-  try {
-    cancelResearch(); // before-quit chạy đồng bộ nên không chờ; lượt dở dang được failInterruptedScans sửa ở lần mở sau
   } catch {}
 
   // Listener + sink closed synchronously. After the poster scheduler/jobs stop (so schedule.missed raised during quit is recorded), before DatabaseService.close() below.
   void shutdownControlApi().catch(() => {});
-
-  try {
-    // Ask every open browser profile to exit so cookies are flushed and no orphan keeps running
-    closeAllBrowserProfiles();
-  } catch {}
 
   try {
     // Close DB completely — releases file handles so NSIS installer can update safely.
@@ -1389,13 +1488,28 @@ app.on('before-quit', () => {
     const { stopAllPollers } = require('../src/services/workflow/TelegramBotPollingService');
     stopAllPollers();
   } catch {}
-});
+}
 
-// ─── Last-resort: ensure DB is closed before process exits ──────────────────
-// Covers edge cases where before-quit didn't fire (e.g. process.kill, NSIS force-quit)
-app.on('will-quit', () => {
-  try { DatabaseService.getInstance().close(); } catch {}
-});
+function handleQuit(event: Electron.Event): void {
+  if (!quitReady) {
+    event.preventDefault();
+    void requestQuit();
+    return;
+  }
+  try { cleanupBeforeQuit(); }
+  catch (error: any) {
+    event.preventDefault();
+    quitReady = false;
+    Logger.warn(`[Quit] Chưa thể hoàn tất dừng công việc: ${error?.message}`);
+    void resumeOwnedQuit().catch(err => Logger.warn(`[Quit] ${err?.message}`)).finally(() => {
+      quitOwner = null;
+      quitGuard = buildQuitGuard();
+    });
+  }
+}
+app.on('before-quit', handleQuit);
+// Never let a fallback will-quit bypass the same safety gate or close the DB a second time.
+app.on('will-quit', handleQuit);
 
 // ─── Global error handlers ──────────────────────────────────────────────────
 // Không có handlers → unhandled error trong main process = treo im lặng,

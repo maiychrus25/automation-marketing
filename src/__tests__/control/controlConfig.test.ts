@@ -61,3 +61,20 @@ describe('publicHost in config', () => {
     expect(() => validateConfigInput({ port: 47321, allowList: '', publicHost: 'bad host' })).toThrow(ControlConfigError);
   });
 });
+
+
+describe('protected writes and scoped staging', () => {
+  test('protected writes default false and only accept a boolean', () => {
+    expect(parseStoredConfig(null).protectedWritesEnabled).toBe(false);
+    expect(parseStoredConfig('{"protectedWritesEnabled":true}').protectedWritesEnabled).toBe(true);
+    expect(parseStoredConfig('{"protectedWritesEnabled":"true"}').protectedWritesEnabled).toBe(false);
+    expect(validateConfigInput({ port: 47321, allowList: [] }).protectedWritesEnabled).toBe(false);
+    expect(validateConfigInput({ port: 47321, allowList: [], protectedWritesEnabled: true }).protectedWritesEnabled).toBe(true);
+    expect(() => validateConfigInput({ port: 47321, allowList: [], protectedWritesEnabled: 'true' })).toThrow(ControlConfigError);
+  });
+  test.each(['page_runner', 'page_receiver'] as const)('stages %s separately without installing in the bot', kind => {
+    const command = buildInstallCommand({ host: '203.0.113.7', port: 47321, sha256: 'abc', code: 'mhp1.xyz', kind });
+    expect(command).toContain(` pair 'mhp1.xyz' --dir /root/maihub-page-${kind === 'page_runner' ? 'runner' : 'receiver'}`);
+    expect(command).not.toContain('--install');
+  });
+});

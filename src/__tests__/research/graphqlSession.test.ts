@@ -58,6 +58,79 @@ function makeStore() {
 const mk = (page: any, store = makeStore()) =>
     ({ store, s: new GraphqlSession(page, store as any, { now: () => 1000, sleep: sleepMock(), random: () => 0.5 }) });
 
+describe('Node-side ownership guards', () => {
+    function guardState() {
+        const error = new Error('ownership revoked');
+        let current = true;
+        return { error, revoke: () => { current = false; }, assertCurrent: () => { if (!current) throw error; } };
+    }
+    it.each([false, true])('stops after navigation resolves/rejects=%s before token reads', async (rejects) => {
+        const { page } = makePage(); const g = guardState();
+        page.goto.mockImplementation(async () => { g.revoke(); if (rejects) throw new Error('closed'); });
+        const session = new GraphqlSession(page, makeStore(), { assertCurrent: g.assertCurrent });
+        await expect(session.open()).rejects.toBe(g.error);
+        expect(page.evaluate).not.toHaveBeenCalled();
+        expect(() => session.userId()).toThrow(g.error);
+    });
+    it.each([false, true])('stops after token evaluation resolves/rejects=%s before cookie fallback', async (rejects) => {
+        const { page } = makePage(); const g = guardState(); const cookies = jest.fn(async () => [{ name: 'c_user', value: '7' }]);
+        page.context = () => ({ cookies });
+        page.evaluate.mockImplementation(async () => { g.revoke(); if (rejects) throw new Error('closed'); return { dtsg: 'D', userId: '' }; });
+        const session = new GraphqlSession(page, makeStore(), { assertCurrent: g.assertCurrent });
+        await expect(session.open()).rejects.toBe(g.error);
+        expect(cookies).not.toHaveBeenCalled();
+    });
+    it.each([false, true])('does not expose cookies after fallback resolves/rejects=%s', async (rejects) => {
+        const { page } = makePage({ tokens: { dtsg: 'D', userId: '' } }); const g = guardState();
+        page.context = () => ({ cookies: async () => { g.revoke(); if (rejects) throw new Error('cookies'); return [{ name: 'c_user', value: '7' }]; } });
+        const session = new GraphqlSession(page, makeStore(), { assertCurrent: g.assertCurrent });
+        await expect(session.open()).rejects.toBe(g.error);
+        await expect(session.call({ friendlyName: SEARCH, docId: '1', variables: {} }, {})).rejects.toBe(g.error);
+        expect(page.evaluate).toHaveBeenCalledTimes(1);
+    });
+    it.each(['goto', 'wheel', 'sleep'] as const)('removes listener and prevents cache writes when revoked after %s', async (step) => {
+        const { page, listeners } = makePage(); const store = makeStore(); const g = guardState();
+        const sleep = jest.fn(async () => { if (step === 'sleep') g.revoke(); });
+        page.goto.mockImplementation(async () => { if (step === 'goto') g.revoke(); });
+        page.mouse.wheel.mockImplementation(async () => {
+            listeners.request.forEach((cb) => cb(req(SEARCH)));
+            if (step === 'wheel') g.revoke();
+        });
+        const session = new GraphqlSession(page, store, { sleep, assertCurrent: g.assertCurrent });
+        await expect(session.ensureQuery('posts', SEARCH, 'https://www.facebook.com/search/posts')).rejects.toBe(g.error);
+        expect(listeners.request).toEqual([]); expect(page.off).toHaveBeenCalledTimes(1);
+        expect(store.m.size).toBe(0);
+        if (step === 'goto') expect(page.mouse.wheel).not.toHaveBeenCalled();
+        if (step !== 'sleep') expect(sleep).not.toHaveBeenCalled();
+    });
+    it.each(['goto', 'wheel', 'sleep'] as const)('retains guard error and listener cleanup after rejected %s', async (step) => {
+        const { page, listeners } = makePage(); const store = makeStore(); const g = guardState();
+        const fail = async () => { g.revoke(); throw new Error('transport failure'); };
+        const sleep = jest.fn(step === 'sleep' ? fail : async () => undefined);
+        if (step === 'goto') page.goto.mockImplementation(fail);
+        if (step === 'wheel') page.mouse.wheel.mockImplementation(fail);
+        const session = new GraphqlSession(page, store, { sleep, assertCurrent: g.assertCurrent });
+        await expect(session.ensureQuery('posts', SEARCH, 'https://www.facebook.com/search/posts')).rejects.toBe(g.error);
+        expect(listeners.request).toEqual([]); expect(store.m.size).toBe(0);
+        if (step === 'wheel') expect(sleep).not.toHaveBeenCalled();
+    });
+    it.each([false, true])('does not expose response or translate guard into retryable error when call rejects=%s', async (rejects) => {
+        const { page } = makePage(); const g = guardState();
+        const session = new GraphqlSession(page, makeStore(), { assertCurrent: g.assertCurrent });
+        await session.open();
+        page.evaluate.mockImplementation(async () => { g.revoke(); if (rejects) throw new Error('AbortError'); return { status: 200, text: 'stale' }; });
+        await expect(session.call({ friendlyName: SEARCH, docId: '1', variables: {} }, {})).rejects.toBe(g.error);
+        expect(typeof page.evaluate.mock.calls[1][1].assertCurrent).toBe('undefined');
+    });
+    it('denies cached query and recapture before any state/browser access', async () => {
+        const { page } = makePage(); const store = makeStore(); const g = guardState(); g.revoke();
+        const session = new GraphqlSession(page, store, { assertCurrent: g.assertCurrent });
+        await expect(session.ensureQuery('posts', SEARCH, 'https://x')).rejects.toBe(g.error);
+        await expect(session.recapture('posts', SEARCH, 'https://x')).rejects.toBe(g.error);
+        expect(store.getQuery).not.toHaveBeenCalled(); expect(page.goto).not.toHaveBeenCalled(); expect(page.on).not.toHaveBeenCalled();
+    });
+});
+
 describe('open', () => {
     it('reads tokens and succeeds', async () => {
         const { page } = makePage();

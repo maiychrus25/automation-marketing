@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import type { ScopedKeyPolicy } from '../../../services/control/controlAuthorization';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { showConfirm } from '../common/ConfirmDialog';
@@ -6,7 +7,7 @@ import { Spinner } from '../common/PageLoading';
 import { KeyIcon } from '../common/icons';
 import { Card, CodeBox } from './controlApiParts';
 
-type Ticket = { code: string; command: string; firewall: string; expiresAt: number; botIp: string; name: string };
+type Ticket = { kind?: ScopedKeyPolicy['kind']; code: string; command: string; firewall: string; expiresAt: number; botIp: string; name: string };
 
 const formatCountdown = (ms: number) => {
   const total = Math.max(0, Math.ceil(ms / 1000));
@@ -14,6 +15,8 @@ const formatCountdown = (ms: number) => {
 };
 
 interface Props {
+  policy?: ScopedKeyPolicy | null;
+  scopeError?: string;
   /** Địa chỉ MaiHub điền sẵn (publicHost đã lưu hoặc IP công khai dò được). */
   publicHost: string;
   onCopy: (text: string) => void;
@@ -23,7 +26,7 @@ interface Props {
   onPaired: () => void | Promise<void>;
 }
 
-export default function PairingPanel({ publicHost, onCopy, onCreated, onPaired }: Props) {
+export default function PairingPanel({ publicHost, onCopy, onCreated, onPaired, policy = null, scopeError = '' }: Props) {
   const { showNotification } = useAppStore();
   const [name, setName] = useState('');
   const [botIp, setBotIp] = useState('');
@@ -66,13 +69,14 @@ export default function PairingPanel({ publicHost, onCopy, onCreated, onPaired }
   }, []);
 
   const expired = !!ticket && remaining <= 0;
-  const canSubmit = !busy && name.trim() && botIp.trim() && host.trim();
+  const canSubmit = !busy && !scopeError && name.trim() && botIp.trim() && host.trim();
 
   const create = async () => {
     setError('');
+    if (scopeError) { setError(scopeError); return; }
     const ok = await showConfirm({
       title: 'Tạo mã ghép nối?',
-      message: 'Sẽ bật API và thêm IP này vào danh sách được phép',
+      message: `Sẽ bật API và thêm IP này vào danh sách được phép.${policy ? ' Chỉ tạo tệp staging riêng cho role, không tự cài MCP/service và chưa chứng minh cách ly.' : ''}${policy?.kind === 'page_receiver' ? ` Tôi đã xác nhận Chat ID ${policy.ownerChatId} và Sender ID ${policy.ownerSenderId} của chủ Page; giữ khoá receiver ngoài cấu hình/.env/MCP của runner.` : ''}`,
       confirmText: 'Tạo mã',
       variant: 'warning',
     });
@@ -80,9 +84,9 @@ export default function PairingPanel({ publicHost, onCopy, onCreated, onPaired }
     setBusy(true);
     setPairedName('');
     try {
-      const res = await ipc.controlApi?.createPairing({ name: name.trim(), botIp: botIp.trim(), publicHost: host.trim() });
+      const res = await ipc.controlApi?.createPairing({ name: name.trim(), botIp: botIp.trim(), publicHost: host.trim(), ...(policy ? { policy } : {}) });
       if (res?.success && res.code && res.command && res.expiresAt) {
-        setTicket({ code: res.code, command: res.command, firewall: res.firewall || '', expiresAt: res.expiresAt, botIp: botIp.trim(), name: name.trim() });
+        setTicket({ kind: policy?.kind, code: res.code, command: res.command, firewall: res.firewall || '', expiresAt: res.expiresAt, botIp: botIp.trim(), name: name.trim() });
         Promise.resolve(onCreated()).catch(() => {});
       } else setError(res?.error || 'Không tạo được mã ghép nối');
     } catch (e: any) {
@@ -134,16 +138,17 @@ export default function PairingPanel({ publicHost, onCopy, onCreated, onPaired }
             <CodeBox text={ticket.firewall} onCopy={onCopy} label="Sao chép lệnh tường lửa" />
           </div>
           <div>
-            <p className="text-xs text-gray-400 mb-1">Bước 2: chạy bằng root trên VPS bot</p>
+            <p className="text-xs text-gray-400 mb-1">{ticket.kind ? `Bước 2: staging bằng root vào /root/maihub-page-${ticket.kind === 'page_runner' ? 'runner' : 'receiver'}` : 'Bước 2: chạy bằng root trên VPS bot'}</p>
             {expired
               ? <p className="text-xs text-amber-500" role="status">Mã đã hết hạn — tạo mã mới</p>
-              : <CodeBox text={ticket.command} onCopy={onCopy} label="Sao chép lệnh cài" />}
+              : <CodeBox text={ticket.command} onCopy={onCopy} label={ticket.kind ? 'Sao chép lệnh staging' : 'Sao chép lệnh cài'} />}
           </div>
           <div className="flex flex-wrap items-center gap-3">
             {!expired && <span className="text-xs text-gray-300" aria-live="off">Còn lại: <span className="font-mono">{formatCountdown(remaining)}</span></span>}
             <button type="button" className="btn-secondary" onClick={cancel}>Huỷ mã</button>
           </div>
-          <p className="text-xs text-gray-400">Khởi động lại MaiHub sẽ làm mã mất hiệu lực.</p>
+          {ticket.kind && <p className="text-xs text-amber-500 leading-relaxed">Đây chỉ là tệp staging, không phải cài đặt cách ly đã được xác minh. Không nhập khoá receiver vào runner hoặc chạy --install cho role scoped. Bước bàn giao tài khoản hệ điều hành/cài đặt và runtime scoped còn chờ kiểm chứng; giữ ghi được bảo vệ tắt.</p>}
+          <p className="text-xs text-gray-400">Mỗi IP chỉ có một mã đang chờ; tạo mã mới sẽ thay mã cũ. Khởi động lại MaiHub sẽ làm mã mất hiệu lực.</p>
         </div>
       )}
     </Card>

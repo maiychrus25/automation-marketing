@@ -49,6 +49,23 @@ function makeDeps(ctx: unknown, page: FakePage, extra: Partial<TaskDeps> & { onR
   };
 }
 
+test.each([['direct','selector'],['fallback','selector'],['direct','barrier'],['fallback','barrier']])('revocationDuringPublishAwaitPreventsSubmit(%s,%s)',async(route,phase)=>{
+  let revoked=false; const clicked:string[]=[];
+  const guard={variantIndex:0,assertPost:()=>{},assertCurrent:()=>{if(revoked) throw new Error('revoked');},beforeEffect:async()=>{if(revoked) throw new Error('revoked'); if(phase==='barrier') revoked=true;},settle:()=>{}};
+  const page={goto:async()=>{},$:async()=>null,on:()=>{},off:()=>{},
+    evaluate:async(fn:AnyFn)=>{
+      if(fn.name==='composerIsOpenInPage'||fn.name==='focusEditorInPage') return true;
+      if(fn.name==='markPublishButtonInPage') {if(route==='direct' && phase==='selector') revoked=true; return route==='direct';}
+      return false;
+    },locator:fakeLocators(clicked),waitForSelector:async(_s:string,opts?:{state?:string})=>{
+      if(opts?.state==='hidden') return null;
+      if(route==='fallback') {if(phase==='selector') revoked=true; return {boundingBox:async()=>null,click:async()=>{clicked.push('fallback');}};}
+      return null;
+    },click:async()=>{clicked.push('fallback');},keyboard:{type:async()=>{}}};
+  await runWithFakeTimers(()=>postToTargets({text:'hi',targets:['123'],minDelay:0,maxDelay:0},makeDeps(loggedInCtx([]),page,{autonomyGuard:guard} as any)));
+  expect(clicked).toEqual([]);
+});
+
 test('nhận đúng nhãn nút đăng của group', () => {
   assert.ok(isPublishLabel('Đăng'));
   assert.ok(isPublishLabel('Post'));
@@ -412,6 +429,31 @@ function pageSuccessful({ graphqlBody = null, graphqlThrows = false, clicked = [
   };
   return page;
 }
+
+test.each(['old-feed','unrelated-story','mutation-shaped-current-id'])('autonomyDoesNotTreatUnboundPostEvidenceAsCommentAuthority(%s)',async source=>{
+  const clicked:string[]=[]; const navigated:string[]=[];
+  const story={__typename:'Story',post_id:'20002',id:Buffer.from('S:_I12345:20002').toString('base64')};
+  const graphqlBody=source==='old-feed'?null:JSON.stringify({data:source==='unrelated-story'?{unrelated:story}:{story_create:{story}}});
+  const page=pageSuccessful({graphqlBody,clicked}) as any;
+  const original=page.evaluate; let counts=0;
+  page.goto=async(url:string)=>{navigated.push(url);};
+  page.url=()=>navigated[navigated.length-1] ?? 'https://www.facebook.com/';
+  page.keyboard={type:async()=>{},press:async()=>{clicked.push('Enter');}};
+  page.locator=(selector:string)=>({focus:async()=>{},first:()=>({click:async()=>{clicked.push(selector.includes('comment-send')?'comment-send':'publish');}})});
+  page.evaluate=async(fn:AnyFn,...args:any[])=>{
+    if(fn.name==='findOwnPostLinkInPage') return 'https://www.facebook.com/12345/posts/10001';
+    if(fn.name==='readPostStateInPage') return {found:true,pendingMarker:null};
+    if(fn.name==='countCommentBlocksInPage') return counts++;
+    if(['openCommentBoxInPage','markCommentBoxInPage','commentTypedInPage','markCommentSendButtonInPage','commentTextVisibleInPage'].includes(fn.name)) return true;
+    return original(fn,...args);
+  };
+  const guard={variantIndex:0,assertPost:()=>{},assertCurrent:()=>{},beforeEffect:async()=>{},settle:()=>{}};
+  const result=await runWithFakeTimers(()=>postToTargets({text:'Same first forty characters on the old and new posts',comment:'First comment',targets:['https://www.facebook.com/'],minDelay:0,maxDelay:0},makeDeps(loggedInCtx([]),page,{autonomyGuard:guard})));
+  expect(result.posted).toBe(1); expect(result.results[0].ok).toBe(true);
+  expect(clicked).not.toContain('comment-send'); expect(clicked).not.toContain('Enter');
+  expect(navigated).toEqual(['https://www.facebook.com/','https://www.facebook.com/']);
+  expect(result.results[0].postUrl).toBeNull(); expect(result.results[0].commentStatus).toBe('no_post_url');
+});
 
 test('bắt được post_id từ phản hồi GraphQL và ghép thành link nhóm', async () => {
   const ctx = loggedInCtx([]);

@@ -187,6 +187,71 @@ class PinningTests(BridgeTestCase):
         self.assertEqual(ctx.exception.code, "CONFIG")
 
 
+class RunSelectionToolTests(unittest.TestCase):
+    """runs.active / runs.cancel arrive through the filtered describe catalog; the bridge only forwards."""
+
+    CATALOG = {"protocol": 1, "methods": [
+        {"name": "runs.active", "description": "Các lượt đang chạy", "destructive": False,
+         "paramsSchema": {"type": "object", "properties": {}}, "resultSchema": {"type": "array"}},
+        {"name": "runs.cancel", "description": "Dừng một lượt", "destructive": True,
+         "paramsSchema": {"type": "object", "properties": {"confirm": {"type": "boolean"}, "runId": {"type": "string"}}, "required": ["confirm"]},
+         "resultSchema": {"type": "object"}},
+    ]}
+
+    class Client(object):
+        def __init__(self, catalog, conflict=False):
+            self.catalog, self.conflict, self.calls = catalog, conflict, []
+
+        def describe(self):
+            return self.catalog
+
+        def call(self, method, params=None, idempotency_key=None):
+            if method == "system.status":
+                return {"lastEventSeq": 0, "workspace": {"id": "w1"}}
+            self.calls.append((method, dict(params or {}), idempotency_key))
+            if self.conflict and method == "runs.cancel" and "runId" not in (params or {}):
+                raise bridge.BridgeError("CONFLICT", "Chọn lượt cần dừng", {})
+            return [] if method == "runs.active" else {"cancelled": True}
+
+    def call(self, client, name, arguments):
+        out = io.StringIO()
+        req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}})
+        bridge.McpServer(client, io.StringIO(req + "\n"), out, io.StringIO()).run()
+        return json.loads(out.getvalue().splitlines()[-1])["result"]
+
+    def test_catalog_methods_become_tools_with_optional_run_id(self):
+        tools = dict((t["name"], t) for t in bridge.build_tools(self.CATALOG))
+        self.assertIn("maihub_runs_active", tools)
+        self.assertEqual(tools["maihub_runs_cancel"]["inputSchema"]["properties"]["runId"], {"type": "string"})
+        self.assertEqual(tools["maihub_runs_cancel"]["inputSchema"]["required"], ["confirm"])
+        self.assertIn("Cần confirm: true", tools["maihub_runs_cancel"]["description"])
+
+    def test_run_id_is_forwarded_exactly_and_idempotency_stripped(self):
+        client = self.Client(self.CATALOG)
+        result = self.call(client, "maihub_runs_cancel", {"confirm": True, "runId": "r-2", "idempotencyKey": "k"})
+        self.assertNotIn("isError", result)
+        self.assertEqual(client.calls, [("runs.cancel", {"confirm": True, "runId": "r-2"}, "k")])
+        self.assertEqual(json.loads(self.call(client, "maihub_runs_active", {})["content"][0]["text"]), [])
+
+    def test_conflict_is_shown_and_never_falls_back_to_another_call(self):
+        client = self.Client(self.CATALOG, conflict=True)
+        result = self.call(client, "maihub_runs_cancel", {"confirm": True})
+        self.assertTrue(result["isError"])
+        self.assertTrue(result["content"][0]["text"].startswith("CONFLICT: Chọn lượt cần dừng"))
+        self.assertEqual([c[0] for c in client.calls], ["runs.cancel"])
+
+    def test_scoped_catalog_without_the_methods_exposes_no_tool(self):
+        names = [t["name"] for t in bridge.build_tools({"protocol": 1, "methods": []})]
+        self.assertNotIn("maihub_runs_active", names)
+        self.assertNotIn("maihub_runs_cancel", names)
+
+    def test_guide_explains_active_cancel_and_two_live_runs(self):
+        for word in ("maihub_runs_active", "maihub_runs_cancel", "runId", "CONFLICT", "NOT_FOUND", "tối đa 2"):
+            self.assertIn(word, bridge.GUIDE)
+        self.assertNotIn("chỉ chạy một việc dùng trình duyệt", bridge.GUIDE)
+        self.assertIn("làm mới", bridge.GUIDE)
+
+
 class McpTests(BridgeTestCase):
     def test_initialize_and_framing(self):
         replies = self.mcp([
@@ -2146,7 +2211,8 @@ class InstallBriefTests(InstallFixture):
                          "\nMAIHUB_CERT_SHA256=" + PIN + "\nTELEGRAM_PROXY=http://proxy:8080\n")
 
     def brief_args(self, **over):
-        ns = dict(env_file=self.env_file, user="claudeproxy", state_dir=None, agent_cmd=None)
+        ns = dict(env_file=self.env_file, user="claudeproxy", state_dir=None, agent_cmd=None,
+                  protected=False, receiver_env=None, receiver_user=None)
         ns.update(over)
         service = ns.pop("name", "tg-bot")
         args = mock.Mock(**ns)
@@ -2992,6 +3058,1331 @@ class WatcherVideoTests(unittest.TestCase):
         self.run_events([video_event(1)], sender)
         self.assertEqual(sender.sent, [self.CAPTION])
         self.assertEqual(self.client.downloads, [])
+
+
+class ProtectedPageTests(unittest.TestCase):
+    """External boundaries are fake; durable state and bridge decisions are real."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "protected.json")
+        self.now = 1800000000
+        self.agent = mock.Mock(return_value=(0, False))
+        self.work = None
+        self.claim = None
+        self.cap = {"pageOperations": 1, "protectedWritesEnabled": True,
+                    "principal": {"kind": "page_runner", "workspaceId": "ws",
+                                  "assignments": [{"pageId": "page", "profileIds": ["p"]}]}}
+        self.preparation = {"niche": "Training", "keywords": ["safe"], "groupIds": ["g"],
+                            "tone": "friendly", "notes": "no ads", "time": "09:30", "draftsPerDay": 2}
+        self.calls = []
+        self.client = mock.Mock()
+        self.client.call.side_effect = self.call
+        self.client.describe.return_value = {"methods": []}
+
+    def call(self, method, params=None, **kwargs):
+        self.calls.append((method, params))
+        if method == "system.capabilities":
+            return self.cap
+        if method == "pageWork.list":
+            return {"items": [dict(self.work)] if self.work else []}
+        if method == "pageWork.reconcile":
+            return {"work": dict(self.work)}
+        if method == "pageWork.claimDue":
+            if self.claim:
+                self.work = dict(self.claim)
+            return {"work": dict(self.claim) if self.claim else None}
+        if method == "pageWork.get":
+            return {"work": dict(self.work or self.claim), "preparation": self.preparation}
+        if method == "pageWork.fail":
+            self.work["status"] = "needs_review"
+            return {"work": dict(self.work)}
+        raise AssertionError("Unexpected protected call: " + method)
+
+    def item(self, **changes):
+        item = {"id": "w", "workspaceId": "ws", "pageId": "page", "profileId": "p",
+                "status": "running", "claimedAt": 123, "attempts": 1, "waitFor": None,
+                "videoId": None, "draftIds": [], "nextCheckAt": None}
+        item.update(changes)
+        return item
+
+    def tick(self):
+        self.assertTrue(callable(getattr(bridge, "protected_brief_tick", None)), "missing protected tick")
+        return bridge.protected_brief_tick(self.client, self.agent, lambda: self.now, self.path)
+
+    def campaign_fixture(self):
+        policy = {"startsAt": self.now * 1000, "expiresAt": (self.now + 7 * 86400) * 1000,
+                  "maxPostsPerDay": 1, "maxPostsTotal": 7, "allowedMinutes": [570],
+                  "timeZone": "Asia/Ho_Chi_Minh", "actions": ["schedulePost", "updateScheduledPost"]}
+        proposal = {"id": "proposal", "workspaceId": "ws", "pageId": "page", "profileId": "p",
+                    "workId": "pruned", "revision": 2, "status": "pending",
+                    "input": {"name": "Pilot", "goal": "Giới thiệu dịch vụ", "policy": policy}}
+        campaign = {"campaignId": "campaign", "workspaceId": "ws", "pageId": "page", "profileId": "p",
+                    "revision": 1, "proposalId": "proposal", "managed": True, "deletedAt": None}
+        grant = {"id": "grant", "campaignId": "campaign", "campaignRevision": 1, "revision": 1,
+                 "workspaceId": "ws", "pageId": "page", "profileId": "p", "policy": policy, "status": "active"}
+        report = {"campaignId": "campaign", "pageId": "page", "from": 0, "to": 1,
+                  "published": 0, "eligible": 0, "measured": 0, "coverage": None,
+                  "totalEngagement": None, "uniqueLeads": 0, "lastObservedAt": None,
+                  "missingReasons": ["missing_publish_proof"], "observations": [],
+                  "measurementWindow": {"milestoneMinutes": 4320, "minAgeHours": 72, "maxAgeHours": 96},
+                  "finance": {"status": "unavailable", "reason": "missing_financial_source"}}
+        action = {"kind": "grantCampaign", "pageId": "page", "proposalId": "proposal", "expectedProposalRevision": 2}
+        ticket = {"id": "ticket", "action": action, "chatId": "12", "senderId": "34",
+                  "expiresAt": int(time.time() * 1000) + 10000}
+        methods = ["pageCampaigns." + name for name in ("list", "get", "propose", "schedule", "collect", "report", "optimize")]
+        self.client.describe.return_value = {"methods": [{"name": name} for name in methods]}
+        original = self.call
+        def call(method, params=None, **kwargs):
+            if not method.startswith(("pageCampaigns.", "pageApprovals.")) and method != "pageWork.events":
+                return original(method, params, **kwargs)
+            self.calls.append((method, params))
+            if method == "pageCampaigns.list":
+                return {"campaigns": [campaign], "proposals": [proposal]}
+            if method == "pageCampaigns.get":
+                return {"campaign": campaign, "grants": [grant]}
+            if method == "pageCampaigns.report":
+                return dict(report, **{k: params[k] for k in ("from", "to") if k in params})
+            if method == "pageWork.events":
+                return {"workspaceId": "ws", "events": [], "nextCursor": 4}
+            if method == "pageApprovals.prepare":
+                return {"ticket": dict(ticket, action=dict(params["action"]))}
+            if method in ("pageApprovals.bindMessage", "pageApprovals.confirm"):
+                return {"ok": True}
+            raise AssertionError(method)
+        self.client.call.side_effect = call
+        return proposal, campaign, grant, report, ticket
+
+    def test_campaign_proposal_requires_bound_owner_reply(self):
+        proposal, _, _, _, ticket = self.campaign_fixture()
+        self.cap["principal"]["kind"] = "page_receiver"
+        sender = mock.Mock()
+        sender.send_once.return_value = {"chat": {"id": 12}, "message_id": 7}
+        entry = bridge.ProtectedWatcher(self.client, sender, self.path).deliver(
+            ["ws", "page", "proposal", 2], "not proof", ticket["action"], "pruned")
+        text = sender.send_once.call_args.args[0]
+        for expected in ("page", "Giới thiệu dịch vụ", "09:30", "Asia/Ho_Chi_Minh", "1 bài/ngày", "7 bài", "7 ngày", "thu hồi"):
+            self.assertIn(expected, text)
+        pending = entry["ticket"]
+        update = {"update_id": 1, "message": {"message_id": 8, "chat": {"id": 12}, "from": {"id": 34},
+                  "text": "ok", "reply_to_message": {"message_id": 7}}}
+        for field, value in (("from", {"id": 99}), ("reply_to_message", {"message_id": 99}), ("text", '{"kind":"grantCampaign"}')):
+            invalid = dict(update, message=dict(update["message"], **{field: value}))
+            self.assertEqual(bridge.handle_owner_update(self.client, invalid, pending), {"intent": "clarify"})
+        self.assertEqual(bridge.handle_owner_update(self.client, update, dict(pending, expiresAt=0)), {"intent": "clarify"})
+        proposal["revision"] = 3
+        self.assertEqual(bridge.handle_owner_update(self.client, update, pending), {"intent": "clarify"})
+        self.assertNotIn("pageApprovals.confirm", [m for m, _ in self.calls])
+        proposal["revision"] = 2
+        self.assertEqual(bridge.handle_owner_update(self.client, update, pending), {"ok": True})
+
+    def test_runner_uses_campaign_tools_without_owner_credentials(self):
+        self.campaign_fixture()
+        self.work, self.claim = self.item(status="pending"), self.item()
+        self.agent.side_effect = lambda *args: (self.work.update(status="completed") or (0, False))
+        self.tick()
+        prompt = self.agent.call_args.args[0]
+        for name in ("pageCampaigns.propose", "pageCampaigns.schedule", "pageCampaigns.collect", "pageCampaigns.report", "pageCampaigns.optimize"):
+            self.assertIn(name, prompt)
+        for forbidden in ("drafts.approve", "campaigns.create", "receiverKeyId", "confirmationRef"):
+            self.assertNotIn(forbidden, prompt)
+        tools = bridge.build_tools(self.client.describe())
+        self.assertIn("pageCampaigns.schedule", [tool["_method"] for tool in tools])
+        self.assertNotIn("drafts.approve", [tool["_method"] for tool in tools])
+        with open(self.path) as handle:
+            self.assertNotIn("grant", handle.read())
+
+    def test_grant_does_not_add_agent_budget(self):
+        self.campaign_fixture()
+        for attempt in range(4):
+            self.work = self.item(status="pending", attempts=40 + attempt)
+            self.claim = self.item(attempts=41 + attempt) if attempt < 3 else None
+            self.agent.side_effect = lambda *args: (self.work.update(status="completed") or (0, False))
+            self.tick()
+        self.assertEqual(self.agent.call_count, 3)
+        self.assertEqual([m for m, _ in self.calls].count("pageWork.claimDue"), 4)
+
+    def test_campaign_notifications_survive_lost_event(self):
+        proposal, _, grant, _, _ = self.campaign_fixture()
+        proposal["status"] = "accepted"
+        self.cap["principal"]["kind"] = "page_receiver"
+        sender = mock.Mock()
+        sender.send_once.side_effect = TimeoutError("synthetic ambiguous send")
+        with mock.patch.object(bridge.time, "time", return_value=self.now):
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertEqual(sender.send_once.call_count, 1)
+        self.assertIn("pageCampaigns.report", [m for m, _ in self.calls])
+        self.assertNotIn("pageWork.get", [m for m, _ in self.calls])
+        keys = list(bridge._load_protected_state(self.path)["deliveries"])
+        self.assertEqual(len(keys), 1)
+        for value in ("ws", "page", "campaign", "grant"):
+            self.assertIn(value, keys[0])
+        grant["status"], grant["revision"] = "revoked", 2
+        with mock.patch.object(bridge.time, "time", return_value=self.now):
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertEqual(sender.send_once.call_count, 2)
+        self.assertIn("revoked", sender.send_once.call_args.args[0])
+        self.agent.assert_not_called()
+
+    def test_campaign_revoke_is_revision_bound_and_reports_policy(self):
+        proposal, _, grant, _, _ = self.campaign_fixture()
+        proposal["status"] = "accepted"
+        self.cap["principal"]["kind"] = "page_receiver"
+        sender = mock.Mock()
+        sender.send_once.return_value = {"chat": {"id": 12}, "message_id": 7}
+        action = {"kind": "revokeCampaignGrant", "pageId": "page", "grantId": "grant", "expectedGrantRevision": 1}
+        entry = bridge.ProtectedWatcher(self.client, sender, self.path).deliver(["revoke"], "", action)
+        self.assertEqual(entry["status"], "sent")
+        self.assertIn("Thu hồi grant grant", sender.send_once.call_args.args[0])
+        update = {"update_id": 1, "message": {"message_id": 8, "chat": {"id": 12}, "from": {"id": 34},
+                  "text": "đồng ý", "reply_to_message": {"message_id": 7}}}
+        grant["revision"] = 2
+        self.assertEqual(bridge.handle_owner_update(self.client, update, entry["ticket"]), {"intent": "clarify"})
+        self.assertNotIn("pageApprovals.confirm", [m for m, _ in self.calls])
+        with mock.patch.object(bridge.time, "time", return_value=self.now):
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        for expected in ("schedulePost", "09:30", "1 bài/ngày", "7 bài/grant"):
+            self.assertIn(expected, sender.send_once.call_args.args[0])
+
+    def test_campaign_expiry_scope_and_prepare_mismatch_fail_closed(self):
+        proposal, _, grant, _, ticket = self.campaign_fixture()
+        self.cap["principal"]["kind"] = "page_receiver"
+        sender = mock.Mock()
+        original = self.client.call.side_effect
+        def changed(method, params=None, **kwargs):
+            if method == "pageApprovals.prepare":
+                return {"ticket": dict(ticket, action=dict(ticket["action"], expectedProposalRevision=3))}
+            return original(method, params, **kwargs)
+        self.client.call.side_effect = changed
+        with self.assertRaises(bridge.BridgeError):
+            bridge.ProtectedWatcher(self.client, sender, self.path).deliver(["mismatch"], "", ticket["action"])
+        sender.send_once.assert_not_called()
+        self.client.call.side_effect = original
+        proposal["status"] = "accepted"
+        with mock.patch.object(bridge.time, "time", return_value=self.now + 8 * 86400):
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertIn('"expired"', sender.send_once.call_args.args[0])
+        calls = sender.send_once.call_count
+        grant["pageId"] = "other"
+        with self.assertRaises(bridge.BridgeError):
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertEqual(sender.send_once.call_count, calls)
+
+    def test_latest_decision_and_source_loss_change_same_period_delivery_key(self):
+        proposal, _, _, _, _ = self.campaign_fixture()
+        proposal["status"] = "accepted"
+        self.cap["principal"]["kind"] = "page_receiver"
+        latest = {"decision": {"id": "decision-keep", "campaignId": "campaign", "grantId": "grant",
+                  "grantRevision": 1, "kind": "keep", "before": "A", "after": "A",
+                  "observationRefs": ["controlled-scan"], "sampleSizes": {"variant:A": 5},
+                  "coverage": {"variant:A": 1}, "reason": "insufficient_evidence", "createdAt": self.now * 1000},
+                  "evidenceAvailable": True}
+        original = self.client.call.side_effect
+        def call(method, params=None, **kwargs):
+            value = original(method, params, **kwargs)
+            return dict(value, latestDecision=latest) if method == "pageCampaigns.get" else value
+        self.client.call.side_effect = call
+        sender = mock.Mock()
+        sender.send_once.side_effect = TimeoutError("ambiguous synthetic delivery")
+        with mock.patch.object(bridge.time, "time", return_value=self.now):
+            for kind in ("keep", "variant", "time"):
+                latest["decision"].update(id="decision-" + kind, kind=kind, after=600 if kind == "time" else "B")
+                before = sender.send_once.call_count
+                bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+                bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+                self.assertEqual(sender.send_once.call_count, before + 1)
+                text = sender.send_once.call_args.args[0]
+                for value in ("decision-" + kind, "controlled-scan", "variant:A", "tại thời điểm quyết định", "không chứng minh quyền thực thi hiện tại"):
+                    self.assertIn(value, text)
+            latest["evidenceAvailable"] = False
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertEqual(sender.send_once.call_count, 4)
+        self.assertIn("nguồn hiện không còn khả dụng", sender.send_once.call_args.args[0])
+        state = bridge._load_protected_state(self.path)
+        self.assertEqual(len(state["deliveries"]), 4)
+        self.assertTrue(all(entry["status"] == "uncertain" for entry in state["deliveries"].values()))
+        self.assertNotIn("pageWork.get", [m for m, _ in self.calls])
+        self.assertFalse(any(m in ("pageCampaigns.optimize", "pageApprovals.confirm", "pageWork.claimDue") for m, _ in self.calls))
+        self.agent.assert_not_called()
+
+    def test_latest_decision_invalid_scope_or_availability_never_sends(self):
+        proposal, _, _, _, _ = self.campaign_fixture()
+        proposal["status"] = "accepted"
+        self.cap["principal"]["kind"] = "page_receiver"
+        original = self.client.call.side_effect
+        sender = mock.Mock()
+        for campaign_id, available in (("foreign", True), ("campaign", "true")):
+            def call(method, params=None, **kwargs):
+                value = original(method, params, **kwargs)
+                latest = {"decision": {"campaignId": campaign_id, "kind": "keep"}, "evidenceAvailable": available}
+                return dict(value, latestDecision=latest) if method == "pageCampaigns.get" else value
+            self.client.call.side_effect = call
+            with self.assertRaises(bridge.BridgeError) as caught:
+                bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+            self.assertEqual(caught.exception.code, "CONFLICT")
+        sender.send_once.assert_not_called()
+
+    def test_latest_decision_absent_or_null_never_claims_a_change(self):
+        proposal, _, _, _, _ = self.campaign_fixture()
+        proposal["status"] = "accepted"
+        self.cap["principal"]["kind"] = "page_receiver"
+        sender = mock.Mock()
+        original = self.client.call.side_effect
+        for explicit_null in (False, True):
+            def call(method, params=None, **kwargs):
+                value = original(method, params, **kwargs)
+                return dict(value, latestDecision=None) if method == "pageCampaigns.get" and explicit_null else value
+            self.client.call.side_effect = call
+            path = os.path.join(self.tmp.name, "latest-%s.json" % explicit_null)
+            bridge.ProtectedWatcher(self.client, sender, path).poll()
+            self.assertIn("chưa có quyết định được ghi nhận", sender.send_once.call_args.args[0])
+            self.assertIn("không chứng minh quyền thực thi hiện tại", sender.send_once.call_args.args[0])
+
+    def test_ineligible_campaign_proposal_does_not_block_reports_drafts_or_recovery(self):
+        proposal, _, _, _, _ = self.campaign_fixture()
+        self.cap["principal"]["kind"] = "page_receiver"
+        self.work = self.item(status="completed", draftIds=["legacy-draft"])
+        original = self.client.call.side_effect
+        eligible = [False]
+        def call(method, params=None, **kwargs):
+            if method == "pageApprovals.prepare" and params["action"]["proposalId"] == proposal["id"] and not eligible[0]:
+                raise bridge.BridgeError("CONFLICT", "Synthetic paused Page")
+            if method == "pageWork.draft":
+                return {"draft": {"id": "legacy-draft", "revision": 1, "text": "Legacy draft survives"}}
+            value = original(method, params, **kwargs)
+            if method == "pageCampaigns.list":
+                value = dict(value, proposals=value["proposals"] + [dict(proposal, id="other-proposal")])
+            return value
+        self.client.call.side_effect = call
+        sender = mock.Mock()
+        sender.send_once.return_value = {"chat": {"id": 12}, "message_id": 7}
+        with mock.patch.object(bridge.time, "time", return_value=self.now):
+            for _ in range(2):
+                try:
+                    bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+                except bridge.BridgeError as err:
+                    self.fail("Ineligible proposal blocked reconciliation: " + err.code)
+            self.assertEqual(sender.send_once.call_count, 3)
+            state = bridge._load_protected_state(self.path)
+            refused_key = json.dumps(["ws", "page", "proposal", "proposal", 2], separators=(",", ":"))
+            self.assertNotIn(refused_key, state["deliveries"])
+            self.assertIn("pageCampaigns.report", [m for m, _ in self.calls])
+            self.assertIn("pageWork.list", [m for m, _ in self.calls])
+            self.assertTrue(any("Legacy draft survives" in c.args[0] for c in sender.send_once.call_args_list))
+            eligible[0] = True
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertEqual(sender.send_once.call_count, 4)
+        self.assertEqual(bridge._load_protected_state(self.path)["deliveries"][refused_key]["status"], "sent")
+        self.agent.assert_not_called()
+
+    def test_campaign_prepare_auth_transport_and_system_failures_still_abort(self):
+        self.campaign_fixture()
+        self.cap["principal"]["kind"] = "page_receiver"
+        original = self.client.call.side_effect
+        sender = mock.Mock()
+        for code in ("FORBIDDEN", "UNAUTHORIZED", "UNREACHABLE", "INTERNAL"):
+            with self.subTest(code=code):
+                def call(method, params=None, **kwargs):
+                    if method == "pageApprovals.prepare":
+                        raise bridge.BridgeError(code, "Synthetic refusal")
+                    return original(method, params, **kwargs)
+                self.client.call.side_effect = call
+                with self.assertRaises(bridge.BridgeError) as caught:
+                    bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(bridge._load_protected_state(self.path), {})
+        sender.send_once.assert_not_called()
+
+    def test_large_campaign_report_is_bounded_unicode_safe_and_restart_stable(self):
+        proposal, _, grant, report, _ = self.campaign_fixture()
+        proposal["status"] = "accepted"
+        proposal["input"].update(name=chr(0x1F680) * 50, goal=chr(0x1F680) * 200)
+        grant["policy"]["allowedMinutes"] = list(range(1440))
+        self.cap["principal"]["kind"] = "page_receiver"
+        report["missingReasons"] = ["missing_source_" + str(i) for i in range(100)]
+        latest = {"decision": {"id": "large-decision", "campaignId": "campaign", "grantId": "grant", "grantRevision": 1,
+                  "kind": "keep", "before": "A", "after": "A", "createdAt": self.now * 1000,
+                  "reason": "insufficient_evidence", "observationRefs": ["controlled-source-" + str(i) for i in range(100)],
+                  "sampleSizes": {"time:" + str(i): 0 for i in range(1440)},
+                  "coverage": {"time:" + str(i): 0 for i in range(1440)}}, "evidenceAvailable": False}
+        original = self.client.call.side_effect
+        selected = [latest]
+        def call(method, params=None, **kwargs):
+            value = original(method, params, **kwargs)
+            if method == "pageCampaigns.get":
+                return dict(value, latestDecision=selected[0], grants=[dict(grant, id="history-" + str(i), status="revoked") for i in range(10)])
+            return value
+        self.client.call.side_effect = call
+        for has_decision, uncertain in ((True, False), (False, False), (True, True)):
+            with self.subTest(has_decision=has_decision, uncertain=uncertain):
+                selected[0] = latest if has_decision else None
+                sender = mock.Mock()
+                def send(text):
+                    self.assertLessEqual(len(text.encode("utf-16-le")) // 2, 4096, "transport rejected oversize")
+                    if uncertain:
+                        raise TimeoutError("synthetic ambiguity")
+                    return {"chat": {"id": 12}, "message_id": 7}
+                sender.send_once.side_effect = send
+                path = os.path.join(self.tmp.name, "large-report-%s-%s.json" % (has_decision, uncertain))
+                with mock.patch.object(bridge.time, "time", return_value=self.now):
+                    bridge.ProtectedWatcher(self.client, sender, path).poll()
+                    bridge.ProtectedWatcher(self.client, sender, path).poll()
+                self.assertEqual(sender.send_once.call_count, 1)
+                entries = bridge._load_protected_state(path)["deliveries"]
+                self.assertEqual(len(entries), 1)
+                self.assertEqual(next(iter(entries.values()))["status"], "uncertain" if uncertain else "sent")
+                text = sender.send_once.call_args.args[0]
+                self.assertLessEqual(len(text.encode("utf-16-le")) // 2, 4096)
+                for value in ("page", "campaign", "10", "lược", "pageCampaigns.get", "pageCampaigns.report", "chưa đo được", "không chứng minh quyền thực thi hiện tại"):
+                    self.assertIn(value, text)
+                if has_decision:
+                    for value in ("large-decision", "keep", "insufficient_evidence", "tại thời điểm quyết định", "nguồn hiện không còn khả dụng"):
+                        self.assertIn(value, text)
+                else:
+                    self.assertIn("chưa có quyết định được ghi nhận", text)
+        self.agent.assert_not_called()
+
+    def test_oversize_campaign_consent_never_prepares_sends_or_persists_intent(self):
+        proposal, _, grant, _, ticket = self.campaign_fixture()
+        self.cap["principal"]["kind"] = "page_receiver"
+        sender = mock.Mock()
+        sender.send_once.return_value = {"chat": {"id": 12}, "message_id": 7}
+        for kind, minute_count in (("grantCampaign", 1440), ("revokeCampaignGrant", 1440), ("grantCampaign", 400)):
+            with self.subTest(kind=kind, minute_count=minute_count):
+                grant["policy"]["allowedMinutes"] = list(range(minute_count))
+                # 500 supplementary characters fit the server's 1000 UTF-16-unit goal limit.
+                proposal["input"]["goal"] = chr(0x1F680) * 500 if minute_count == 400 else "Pilot"
+                action = ticket["action"] if kind == "grantCampaign" else {
+                    "kind": kind, "pageId": "page", "grantId": "grant", "expectedGrantRevision": 1}
+                before = len(self.calls)
+                result = bridge.ProtectedWatcher(self.client, sender, self.path).deliver([kind, minute_count], "", action)
+                self.assertEqual(result["status"], "oversize")
+                self.assertNotIn("pageApprovals.prepare", [m for m, _ in self.calls[before:]])
+                self.assertEqual(bridge._load_protected_state(self.path), {})
+        sender.send_once.assert_not_called()
+
+    def test_normal_campaign_report_stays_complete_and_sent_once(self):
+        proposal, _, _, _, _ = self.campaign_fixture()
+        proposal["status"] = "accepted"
+        self.cap["principal"]["kind"] = "page_receiver"
+        sender = mock.Mock(return_value={"chat": {"id": 12}, "message_id": 7})
+        with mock.patch.object(bridge.time, "time", return_value=self.now):
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertEqual(sender.send_once.call_count, 1)
+        text = sender.send_once.call_args.args[0]
+        self.assertLessEqual(len(text.encode("utf-16-le")) // 2, 4096)
+        self.assertIn("09:30", text)
+        self.assertIn("schedulePost", text)
+        self.assertNotIn("lược", text)
+        self.assertEqual(next(iter(bridge._load_protected_state(self.path)["deliveries"].values()))["status"], "sent")
+
+    def test_public_poll_classifies_campaign_hints_and_recovers_missing_work(self):
+        proposal, _, _, _, _ = self.campaign_fixture()
+        proposal["status"] = "accepted"
+        self.cap["principal"]["kind"] = "page_receiver"
+        original = self.client.call.side_effect
+        recovered = self.item(id="recovered", status="waiting", draftIds=["recovered-draft"])
+        revision = [1]
+        afters, lookups = [], []
+        def call(method, params=None, **kwargs):
+            if method == "pageWork.events":
+                afters.append(params["after"])
+                hints = [
+                    {"seq": 1, "type": "pageCampaigns.proposalChanged", "pageId": "page", "proposalId": "proposal", "revision": 2, "status": "accepted", "createdAt": 1},
+                    {"seq": 2, "type": "pageCampaigns.grantChanged", "pageId": "page", "campaignId": "campaign", "grantId": "grant", "revision": 1, "status": "active", "createdAt": 2},
+                    {"seq": 3, "type": "pageWork.draftSaved", "pageId": "page", "workId": "recovered", "draftId": "recovered-draft", "revision": 1, "createdAt": 3}]
+                return {"workspaceId": "ws", "events": [h for h in hints if h["seq"] > params["after"]], "nextCursor": 3}
+            if method == "pageWork.get":
+                lookups.append(params["workId"])
+                self.assertEqual(params["workId"], "recovered", "campaign hints must not invent work ownership")
+                return {"work": recovered}
+            if method == "pageWork.draft":
+                return {"draft": {"id": "recovered-draft", "revision": revision[0], "text": "Recovered draft"}}
+            return original(method, params, **kwargs)
+        self.client.call.side_effect = call
+        for uncertain in (False, True):
+            with self.subTest(uncertain=uncertain):
+                revision[0] = 1
+                afters.clear(); lookups.clear()
+                path = os.path.join(self.tmp.name, "mixed-hints-%s.json" % uncertain)
+                sender = mock.Mock()
+                def send(text):
+                    if uncertain and "Recovered draft" in text:
+                        raise TimeoutError("synthetic unknown draft delivery")
+                    return {"chat": {"id": 12}, "message_id": 7}
+                sender.send_once.side_effect = send
+                with mock.patch.object(bridge.time, "time", return_value=self.now):
+                    self.assertEqual(bridge.ProtectedWatcher(self.client, sender, path).poll(), 3)
+                    saved = bridge._load_protected_state(path)
+                    self.assertEqual(saved["cursor"], 3)
+                    self.assertEqual(saved["workIds"], ["recovered"])
+                    self.assertEqual(sender.send_once.call_count, 2)
+                    self.assertEqual(bridge.ProtectedWatcher(self.client, sender, path).poll(), 3)
+                    self.assertEqual(sender.send_once.call_count, 2)
+                    self.assertEqual(bridge._load_protected_state(path)["deliveries"], saved["deliveries"])
+                    revision[0] = 2  # Known unfinished work remains recoverable even with no new events.
+                    bridge.ProtectedWatcher(self.client, sender, path).poll()
+                self.assertEqual(sender.send_once.call_count, 3)
+                self.assertEqual(afters, [0, 3, 3])
+                self.assertEqual(lookups, ["recovered"] * 3)
+                statuses = [entry["status"] for entry in saved["deliveries"].values()]
+                self.assertEqual(statuses.count("uncertain"), int(uncertain))
+        self.agent.assert_not_called()
+
+    def test_public_poll_does_not_ignore_malformed_work_hints(self):
+        self.cap["principal"]["kind"] = "page_receiver"
+        original = self.client.call.side_effect
+        sender = mock.Mock()
+        for event_type in ("pageWork.changed", "pageWork.draftSaved", "pageWork.businessChanged", "unknown"):
+            with self.subTest(event_type=event_type):
+                def call(method, params=None, **kwargs):
+                    if method == "pageWork.events":
+                        return {"workspaceId": "ws", "events": [{"type": event_type, "pageId": "page"}], "nextCursor": 4}
+                    return original(method, params, **kwargs)
+                self.client.call.side_effect = call
+                with self.assertRaises(KeyError):
+                    bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+                self.assertNotIn("cursor", bridge._load_protected_state(self.path))
+        sender.send_once.assert_not_called()
+
+    def test_finance_unavailable_is_not_zero(self):
+        proposal, _, _, _, _ = self.campaign_fixture()
+        proposal["status"] = "accepted"
+        self.cap["principal"]["kind"] = "page_receiver"
+        sender = mock.Mock()
+        bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertEqual(sender.send_once.call_count, 1)
+        text = sender.send_once.call_args.args[0]
+        for expected in ("chưa đo được", "chưa đủ dữ liệu để điều chỉnh", "missing_publish_proof", "không tự gia hạn"):
+            self.assertIn(expected, text)
+        self.assertNotIn("0%", text)
+        self.assertNotIn("pageApprovals.confirm", [m for m, _ in self.calls])
+
+    def test_protected_tick_rejects_legacy_key(self):
+        self.cap["principal"]["kind"] = "legacy"
+        self.assertTrue(callable(getattr(bridge, "protected_brief_tick", None)), "missing protected tick")
+        with self.assertRaises(bridge.BridgeError) as caught:
+            self.tick()
+        self.assertEqual(caught.exception.code, "FORBIDDEN")
+        self.agent.assert_not_called()
+        self.assertEqual([m for m, _ in self.calls], ["system.capabilities"])
+
+    def test_no_work_calls_no_agent(self):
+        self.tick()
+        self.agent.assert_not_called()
+
+    def test_waiting_video_only_polls(self):
+        self.work = self.item(status="waiting", videoId="v", waitFor="video")
+        self.tick()
+        self.agent.assert_not_called()
+        self.assertIn("pageWork.reconcile", [m for m, _ in self.calls])
+        self.assertNotIn("pageWork.claimDue", [m for m, _ in self.calls])
+
+    def test_resume_after_media_expiry_does_not_render(self):
+        self.work = self.item(status="pending", videoId="v")
+        self.claim = self.item(videoId="v")
+        self.agent.side_effect = lambda *args: (self.work.update(status="completed") or (0, False))
+        self.tick()
+        self.assertEqual(self.agent.call_count, 1)
+        self.assertIn('"videoId": "v"', self.agent.call_args[0][0])
+        self.assertFalse(any("render" in m or "videos." in m for m, _ in self.calls))
+
+    def test_three_invocations_across_steps(self):
+        for attempt in range(1, 5):
+            self.work = self.item(status="pending", attempts=attempt - 1)
+            # Daily admission belongs to the server, not the lifetime work.attempts field.
+            self.claim = self.item(attempts=attempt, claimedAt=attempt) if attempt <= 3 else None
+            self.agent.side_effect = lambda *args: (self.work.update(status="waiting") or (0, False))
+            self.tick()
+        self.assertEqual(self.agent.call_count, 3)
+
+    def test_server_admitted_fourth_lifetime_attempt_runs_once(self):
+        self.work = self.item(status="pending", attempts=3)
+        self.claim = self.item(attempts=4, claimedAt=456)
+        self.agent.side_effect = lambda *args: (self.work.update(status="completed") or (0, False))
+        self.assertEqual(self.tick()["ran"], ["w"])
+        self.assertEqual(self.agent.call_count, 1)
+        self.assertEqual([m for m, _ in self.calls].count("pageWork.claimDue"), 1)
+
+    def test_nonactionable_owner_reply_requires_new_proposal(self):
+        pending = {"id": "ticket", "chatId": "12", "senderId": "34", "messageId": 7,
+                   "expiresAt": int(time.time() * 1000) + 10000, "workId": "w",
+                   "action": {"kind": "approveDraft", "pageId": "page", "draftId": "d",
+                              "expectedRevision": 2, "timing": {"when": "now"}}}
+        update = {"update_id": 1, "message": {"message_id": 8, "chat": {"id": 12}, "from": {"id": 34},
+                  "text": "ok", "reply_to_message": {"message_id": 7}}}
+        for status in ("promoted", "removed"):
+            client = mock.Mock()
+            client.call.side_effect = [{"pageOperations": 1, "principal": {"kind": "page_receiver"}},
+                                       {"draft": {"id": "d", "status": status}}]
+            self.assertEqual(bridge.handle_owner_update(client, update, pending), {"intent": "clarify"})
+            self.assertNotIn("pageApprovals.confirm", [c.args[0] for c in client.call.call_args_list])
+            sender = mock.Mock()
+            client.call.side_effect = [{"pageOperations": 1, "principal": {"kind": "page_receiver"}},
+                                       {"draft": {"id": "d", "status": status}}]
+            with self.assertRaises(bridge.BridgeError) as caught:
+                bridge.ProtectedWatcher(client, sender, self.path).deliver([status], "", pending["action"], "w")
+            self.assertEqual(caught.exception.code, "CONFLICT")
+            sender.send_once.assert_not_called()
+
+    def test_prompt_separates_evidence_hypothesis_and_unknown(self):
+        self.work, self.claim = self.item(status="pending"), self.item()
+        self.agent.side_effect = lambda *args: (self.work.update(status="completed") or (0, False))
+        self.tick()
+        prompt = self.agent.call_args[0][0]
+        for value in ("observed", "hypothesis", "unknown", "ROI", "pageWork.saveDraft", "draftIndex",
+                      "confirmed", "giá", "cam kết", "vùng phục vụ", "khả năng đáp ứng", "không tự xác nhận", "needs_review"):
+            self.assertIn(value, prompt)
+        for key, value in self.preparation.items():
+            self.assertIn(json.dumps(value, ensure_ascii=False), prompt)
+
+    def test_owner_reply_must_match_pending_revision(self):
+        self.assertTrue(callable(getattr(bridge, "handle_owner_update", None)), "missing owner adapter")
+        pending = {"id": "ticket", "chatId": "12", "senderId": "34", "messageId": 7,
+                   "expiresAt": int(time.time() * 1000) + 10000, "workId": "w",
+                   "action": {"kind": "approveDraft", "pageId": "page", "draftId": "d",
+                              "expectedRevision": 2, "timing": {"when": "now"}}}
+        update = {"update_id": 1, "message": {"message_id": 8, "chat": {"id": 12}, "from": {"id": 34},
+                  "text": "ok", "reply_to_message": {"message_id": 7}}}
+        client = mock.Mock()
+        client.call.side_effect = [{"pageOperations": 1, "principal": {"kind": "page_receiver"}},
+                                   {"draft": {"id": "d", "revision": 3}}]
+        result = bridge.handle_owner_update(client, update, pending)
+        self.assertEqual(result["intent"], "clarify")
+        self.assertNotIn("pageApprovals.confirm", [c.args[0] for c in client.call.call_args_list])
+
+    def test_install_rejects_shared_secret_access(self):
+        self.assertTrue(callable(getattr(bridge, "check_protected_install", None)), "missing isolation check")
+        account = mock.Mock(pw_uid=1001, pw_dir="/runner")
+        receiver = mock.Mock(pw_uid=1001, pw_dir="/receiver")
+        run = mock.Mock()
+        with self.assertRaises(bridge.BridgeError):
+            bridge.check_protected_install("/runner/.env", account, "runner", "/receiver/.env",
+                                           receiver, run, self.tmp.name)
+        run.assert_not_called()
+
+    def test_send_timeout_is_not_blindly_retried(self):
+        self.assertTrue(callable(getattr(bridge, "ProtectedWatcher", None)), "missing durable receiver")
+        sender = mock.Mock()
+        sender.send_once.side_effect = TimeoutError("unknown delivery")
+        watcher = bridge.ProtectedWatcher(self.client, sender, self.path)
+        key = ["ws", "w", "d", 2]
+        watcher.deliver(key, "Draft d revision 2")
+        restarted = bridge.ProtectedWatcher(self.client, sender, self.path)
+        restarted.deliver(key, "Draft d revision 2")
+        self.assertEqual(sender.send_once.call_count, 1)
+        with open(self.path) as handle:
+            self.assertIn("uncertain", handle.read())
+
+
+class ProtectedBoundaryTests(unittest.TestCase):
+    setUp = ProtectedPageTests.setUp
+    call = ProtectedPageTests.call
+    item = ProtectedPageTests.item
+    tick = ProtectedPageTests.tick
+
+    def test_missing_receiver_os_user_is_config_error_not_traceback(self):
+        with open(self.path, "w") as handle:
+            handle.write("# fake runner config\n")
+        def account(name):
+            if name == "runner":
+                return mock.Mock(pw_uid=1001, pw_gid=1001, pw_dir=self.tmp.name)
+            raise KeyError(name)
+        with self.assertRaises(bridge.BridgeError):
+            bridge.install_brief(self.path, "runner", "test", None, mock.Mock(), self.tmp.name, account,
+                                 protected=True, receiver_env="/receiver/.env", receiver_user="missing")
+
+    def test_kill_after_intent_before_send_return_suppresses_restart_retry(self):
+        sender = mock.Mock()
+        sender.send_once.side_effect = SystemExit("simulated process death")
+        with self.assertRaises(SystemExit):
+            bridge.ProtectedWatcher(self.client, sender, self.path).deliver(["ws", "w", "d", 2], "draft")
+        bridge.ProtectedWatcher(self.client, sender, self.path).deliver(["ws", "w", "d", 2], "draft")
+        self.assertEqual(sender.send_once.call_count, 1)
+
+    def test_protected_dry_run_uses_capabilities_and_never_invokes_or_writes_state(self):
+        env_file = os.path.join(self.tmp.name, ".env")
+        with open(env_file, "w") as handle:
+            handle.write("MAIHUB_URL=https://invalid.test:7443\nMAIHUB_API_KEY=" + API_KEY +
+                         "\nMAIHUB_CERT_SHA256=" + PIN + "\n")
+        for enabled in (False, True):
+            self.cap["protectedWritesEnabled"] = enabled
+            with mock.patch.object(bridge, "MaiHubClient", return_value=self.client), \
+                    mock.patch.object(bridge.shutil, "which", return_value="/usr/bin/claude"), \
+                    mock.patch.object(bridge, "run_protected_agent") as agent, \
+                    mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                code = bridge.main(["brief-tick", "--protected", "--env-file", env_file,
+                                    "--state", self.path, "--dry-run"])
+            self.assertEqual(code == 0, enabled)
+            agent.assert_not_called()
+            self.assertFalse(os.path.exists(self.path))
+        self.assertEqual([m for m, _ in self.calls], ["system.capabilities", "system.capabilities"])
+
+    def test_pending_backoff_is_not_claimed_before_next_check(self):
+        self.work = self.item(status="pending", nextCheckAt=self.now * 1000 + 60000)
+        self.claim = self.item()
+        self.tick()
+        self.agent.assert_not_called()
+        self.assertNotIn("pageWork.claimDue", [m for m, _ in self.calls])
+
+    def test_budget_exhaustion_and_slow_claim_preserve_headroom(self):
+        with mock.patch.object(bridge.time, "monotonic", side_effect=[0, 3301]):
+            self.tick()
+        self.assertNotIn("pageWork.claimDue", [m for m, _ in self.calls])
+        self.work, self.claim = self.item(status="pending"), self.item()
+        self.agent.side_effect = lambda *args: (self.work.update(status="completed") or (0, False))
+        with mock.patch.object(bridge.time, "monotonic", side_effect=[0, 2000, 2001]):
+            self.tick()
+        self.assertEqual(self.agent.call_args.args[1], 1119)
+
+    def test_budget_consumed_during_claim_releases_owned_lease_without_agent(self):
+        self.work, self.claim = self.item(status="pending"), self.item()
+        with mock.patch.object(bridge.time, "monotonic", side_effect=[0, 0, 3121]):
+            self.tick()
+        self.agent.assert_not_called()
+        failures = [params for method, params in self.calls if method == "pageWork.fail"]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["code"], "busy")
+        self.assertEqual(failures[0]["claimedAt"], 123)
+
+    def test_receiver_revoked_403_does_not_send_or_advance(self):
+        self.cap["principal"]["kind"] = "page_receiver"
+        original = self.client.call.side_effect
+        def revoked(method, params=None, **kw):
+            if method == "pageWork.events":
+                raise bridge.BridgeError("FORBIDDEN", "HTTP 403 revoked")
+            return original(method, params, **kw)
+        self.client.call.side_effect = revoked
+        sender = mock.Mock()
+        with self.assertRaises(bridge.BridgeError):
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        sender.send_once.assert_not_called()
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_restart_after_claim_save_failure_reconciles_without_duplicate_invoke(self):
+        self.work, self.claim = self.item(status="pending"), self.item()
+        save = bridge._save_protected_state
+        count = [0]
+        def disk_full(path, state):
+            count[0] += 1
+            if count[0] == 2:
+                raise OSError("claim persisted remotely, local disk full")
+            save(path, state)
+        with mock.patch.object(bridge, "_save_protected_state", side_effect=disk_full):
+            with self.assertRaises(OSError):
+                self.tick()
+        self.assertEqual(self.work["status"], "running")
+        self.agent.assert_not_called()
+        self.tick()
+        self.agent.assert_not_called()
+        self.assertEqual(sum(m == "pageWork.claimDue" for m, _ in self.calls), 1)
+
+    def test_killed_agent_restart_does_not_invoke_live_lease_again(self):
+        self.work, self.claim = self.item(status="pending"), self.item()
+        self.agent.side_effect = SystemExit("simulated runner death during agent")
+        with self.assertRaises(SystemExit):
+            self.tick()
+        self.tick()
+        self.assertEqual(self.agent.call_count, 1)
+
+    def test_protected_lock_prevents_overlapping_claims(self):
+        with open(self.path + ".lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.tick(), {"skipped": "locked"})
+        self.agent.assert_not_called()
+        self.assertEqual([m for m, _ in self.calls], ["system.capabilities"])
+
+    def test_fresh_empty_receiver_persists_cursor_without_sending(self):
+        self.path = os.path.join(self.tmp.name, "new", "receiver.json")
+        self.cap["principal"]["kind"] = "page_receiver"
+        original = self.client.call.side_effect
+        self.client.call.side_effect = lambda method, params=None, **kw: (
+            {"workspaceId": "ws", "events": [], "nextCursor": 2} if method == "pageWork.events"
+            else original(method, params, **kw))
+        sender = mock.Mock()
+        self.assertEqual(bridge.ProtectedWatcher(self.client, sender, self.path).poll(), 2)
+        sender.send_once.assert_not_called()
+
+    def test_proposal_changed_revision_is_not_prepared_or_sent(self):
+        self.cap["principal"]["kind"] = "page_receiver"
+        original = self.client.call.side_effect
+        self.client.call.side_effect = lambda method, params=None, **kw: (
+            {"draft": {"revision": 3, "text": "new revision"}} if method == "pageWork.draft"
+            else original(method, params, **kw))
+        action = {"kind": "approveDraft", "pageId": "page", "draftId": "d", "expectedRevision": 2,
+                  "timing": {"when": "now"}}
+        sender = mock.Mock()
+        with self.assertRaises(bridge.BridgeError):
+            bridge.ProtectedWatcher(self.client, sender, self.path).deliver(
+                ["ws", "w", "d", 2, "approval"], "summary", action, "w")
+        sender.send_once.assert_not_called()
+        self.assertNotIn("pageApprovals.prepare", [m for m, _ in self.calls])
+
+    def test_live_running_lease_and_needs_review_never_claim(self):
+        for status in ("running", "needs_review", "cancelled"):
+            self.work = self.item(status=status)
+            self.claim = None
+            self.tick()
+        self.agent.assert_not_called()
+        self.assertEqual(sum(m == "pageWork.claimDue" for m, _ in self.calls), 1)
+
+    def test_agent_timeout_marks_uncertain_and_never_calls_finish(self):
+        self.work, self.claim = self.item(status="pending"), self.item()
+        self.agent.return_value = (-15, True)
+        self.tick()
+        self.assertEqual(self.work["status"], "needs_review")
+        self.assertNotIn("pageWork.finish", [m for m, _ in self.calls])
+        self.tick()
+        self.assertEqual(self.agent.call_count, 1)
+
+    def test_deleted_event_history_and_known_work_recover_without_duplicate(self):
+        self.cap["principal"]["kind"] = "page_receiver"
+        bridge._save_protected_state(self.path, {"workspaceId": "ws", "workIds": ["w"], "cursor": 900})
+        self.work = self.item(status="completed", draftIds=["d"])
+        original = self.client.call.side_effect
+        def receiver(method, params=None, **kw):
+            if method == "pageWork.list":
+                return {"items": []}
+            if method == "pageWork.events":
+                return {"events": [], "nextCursor": 901, "workspaceId": "ws"}
+            if method == "pageWork.draft":
+                return {"draft": {"id": "d", "revision": 2, "text": "draft"}}
+            return original(method, params, **kw)
+        self.client.call.side_effect = receiver
+        sender = mock.Mock()
+        for _ in range(2):
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertEqual(sender.send_once.call_count, 1)
+
+    def test_fact_proposal_includes_current_fact_and_rejects_stale_business(self):
+        action = {"kind": "confirmFact", "pageId": "page", "factId": "f", "expectedRevision": 2}
+        client = mock.Mock()
+        revision = [2]
+        def call(method, params=None, **kw):
+            if method == "system.capabilities":
+                return {"pageOperations": 1, "principal": {"kind": "page_receiver"}}
+            if method == "pageBusiness.get":
+                return {"business": {"revision": revision[0], "facts": [
+                    {"id": "f", "topic": "location", "value": "Verified owner location", "reason": "owner review"}]}}
+            if method == "pageApprovals.prepare":
+                return {"ticket": {"id": "t", "action": action, "chatId": "12", "senderId": "34"}}
+            if method == "pageApprovals.bindMessage":
+                return {"bound": True}
+            raise AssertionError(method)
+        client.call.side_effect = call
+        sender = mock.Mock()
+        sender.send_once.return_value = {"message_id": 7, "chat": {"id": 12}}
+        watcher = bridge.ProtectedWatcher(client, sender, self.path)
+        watcher.deliver(["ws", "w", "fact", 2], "vague NL", action, "w")
+        self.assertIn("Verified owner location", sender.send_once.call_args.args[0])
+        revision[0] = 3
+        with self.assertRaises(bridge.BridgeError):
+            watcher.deliver(["ws", "w", "fact", 3], "vague NL", action, "w")
+        self.assertEqual(sender.send_once.call_count, 1)
+
+    def test_corrupt_receiver_state_does_not_resend(self):
+        with open(self.path, "w") as handle:
+            handle.write("broken-json")
+        sender = mock.Mock()
+        with self.assertRaises(bridge.BridgeError):
+            bridge.ProtectedWatcher(self.client, sender, self.path).deliver(["ws", "w", "d", 2], "draft")
+        sender.send_once.assert_not_called()
+
+    def test_protected_install_candidate_checks_before_units_and_gate_failure_writes_nothing(self):
+        home = os.path.join(self.tmp.name, "runner")
+        receiver_home = os.path.join(self.tmp.name, "receiver")
+        units = os.path.join(self.tmp.name, "units")
+        for path in (home, receiver_home, units):
+            os.mkdir(path)
+        env_file = os.path.join(home, ".env")
+        with open(env_file, "w") as handle:
+            handle.write("MAIHUB_API_KEY=mh_fake_scoped\n")
+        with open(os.path.join(receiver_home, ".env"), "w") as handle:
+            handle.write("# fake receiver config\n")
+        accounts = {"runner": mock.Mock(pw_uid=1001, pw_gid=1001, pw_dir=home),
+                    "receiver": mock.Mock(pw_uid=1002, pw_gid=1002, pw_dir=receiver_home)}
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            self.assertFalse(os.path.exists(os.path.join(units, "maihub-brief-test.service")))
+            if "brief-tick" in command:
+                self.assertIn("--protected", command)
+                self.assertIn("--dry-run", command)
+                self.assertEqual(command[2], "runner")
+                return mock.Mock(returncode=2, stderr="gate false")
+            return mock.Mock(returncode=0, stdout="[]")
+        with mock.patch.object(bridge, "_require_safe_dir"):
+            with self.assertRaises(bridge.BridgeError):
+                bridge.install_brief(env_file, "runner", "test", None, run, units, accounts.__getitem__,
+                                     protected=True, receiver_env=os.path.join(receiver_home, ".env"),
+                                     receiver_user="receiver")
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(os.listdir(units), [])
+        self.assertFalse(os.path.exists(os.path.join(home, "state")))
+
+    def test_unavailable_capability_gate_and_revocation_stop_before_agent(self):
+        for change in ({"pageOperations": 0}, {"protectedWritesEnabled": False}):
+            with self.subTest(change=change):
+                previous = dict(self.cap)
+                self.cap.update(change)
+                with self.assertRaises(bridge.BridgeError):
+                    self.tick()
+                self.agent.assert_not_called()
+                self.cap = previous
+        self.work = self.item(status="pending")
+        original = self.client.call.side_effect
+        def revoked(method, params=None, **kwargs):
+            if method == "pageWork.reconcile":
+                raise bridge.BridgeError("FORBIDDEN", "revoked")
+            return original(method, params, **kwargs)
+        self.client.call.side_effect = revoked
+        with self.assertRaises(bridge.BridgeError):
+            self.tick()
+        self.agent.assert_not_called()
+
+    def test_long_video_across_days_and_restart_never_invokes(self):
+        self.work = self.item(status="waiting", videoId="v", waitFor="video")
+        for days in (0, 1, 7):
+            self.now += days * 86400
+            self.tick()
+        self.agent.assert_not_called()
+
+    def test_disk_full_before_invoke_keeps_claim_for_reconciliation(self):
+        self.work, self.claim = self.item(status="pending"), self.item()
+        with mock.patch.object(bridge.os, "replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.tick()
+        self.agent.assert_not_called()
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_sender_one_attempt_returns_real_message_or_rejects(self):
+        sender = bridge.TelegramSender({"token": "test-only", "chat_id": "12"},
+                                      {"api_base": "https://invalid.test"})
+        response = mock.Mock()
+        response.read.return_value = b'{"ok":true,"result":{"message_id":9,"chat":{"id":12}}}'
+        sender.opener = mock.Mock()
+        sender.opener.open.return_value = response
+        self.assertEqual(sender.send_once("hello")["message_id"], 9)
+        response.read.return_value = b'{"ok":true}'
+        with self.assertRaises(bridge.BridgeError):
+            sender.send_once("hello")
+        sender.opener.open.side_effect = TimeoutError("test timeout")
+        with self.assertRaises(TimeoutError):
+            sender.send_once("hello")
+        self.assertEqual(sender.opener.open.call_count, 3)
+
+    def test_protected_cli_defaults_and_child_environment_are_isolated(self):
+        args = bridge.build_parser().parse_args(["brief-tick", "--protected", "--state", self.path])
+        self.assertTrue(args.protected)
+        self.assertFalse(bridge.build_parser().parse_args(["brief-tick"]).protected)
+        self.assertTrue(callable(getattr(bridge, "run_protected_agent", None)), "missing isolated process")
+        env = {"MAIHUB_URL": "https://invalid.test", "MAIHUB_API_KEY": "mh_scoped_test",
+               "MAIHUB_CERT_SHA256": "a" * 64}
+        with mock.patch.dict(os.environ, {"TG_TOKEN": "receiver-only-test", "OWNER_KEY": "owner-test"}):
+            with mock.patch.object(bridge, "run_agent", return_value=(0, False)) as run:
+                bridge.run_protected_agent(env, "hello", 50)
+        child = run.call_args.kwargs["env"]
+        self.assertNotIn("TG_TOKEN", child)
+        self.assertNotIn("OWNER_KEY", child)
+        self.assertNotEqual(child["HOME"], os.path.expanduser("~"))
+        self.assertIn("--strict-mcp-config", run.call_args.args[0])
+        with self.assertRaises(bridge.BridgeError):
+            bridge.run_protected_agent(dict(env, TG_TOKEN="forbidden-test"), "hello", 50)
+
+    def test_install_probe_denies_read_or_write_and_legacy_timer(self):
+        self.assertTrue(callable(getattr(bridge, "check_protected_install", None)), "missing isolation check")
+        runner_home, receiver_home = [os.path.join(self.tmp.name, value) for value in ("runner", "receiver")]
+        os.mkdir(runner_home)
+        os.mkdir(receiver_home)
+        receiver_env = os.path.join(receiver_home, ".env")
+        with open(receiver_env, "w") as handle:
+            handle.write("# fake receiver path; no secret bytes read\n")
+        account = mock.Mock(pw_uid=1001, pw_dir=runner_home)
+        receiver = mock.Mock(pw_uid=1002, pw_dir=receiver_home)
+        run = mock.Mock(return_value=mock.Mock(returncode=1, stdout="[]"))
+        with self.assertRaises(bridge.BridgeError):
+            bridge.check_protected_install(os.path.join(runner_home, ".env"), account, "runner", receiver_env,
+                                           receiver, run, self.tmp.name)
+        self.assertIn("runner", run.call_args.args[0])
+        run.return_value.returncode = 0
+        legacy = os.path.join(self.tmp.name, "maihub-brief-old.service")
+        with open(legacy, "w") as handle:
+            handle.write("ExecStart=python3 bridge.py brief-tick --env-file /old/.env\n")
+        with self.assertRaises(bridge.BridgeError):
+            bridge.check_protected_install(os.path.join(runner_home, ".env"), account, "runner", receiver_env,
+                                           receiver, run, self.tmp.name)
+        os.unlink(legacy)
+        run.return_value.stdout = '[{"unit":"maihub-brief-transient.timer"}]'
+        with self.assertRaises(bridge.BridgeError):
+            bridge.check_protected_install(os.path.join(runner_home, ".env"), account, "runner", receiver_env,
+                                           receiver, run, self.tmp.name)
+
+    def test_install_missing_receiver_file_is_not_isolation_proof(self):
+        account = mock.Mock(pw_uid=1001, pw_dir="/runner")
+        receiver = mock.Mock(pw_uid=1002, pw_dir="/receiver")
+        run = mock.Mock(return_value=mock.Mock(returncode=0, stdout="[]"))
+        with self.assertRaises(bridge.BridgeError):
+            bridge.check_protected_install("/runner/.env", account, "runner", "/receiver/missing.env",
+                                           receiver, run, self.tmp.name)
+        run.assert_not_called()
+
+    def test_protected_units_use_same_timer_and_protected_candidate(self):
+        self.assertTrue(callable(getattr(bridge, "render_brief_units", None)))
+        service, timer = bridge.render_brief_units("one", "runner", "/o/bridge.py", "/r/.env", "/r/state", protected=True)
+        self.assertIn("--protected", service)
+        self.assertIn("OnCalendar=*:0/15", timer)
+        self.assertIn("NoNewPrivileges=yes", service)
+
+    def test_missed_events_recover_draft_revision_and_advance_hidden_cursor(self):
+        self.assertTrue(callable(getattr(bridge, "ProtectedWatcher", None)))
+        self.cap["principal"]["kind"] = "page_receiver"
+        self.work = self.item(status="completed", draftIds=["d"])
+        original = self.client.call.side_effect
+        def receiver(method, params=None, **kwargs):
+            if method == "pageWork.events":
+                return {"events": [], "nextCursor": 700, "workspaceId": "ws"}
+            if method == "pageWork.draft":
+                return {"draft": {"id": "d", "revision": 2, "text": "safe draft"}}
+            return original(method, params, **kwargs)
+        self.client.call.side_effect = receiver
+        sender = mock.Mock()
+        sender.send_once.return_value = {"message_id": 9, "chat": {"id": 12}}
+        for _ in range(2):
+            bridge.ProtectedWatcher(self.client, sender, self.path).poll()
+        self.assertEqual(sender.send_once.call_count, 1)
+        with open(self.path) as handle:
+            self.assertEqual(json.load(handle)["cursor"], 700)
+        self.assertNotIn("pageWork.reconcile", [m for m, _ in self.calls])
+
+    def test_restart_before_and_after_send_state_and_disk_full(self):
+        self.assertTrue(callable(getattr(bridge, "ProtectedWatcher", None)))
+        sender = mock.Mock()
+        sender.send_once.return_value = {"message_id": 9, "chat": {"id": 12}}
+        watcher = bridge.ProtectedWatcher(self.client, sender, self.path)
+        key = ["ws", "w", "d", 2]
+        with mock.patch.object(bridge.os, "replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                watcher.deliver(key, "draft")
+        sender.send_once.assert_not_called()
+        save = bridge._save_protected_state
+        count = [0]
+        def crash_after_send(path, state):
+            count[0] += 1
+            if count[0] == 2:
+                raise OSError("disk full after send")
+            save(path, state)
+        with mock.patch.object(bridge, "_save_protected_state", side_effect=crash_after_send):
+            with self.assertRaises(OSError):
+                watcher.deliver(key, "draft")
+        bridge.ProtectedWatcher(self.client, sender, self.path).deliver(key, "draft")
+        self.assertEqual(sender.send_once.call_count, 1)
+
+    def test_proposal_summary_actual_id_bind_and_expired_ungrounded_reply(self):
+        self.assertTrue(callable(getattr(bridge, "ProtectedWatcher", None)))
+        action = {"kind": "approveDraft", "pageId": "page", "draftId": "d", "expectedRevision": 2,
+                  "timing": {"when": "now"}}
+        ticket = {"id": "t", "action": action, "chatId": "12", "senderId": "34", "messageId": None,
+                  "expiresAt": int(time.time() * 1000) + 10000}
+        client = mock.Mock()
+        def call(method, params=None, **kwargs):
+            if method == "system.capabilities":
+                return {"pageOperations": 1, "principal": {"kind": "page_receiver"}}
+            if method == "pageApprovals.prepare":
+                return {"ticket": dict(ticket)}
+            if method == "pageApprovals.bindMessage":
+                self.assertEqual(params["messageId"], 99)
+                return {"bound": True}
+            if method == "pageWork.draft":
+                return {"draft": {"revision": 2, "text": "The exact proposed draft"}}
+            if method == "pageApprovals.confirm":
+                return {"resourceId": "d", "replayed": False}
+            raise AssertionError(method)
+        client.call.side_effect = call
+        sender = mock.Mock()
+        sender.send_once.return_value = {"message_id": 99, "chat": {"id": 12}}
+        entry = bridge.ProtectedWatcher(client, sender, self.path).deliver(
+            ["ws", "w", "d", 2, "approval"], "untrusted NL summary", action, "w")
+        self.assertEqual(entry["status"], "sent")
+        self.assertIn('"expectedRevision": 2', sender.send_once.call_args.args[0])
+        update = {"update_id": 10, "message": {"message_id": 100, "chat": {"id": 12},
+                  "from": {"id": 34}, "text": "ok", "reply_to_message": {"message_id": 99}}}
+        pending = entry["ticket"]
+        self.assertEqual(bridge.handle_owner_update(client, update, pending)["resourceId"], "d")
+        for bad in ({"chat": {"id": 13}}, {"from": {"id": 35}}, {"reply_to_message": {}},
+                    {"message_id": True}, {"text": "approve everything"}):
+            changed = dict(update, message=dict(update["message"], **bad))
+            self.assertEqual(bridge.handle_owner_update(client, changed, pending)["intent"], "clarify")
+        pending["expiresAt"] = 0
+        self.assertEqual(bridge.handle_owner_update(client, update, pending)["intent"], "clarify")
+
+
+class ProtectedReviewRegressionTests(unittest.TestCase):
+    setUp = ProtectedPageTests.setUp
+    call = ProtectedPageTests.call
+    item = ProtectedPageTests.item
+
+    def approval_fixture(self, action, canonical):
+        client, sender = mock.Mock(), mock.Mock()
+        calls = []
+        def call(method, params=None, **kwargs):
+            calls.append((method, params))
+            if method == "system.capabilities":
+                return {"pageOperations": 1, "principal": {"kind": "page_receiver"}}
+            if method == "pageWork.draft":
+                return {"draft": {"revision": 2, "text": "Review this exact draft"}}
+            if method == "pageApprovals.prepare":
+                self.assertEqual(params["action"], action)
+                return {"ticket": {"id": "t", "action": canonical, "chatId": "12", "senderId": "34",
+                                   "expiresAt": int(time.time() * 1000) + 60000}}
+            if method == "pageApprovals.bindMessage":
+                return {"bound": True}
+            if method == "pageApprovals.confirm":
+                return {"resourceId": "d", "replayed": False}
+            raise AssertionError(method)
+        client.call.side_effect = call
+        sender.send_once.return_value = {"message_id": 7, "chat": {"id": 12}}
+        return client, sender, calls
+
+    def test_recurring_day_normalization_uses_one_canonical_action_for_summary_state_and_confirm(self):
+        for days in ([5, 1, 5], [5, 1], [1, 5]):
+            with self.subTest(days=days):
+                action = {"kind": "approveDraft", "pageId": "page", "draftId": "d", "expectedRevision": 2,
+                          "timing": {"when": "schedule", "kind": "recurring", "days": days, "time": "09:30"}}
+                canonical = dict(action, timing={"when": "schedule", "kind": "recurring", "days": [1, 5], "time": "09:30"})
+                original = json.dumps(action, sort_keys=True)
+                client, sender, calls = self.approval_fixture(action, canonical)
+                path = os.path.join(self.tmp.name, str(len(days)) + str(days[0]) + ".json")
+                try:
+                    entry = bridge.ProtectedWatcher(client, sender, path).deliver(
+                        ["ws", "w", "d", 2, "owner-request"], "untrusted NL", action, "w")
+                except bridge.BridgeError as err:
+                    self.fail("Valid server day normalization was rejected: " + err.code)
+                self.assertEqual(entry["status"], "sent")
+                self.assertIn(json.dumps(canonical, ensure_ascii=False), sender.send_once.call_args.args[0])
+                pending = entry["ticket"]
+                self.assertEqual(pending["action"], canonical)
+                saved = next(iter(bridge._load_protected_state(path)["deliveries"].values()))
+                self.assertEqual(saved["ticket"]["action"], canonical)
+                update = {"update_id": 10, "message": {"message_id": 8, "chat": {"id": 12}, "from": {"id": 34},
+                          "text": "ok", "reply_to_message": {"message_id": 7}}}
+                self.assertEqual(bridge.handle_owner_update(client, update, pending)["resourceId"], "d")
+                self.assertEqual(json.dumps(action, sort_keys=True), original)
+                self.assertEqual(sum(method == "pageApprovals.confirm" for method, _ in calls), 1)
+
+    def test_now_once_approvals_remain_supported_and_changed_action_identity_or_timing_is_rejected(self):
+        base = {"kind": "approveDraft", "pageId": "page", "draftId": "d", "expectedRevision": 2}
+        for index, timing in enumerate(({"when": "now"}, {"when": "schedule", "kind": "once", "runAt": 1800000060000})):
+            action = dict(base, timing=timing)
+            client, sender, _ = self.approval_fixture(action, action)
+            path = os.path.join(self.tmp.name, "valid-%s.json" % index)
+            entry = bridge.ProtectedWatcher(client, sender, path).deliver(["ws", "w", "d", 2], "", action, "w")
+            self.assertEqual(entry["status"], "sent")
+            self.assertEqual(sender.send_once.call_count, 1)
+        action = dict(base, timing={"when": "schedule", "kind": "recurring", "days": [5, 1, 5], "time": "09:30"})
+        canonical = dict(base, timing={"when": "schedule", "kind": "recurring", "days": [1, 5], "time": "09:30"})
+        changes = [{"pageId": "foreign"}, {"draftId": "foreign"}, {"expectedRevision": 3}, {"kind": "resolveWork"},
+                   {"timing": dict(canonical["timing"], time="10:00")},
+                   {"timing": dict(canonical["timing"], days=[1, 4])}]
+        for index, change in enumerate(changes):
+            with self.subTest(change=change):
+                client, sender, calls = self.approval_fixture(action, dict(canonical, **change))
+                with self.assertRaises(bridge.BridgeError) as caught:
+                    bridge.ProtectedWatcher(client, sender, os.path.join(self.tmp.name, "bad-%s.json" % index)).deliver(
+                        ["ws", "w", "d", 2], "", action, "w")
+                self.assertEqual(caught.exception.code, "CONFLICT")
+                sender.send_once.assert_not_called()
+                self.assertNotIn("pageApprovals.bindMessage", [m for m, _ in calls])
+
+    def run_consumer(self, role, client, agent, sender, path):
+        client.describe.return_value = {"methods": []}
+        if role == "page_runner":
+            return bridge.protected_brief_tick(client, agent, lambda: self.now, path)
+        return bridge.ProtectedWatcher(client, sender, path).poll()
+
+    def test_terminal_retention_allows_new_work_across_both_consumer_restarts(self):
+        for role in ("page_runner", "page_receiver"):
+            for terminal_status in ("completed", "failed", "cancelled"):
+                with self.subTest(role=role, terminal=terminal_status):
+                    path = os.path.join(self.tmp.name, role + terminal_status + ".json")
+                    phase = [0]
+                    old = self.item(id="old", status=terminal_status, draftIds=["old-draft"])
+                    new = self.item(id="new", status="pending" if role == "page_runner" else "completed",
+                                    draftIds=["new-draft"])
+                    calls = []
+                    def call(method, params=None, **kwargs):
+                        calls.append((method, params))
+                        if method == "system.capabilities":
+                            return {"pageOperations": 1, "protectedWritesEnabled": True,
+                                    "principal": dict(self.cap["principal"], kind=role)}
+                        if method == "pageWork.list":
+                            return {"items": [old if phase[0] == 0 else new]}
+                        if method == "pageWork.events":
+                            return {"workspaceId": "ws", "events": [], "nextCursor": phase[0] + 1}
+                        if method == "pageWork.get":
+                            if params["workId"] == "old":
+                                raise bridge.BridgeError("FORBIDDEN", "non-disclosing pruned work")
+                            return {"work": dict(new), "preparation": self.preparation}
+                        if method == "pageWork.reconcile":
+                            return {"work": dict(new)}
+                        if method == "pageWork.claimDue":
+                            if phase[0] and new["status"] == "pending":
+                                new["status"] = "running"
+                                return {"work": dict(new)}
+                            return {"work": None}
+                        if method == "pageWork.draft":
+                            return {"draft": {"id": params["draftId"], "revision": 2, "text": "draft"}}
+                        raise AssertionError(method)
+                    client = mock.Mock()
+                    client.call.side_effect = call
+                    agent = mock.Mock(side_effect=lambda *args: (new.update(status="completed") or (0, False)))
+                    sender = mock.Mock()
+                    self.run_consumer(role, client, agent, sender, path)
+                    deliveries = bridge._load_protected_state(path).get("deliveries", {})
+                    phase[0] = 1  # Fake normal terminal-journal pruning, without waiting 30 real days.
+                    for _ in range(2):
+                        try:
+                            self.run_consumer(role, client, agent, sender, path)
+                        except bridge.BridgeError as err:
+                            self.fail("Routine terminal prune blocked valid work: " + err.code)
+                    self.assertFalse(any(m == "pageWork.get" and p["workId"] == "old" for m, p in calls))
+                    if role == "page_runner":
+                        self.assertEqual(agent.call_count, 1)
+                    else:
+                        self.assertEqual(sender.send_once.call_count, 2)
+                        final = bridge._load_protected_state(path)["deliveries"]
+                        for key, entry in deliveries.items():
+                            self.assertEqual(final[key], entry)
+
+    def test_runner_completed_invocation_is_not_probed_after_pruning(self):
+        self.work, self.claim = self.item(status="pending"), self.item()
+        self.agent.side_effect = lambda *args: (self.work.update(status="completed") or (0, False))
+        self.run_consumer("page_runner", self.client, self.agent, mock.Mock(), self.path)
+        self.work, self.claim = None, None
+        original = self.client.call.side_effect
+        def pruned(method, params=None, **kwargs):
+            if method == "pageWork.get":
+                raise bridge.BridgeError("FORBIDDEN", "pruned terminal")
+            return original(method, params, **kwargs)
+        self.client.call.side_effect = pruned
+        try:
+            self.run_consumer("page_runner", self.client, self.agent, mock.Mock(), self.path)
+        except bridge.BridgeError as err:
+            self.fail("Successful invocation left a poisoned terminal ID: " + err.code)
+        self.assertEqual(self.agent.call_count, 1)
+
+    def test_known_active_ids_recover_but_forbidden_unknown_ids_still_stop_both_consumers(self):
+        for role in ("page_runner", "page_receiver"):
+            with self.subTest(role=role):
+                path = os.path.join(self.tmp.name, role + "-active.json")
+                bridge._save_protected_state(path, {"workspaceId": "ws", "workIds": ["active"],
+                    "deliveries": {"old-uncertain": {"status": "uncertain"}}})
+                revoked = [False]
+                seen = []
+                def call(method, params=None, **kwargs):
+                    seen.append(method)
+                    if method == "system.capabilities":
+                        return {"pageOperations": 1, "protectedWritesEnabled": True,
+                                "principal": dict(self.cap["principal"], kind=role)}
+                    if method == "pageWork.list":
+                        return {"items": []}
+                    if method == "pageWork.events":
+                        return {"workspaceId": "ws", "events": [], "nextCursor": 1}
+                    if method in ("pageWork.get", "pageWork.reconcile"):
+                        if revoked[0]:
+                            raise bridge.BridgeError("FORBIDDEN", "revoked/unknown active ID")
+                        return {"work": self.item(id="active", status="waiting")}
+                    raise AssertionError(method)
+                client = mock.Mock()
+                client.call.side_effect = call
+                agent, sender = mock.Mock(), mock.Mock()
+                self.run_consumer(role, client, agent, sender, path)
+                self.assertIn("pageWork.get", seen)
+                before = bridge._load_protected_state(path)
+                self.assertIn("active", before["workIds"])
+                self.assertEqual(before["deliveries"]["old-uncertain"]["status"], "uncertain")
+                revoked[0] = True
+                with self.assertRaises(bridge.BridgeError) as caught:
+                    self.run_consumer(role, client, agent, sender, path)
+                self.assertEqual(caught.exception.code, "FORBIDDEN")
+                self.assertEqual(bridge._load_protected_state(path), before)
+                agent.assert_not_called()
+                sender.send_once.assert_not_called()
+
+    def isolated_layout(self, nested=False):
+        runner_home = os.path.join(self.tmp.name, "runner")
+        receiver_home = os.path.join(runner_home if nested else self.tmp.name, "receiver")
+        os.makedirs(receiver_home)
+        os.makedirs(runner_home, exist_ok=True)
+        receiver_env = os.path.join(receiver_home, "receiver.env")
+        with open(receiver_env, "w") as handle:
+            handle.write("# temporary fake receiver config\n")
+        runner = mock.Mock(pw_uid=1001, pw_dir=runner_home)
+        receiver = mock.Mock(pw_uid=1002, pw_dir=receiver_home)
+        return runner, receiver, receiver_env
+
+    def permission_probe(self, receiver_home, writable=()):
+        executions = []
+        def run(command, **kwargs):
+            if command[0] != "sudo":
+                return subprocess.CompletedProcess(command, 0, "[]", "")
+            self.assertEqual(command[2], "runner")
+            executions.append(command)
+            fake_os = mock.Mock()
+            fake_os.path = os.path
+            fake_os.R_OK, fake_os.W_OK, fake_os.X_OK = os.R_OK, os.W_OK, os.X_OK
+            def access(path, mode):
+                if os.path.commonpath([path, receiver_home]) == receiver_home:
+                    return False  # Leaves are inaccessible; ancestor replacement is independent.
+                return not (mode & os.W_OK) or path in writable
+            fake_os.access = access
+            fake_sys = mock.Mock()
+            fake_sys.argv = ["-c"] + command[8:]
+            fake_sys.exit.side_effect = lambda code: (_ for _ in ()).throw(SystemExit(code))
+            # Execute the installer-generated code under fake target-user permissions, never sudo/chmod.
+            with mock.patch.dict(sys.modules, {"os": fake_os, "sys": fake_sys}):
+                try:
+                    exec(command[7], {})
+                except SystemExit as stopped:
+                    return subprocess.CompletedProcess(command, stopped.code, "[]", "")
+            self.fail("probe did not terminate")
+        return run, executions
+
+    def test_isolation_rejects_inaccessible_receiver_beneath_runner_home(self):
+        runner, receiver, receiver_env = self.isolated_layout(nested=True)
+        run, _ = self.permission_probe(receiver.pw_dir, writable=[runner.pw_dir])
+        with self.assertRaises(bridge.BridgeError):
+            bridge.check_protected_install(os.path.join(runner.pw_dir, ".env"), runner, "runner", receiver_env,
+                                           receiver, run, self.tmp.name)
+
+    def test_isolation_probe_rejects_writable_shared_ancestor(self):
+        runner, receiver, receiver_env = self.isolated_layout()
+        run, executed = self.permission_probe(receiver.pw_dir, writable=[self.tmp.name])
+        with self.assertRaises(bridge.BridgeError):
+            bridge.check_protected_install(os.path.join(runner.pw_dir, ".env"), runner, "runner", receiver_env,
+                                           receiver, run, self.tmp.name)
+        self.assertEqual(len(executed), 1)
+
+    def test_isolation_probe_allows_readable_traversable_but_not_writable_ancestors(self):
+        runner, receiver, receiver_env = self.isolated_layout()
+        run, executed = self.permission_probe(receiver.pw_dir)
+        bridge.check_protected_install(os.path.join(runner.pw_dir, ".env"), runner, "runner", receiver_env,
+                                       receiver, run, self.tmp.name)
+        self.assertEqual(len(executed), 1)
+
+    def test_isolation_rejects_symlink_hidden_home_overlap(self):
+        runner, receiver, receiver_env = self.isolated_layout()
+        alias = os.path.join(self.tmp.name, "alias")
+        os.symlink(receiver.pw_dir, alias)
+        runner.pw_dir = alias
+        run, _ = self.permission_probe(receiver.pw_dir)
+        with self.assertRaises(bridge.BridgeError):
+            bridge.check_protected_install(os.path.join(alias, ".env"), runner, "runner", receiver_env,
+                                           receiver, run, self.tmp.name)
 
 
 class BriefTickTests(unittest.TestCase):

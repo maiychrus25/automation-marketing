@@ -20,7 +20,29 @@ export interface CollectedComment {
  * \u0000 làm dấu ngăn vì không ký tự nào trong tên hay nội dung dùng nó.
  */
 export function keyOf(c: Pick<CollectedComment, 'authorId' | 'postUrl' | 'text'>): string {
-    return `${c.authorId}\u0000${c.postUrl}\u0000${c.text}`;
+    return `${c.authorId}\u0000${commentPostIdentity(c.postUrl)}\u0000${c.text}`;
+}
+
+/** Identity only: never replace the stored URL used for attribution/navigation. */
+function commentPostIdentity(raw: string): string {
+    let url: URL;
+    try { url = new URL(raw); } catch { return raw; }
+    if (url.protocol !== 'https:' || url.username || url.password || url.port
+        || !['facebook.com', 'www.facebook.com', 'm.facebook.com', 'mbasic.facebook.com'].includes(url.hostname)) return raw;
+    const pathPost = /^\/(?:groups\/[^/]+\/(?:posts|permalink)|[^/]+\/posts)\/[^/]+\/?$/.test(url.pathname);
+    const queryPost = (/^\/(?:story|permalink)\.php$/.test(url.pathname) && !!url.searchParams.get('story_fbid') && !!url.searchParams.get('id'))
+        || (url.pathname === '/photo.php' && !!url.searchParams.get('fbid'))
+        || (url.pathname === '/watch/' && !!url.searchParams.get('v'));
+    if (!pathPost && !queryPost) return raw;
+    url.hostname = 'www.facebook.com';
+    if (pathPost && !url.pathname.endsWith('/')) url.pathname += '/';
+    for (const name of Array.from(url.searchParams.keys())) {
+        if (['fbclid', 'ref', 'mibextid', '__tn__', '__cft__', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'].includes(name)
+            || /^__(?:cft|tn)__\[\d*\]$/.test(name)) url.searchParams.delete(name);
+    }
+    // Serialize retained parameters even without tracking, so spaces cannot alternate between %20 and +.
+    url.search = url.searchParams.toString();
+    return url.href;
 }
 
 // Nhãn Facebook hiển thị. Mỗi phần tử là một mẫu regex dạng chuỗi, khớp

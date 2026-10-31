@@ -219,15 +219,83 @@ describe('UpdateService.install', () => {
         return ctx;
     }
 
+    test('validates downloaded state and busy refusal before lifecycle preparation', async () => {
+        const prepareInstall = jest.fn(async () => true);
+        const missing = make({ prepareInstall });
+        expect((await missing.service.install()).success).toBe(false);
+        const busy = await downloaded({ isBusy: () => true, prepareInstall });
+        expect((await busy.service.install()).success).toBe(false);
+        expect(prepareInstall).not.toHaveBeenCalled();
+    });
+
+    test('coalesces install requests and waits for preparation before invoking the installer', async () => {
+        let release!: (ready: boolean) => void;
+        const prepareInstall = jest.fn(() => new Promise<boolean>(resolve => { release = resolve; }));
+        const { service, updater } = await downloaded({ prepareInstall });
+        const first = service.install(); const second = service.install();
+        const installedBeforeDrain = updater.calls.some((call: string) => call.startsWith('install'));
+        if (release) release(true);
+        expect(await first).toEqual({ success: true }); expect(await second).toEqual({ success: true });
+        expect(installedBeforeDrain).toBe(false);
+        expect(prepareInstall).toHaveBeenCalledTimes(1);
+        expect(updater.calls.filter((call: string) => call.startsWith('install'))).toHaveLength(1);
+    });
+
+    test.each(['false', 'reject'])('failed preparation releases owned lifecycle and permits retry: %s', async outcome => {
+        const prepareInstall = jest.fn<Promise<boolean>, []>();
+        if (outcome === 'false') prepareInstall.mockResolvedValueOnce(false);
+        else prepareInstall.mockRejectedValueOnce(new Error('drain failed'));
+        prepareInstall.mockResolvedValue(true);
+        const cancelInstall = jest.fn();
+        const { service, updater } = await downloaded({ prepareInstall, cancelInstall });
+        expect((await service.install()).success).toBe(false);
+        expect(updater.calls.some((call: string) => call.startsWith('install'))).toBe(false);
+        expect(cancelInstall).toHaveBeenCalledTimes(1);
+        expect(await service.install()).toEqual({ success: true });
+    });
+
+    test.each(['false', 'throw', 'reject', 'error-event'])('refused installation restores owned admission and retains downloaded retry: %s', async outcome => {
+        const cancelInstall = jest.fn();
+        const { service, updater } = await downloaded({ prepareInstall: async () => true, cancelInstall });
+        const install = updater.quitAndInstall;
+        updater.quitAndInstall = () => {
+            if (outcome === 'throw') throw new Error('installer failed');
+            if (outcome === 'reject') {
+                const rejected = Promise.reject(new Error('installer failed'));
+                void rejected.catch(() => {});
+                return rejected;
+            }
+            if (outcome === 'error-event') { updater.emit('error', new Error('installer refused')); return; }
+            return false;
+        };
+        expect((await service.install()).success).toBe(false);
+        expect(cancelInstall).toHaveBeenCalledTimes(1);
+        expect(service.getState().status).toBe('downloaded');
+        updater.quitAndInstall = install;
+        expect(await service.install()).toEqual({ success: true });
+    });
+
+    test('a later installer error releases readiness and permits downloaded retry', async () => {
+        const cancelInstall = jest.fn(async () => {});
+        const { service, updater } = await downloaded({ prepareInstall: async () => true, cancelInstall });
+        expect(await service.install()).toEqual({ success: true });
+        updater.emit('error', new Error('installer startup failed'));
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+        expect(cancelInstall).toHaveBeenCalledTimes(1);
+        expect(service.getState().status).toBe('downloaded');
+        expect(await service.install()).toEqual({ success: true });
+        expect(updater.calls.filter((call: string) => call.startsWith('install'))).toHaveLength(2);
+    });
+
     test('đã tải xong thì khởi động lại để cài, mở lại app sau khi cài', async () => {
         const { service, updater } = await downloaded();
-        expect(service.install()).toEqual({ success: true });
+        expect(await service.install()).toEqual({ success: true });
         expect(updater.calls).toContain('install:false:true');
     });
 
     test('đang có việc Đăng Facebook thì từ chối, không khởi động lại', async () => {
         const { service, updater } = await downloaded({ isBusy: () => true });
-        expect(service.install()).toEqual({
+        expect(await service.install()).toEqual({
             success: false, error: 'Đang có việc Đăng Facebook chạy. Đợi xong hoặc huỷ rồi khởi động lại.',
         });
         expect(updater.calls.some((c: string) => c.startsWith('install'))).toBe(false);
@@ -236,7 +304,7 @@ describe('UpdateService.install', () => {
     test('chưa tải xong thì không cài', async () => {
         const { service, updater } = make();
         await service.check();
-        expect(service.install()).toEqual({ success: false, error: 'Chưa tải xong bản cập nhật' });
+        expect(await service.install()).toEqual({ success: false, error: 'Chưa tải xong bản cập nhật' });
         expect(updater.calls).toEqual([]);
     });
 });

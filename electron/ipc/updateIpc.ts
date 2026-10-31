@@ -30,7 +30,10 @@ function canInstallInPlace(): boolean {
  * Registers update IPC and, outside development, checks GitHub Releases 15 s after start and every 6 hours.
  * See docs/specs/2026-10-03-auto-update.md.
  */
-export function registerUpdateIpc(getWindow: () => BrowserWindow | null, isDev: boolean): void {
+export function registerUpdateIpc(getWindow: () => BrowserWindow | null, isDev: boolean, lifecycle: {
+    prepareInstall: () => Promise<boolean>;
+    cancelInstall: () => void | Promise<void>;
+}): void {
     const canInstall = canInstallInPlace();
     if (canInstall) {
         autoUpdater.autoDownload = false;
@@ -42,6 +45,8 @@ export function registerUpdateIpc(getWindow: () => BrowserWindow | null, isDev: 
         fetchLatestRelease,
         updater: canInstall ? autoUpdater : null,
         isBusy: isFacebookPosterBusy,
+        prepareInstall: lifecycle.prepareInstall,
+        cancelInstall: lifecycle.cancelInstall,
         openExternal: (url) => { void shell.openExternal(url); },
         emit: (state) => {
             const win = getWindow();

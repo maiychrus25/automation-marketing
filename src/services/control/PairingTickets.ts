@@ -1,11 +1,12 @@
 import { createHash, randomBytes as nodeRandomBytes } from 'crypto';
 import { normalizeIp } from './controlSecurity';
+import { validateScopedKeyPolicy, type ScopedKeyPolicy } from './controlAuthorization';
 
 /** Vé sống 15 phút, dùng một lần, tối đa 5 vé còn hiệu lực (mỗi IP bot một vé). */
 export const PAIRING_TTL_MS = 900_000;
 export const MAX_PENDING_TICKETS = 5;
 
-interface TicketRecord { name: string; botIp: string; expiresAt: number; createdAt: number }
+interface TicketRecord { name: string; botIp: string; expiresAt: number; createdAt: number; policy?: ScopedKeyPolicy }
 
 const hashTicket = (ticket: string): string => createHash('sha256').update(ticket).digest('hex');
 
@@ -18,7 +19,8 @@ export class PairingTickets {
         private readonly randomBytes: (n: number) => Buffer = nodeRandomBytes,
     ) {}
 
-    create(name: string, botIp: string): { ticket: string; expiresAt: number } {
+    create(name: string, botIp: string, inputPolicy?: ScopedKeyPolicy): { ticket: string; expiresAt: number } {
+        const policy = inputPolicy === undefined ? undefined : validateScopedKeyPolicy(inputPolicy);
         const ip = normalizeIp(botIp);
         this.prune();
         this.cancel(ip);
@@ -32,18 +34,18 @@ export class PairingTickets {
         const ticket = this.randomBytes(32).toString('base64url');
         const createdAt = this.now();
         const expiresAt = createdAt + PAIRING_TTL_MS;
-        this.records.set(hashTicket(ticket), { name, botIp: ip, expiresAt, createdAt });
+        this.records.set(hashTicket(ticket), { name, botIp: ip, expiresAt, createdAt, ...(policy ? { policy } : {}) });
         return { ticket, expiresAt };
     }
 
     /** Đúng vé + đúng IP thì đánh dấu đã dùng và trả thông tin; sai IP không làm mất vé. */
-    consume(ticket: string, ip: string): { name: string; botIp: string } | null {
+    consume(ticket: string, ip: string): { name: string; botIp: string; policy?: ScopedKeyPolicy } | null {
         this.prune();
         const hash = hashTicket(ticket);
         const rec = this.records.get(hash);
         if (!rec || rec.botIp !== normalizeIp(ip)) return null;
         this.records.delete(hash);
-        return { name: rec.name, botIp: rec.botIp };
+        return { name: rec.name, botIp: rec.botIp, ...(rec.policy ? { policy: rec.policy } : {}) };
     }
 
     cancel(botIp: string): void {

@@ -2,6 +2,43 @@ import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
 import type { FbPosterResult, FbPosterRun, FbPosterSchedule, LoginCheckOutcome, LoginCheckSource, LoginState } from '../../models/facebookPoster';
 import type { LearnResult } from '../dailyBrief/PageLearner';
+import type { ControlPrincipal, PageWork } from '../../models/pageOperations';
+import type { CampaignGrant, CampaignProposal, PageCampaignLink } from '../../models/pageCampaigns';
+import type { ControlEvent } from './ControlStore';
+
+export function projectPageCampaignEvent(event: ControlEvent, principal: ControlPrincipal, store: {
+    getLink(id: string): PageCampaignLink | null;
+    getProposal(id: string): CampaignProposal | null;
+    getGrant(id: string): CampaignGrant | null;
+}) {
+    if (principal.kind !== 'page_receiver') return null;
+    const payload = event.payload as Record<string, unknown> | null;
+    if (!payload || typeof payload !== 'object') return null;
+    const row = event.type === 'pageCampaigns.proposalChanged' && typeof payload.proposalId === 'string' ? store.getProposal(payload.proposalId)
+        : event.type === 'pageCampaigns.grantChanged' && typeof payload.grantId === 'string' ? store.getGrant(payload.grantId) : null;
+    if (!row || row.workspaceId !== principal.workspaceId
+        || !principal.assignments.some(a => a.pageId === row.pageId && a.profileIds.includes(row.profileId))) return null;
+    if ('campaignId' in row) {
+        const link = store.getLink(row.campaignId);
+        if (!link || link.workspaceId !== row.workspaceId || link.pageId !== row.pageId || link.profileId !== row.profileId) return null;
+    }
+    return {seq:event.seq, type:event.type, pageId:row.pageId, revision:row.revision, status:row.status, createdAt:event.createdAt,
+        ...('campaignId' in row ? {campaignId:row.campaignId, grantId:row.id} : {proposalId:row.id})};
+}
+
+/** Re-project stored rows: old/malformed/foreign events are not authority or a resource snapshot. */
+export function projectPageWorkEvent(event: ControlEvent, principal: ControlPrincipal, getWork: (id: string) => PageWork | null) {
+    if (principal.kind !== 'page_receiver' || !['pageWork.changed', 'pageWork.draftSaved', 'pageWork.businessChanged'].includes(event.type)) return null;
+    const p = event.payload as Record<string, unknown> | null;
+    if (!p || typeof p.workId !== 'string') return null;
+    const work = getWork(p.workId);
+    if (!work || p.workspaceId !== principal.workspaceId || p.workspaceId !== work.workspaceId || p.pageId !== work.pageId
+        || !principal.assignments.some(a => a.pageId === work.pageId && a.profileIds.includes(work.profileId))) return null;
+    return { seq: event.seq, type: event.type, workId: work.id, pageId: work.pageId, createdAt: event.createdAt,
+        ...(typeof p.status === 'string' && ['pending', 'running', 'waiting', 'needs_review', 'completed', 'failed', 'cancelled'].includes(p.status) ? { status: p.status } : {}),
+        ...(Number.isSafeInteger(p.revision) && (p.revision as number) > 0 ? { revision: p.revision as number } : {}),
+        ...(event.type === 'pageWork.draftSaved' && typeof p.draftId === 'string' && work.draftIds.includes(p.draftId) ? { draftId: p.draftId } : {}) };
+}
 
 export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'briefs.finished' | 'pages.learnFinished';
 

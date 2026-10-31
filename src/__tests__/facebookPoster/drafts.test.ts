@@ -3,9 +3,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPosterStore';
-import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../services/facebookPoster/drafts';
+import { saveDraft, prepareDraft, getDraft, approveDraft, type DraftDeps } from '../../services/facebookPoster/drafts';
 import { scheduleMediaDir } from '../../services/facebookPoster/scheduleMedia';
 import { memoryDb } from './helpers';
+import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from '../../services/facebookPoster/schema';
 
 const NOW = new Date(2026, 9, 10, 10, 0, 0).getTime();
 const HOUR = 3_600_000;
@@ -30,6 +31,107 @@ const full = (over: Record<string, unknown> = {}) =>
   content({ profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123456789'] }], ...over });
 
 describe('drafts', () => {
+  test('approvalExpectedRevisionRejectsWithoutMutationAndLegacyStillWorks', () => {
+    const { deps, store } = setup();
+    const draft = saveDraft(deps, { params: full() });
+    store.updateSchedule(draft.id, { name: 'Changed' }, NOW);
+    const before = store.getSchedule(draft.id);
+    expect(() => approveDraft(deps, { id: draft.id, when: 'now', expectedRevision: draft.revision })).toThrow();
+    expect(store.getSchedule(draft.id)).toEqual(before);
+    expect(approveDraft(deps, { id: draft.id, when: 'now' })).toMatchObject({ draft: false, enabled: true });
+  });
+  test.each([false, true])('productionMigrationPreservesRowsAndSupportsLegacyAndCasUpdates(existing=%s)', (existing) => {
+    const database = memoryDb();
+    const initialize = (migrations: string[]) => {
+      database.exec(FB_POSTER_SCHEMA_SQL);
+      for (const sql of migrations) { try { database.exec(sql); } catch { /* existing column, like production */ } }
+    };
+    if (existing) {
+      initialize(FB_POSTER_MIGRATIONS.filter((sql) => !/ADD COLUMN revision\b/.test(sql)));
+      expect(database.query<{ name: string }>('PRAGMA table_info(fb_poster_schedules)').some((column) => column.name === 'revision')).toBe(false);
+      database.run(`INSERT INTO fb_poster_schedules
+        (id, name, kind, params_json, run_at, days, time, enabled, draft, next_run_at, created_at, updated_at)
+        VALUES ('preserved', 'Original', 'once', '{}', NULL, '', '', 0, 1, NULL, 10, 20)`);
+    }
+    initialize(FB_POSTER_MIGRATIONS);
+    // Do not call store.ensureSchema: DatabaseService initializes using exported SQL/migrations.
+    const store = new FacebookPosterStore(database);
+    if (!existing) store.createSchedule({ id: 'preserved', name: 'Original', kind: 'once', params: {},
+      runAt: null, days: [], time: '', enabled: false, draft: true, nextRunAt: null, createdAt: 10 });
+    expect(store.getSchedule('preserved')).toMatchObject({ id: 'preserved', name: 'Original', revision: 1,
+      params: {}, draft: true, enabled: false, createdAt: 10, updatedAt: existing ? 20 : 10 });
+    store.updateSchedule('preserved', { name: 'Legacy update' }, 30);
+    expect(store.getSchedule('preserved')).toMatchObject({ revision: 2, name: 'Legacy update' });
+    store.updateSchedule('preserved', { name: 'CAS update' }, 40, 2);
+    expect(() => store.updateSchedule('preserved', { name: 'Stale update' }, 50, 2)).toThrow();
+    initialize(FB_POSTER_MIGRATIONS);
+    expect(store.getSchedule('preserved')).toMatchObject({ revision: 3, name: 'CAS update', createdAt: 10, updatedAt: 40 });
+    expect(store.countSchedules()).toBe(1);
+  });
+
+  test('preparedRevisionPreservesOldBytesOnCasFailureAndOnlyCleansOwnFiles', () => {
+    const { deps, file, store } = setup();
+    const original = saveDraft(deps, { params: content({ mediaPaths: [file('old.jpg', 'OLD')] }) });
+    expect(original.revision).toBe(1);
+    const oldPath = getDraft(deps, original.id).media[0].path;
+    const first = prepareDraft(deps, { id: original.id, expectedRevision: 1, params: content({ mediaPaths: [file('new.jpg', 'NEW')] }) });
+    const second = prepareDraft(deps, { id: original.id, expectedRevision: 1, params: content({ mediaPaths: [file('other.jpg', 'OTHER')] }) });
+    expect(fs.readFileSync(oldPath, 'utf8')).toBe('OLD');
+    expect(store.getSchedule(original.id)!.revision).toBe(1);
+    const saved = first.commit();
+    expect(saved.revision).toBe(2);
+    const newPath = getDraft(deps, original.id).media[0].path;
+    expect(() => second.commit()).toThrow();
+    second.cleanup();
+    expect(fs.readFileSync(oldPath, 'utf8')).toBe('OLD');
+    expect(fs.readFileSync(newPath, 'utf8')).toBe('NEW');
+    expect(store.getSchedule(original.id)!.revision).toBe(2);
+  });
+
+  test('lostCommitResponseAndUnreadableRowNeverDeleteReferencedMedia', () => {
+    const { deps, file, store } = setup();
+    const prepared = prepareDraft(deps, { params: content({ mediaPaths: [file('old.jpg', 'SAVED')] }) });
+    const saved = prepared.commit();
+    const savedPath = getDraft(deps, saved.id).media[0].path;
+    const read = jest.spyOn(store, 'getSchedule').mockReturnValue(null);
+    prepared.cleanup();
+    read.mockRestore();
+    expect(fs.readFileSync(savedPath, 'utf8')).toBe('SAVED');
+  });
+
+  test('lateCleanupOfCommittedAttemptKeepsHistoricalRevisionBytes', () => {
+    const { deps, file } = setup();
+    const first = prepareDraft(deps, { params: content({ mediaPaths: [file('first.jpg', 'FIRST')] }) });
+    const saved = first.commit();
+    const firstPath = getDraft(deps, saved.id).media[0].path;
+    prepareDraft(deps, { id: saved.id, expectedRevision: 1, params: content({ mediaPaths: [file('second.jpg', 'SECOND')] }) }).commit();
+    first.cleanup();
+    expect(fs.readFileSync(firstPath, 'utf8')).toBe('FIRST');
+    expect(fs.readFileSync(getDraft(deps, saved.id).media[0].path, 'utf8')).toBe('SECOND');
+  });
+
+  test('expectedRevisionRejectsStaleEditBeforeMediaMutation', () => {
+    const { deps, file, store } = setup();
+    const original = saveDraft(deps, { params: content({ mediaPaths: [file('old.jpg', 'OLD')] }) });
+    const oldPath = getDraft(deps, original.id).media[0].path;
+    expect(() => saveDraft(deps, { id: original.id, expectedRevision: 9, params: content({ mediaPaths: [file('new.jpg', 'NEW')] }) })).toThrow();
+    expect(fs.readFileSync(oldPath, 'utf8')).toBe('OLD');
+    expect(store.getSchedule(original.id)!.revision).toBe(1);
+  });
+
+  test('preparedDraftDbFailureKeepsOldRevisionAndBytes', () => {
+    const { deps, file, store } = setup();
+    const original = saveDraft(deps, { params: content({ mediaPaths: [file('old.jpg', 'OLD')] }) });
+    const oldPath = getDraft(deps, original.id).media[0].path;
+    const prepared = prepareDraft(deps, { id: original.id, expectedRevision: 1, params: content({ mediaPaths: [file('new.jpg', 'NEW')] }) });
+    const update = jest.spyOn(store, 'updateSchedule').mockImplementation(() => { throw new Error('DB failure'); });
+    expect(() => prepared.commit()).toThrow('DB failure');
+    prepared.cleanup();
+    update.mockRestore();
+    expect(store.getSchedule(original.id)!.revision).toBe(1);
+    expect(fs.readFileSync(oldPath, 'utf8')).toBe('OLD');
+  });
+
   test('saveDraft chỉ cần nội dung; nháp tắt, không có giờ chạy, scheduler không thấy', () => {
     const { store, deps } = setup();
     const d = saveDraft(deps, { params: content() });

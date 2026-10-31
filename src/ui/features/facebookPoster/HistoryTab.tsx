@@ -11,7 +11,7 @@ const TRACKING_LIMIT = 500;
 
 type TrackInfo = { linkStatus: LinkStatus; removedSuspected: boolean; latestStats: PostStatsSnapshot | null };
 
-const KIND_LABEL: Record<string, string> = { post: 'Đăng bài', join: 'Tham gia nhóm', scan_groups: 'Quét nhóm', collect_comments: 'Thu bình luận' };
+export const KIND_LABEL: Record<string, string> = { post: 'Đăng bài', join: 'Tham gia nhóm', scan_groups: 'Quét nhóm', collect_comments: 'Thu bình luận' };
 const MODE_LABEL: Record<string, string> = { group: 'Nhóm', page: 'Page' };
 export const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   running: { label: 'Đang chạy', cls: 'text-blue-400' },

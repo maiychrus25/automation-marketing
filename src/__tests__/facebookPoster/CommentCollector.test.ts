@@ -29,7 +29,7 @@ const comment = (postUrl: string, text: string, authorId = 'a1') =>
 
 type FakeCollect = (input: any, deps: any) => Promise<any>;
 
-function setup(opts: { collect?: FakeCollect; launchFor?: (id: string) => Promise<any>; busy?: boolean; processThrows?: boolean } = {}) {
+function setup(opts: { collect?: FakeCollect; launchFor?: (id: string) => Promise<any>; rejectAdmission?: boolean; processThrows?: boolean } = {}) {
     const store = new FacebookPosterStore(memoryDb());
     store.ensureSchema();
     const events: { type: string; payload: any }[] = [];
@@ -37,7 +37,7 @@ function setup(opts: { collect?: FakeCollect; launchFor?: (id: string) => Promis
     const closed: string[] = [];
     const logs: { message: string; level: string }[] = [];
     const processed: { rows: any[]; auto: boolean }[] = [];
-    const slot = { acquire: jest.fn(() => { if (opts.busy) throw new Error(BUSY_ERROR); }), release: jest.fn() };
+    const assertCurrent = jest.fn(() => { if (opts.rejectAdmission) throw new Error('retired'); });
     const observeLogin = jest.fn();
     const sleeps: number[] = [];
     const collect: FakeCollect = opts.collect ?? (async (input, deps) => {
@@ -53,7 +53,7 @@ function setup(opts: { collect?: FakeCollect; launchFor?: (id: string) => Promis
         store,
         launchFor: opts.launchFor ?? (async (id: string) => { launched.push(id); return { ctx: {} as any, page: {} as any, close: async () => { closed.push(id); } }; }),
         collect: collect as unknown as typeof collectComments,
-        slot,
+        assertCurrent,
         observeLogin,
         detector: { process: async (rows, o) => { if (opts.processThrows) throw new Error('ai'); processed.push({ rows, auto: o.auto }); return rows.map((_, i) => ({ id: i }) as any); } },
         readConfig: () => CONFIG,
@@ -64,7 +64,7 @@ function setup(opts: { collect?: FakeCollect; launchFor?: (id: string) => Promis
         random: () => 0,
         newId: () => 'job1',
     });
-    return { store, collector, events, logs, launched, closed, processed, slot, observeLogin, sleeps };
+    return { store, collector, events, logs, launched, closed, processed, assertCurrent, observeLogin, sleeps };
 }
 
 async function run(h: ReturnType<typeof setup>, params: any = {}) {
@@ -74,7 +74,45 @@ async function run(h: ReturnType<typeof setup>, params: any = {}) {
 }
 const finished = (events: any[]) => events.filter((e) => e.type === 'comments.collectFinished');
 
+test('reserves local collector admission before row-selection reentry', async () => {
+    const h = setup();
+    let attempted = false;
+    let error: unknown;
+    const original = h.store.listDueCommentPosts.bind(h.store);
+    jest.spyOn(h.store, 'listDueCommentPosts').mockImplementation((...args) => {
+        if (!attempted) { attempted = true; try { h.collector.collect(); } catch (caught) { error = caught; } }
+        return original(...args);
+    });
+    h.collector.collect();
+    await h.collector.whenIdle();
+    expect(error).toEqual(new Error(BUSY_ERROR));
+    expect(finished(h.events)).toHaveLength(1);
+});
+
 describe('CommentCollector', () => {
+    test('preserves stop requested while selecting rows', async () => {
+        const h = setup(); addPost(h.store);
+        const original = h.store.listDueCommentPosts.bind(h.store);
+        jest.spyOn(h.store, 'listDueCommentPosts').mockImplementation((...args) => { h.collector.stop(); return original(...args); });
+        h.collector.collect(); await h.collector.whenIdle();
+        expect(h.launched).toEqual([]);
+        expect(h.collector.status().last?.cancelled).toBe(true);
+    });
+    test('revoked context stops further browser collection after an awaited boundary', async () => {
+        let current = true;
+        let stopping = false;
+        const h = setup({ collect: async (_input, deps) => {
+            await deps.launch();
+            current = false;
+            stopping = deps.getIsStopping();
+            return { scanned: 0, failed: 0, added: 0, results: [] };
+        } });
+        (h.collector as any).deps.assertCurrent = () => { if (!current) throw new Error('retired'); };
+        addPost(h.store);
+        await run(h);
+        expect(stopping).toBe(true);
+        expect(h.closed).toEqual(['p1']);
+    });
     test('collects due posts per profile, saves comments, runs the detector with auto, settles the schedule', async () => {
         const h = setup();
         const a = addPost(h.store);
@@ -93,7 +131,7 @@ describe('CommentCollector', () => {
             expect(rowOf(h.store, id)).toMatchObject({ commentsDone: ['120m'], nextCommentAt: NOW - 3 * HOUR + 1440 * MIN });
         }
         expect(h.sleeps).toEqual([10_000]);
-        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(h.collector.isRunning()).toBe(false);
     });
 
     test('last milestone sets next_comment_at to NULL and marks every overdue milestone', async () => {
@@ -120,34 +158,34 @@ describe('CommentCollector', () => {
         await h.collector.whenIdle();
     });
 
-    test('BUSY: slot held → throws and no job starts; second collect while running → BUSY', async () => {
-        const busy = setup({ busy: true });
+    test('retired admission rejects before work; second collect while running remains BUSY', async () => {
+        const busy = setup({ rejectAdmission: true });
         addPost(busy.store);
-        expect(() => busy.collector.collect({})).toThrow(BUSY_ERROR);
+        expect(() => busy.collector.collect({})).toThrow('retired');
         expect(busy.collector.isRunning()).toBe(false);
         const h = setup();
         addPost(h.store);
         h.collector.collect({});
         expect(h.collector.isRunning()).toBe(true);
         expect(() => h.collector.collect({})).toThrow(BUSY_ERROR);
-        expect(h.slot.acquire).toHaveBeenCalledTimes(1);
+        expect(h.assertCurrent).toHaveBeenCalledTimes(1);
         await h.collector.whenIdle();
         expect(h.collector.isRunning()).toBe(false);
-        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(h.collector.isRunning()).toBe(false);
     });
 
-    test('holds the slot until finished, status reports progress and last', async () => {
+    test('holds local admission until finished, status reports progress and last', async () => {
         let release!: () => void;
         const gate = new Promise<void>((r) => { release = r; });
         const h = setup({ collect: async (input) => { await gate; return { scanned: 0, failed: 0, added: 0, results: input.posts.map((p: any) => ({ url: p.postUrl, outcome: 'done', error: null, added: 0 })) }; } });
         addPost(h.store);
         h.collector.collect({ auto: true });
         await Promise.resolve();
-        expect(h.slot.release).not.toHaveBeenCalled();
+        expect(h.collector.isRunning()).toBe(true);
         expect(h.collector.status()).toMatchObject({ running: true, jobId: 'job1', progress: { done: 0, total: 1 } });
         release();
         await h.collector.whenIdle();
-        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(h.collector.isRunning()).toBe(false);
         expect(h.collector.status()).toMatchObject({ running: false, jobId: null, last: { jobId: 'job1', auto: true, posts: 1, cancelled: false } });
     });
 
@@ -167,7 +205,7 @@ describe('CommentCollector', () => {
         expect(rowOf(h.store, b)).toMatchObject({ commentsDone: [], nextCommentAt: NOW - 3 * HOUR + 120 * MIN });
         expect(h.collector.status().last?.cancelled).toBe(true);
         expect(finished(h.events)[0].payload).toMatchObject({ jobId: 'job1', cancelled: true });
-        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(h.collector.isRunning()).toBe(false);
         expect(h.collector.cancel()).toBe(false);
     });
 
@@ -237,7 +275,7 @@ describe('CommentCollector', () => {
         await run(h);
         expect(rowOf(h.store, a).commentsDone).toEqual(['120m']);
         expect(h.collector.isRunning()).toBe(false);
-        expect(h.slot.release).toHaveBeenCalledTimes(1);
+        expect(h.collector.isRunning()).toBe(false);
         expect(finished(h.events)[0].payload.errors).toBe(1);
     });
 

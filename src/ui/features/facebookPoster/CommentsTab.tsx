@@ -1,14 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import ProfilePicker from './ProfilePicker';
+import { CAPACITY_REASON } from './runState';
 import type { FbPosterComment } from '../../../models/facebookPoster';
 
 const PAGE_SIZE = 100;
 type PostedUrl = { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number };
 
-interface Props { busy: boolean; onStarted: () => void }
+interface Props { atCapacity: boolean; onStarted: (runId: string) => void }
 
 // Link lấy từ dữ liệu Facebook (không tin cậy): tiến trình chính kiểm tra (chỉ https tới facebook.com) rồi mới mở.
 const openLink = (url: string) => {
@@ -18,13 +19,14 @@ const openLink = (url: string) => {
 };
 const formatTime = (at: number) => new Date(at).toLocaleString('vi-VN', { hour12: false });
 
-export default function CommentsTab({ busy, onStarted }: Props) {
+export default function CommentsTab({ atCapacity, onStarted }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [profileIds, setProfileIds] = useState<string[]>([]);
   const [posts, setPosts] = useState<PostedUrl[]>([]);
   const [postsLoading, setPostsLoading] = useState(true);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false);
 
   const [comments, setComments] = useState<FbPosterComment[]>([]);
   const [leadKeys, setLeadKeys] = useState<Set<string>>(new Set());
@@ -72,20 +74,23 @@ export default function CommentsTab({ busy, onStarted }: Props) {
     return next;
   });
 
-  const disabledReason = busy ? 'Đang có việc chạy. Đợi xong hoặc hủy việc đó.'
+  const disabledReason = atCapacity ? CAPACITY_REASON
     : profileIds.length === 0 ? 'Chọn một profile.'
     : picked.size === 0 ? 'Chọn ít nhất một bài.'
     : '';
 
   const handleCollect = async () => {
+    if (startingRef.current) return;
+    startingRef.current = true;
     setStarting(true);
     try {
       const res = await ipc.facebookPoster?.start('collect_comments', { profileId: profileIds[0], postUrls: [...picked] });
       if (!res?.success) showNotification(res?.error || 'Không bắt đầu được', 'error');
-      else onStarted();
+      else if (res.runId) onStarted(res.runId);
     } catch (err: any) {
       showNotification(err?.message || 'Không bắt đầu được', 'error');
     } finally {
+      startingRef.current = false;
       setStarting(false);
     }
   };
@@ -100,14 +105,14 @@ export default function CommentsTab({ busy, onStarted }: Props) {
     <div className="space-y-6 min-w-0">
       <section className="space-y-3">
         <h3 className="text-sm font-medium text-white">Thu bình luận</h3>
-        <ProfilePicker mode="single" selected={profileIds} onChange={setProfileIds} disabled={busy} />
+        <ProfilePicker mode="single" selected={profileIds} onChange={setProfileIds} />
         {postsLoading ? <div className="flex justify-center py-4"><Spinner size={5} /></div>
           : posts.length === 0 ? <p className="text-sm text-gray-400 text-center py-4">Chưa có bài nào có link để thu bình luận.</p>
           : (
             <ul className="max-h-56 overflow-y-auto rounded-lg border border-gray-700 divide-y divide-gray-800" aria-label="Bài đã đăng">
               {posts.map((p) => (
                 <li key={p.postUrl} className="flex items-center gap-2 px-3 py-2 min-w-0">
-                  <input type="checkbox" aria-label={`Chọn bài ${p.postUrl}`} checked={picked.has(p.postUrl)} onChange={() => togglePost(p.postUrl)} disabled={busy} />
+                  <input type="checkbox" aria-label={`Chọn bài ${p.postUrl}`} checked={picked.has(p.postUrl)} onChange={() => togglePost(p.postUrl)} />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-200 truncate" title={p.profileName}>{p.profileName}</p>
                     <p className="text-xs text-gray-400 truncate" title={p.targetUrl}>{p.targetUrl}</p>

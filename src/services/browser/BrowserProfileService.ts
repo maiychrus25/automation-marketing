@@ -30,6 +30,8 @@ export interface BrowserProcess extends EventEmitter {
     kill(signal?: NodeJS.Signals): boolean;
 }
 
+export interface AutomationReservation { readonly profileId: string }
+
 export interface AutomationSession {
     context: BrowserContext;
     /** Idempotent. */
@@ -66,6 +68,8 @@ interface RunningEntry {
     /** Set only for automation sessions (openForAutomation). */
     context: BrowserContext | null;
     closing: Promise<void> | null;
+    cancelOpening?: boolean;
+    releasing?: Promise<void>;
 }
 
 function defaultTerminate(platform: NodeJS.Platform): (child: BrowserProcess, force: boolean) => void {
@@ -86,6 +90,10 @@ function defaultTerminate(platform: NodeJS.Platform): (child: BrowserProcess, fo
 /** Opens and closes browser profiles and tracks which ones are running. Running state lives in memory only. */
 export class BrowserProfileService {
     private readonly running = new Map<string, RunningEntry>();
+    private readonly reservations = new Map<string, { token: AutomationReservation; released: boolean }>();
+    private readonly availabilityListeners = new Set<() => void>();
+    private admissionPaused = false;
+    private retired = false;
     private readonly platform: NodeJS.Platform;
     private readonly spawnBrowser: (executable: string, args: string[]) => BrowserProcess;
     private readonly createForwarder: (proxy: ProxyConfig) => ForwarderLike;
@@ -104,6 +112,69 @@ export class BrowserProfileService {
             || ((exe, dir, args) => require('./automationLauncher').launchAutomationBrowser(exe, dir, args));
     }
 
+    public pauseAdmission(): void { this.admissionPaused = true; }
+
+    public resumeAdmission(): void {
+        if (this.retired) return;
+        this.admissionPaused = false;
+        this.notifyAvailability();
+    }
+
+    /** Retirement is permanent, and may not discard pending native ownership. */
+    public retire(): void {
+        if (!this.isIdle()) throw new Error('Trình duyệt chưa đóng xong. Thử lại sau.');
+        this.admissionPaused = true;
+        this.retired = true;
+    }
+
+    public tryReserveAutomation(profileId: string): AutomationReservation | null {
+        if (this.admissionPaused || this.retired) return null;
+        if (!this.deps.store.getBrowserProfileById(profileId)) throw new Error('Không tìm thấy profile');
+        if (!this.canReserveAutomation(profileId)) return null;
+        const token = Object.freeze({ profileId });
+        this.reservations.set(profileId, { token, released: false });
+        this.notifyAvailability();
+        return token;
+    }
+
+    public canReserveAutomation(profileId: string): boolean {
+        return !this.admissionPaused && !this.retired && !this.running.has(profileId) && !this.reservations.has(profileId)
+            && this.occupiedCount() < MAX_RUNNING_PROFILES
+            && this.deps.store.getBrowserProfileById(profileId) !== null;
+    }
+
+    public releaseAutomationReservation(token: AutomationReservation): void {
+        const reservation = this.reservations.get(token.profileId);
+        if (reservation?.token !== token) return;
+        if (this.running.has(token.profileId)) reservation.released = true;
+        else this.reservations.delete(token.profileId);
+        this.notifyAvailability();
+    }
+
+    public onAvailabilityChanged(listener: () => void): () => void {
+        this.availabilityListeners.add(listener);
+        return () => { this.availabilityListeners.delete(listener); };
+    }
+
+    public isIdle(): boolean { return this.running.size === 0 && this.reservations.size === 0; }
+
+    public waitUntilIdle(timeoutMs: number): Promise<boolean> {
+        if (this.isIdle()) return Promise.resolve(true);
+        return new Promise(resolve => {
+            const finish = (idle: boolean) => { clearTimeout(timer); unsubscribe(); resolve(idle); };
+            const unsubscribe = this.onAvailabilityChanged(() => { if (this.isIdle()) finish(true); });
+            const timer = setTimeout(() => finish(false), timeoutMs);
+        });
+    }
+
+    private occupiedCount(): number {
+        return new Set([...this.running.keys(), ...this.reservations.keys()]).size;
+    }
+
+    private notifyAvailability(): void {
+        for (const listener of Array.from(this.availabilityListeners)) listener();
+    }
+
     public getRunningIds(): string[] {
         return Array.from(this.running.keys());
     }
@@ -117,9 +188,12 @@ export class BrowserProfileService {
     }
 
     /** Checks shared by open() and openForAutomation(); throws before anything is reserved. */
-    private prepareOpen(id: string, busyMessage: string): { profile: BrowserProfile; proxy: ProxyConfig | null; persona: Persona; executable: string } {
-        if (this.running.has(id)) throw new Error(busyMessage);
-        if (this.running.size >= MAX_RUNNING_PROFILES) {
+    private prepareOpen(id: string, busyMessage: string, token?: AutomationReservation): { profile: BrowserProfile; proxy: ProxyConfig | null; persona: Persona; executable: string } {
+        if (this.admissionPaused || this.retired) throw new Error('Trình duyệt đang dừng, thử lại sau.');
+        const reservation = this.reservations.get(id);
+        if (token && (reservation?.token !== token || reservation.released)) throw new Error('Quyền giữ profile không còn hiệu lực');
+        if (this.running.has(id) || (reservation && reservation.token !== token)) throw new Error(busyMessage);
+        if (!reservation && this.occupiedCount() >= MAX_RUNNING_PROFILES) {
             throw new Error(`Đã đạt giới hạn ${MAX_RUNNING_PROFILES} profile mở cùng lúc`);
         }
         const persona = hostPersona(this.platform);
@@ -143,13 +217,13 @@ export class BrowserProfileService {
         const entry: RunningEntry = { child: null, forwarder: null, closeRequested: false, exited: false, forceKillTimer: null, context: null, closing: null };
         this.running.set(id, entry);
         try {
+            const userDataDir = this.getProfileDir(id);
             let proxyPort: number | null = null;
             if (proxy) {
                 entry.forwarder = this.createForwarder(proxy);
                 proxyPort = await entry.forwarder.start();
                 this.assertNotCancelled(id, entry);
             }
-            const userDataDir = this.getProfileDir(id);
             fs.mkdirSync(userDataDir, { recursive: true });
             const noSandbox = (await this.resolveSandbox(executable)) === 'disabled';
             this.assertNotCancelled(id, entry);
@@ -157,20 +231,19 @@ export class BrowserProfileService {
                 executable,
                 buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort, noSandbox }),
             );
-            await new Promise<void>((resolve, reject) => {
-                child.once('spawn', () => resolve());
-                child.once('error', reject);
-            });
-            this.assertNotCancelled(id, entry, child);
-            entry.child = child;
             child.once('exit', () => {
                 entry.exited = true;
                 if (entry.forceKillTimer) clearTimeout(entry.forceKillTimer);
                 this.release(id, entry);
             });
             child.on('error', () => undefined);
+            await new Promise<void>((resolve, reject) => {
+                child.once('spawn', () => { entry.child = child; resolve(); });
+                child.once('error', reject);
+            });
+            this.assertNotCancelled(id, entry, child);
         } catch (error: any) {
-            this.release(id, entry);
+            if (!entry.child || entry.exited) this.release(id, entry);
             throw new Error(`Không mở được trình duyệt: ${error?.message || error}`);
         }
         try {
@@ -184,37 +257,36 @@ export class BrowserProfileService {
     }
 
     /** Opens the profile under Playwright's control (pipe) so a job can drive its pages. Counts as a running profile. */
-    public async openForAutomation(id: string): Promise<AutomationSession> {
-        const { profile, proxy, persona, executable } = this.prepareOpen(id, 'Profile đang mở. Đóng profile trước khi chạy tự động');
+    public async openForAutomation(id: string, reservation?: AutomationReservation): Promise<AutomationSession> {
+        const { profile, proxy, persona, executable } = this.prepareOpen(id, 'Profile đang mở. Đóng profile trước khi chạy tự động', reservation);
         // Reserve the slot before the first await, same as open().
         const entry: RunningEntry = { child: null, forwarder: null, closeRequested: false, exited: false, forceKillTimer: null, context: null, closing: null };
         this.running.set(id, entry);
         let context: BrowserContext;
         try {
+            const userDataDir = this.getProfileDir(id);
             let proxyPort: number | null = null;
             if (proxy) {
                 entry.forwarder = this.createForwarder(proxy);
                 proxyPort = await entry.forwarder.start();
                 this.assertNotCancelled(id, entry);
             }
-            const userDataDir = this.getProfileDir(id);
             fs.mkdirSync(userDataDir, { recursive: true });
             const noSandbox = (await this.resolveSandbox(executable)) === 'disabled';
             this.assertNotCancelled(id, entry);
             const args = ['--remote-debugging-pipe', ...buildLaunchArgs({ userDataDir, fingerprint: profile.fingerprint, persona, proxyPort, noSandbox })];
             context = await this.launchAutomation(executable, userDataDir, args);
-            if (this.running.get(id) !== entry) {
-                await context.close().catch(() => undefined);
-                entry.forwarder?.stop().catch(() => undefined);
-                throw new Error('Đã hủy mở trình duyệt');
-            }
             entry.context = context;
             context.on('close', () => {
                 entry.exited = true;
                 this.release(id, entry);
             });
+            if (entry.cancelOpening) {
+                void this.closeAutomation(id, entry);
+                throw new Error('Đã hủy mở trình duyệt');
+            }
         } catch (error: any) {
-            this.release(id, entry);
+            if (!entry.context || entry.exited) this.release(id, entry);
             throw new Error(`Không mở được trình duyệt: ${error?.message || error}`);
         }
         try {
@@ -229,32 +301,42 @@ export class BrowserProfileService {
         return session;
     }
 
-    // ponytail: a persistent context exposes no browser process, so a hung close() only releases our slot; the browser may linger until it exits by itself.
-    /** Graceful context.close() so Chromium flushes cookies; never waits longer than FORCE_KILL_DELAY_MS. Idempotent. */
+    /** Bounds the caller's wait, but retains authority until close succeeds or a close event confirms exit. */
     private closeAutomation(id: string, entry: RunningEntry): Promise<void> {
+        if (entry.exited) return entry.releasing ?? Promise.resolve();
         if (!entry.context) {
             entry.closeRequested = true;
             return Promise.resolve();
         }
         if (!entry.closing) {
             const ctx = entry.context;
+            let timer: NodeJS.Timeout;
+            const closed = (async () => {
+                try {
+                    await ctx.close();
+                    entry.exited = true;
+                    this.release(id, entry);
+                } catch {
+                    // A rejected close is not evidence that the browser has stopped.
+                } finally {
+                    entry.closing = null;
+                }
+            })();
             entry.closing = Promise.race([
-                ctx.close().catch(() => undefined),
+                closed,
                 new Promise<void>((resolve) => {
-                    const timer = setTimeout(resolve, FORCE_KILL_DELAY_MS);
-                    (timer as any).unref?.();
+                    timer = setTimeout(resolve, FORCE_KILL_DELAY_MS);
+                    timer.unref?.();
                 }),
-            ]).then(() => { this.release(id, entry); });
+            ]).finally(() => clearTimeout(timer));
         }
         return entry.closing;
     }
 
-    /** Called after each await in open(): closeAll() may have released the entry meanwhile. */
+    /** Pending launches stay tracked until cancellation cleanup is confirmed. */
     private assertNotCancelled(id: string, entry: RunningEntry, spawned?: BrowserProcess): void {
-        if (this.running.get(id) === entry) return;
-        if (spawned) this.terminate(spawned, true);
-        // release() may have stopped the forwarder before its start() finished; stop() is idempotent.
-        entry.forwarder?.stop().catch(() => undefined);
+        if (this.running.get(id) === entry && !entry.cancelOpening) return;
+        if (spawned && !entry.exited) this.terminate(spawned, true);
         throw new Error('Đã hủy mở trình duyệt');
     }
 
@@ -282,24 +364,41 @@ export class BrowserProfileService {
         entry.forceKillTimer.unref?.();
     }
 
-    /** Used on app quit and workspace switch: graceful exit (then force-kill if still alive) for every browser, state cleared immediately. */
+    /** Used on app quit and workspace switch; authority remains until confirmed cleanup. */
     public closeAll(): void {
-        const entries = Array.from(this.running.entries());
-        for (const [id, entry] of entries) {
+        for (const reservation of Array.from(this.reservations.values())) {
+            this.releaseAutomationReservation(reservation.token);
+        }
+        for (const [id, entry] of Array.from(this.running.entries())) {
+            if (entry.exited) { this.release(id, entry); continue; }
+            entry.cancelOpening = true;
+            entry.closeRequested = true;
             if (entry.context) void this.closeAutomation(id, entry);
             if (entry.child) this.terminateWithFallback(entry, entry.child);
-            this.release(id, entry);
         }
     }
 
     private release(id: string, entry: RunningEntry): void {
-        if (this.running.get(id) !== entry) return;
+        if (this.running.get(id) !== entry || entry.releasing) return;
+        entry.exited = true;
+        if (entry.forwarder) {
+            entry.releasing = entry.forwarder.stop().then(() => {
+                entry.forwarder = null;
+                entry.releasing = undefined;
+                this.release(id, entry);
+            }, () => {
+                // Retain ownership until a later cleanup attempt confirms proxy shutdown.
+                entry.releasing = undefined;
+            });
+            return;
+        }
         this.running.delete(id);
-        entry.forwarder?.stop().catch(() => undefined);
+        if (this.reservations.get(id)?.released) this.reservations.delete(id);
         this.notify();
     }
 
     private notify(): void {
         this.deps.onStatusChanged?.(this.getRunningIds());
+        this.notifyAvailability();
     }
 }

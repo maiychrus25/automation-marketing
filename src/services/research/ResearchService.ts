@@ -1,5 +1,6 @@
 // Điều phối lượt quét Nghiên cứu chủ đề: xoay vòng profile, phân trang, giới hạn, huỷ (spec mục 3, 5, 6, 7).
 import { BUSY_ERROR } from '../facebookPoster/FacebookPosterService';
+import type { ProfileTaskContext } from '../browser/ProfileJobQueue';
 import type { ProfileLoginState } from '../../models/facebookPoster';
 import type {
     ParsedItem, ResearchErrorCode, ResearchOrigin, ResearchScanStatus, ResearchSource,
@@ -40,10 +41,32 @@ const SHAPE_DEPTH = 16;
 /** Phần của GraphqlSession mà service dùng (để test thay bằng bản giả). */
 export type ResearchGraphqlSession = Pick<GraphqlSession, 'open' | 'ensureQuery' | 'call' | 'recapture'>;
 
+export interface ResearchOwnership {
+    priority?: ProfileTaskContext['priority'];
+    scanId: string;
+    pageId: string;
+    profileId: string;
+    assertCurrent(): void;
+}
+
+/** Reserve synchronously; call start only AFTER the caller's transaction commits. */
+export interface ReservedResearchScan { scanId: string; start(): void }
+
+type ResearchSession = {
+    session: ResearchGraphqlSession;
+    readIdentity?(): Promise<{ kind: string; pageId: string }>;
+    close(): Promise<void>;
+};
+
 export interface ResearchServiceDeps {
     store: ResearchStore;
+    shouldYield?(): boolean;
+    /** Workspace/session binding, including legacy callers. */
+    assertCurrent?(): void;
+    /** Admission only; pausing new work must not revoke an already admitted scan's settlement. */
+    assertCanStart?(): void;
     /** Mở phiên trình duyệt cho profile (Electron: openForAutomation + new GraphqlSession(page, store)). */
-    openSession(profileId: string): Promise<{ session: ResearchGraphqlSession; close(): Promise<void> }>;
+    openSession(profileId: string, assertCurrent: () => void, context: ProfileTaskContext): Promise<ResearchSession>;
     listProfiles(): { id: string; name: string }[];
     isProfileBusy(id: string): boolean;
     loginStates(): ProfileLoginState[];
@@ -109,6 +132,9 @@ function inRange(v: unknown, min: number, max: number): v is number {
 export class ResearchService {
     private running: Promise<void> | null = null;
     private cancelled = false;
+    private abort = new AbortController();
+    private ownership: ResearchOwnership | undefined;
+    private launch: (() => void) | null = null;
     private currentScanId: string | null = null;
     private wake: (() => void) | null = null;
     private readonly lastUsedAt: Record<string, number> = {};
@@ -138,16 +164,32 @@ export class ResearchService {
     cancel(): boolean {
         if (!this.running) return false;
         this.cancelled = true;
+        this.abort.abort();
         this.wake?.();
         const closeNow = this.activeClose;
         if (closeNow) void closeNow();
+        this.launch?.();
         return true;
     }
 
     /** Dùng khi tắt app. */
     stop(): void { this.cancel(); }
 
+    cancelOwned(scanId: string): boolean {
+        return this.ownership?.scanId === scanId && this.currentScanId === scanId ? this.cancel() : false;
+    }
+
     search(params: SearchParams): { scanId: string } {
+        const reserved = this.prepareSearch(params);
+        reserved.start();
+        return { scanId: reserved.scanId };
+    }
+
+    reserveSearch(params: SearchParams, ownership: ResearchOwnership): ReservedResearchScan {
+        return this.prepareSearch(params, ownership);
+    }
+
+    private prepareSearch(params: SearchParams, ownership?: ResearchOwnership): ReservedResearchScan {
         if (!['posts', 'groups', 'pages'].includes(params.source)) throw new Error('Nguồn quét không hợp lệ.');
         const query = typeof params.query === 'string' ? params.query.trim() : '';
         if (query.length < 1 || query.length > 100) throw new Error('Từ khoá phải dài 1–100 ký tự.');
@@ -162,10 +204,20 @@ export class ResearchService {
         const profileIds = params.profileIds; // đã kiểm tra ở researchOperationsLogic.checkProfileIds
         const stored = { query, limit, recent: !!params.recent, year: params.year ?? null, profileIds: profileIds ?? null };
         return this.start(params.source, query, stored, params.origin, profileIds,
-            (run) => this.runKeyword(run, query, limit, !!params.recent, params.year));
+            (run) => this.runKeyword(run, query, limit, !!params.recent, params.year), ownership);
     }
 
     scanGroupFeeds(params: GroupFeedParams): { scanId: string } {
+        const reserved = this.prepareGroupFeeds(params);
+        reserved.start();
+        return { scanId: reserved.scanId };
+    }
+
+    reserveGroupFeeds(params: GroupFeedParams, ownership: ResearchOwnership): ReservedResearchScan {
+        return this.prepareGroupFeeds(params, ownership);
+    }
+
+    private prepareGroupFeeds(params: GroupFeedParams, ownership?: ResearchOwnership): ReservedResearchScan {
         const sinceDays = params.sinceDays ?? DEFAULT_SINCE_DAYS;
         if (!inRange(sinceDays, 1, MAX_SINCE_DAYS)) throw new Error(`Số ngày phải từ 1 đến ${MAX_SINCE_DAYS}.`);
         const limitPerGroup = params.limitPerGroup ?? DEFAULT_LIMIT_PER_GROUP;
@@ -178,38 +230,73 @@ export class ResearchService {
         }
         const stored = { groupUrls: params.groupUrls ?? null, sinceDays, limitPerGroup, profileIds: profileIds ?? null };
         return this.start('group_feed', '', stored, params.origin, profileIds,
-            (run) => this.runGroupFeed(run, params.groupUrls, sinceDays, limitPerGroup));
+            (run) => this.runGroupFeed(run, params.groupUrls, sinceDays, limitPerGroup), ownership);
     }
 
     // ---------- Vòng đời lượt quét ----------
 
     private start(
         source: ResearchSource, query: string, params: Record<string, unknown>, origin: ResearchOrigin,
-        restrictTo: string[] | undefined, body: (run: Run) => Promise<Outcome>,
-    ): { scanId: string } {
+        restrictTo: string[] | undefined, body: (run: Run) => Promise<Outcome>, ownership?: ResearchOwnership,
+    ): ReservedResearchScan {
         if (this.running) throw new Error(BUSY_ERROR);
-        const scanId = this.newId();
-        this.deps.store.createScan({ id: scanId, source, query, params, profileIds: [], origin, startedAt: this.now() });
+        let settle!: () => void;
+        this.running = new Promise<void>((resolve) => { settle = resolve; });
+        this.cancelled = false;
+        this.abort = new AbortController();
+        let scanId: string;
+        try {
+            this.deps.assertCanStart?.();
+            this.deps.assertCurrent?.();
+            ownership?.assertCurrent();
+            if (this.deps.shouldYield?.()) throw new Error(BUSY_ERROR);
+            scanId = ownership?.scanId ?? this.newId();
+            this.deps.assertCurrent?.();
+            ownership?.assertCurrent();
+            if (this.deps.store.getScan(scanId)) throw new Error('Lượt quét đã tồn tại; cần đối soát, không chạy lại.');
+            this.deps.store.createScan({ id: scanId, source, query,
+                params: { ...params, ...(ownership ? { profileIds: [ownership.profileId] } : {}) },
+                profileIds: [], origin, startedAt: this.now() });
+        } catch (e) {
+            this.running = null;
+            settle();
+            throw e;
+        }
         const run: Run = {
-            scanId, source, restrictTo, used: [], failed: [], total: 0, pages: 0,
+            scanId, source, restrictTo: ownership ? [ownership.profileId] : restrictTo, used: [], failed: [], total: 0, pages: 0,
             details: { profiles: {}, ...(source === 'group_feed' ? { groups: {} } : {}) },
         };
-        this.cancelled = false;
+        this.ownership = ownership;
         this.currentScanId = scanId;
         this.wakeSignal = new Promise<void>((resolve) => { this.wake = resolve; });
-        this.running = this.execute(run, query, body).finally(() => { this.running = null; this.wake = null; this.currentScanId = null; });
-        return { scanId };
+        let started = false;
+        const start = () => {
+            if (started) return;
+            started = true;
+            this.launch = null;
+            void this.execute(run, query, body).finally(() => {
+                this.running = null; this.wake = null; this.currentScanId = null; this.ownership = undefined;
+                settle();
+            });
+        };
+        this.launch = start;
+        return { scanId, start };
     }
 
     private async execute(run: Run, query: string, body: (run: Run) => Promise<Outcome>): Promise<void> {
         let outcome: Outcome;
         try {
+            this.assertCurrent();
+            if (!this.deps.store.getScan(run.scanId)) return; // caller rolled back the reservation
+            this.checkCancel();
             outcome = await body(run);
+            this.checkCancel();
         } catch (e) {
             outcome = e instanceof ScanStop
                 ? e.outcome
                 : this.cancelled ? CANCELLED : { status: 'failed', errorCode: '', error: `Lỗi nội bộ: ${shortMessage(e)}` };
         }
+        // Settle the admitted scan on its captured store even after revocation; emit remains independently guarded.
         let itemCount = run.total;
         let written = false;
         for (let attempt = 0; attempt < 2 && !written; attempt++) {
@@ -228,11 +315,17 @@ export class ResearchService {
     }
 
     private emit(channel: string, data: unknown): void {
-        try { this.deps.emit(channel, data); } catch { /* người nhận lỗi không được chặn lượt quét */ }
+        try { this.assertCurrent(); this.deps.emit(channel, data); } catch { /* người nhận lỗi không được chặn lượt quét */ }
+    }
+
+    private assertCurrent(): void {
+        this.deps.assertCurrent?.();
+        this.ownership?.assertCurrent();
     }
 
     private checkCancel(): void {
-        if (this.cancelled) throw new ScanStop(CANCELLED);
+        this.assertCurrent();
+        if (this.cancelled || this.deps.shouldYield?.()) throw new ScanStop(CANCELLED);
     }
 
     /** Nghỉ ngẫu nhiên [min, max] ms; huỷ thì thoát ngay. */
@@ -254,7 +347,7 @@ export class ResearchService {
         const ids = eligibleProfiles({
             profiles,
             excluded: cfg.excludedProfileIds,
-            busyIds: profiles.filter((p) => this.deps.isProfileBusy(p.id)).map((p) => p.id),
+            busyIds: [],
             loginStates: this.deps.loginStates(),
             usedLast24h: used24h,
             lastUsedAt: this.lastUsedAt,
@@ -262,6 +355,8 @@ export class ResearchService {
             restrictTo,
             failedInScan: skip,
         });
+        // Busy profiles remain eligible; prefer available profiles without escaping a pinned set.
+        ids.sort((a, b) => Number(this.deps.isProfileBusy(a)) - Number(this.deps.isProfileBusy(b)));
         return { ids, remaining: (id) => remainingToday(id, used24h, cfg.perProfileDailyCap) };
     }
 
@@ -272,15 +367,21 @@ export class ResearchService {
     }
 
     private async openProfile(run: Run, id: string): Promise<OpenProfile> {
+        this.checkCancel();
         if (!run.used.includes(id)) {
             run.used.push(id);
             this.deps.store.updateScanProfiles(run.scanId, run.used);
         }
         run.details.profiles[id] ||= { items: 0 };
         this.lastUsedAt[id] = this.now();
-        let opened: { session: ResearchGraphqlSession; close(): Promise<void> };
+        let opened: ResearchSession;
+        const guard = () => {
+            if (this.currentScanId !== run.scanId) throw new Error('Phiên nghiên cứu đã kết thúc.');
+            this.checkCancel();
+        };
         try {
-            opened = await this.deps.openSession(id);
+            opened = await this.deps.openSession(id, guard, { jobId: run.scanId, signal: this.abort.signal,
+                priority: this.ownership?.priority ?? 'interactive', assertCurrent: guard });
         } catch (e) {
             throw new ProfileOpenError(shortMessage(e));
         }
@@ -290,8 +391,30 @@ export class ResearchService {
         })();
         this.activeClose = close;
         try {
-            await opened.session.open();
-            return { id, gql: opened.session, close };
+            this.checkCancel();
+            // Wrap every browser operation, including helper-owned recapture/retry awaits.
+            const guarded = async <T>(action: () => Promise<T>): Promise<T> => {
+                this.checkCancel();
+                if (this.ownership) {
+                    const identity = await opened.readIdentity?.();
+                    this.checkCancel();
+                    if (identity?.kind !== 'page' || identity.pageId !== this.ownership.pageId) {
+                        throw new Error('Danh tính Page hiện tại không khớp; cần kiểm tra lại profile.');
+                    }
+                }
+                const result = await action();
+                this.checkCancel();
+                return result;
+            };
+            const gql: ResearchGraphqlSession = {
+                open: (...args) => guarded(() => opened.session.open(...args)),
+                ensureQuery: (...args) => guarded(() => opened.session.ensureQuery(...args)),
+                call: (...args) => guarded(() => opened.session.call(...args)),
+                recapture: (...args) => guarded(() => opened.session.recapture(...args)),
+            };
+            await gql.open();
+            this.checkCancel();
+            return { id, gql, close };
         } catch (e) {
             await close();
             throw e;
@@ -300,7 +423,8 @@ export class ResearchService {
 
     /** Lỗi ở một profile: ghi lại và chuyển profile; lỗi cấp lượt quét thì ném ScanStop. */
     private onProfileError(run: Run, id: string, e: unknown, setupPhase: boolean): void {
-        if (e instanceof ScanStop) throw e;
+        this.assertCurrent();
+        if (this.ownership || e instanceof ScanStop) throw e;
         if (this.cancelled) throw new ScanStop(CANCELLED); // huỷ làm phiên bị đóng: lỗi kèm theo không phải lỗi thật
         let code: string;
         if (e instanceof ProfileOpenError) {
@@ -327,16 +451,20 @@ export class ResearchService {
     }
 
     /** Gọi một trang; doc_id hỏng thì bắt lại đúng một lần rồi gọi lại. */
-    private fetchPage(
+    private async fetchPage(
         gql: ResearchGraphqlSession, state: { query: CapturedQuery; recapture(): Promise<CapturedQuery> },
         buildVars: (query: CapturedQuery, cursor: string | null) => Record<string, any>,
         parse: (text: string) => ParseResult, cursor: string | null,
     ): Promise<{ res: ParseResult; text: string }> {
-        return fetchGraphqlPage(gql, state, buildVars, parse, cursor);
+        this.checkCancel();
+        const result = await fetchGraphqlPage(gql, state, buildVars, parse, cursor);
+        this.checkCancel();
+        return result;
     }
 
     /** Lưu tối đa `room` mục MỚI theo thứ tự trang; `leftover` = trang còn mục chưa xét (do hết chỗ). */
     private save(run: Run, items: ParsedItem[], profileId: string, room: number): { added: number; leftover: boolean } {
+        this.checkCancel();
         let added = 0;
         let leftover = false;
         for (const item of items) {
@@ -380,6 +508,7 @@ export class ResearchService {
         parse: (text: string) => ParseResult; triggerUrl: string; query: string; limit: number; recent: boolean; year?: number;
         st: { cursor: string | null; finished: boolean; restarts: number }; cap: number; ready(): void;
     }): Promise<void> {
+        this.checkCancel();
         const { gql, id } = profile;
         const name = SEARCH_QUERY_NAME;
         const state = {
@@ -512,8 +641,10 @@ export class ResearchService {
     private async scanGroup(
         run: Run, profile: OpenProfile, url: string, sinceDays: number, limitPerGroup: number, cap: number, ready: () => void,
     ): Promise<boolean> {
+        this.checkCancel();
         const { gql, id } = profile;
         const prepared = await prepareGroupFeed(gql, url, PAGE_COUNT);
+        this.checkCancel();
         if (isUnresolved(prepared) && prepared.reason === 'no_query') {
             run.details.groups![url] = 'unresolved';
             return false;

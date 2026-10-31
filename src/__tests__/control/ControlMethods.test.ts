@@ -2,6 +2,7 @@ import { ControlError, createControlMethods, describe as describeMethods, toCont
 import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../../services/research/researchOperationsLogic';
 import { RenderError } from '../../services/video/RenderClient';
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../../services/facebookPoster/FacebookPosterService';
+import { PosterRunSelectionError } from '../../services/facebookPoster/FacebookPosterCoordinator';
 import { DailyBriefStore } from '../../services/dailyBrief/DailyBriefStore';
 import { createBriefOperations } from '../../services/dailyBrief/briefOperations';
 import { memoryDb } from '../facebookPoster/helpers';
@@ -15,7 +16,8 @@ function makeDeps() {
         draftSave: jest.fn((_input?: any): any => ({ schedule: { id: 'd1' } })),
         draftGet: jest.fn(() => ({ draft: { id: 'd1', name: 'Nháp', params: { mode: 'group', text: 'cũ', mediaPaths: ['a.jpg'] } }, media: [{ path: '/m/a.jpg', size: 1 }] })),
         draftApprove: jest.fn((_input?: any): any => ({ schedule: { id: 'd1' } })),
-        cancel: jest.fn(() => undefined),
+        cancel: jest.fn((_input?: any): any => undefined),
+        active: jest.fn((): any => ({ runs: [] })),
         current: jest.fn(() => ({ run: null, progress: null })),
         listGroups: jest.fn(() => ({ groups: [] })),
         listRuns: jest.fn(() => ({ runs: [] })),
@@ -72,7 +74,7 @@ describe('pages.*', () => {
     });
     it('adds two non-destructive methods with the public response schema', () => {
         const { methods } = setupPages();
-        expect(methods).toHaveLength(59);
+        expect(methods).toHaveLength(60);
         const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('pages.')) as any[];
         expect(found.map((m) => m.name).sort()).toEqual(['pages.learn', 'pages.list']);
         expect(found.every((m) => m.destructive === false)).toBe(true);
@@ -287,6 +289,54 @@ describe('createControlMethods', () => {
         expect(deps.poster.cancel).toHaveBeenCalled();
     });
 
+    it('runs.active unwraps the operation runs and takes no params', async () => {
+        const { deps, call } = setup();
+        expect(await call('runs.active', {})).toEqual([]);
+        const snapshot = { run: { id: 'r1' }, progress: { runId: 'r1' } };
+        (deps.poster.active as jest.Mock).mockReturnValueOnce({ runs: [snapshot] });
+        expect(await call('runs.active', {})).toEqual([snapshot]);
+        expect(deps.poster.active).toHaveBeenCalledWith();
+    });
+
+    it('runs.cancel forwards exactly the requested runId and reports the real outcome', async () => {
+        const { deps, call } = setup();
+        (deps.poster.cancel as jest.Mock).mockReturnValueOnce({ cancelled: false });
+        expect(await call('runs.cancel', { confirm: true, runId: 'finished-1' })).toEqual({ cancelled: false });
+        (deps.poster.cancel as jest.Mock).mockReturnValueOnce({ cancelled: true });
+        expect(await call('runs.cancel', { confirm: true, runId: 'live-1', junk: 1 })).toEqual({ cancelled: true });
+        expect((deps.poster.cancel as jest.Mock).mock.calls).toEqual([[{ runId: 'finished-1' }], [{ runId: 'live-1' }]]);
+    });
+
+    it('runs.cancel without runId keeps the legacy acknowledgment and passes no selector', async () => {
+        const { deps, call } = setup();
+        expect(await call('runs.cancel', { confirm: true })).toEqual({ cancelled: true });
+        expect(deps.poster.cancel).toHaveBeenCalledWith();
+    });
+
+    it.each([[''], [5], [null], [{ id: 'r1' }], [['r1']]])('runs.cancel rejects invalid runId %j before touching the poster', async (runId) => {
+        const { deps, call } = setup();
+        await expect(call('runs.cancel', { confirm: true, runId })).rejects.toMatchObject({ code: 'INVALID_PARAMS', details: { field: 'runId' } });
+        allDepFns(deps).forEach((fn) => expect(fn).not.toHaveBeenCalled());
+    });
+
+    it('runs.cancel maps coordinator selection errors to explicit protocol codes', async () => {
+        const { deps, call } = setup();
+        (deps.poster.cancel as jest.Mock).mockImplementationOnce(() => { throw new PosterRunSelectionError('CONFLICT'); });
+        await expect(call('runs.cancel', { confirm: true })).rejects.toMatchObject({ code: 'CONFLICT' });
+        (deps.poster.cancel as jest.Mock).mockImplementationOnce(() => { throw new PosterRunSelectionError('NOT_FOUND'); });
+        await expect(call('runs.cancel', { confirm: true, runId: 'nope' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+        expect(toControlError(new PosterRunSelectionError('CONFLICT'))).toMatchObject({ code: 'CONFLICT' });
+        expect(toControlError(new PosterRunSelectionError('NOT_FOUND'))).toMatchObject({ code: 'NOT_FOUND' });
+    });
+
+    it('runs.cancel describes an optional runId and stays destructive', () => {
+        const { methods } = setup();
+        const cancel = describeMethods(methods).methods.find((m) => m.name === 'runs.cancel') as any;
+        expect(cancel.destructive).toBe(true);
+        expect(cancel.paramsSchema.required).toEqual(['confirm']);
+        expect(cancel.paramsSchema.properties.runId).toMatchObject({ type: 'string' });
+    });
+
     it.each([
         ['drafts.delete', { id: 'd1' }],
         ['schedules.delete', { id: 's1' }],
@@ -388,7 +438,7 @@ describe('describe', () => {
             'system.status', 'profiles.list', 'profiles.groups', 'profiles.scanGroups', 'profiles.check',
             'drafts.list', 'drafts.get', 'drafts.create', 'drafts.update', 'drafts.delete', 'drafts.approve',
             'schedules.list', 'schedules.update', 'schedules.delete',
-            'runs.current', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
+            'runs.current', 'runs.active', 'runs.list', 'runs.get', 'runs.cancel', 'events.wait',
             'research.search', 'research.scanGroupFeeds', 'research.list', 'research.get', 'research.trending', 'research.cancel',
             'pages.learn', 'pages.list',
             'briefs.list', 'briefs.get', 'briefs.save', 'briefs.delete', 'briefs.claimDue', 'briefs.finish',
@@ -400,7 +450,7 @@ describe('describe', () => {
         for (const m of d.methods) {
             expect(m.description).toMatch(/\S/);
             expect(m.paramsSchema).toMatchObject({ type: 'object' });
-            expect(m.resultSchema).toMatchObject({ type: 'object' });
+            expect(m.resultSchema).toMatchObject({ type: m.name === 'runs.active' ? 'array' : 'object' });
         }
         const flags = Object.fromEntries(d.methods.map((m) => [m.name, m.destructive]));
         expect(flags['drafts.delete'] && flags['schedules.delete'] && flags['runs.cancel'] && flags['drafts.approve']).toBe(true);
@@ -889,5 +939,48 @@ describe('videos.*', () => {
         const { v, call } = setupVideos();
         v.render.mockRejectedValueOnce(new RenderError(code, message));
         await expect(call('videos.render', { name: 'x' })).rejects.toMatchObject({ code: expected, message });
+    });
+});
+
+describe('scoped method results and store errors', () => {
+    const principal = { kind: 'page_runner', keyId: 'k', workspaceId: 'ws1', assignments: [{ pageId: 'page1', profileIds: ['p1', 'changed', 'unknown'] }] };
+    const identities = [{ profileId: 'p1', kind: 'page', pageId: 'page1' }, { profileId: 'changed', kind: 'page', pageId: 'otherPage' }, { profileId: 'unknown', kind: 'unknown', pageId: '' }, { profileId: 'other', kind: 'page', pageId: 'otherPage' }];
+    function setup() {
+        let current = true;
+        const assertCurrent = () => { if (!current) throw new ControlError('FORBIDDEN', 'Không có quyền'); };
+        const resources = { workspaceId: 'ws1', assertCurrent, getPageIdentity: (id: string) => identities.find((i) => i.profileId === id) ?? null, getWork: () => null, getResourceOwner: () => null };
+        const deps = { ...makeDeps(), listProfiles: async () => identities.map((i) => ({ id: i.profileId })), pages: { list: () => ({ identities }), learn: () => ({ jobId: 'j1' }) } };
+        const methods = createControlMethods(deps as any);
+        const call = (name: string, params: any = {}, ctx: any = { principal, assertCurrent, resources }) => methods.find((m) => m.name === name)!.run(params, ctx);
+        return { call, deps, methods, stale: () => { current = false; }, assertCurrent, resources };
+    }
+    it('filters profiles and identities by assigned profile AND current Page identity', async () => {
+        const { call } = setup();
+        expect(await call('profiles.list')).toEqual({ profiles: [{ id: 'p1' }] });
+        expect(await call('pages.list')).toEqual({ identities: [identities[0]] });
+        expect(await call('pages.list', {}, {})).toEqual({ identities });
+    });
+    it('guards asynchronous list results and denies scoped direct calls without resources', async () => {
+        const { deps, methods, stale, assertCurrent, resources } = setup();
+        deps.listProfiles = async () => { stale(); return [{ id: 'p1' }]; };
+        await expect(methods.find((m) => m.name === 'profiles.list')!.run({}, { principal, assertCurrent, resources } as any)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(methods.find((m) => m.name === 'pages.list')!.run({}, { principal } as any)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    });
+    it('guards pages.learn before side effect and after await', async () => {
+        const { call, deps, stale } = setup();
+        await expect(call('pages.learn')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        deps.pages.learn = () => { stale(); return { jobId: 'j1' }; };
+        await expect(call('pages.learn', { profileIds: ['p1'] })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    });
+    it('maps only actual PageBusinessError/PageWorkError classes to public codes', () => {
+        const { PageBusinessError } = require('../../services/dailyBrief/PageBusinessStore');
+        const { PageWorkError } = require('../../services/dailyBrief/PageWorkStore');
+        for (const code of ['INVALID_PARAMS', 'NOT_FOUND', 'CONFLICT', 'LIMIT_EXCEEDED']) {
+            expect(toControlError(new PageBusinessError(code, 'Lỗi hồ sơ')).code).toBe(code);
+            expect(toControlError(new PageWorkError(code, 'Lỗi công việc')).code).toBe(code);
+        }
+        expect(toControlError(new PageWorkError('NEEDS_REVIEW', 'Cần xem lại')).code).toBe('NEEDS_REVIEW');
+        expect(toControlError(new PageWorkError('INTERNAL', 'secret')).message).not.toContain('secret');
+        expect(toControlError(Object.assign(new Error('secret'), { code: 'FORBIDDEN' })).code).toBe('INTERNAL');
     });
 });

@@ -5,6 +5,7 @@ export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 export interface LaunchedPage { ctx: BrowserContext; page: Page; }
 
 export interface TaskDeps {
+    autonomyGuard?: import('../../models/pageCampaigns').AutonomyExecutionGuard;
     /** Opens the profile's automation browser. The task closes ctx itself when done (as FB Poster did). */
     launch: () => Promise<LaunchedPage>;
     getIsStopping: () => boolean;

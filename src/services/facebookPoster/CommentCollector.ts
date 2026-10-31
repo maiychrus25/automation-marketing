@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { ProfileTaskContext } from '../browser/ProfileJobQueue';
 import type { FbPosterComment, FbPosterLead, PostTrackingRow } from '../../models/facebookPoster';
 import { collectComments, type CollectedComment, type LoginProblem } from './collectComments';
 import { PROFILE_OPEN_PREFIX } from './loginCheck';
@@ -41,9 +42,9 @@ export interface CommentCollectorDeps {
     store: Pick<FacebookPosterStore,
         'trackingByPostUrls' | 'listDueCommentPosts' | 'loadCommentKeys' | 'insertCommentsReturningNew' | 'updateCommentSchedule' | 'listLoginStates'>;
     /** Mở phiên tự động của profile; lỗi có `code` 'logged_out' | 'checkpoint' (như ResearchError) thì được ghi nhận đăng nhập. */
-    launchFor(profileId: string): Promise<LaunchedPage & { close(): Promise<void> }>;
+    launchFor(profileId: string, context: ProfileTaskContext): Promise<LaunchedPage & { close(): Promise<void> }>;
     collect: typeof collectComments;
-    slot: { acquire(): void; release(): void };
+    assertCurrent?: () => void;
     observeLogin(profileId: string, state: LoginProblem): void;
     detector: Pick<LeadDetector, 'process'>;
     readConfig: () => LeadConfig;
@@ -71,6 +72,7 @@ export class CommentCollector {
     private running: Promise<void> = Promise.resolve();
     private active = false;
     private cancelled = false;
+    private abort = new AbortController();
     private wake: (() => void) | null = null;
     private jobId: string | null = null;
     private progress = { done: 0, total: 0 };
@@ -88,24 +90,25 @@ export class CommentCollector {
         this.sleepFn = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     }
 
-    /** Đồng bộ đến khi giành được khe (ném BUSY nếu không được), sau đó chạy nền. */
+    /** Giữ admission riêng đồng bộ (ném BUSY khi job trước còn sống), sau đó chạy nền. */
     collect(params: CommentCollectParams = {}): { jobId: string; posts: number } {
         if (this.active) throw new Error(BUSY_ERROR);
         if (params.postUrls !== undefined && (!Array.isArray(params.postUrls) || params.postUrls.some((u) => typeof u !== 'string'))) {
             throw new Error('postUrls phải là danh sách link bài');
         }
-        this.deps.slot.acquire();
+        this.active = true;
+        this.cancelled = false;
+        this.abort = new AbortController();
         let jobId: string;
         let rows: PostTrackingRow[];
         try {
+            this.deps.assertCurrent?.();
             jobId = (this.deps.newId ?? randomUUID)();
             rows = this.selectRows(params);
         } catch (e) {
-            this.deps.slot.release();
+            this.active = false;
             throw e;
         }
-        this.active = true;
-        this.cancelled = false;
         this.aborted = false;
         this.abortError = null;
         this.jobId = jobId;
@@ -126,6 +129,7 @@ export class CommentCollector {
     cancel(): boolean {
         if (!this.active) return false;
         this.cancelled = true;
+        this.abort.abort();
         this.wake?.();
         return true;
     }
@@ -181,7 +185,6 @@ export class CommentCollector {
             this.last = { jobId, auto, finishedAt: this.now(), cancelled, posts: rows.length, ...summary, errors };
             this.active = false;
             this.jobId = null;
-            this.deps.slot.release();
             // Một sự kiện khách mới cho cả lượt (không phải mỗi bài).
             if (totals.found.length > 0) this.emit('leads.found', buildLeadsFoundPayload(totals.found, auto));
             this.emit('comments.collectFinished', { jobId, auto, cancelled, posts: rows.length, ...summary, errors: errors.length });
@@ -209,10 +212,16 @@ export class CommentCollector {
                 { posts: rows.map((r) => ({ postUrl: r.postUrl as string })), minDelay: POST_DELAY_MIN_SEC, maxDelay: POST_DELAY_MAX_SEC, stopOnLoginProblem: true },
                 {
                     launch: async () => {
-                        opened = await this.deps.launchFor(profileId);
+                        opened = await this.deps.launchFor(profileId, { jobId: this.jobId!, signal: this.abort.signal,
+                            priority: auto ? 'background' : 'interactive', assertCurrent: () => { this.deps.assertCurrent?.(); } });
+                        this.deps.assertCurrent?.();
+                        if (this.cancelled) throw new Error('Đã huỷ lượt thu');
                         return { ctx: opened.ctx, page: opened.page };
                     },
-                    getIsStopping: () => this.cancelled || this.aborted,
+                    getIsStopping: () => {
+                        try { this.deps.assertCurrent?.(); } catch { return true; }
+                        return this.cancelled || this.aborted;
+                    },
                     sendLog: (message, level) => this.log(message, level),
                     updateProgress: () => undefined,
                     loadKeys: async () => this.deps.store.loadCommentKeys(),

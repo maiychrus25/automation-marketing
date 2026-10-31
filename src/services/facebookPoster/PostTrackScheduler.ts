@@ -16,11 +16,14 @@ export interface PostTrackSchedulerDeps {
     /** Đồng bộ; ném `BUSY_ERROR` khi đang có việc chạy. Luôn gọi với `auto = true`. */
     runTrack: (pairs: TrackPair[], auto: true) => void;
     log: (msg: string) => void;
+    /** Captured Page composition; true only when one job has been accepted. */
+    runDueCampaignTracking?: () => boolean;
 }
 
 export class PostTrackScheduler {
     private timer: unknown = null;
     private stopped = true;
+    private preferPage = false;
 
     constructor(private readonly deps: PostTrackSchedulerDeps) {}
 
@@ -45,10 +48,11 @@ export class PostTrackScheduler {
                 log(`[PostTrackScheduler] đọc cấu hình lỗi, dùng mặc định: ${errorMessage(err)}`);
                 config = DEFAULT_POST_TRACKING_CONFIG;
             }
-            if (!config.autoEnabled || isBusy()) return;
-            const pairs = duePairs(now(), AUTO_TRACK_GROUPS);
-            if (pairs.length === 0) return;
-            runTrack(pairs, true);
+            if (isBusy()) return;
+            if (this.preferPage && this.deps.runDueCampaignTracking?.()) { this.preferPage=false; return; }
+            const pairs = config.autoEnabled ? duePairs(now(), AUTO_TRACK_GROUPS) : [];
+            if (pairs.length) { runTrack(pairs, true); this.preferPage=true; return; }
+            if (this.deps.runDueCampaignTracking?.()) this.preferPage=false;
         } catch (err) {
             const message = errorMessage(err);
             if (message !== BUSY_ERROR) log(`[PostTrackScheduler] theo dõi tự động lỗi: ${message}`);

@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { SqlDatabase } from '../facebookPoster/FacebookPosterStore';
 import { generateKey, hashKey } from './controlSecurity';
+import { validateScopedKeyPolicy, type ScopedKeyPolicy } from './controlAuthorization';
 
 /** Bảng của Control API; DatabaseService chạy chuỗi này, test chạy trên memoryDb(). */
 export const CONTROL_SCHEMA_SQL = `
@@ -10,7 +11,8 @@ CREATE TABLE IF NOT EXISTS control_keys (
   key_hash TEXT NOT NULL UNIQUE,
   created_at INTEGER NOT NULL,
   last_used_at INTEGER,
-  revoked_at INTEGER
+  revoked_at INTEGER,
+  policy_json TEXT
 );
 CREATE TABLE IF NOT EXISTS control_audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,6 +37,7 @@ CREATE TABLE IF NOT EXISTS control_idempotency (
   idem_key TEXT NOT NULL,
   method TEXT NOT NULL DEFAULT '',
   result TEXT NOT NULL,
+  request_hash TEXT,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (key_id, idem_key)
 );
@@ -43,6 +46,8 @@ CREATE TABLE IF NOT EXISTS control_idempotency (
 /** Cột thêm sau khi bảng đã có (DB cũ); lỗi "cột đã tồn tại" được bỏ qua. Dòng cũ có method '' và không bị coi là xung đột. */
 export const CONTROL_MIGRATIONS = [
   `ALTER TABLE control_idempotency ADD COLUMN method TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE control_idempotency ADD COLUMN request_hash TEXT`,
+  `ALTER TABLE control_keys ADD COLUMN policy_json TEXT`,
 ];
 
 export const AUDIT_RETENTION_MS = 30 * 86_400_000;
@@ -56,6 +61,7 @@ export interface ControlKeyInfo {
     createdAt: number;
     lastUsedAt: number | null;
     revokedAt: number | null;
+    policy?: ScopedKeyPolicy;
 }
 
 export interface ControlAuditRow {
@@ -80,21 +86,23 @@ export class ControlStore {
     constructor(private readonly db: SqlDatabase) {}
 
     /** Nơi duy nhất trả khoá thô; DB chỉ giữ SHA-256. */
-    createKey(name: string): { id: string; name: string; key: string } {
+    createKey(name: string, policy?: ScopedKeyPolicy): { id: string; name: string; key: string } {
+        const validated = policy === undefined ? undefined : validateScopedKeyPolicy(policy);
         const id = randomUUID();
         const key = generateKey();
         this.db.run(
-            'INSERT INTO control_keys (id, name, key_hash, created_at) VALUES (?,?,?,?)',
-            [id, name, hashKey(key), Date.now()],
+            'INSERT INTO control_keys (id, name, key_hash, created_at, policy_json) VALUES (?,?,?,?,?)',
+            [id, name, hashKey(key), Date.now(), validated ? JSON.stringify(validated) : null],
         );
         return { id, name, key };
     }
 
     listKeys(): ControlKeyInfo[] {
-        return this.db.query<any>('SELECT id, name, created_at, last_used_at, revoked_at FROM control_keys ORDER BY created_at DESC')
+        return this.db.query<any>('SELECT id, name, created_at, last_used_at, revoked_at, policy_json FROM control_keys ORDER BY created_at DESC')
             .map((r) => ({
                 id: r.id, name: r.name, createdAt: r.created_at,
                 lastUsedAt: r.last_used_at ?? null, revokedAt: r.revoked_at ?? null,
+                ...(r.policy_json == null ? {} : { policy: validateScopedKeyPolicy(JSON.parse(r.policy_json)) }),
             }));
     }
 
@@ -106,9 +114,22 @@ export class ControlStore {
         return true;
     }
 
-    findActiveKeyByHash(hash: string): { id: string; name: string } | null {
-        const row = this.db.queryOne<any>('SELECT id, name FROM control_keys WHERE key_hash = ? AND revoked_at IS NULL', [hash]);
-        return row ? { id: row.id, name: row.name } : null;
+    findActiveKeyByHash(hash: string): { id: string; name: string; policy?: ScopedKeyPolicy } | null {
+        const row = this.db.queryOne<any>('SELECT id, name, policy_json FROM control_keys WHERE key_hash = ? AND revoked_at IS NULL', [hash]);
+        if (!row) return null;
+        if (row.policy_json == null) return { id: row.id, name: row.name };
+        try {
+            return { id: row.id, name: row.name, policy: validateScopedKeyPolicy(JSON.parse(row.policy_json)) };
+        } catch { return null; } // A corrupt scoped policy is not a legacy credential.
+    }
+
+    /** Safe live authority lookup; never return hashes, secrets or key names. */
+    findActiveKeyById(id: string): { id: string; policy?: ScopedKeyPolicy } | null {
+        const row = this.db.queryOne<any>('SELECT id, policy_json FROM control_keys WHERE id = ? AND revoked_at IS NULL', [id]);
+        if (!row) return null;
+        if (row.policy_json == null) return {id:row.id};
+        try { return {id:row.id, policy:validateScopedKeyPolicy(JSON.parse(row.policy_json))}; }
+        catch { return null; }
     }
 
     touchKey(id: string, at: number): void {
@@ -147,13 +168,13 @@ export class ControlStore {
         return this.db.queryOne<any>('SELECT MAX(seq) AS seq FROM control_events')?.seq ?? 0;
     }
 
-    getIdempotent(keyId: string, idem: string): { result: string; createdAt: number; method: string } | null {
-        const row = this.db.queryOne<any>('SELECT result, created_at, method FROM control_idempotency WHERE key_id = ? AND idem_key = ?', [keyId, idem]);
-        return row ? { result: row.result, createdAt: row.created_at, method: row.method ?? '' } : null;
+    getIdempotent(keyId: string, idem: string): { result: string; createdAt: number; method: string; requestHash?: string } | null {
+        const row = this.db.queryOne<any>('SELECT result, created_at, method, request_hash FROM control_idempotency WHERE key_id = ? AND idem_key = ?', [keyId, idem]);
+        return row ? { result: row.result, createdAt: row.created_at, method: row.method ?? '', ...(row.request_hash == null ? {} : { requestHash: row.request_hash }) } : null;
     }
 
-    putIdempotent(keyId: string, idem: string, method: string, resultJson: string, now: number): void {
-        this.db.run('INSERT OR REPLACE INTO control_idempotency (key_id, idem_key, method, result, created_at) VALUES (?,?,?,?,?)', [keyId, idem, method, resultJson, now]);
+    putIdempotent(keyId: string, idem: string, method: string, resultJson: string, now: number, requestHash?: string): void {
+        this.db.run('INSERT OR REPLACE INTO control_idempotency (key_id, idem_key, method, result, created_at, request_hash) VALUES (?,?,?,?,?,?)', [keyId, idem, method, resultJson, now, requestHash ?? null]);
     }
 
     /** Audit > 30 ngày; sự kiện > 7 ngày hoặc ngoài 5000 dòng mới nhất; idempotency > 24 giờ. */

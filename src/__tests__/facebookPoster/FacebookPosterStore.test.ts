@@ -19,6 +19,21 @@ function comment(over: Partial<CollectedComment> = {}): CollectedComment {
   return { authorId: 'a1', authorName: 'An', authorUrl: 'https://www.facebook.com/an', text: 'hi', commentedAt: '2 giờ', postUrl: 'https://www.facebook.com/groups/1/posts/1/', ...over };
 }
 
+test('alias ingestion preserves distinct authors, texts and posts and rolls back a failed batch', () => {
+  const db = memoryDb();
+  const s = new FacebookPosterStore(db);
+  s.ensureSchema();
+  const original = comment();
+  expect(s.saveComments('p1', [original], 1)).toBe(1);
+  const distinct = [comment({ authorId: 'other' }), comment({ text: 'other' }), comment({ postUrl: 'https://www.facebook.com/groups/1/posts/2/' })];
+  expect(s.insertCommentsReturningNew('p1', distinct, 2)).toHaveLength(3);
+  db.exec("CREATE TRIGGER fail_comment BEFORE INSERT ON fb_poster_comments WHEN NEW.text = 'fail' BEGIN SELECT RAISE(ABORT, 'test write failure'); END");
+  expect(() => s.insertCommentsReturningNew('p2', [comment({ text: 'pending' }), comment({ text: 'fail' })], 3)).toThrow('test write failure');
+  expect(s.listComments({ limit: 10, offset: 0 }).total).toBe(4);
+  expect(s.saveComments('p2', [comment({ text: 'pending' })], 4)).toBe(1);
+  expect(s.saveComments('p2', [{ ...original, postUrl: original.postUrl.replace('www.', 'm.') + '?fbclid=x' }], 5)).toBe(0);
+});
+
 test('ensureSchema chạy hai lần không lỗi', () => {
   const s = store();
   s.ensureSchema();

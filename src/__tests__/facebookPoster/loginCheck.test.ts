@@ -68,11 +68,6 @@ function setup(over: Partial<LoginCheckerDeps> = {}) {
   const store = new FacebookPosterStore(memoryDb());
   store.ensureSchema();
   const events = { problems: [] as any[], finished: [] as any[], progress: [] as any[], changed: 0, opened: [] as string[], closed: [] as string[], live: 0, maxLive: 0 };
-  let slotHeld = false;
-  const slot = {
-    acquire: jest.fn(() => { if (slotHeld) throw new Error(BUSY_ERROR); slotHeld = true; }),
-    release: jest.fn(() => { slotHeld = false; }),
-  };
   const checker = new LoginChecker({
     store,
     getProfile: (id) => (id === 'ghost' ? null : { id, name: `Name ${id}` }),
@@ -81,7 +76,6 @@ function setup(over: Partial<LoginCheckerDeps> = {}) {
       events.live += 1; events.maxLive = Math.max(events.maxLive, events.live);
       return { context: {} as any, close: async () => { events.live -= 1; events.closed.push(id); } };
     },
-    slot,
     onProblem: (e) => events.problems.push(e),
     onFinished: (e) => events.finished.push(e),
     onProgress: (p) => events.progress.push(p),
@@ -91,10 +85,38 @@ function setup(over: Partial<LoginCheckerDeps> = {}) {
     classify: async () => 'ok',
     ...over,
   });
-  return { checker, store, events, slot };
+  return { checker, store, events };
 }
 
 describe('LoginChecker', () => {
+  test('preserves stop requested by the ID callback before browser work', async () => {
+    let checker!: LoginChecker;
+    const h = setup({ newId: () => { checker.stop(); return 'stopped'; } });
+    checker = h.checker;
+    checker.check(['a'], 'manual'); await checker.whenIdle();
+    expect(h.events.opened).toEqual([]);
+    expect(checker.isRunning()).toBe(false);
+  });
+  test('reserves local admission before ID callbacks can reenter', async () => {
+    let checker!: LoginChecker;
+    let attempted = false;
+    let reentryError: unknown;
+    const ctx = setup({
+      newId: () => {
+        if (!attempted) {
+          attempted = true;
+          try { checker.check(['b'], 'manual'); } catch (error) { reentryError = error; }
+        }
+        return 'local-check';
+      },
+    });
+    checker = ctx.checker;
+    checker.check(['a'], 'manual');
+    await checker.whenIdle();
+    expect(reentryError).toEqual(new Error(BUSY_ERROR));
+    expect(ctx.events.opened).toEqual(['a']);
+  });
+
   test('sequential, closes session on error', async () => {
     const { checker, events, store } = setup({
       classify: async (s: any) => { throw new Error('proxy chết'); },
@@ -118,6 +140,17 @@ describe('LoginChecker', () => {
     expect(events.finished[0].results[0].outcome).toBe('skipped');
     expect(store.listLoginStates()).toEqual([]);
     expect(events.problems).toEqual([]);
+  });
+
+  test.each(['profile_wait_cancelled', 'profile_wait_timeout'])('profile wait %s → skipped, no login error written', async (code) => {
+    const { checker, events, store } = setup({
+      openForAutomation: async () => { throw Object.assign(new Error('Đã hủy chờ profile'), { code }); },
+    });
+    checker.check(['a'], 'manual');
+    await checker.whenIdle();
+    expect(events.finished[0].results).toEqual([{ profileId: 'a', profileName: 'Name a', outcome: 'skipped' }]);
+    expect(store.listLoginStates()).toEqual([]);
+    expect(events.changed).toBe(0);
   });
 
   test('problem emitted once per transition', async () => {
@@ -146,10 +179,12 @@ describe('LoginChecker', () => {
     expect(events.problems).toEqual([]);
   });
 
-  test('BUSY when slot taken', async () => {
-    const { checker, slot } = setup();
-    slot.acquire();
-    expect(() => checker.check(['a'], 'manual')).toThrow(BUSY_ERROR);
+  test('BUSY only when this checker already has a live job', async () => {
+    const { checker } = setup();
+    checker.check(['a'], 'manual');
+    expect(() => checker.check(['b'], 'manual')).toThrow(BUSY_ERROR);
+    expect(checker.isRunning()).toBe(true);
+    await checker.whenIdle();
     expect(checker.isRunning()).toBe(false);
   });
 
@@ -161,7 +196,7 @@ describe('LoginChecker', () => {
     await checker.whenIdle();
     expect(ctx.events.opened).toEqual(['a']);
     expect(ctx.events.finished[0].results).toHaveLength(1);
-    expect(ctx.slot.release).toHaveBeenCalled();
+    expect(checker.isRunning()).toBe(false);
   });
 
   test('onFinished results', async () => {

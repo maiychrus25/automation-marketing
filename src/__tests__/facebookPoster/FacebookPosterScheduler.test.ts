@@ -4,14 +4,14 @@ import {
   FacebookPosterScheduler, GRACE_MS, QUEUE_MAX_WAIT_MS, MAX_TIMER_MS,
   MISSED_APP_CLOSED, MISSED_QUEUE_TIMEOUT, MISSED_APP_QUIT, ERROR_RETRY_MS, type MissedNotice,
 } from '../../services/facebookPoster/FacebookPosterScheduler';
-import type { StartParams } from '../../services/facebookPoster/FacebookPosterService';
+import type { RunStartOptions, StartParams } from '../../services/facebookPoster/FacebookPosterService';
 import type { FbPosterSchedule } from '../../models/facebookPoster';
 import { memoryDb } from './helpers';
 
 const MIN = 60 * 1000;
 const T0 = new Date(2026, 9, 7, 12, 0, 0).getTime(); // Wed 2026-10-07 12:00 local
 
-function setup(over: { resolveParams?: (s: FbPosterSchedule) => StartParams; startRun?: (p: StartParams, id: string) => { runId: string } } = {}) {
+function setup(over: { canStart?: (p: StartParams) => boolean; assertAutonomyCurrent?: (s:FbPosterSchedule)=>void; resolveParams?: (s: FbPosterSchedule) => StartParams; startRun?: (p: StartParams, id: string, options: RunStartOptions) => { runId: string }; isScheduleRunning?: (id: string) => boolean } = {}) {
   const store = new FacebookPosterStore(memoryDb());
   store.ensureSchema();
   const env = {
@@ -26,12 +26,15 @@ function setup(over: { resolveParams?: (s: FbPosterSchedule) => StartParams; sta
     setTimer: (fn, ms) => { const h = { fn, ms, cleared: false }; env.timers.push(h); return h; },
     clearTimer: (h) => { (h as { cleared: boolean }).cleared = true; },
     isBusy: () => env.busy,
+    canStart: over.canStart ?? (() => true),
     resolveParams: over.resolveParams ?? (() => ({ kind: 'post' }) as unknown as StartParams),
     startRun: over.startRun ?? ((_p, id) => { env.started.push(id); return { runId: `run-${id}` }; }),
     newId: () => `gen-${++env.seq}`,
     onMissed: (n) => env.missed.push(n),
     onChanged: () => { env.changed++; },
     campaignBlock: (s, t) => env.block(s, t),
+    assertAutonomyCurrent: over.assertAutonomyCurrent,
+    isScheduleRunning: over.isScheduleRunning,
   });
   const add = (id: string, over: Record<string, unknown> = {}) => store.createSchedule({
     id, name: `Lịch ${id}`, kind: 'once', params: { kind: 'post', mode: 'group' }, runAt: T0, days: [], time: '',
@@ -40,6 +43,186 @@ function setup(over: { resolveParams?: (s: FbPosterSchedule) => StartParams; sta
   const live = () => env.timers.filter((x) => !x.cleared);
   return { store, env, sched, add, live };
 }
+
+test('autonomyCannotUseManualCampaignBypassOrMissingAuthorityCallback',()=>{
+  const s=setup(); s.add('auto');
+  s.store.updateAutonomySchedule('auto',{},T0,1);
+  s.sched.bypassCampaignGateOnce('auto'); s.sched.start();
+  expect(s.env.started).toEqual([]);
+});
+
+test.each(['paused','archived','missing','throw'])('autonomyCannotUseCampaignFailOpen(%s)',state=>{
+  const s=setup({assertAutonomyCurrent:()=>{if(state==='throw') throw new Error('revoked');}});
+  s.add('auto',{campaignId:'campaign'}); s.store.updateAutonomySchedule('auto',{},T0,1);
+  jest.spyOn(s.store,'getCampaign').mockReturnValue(state==='missing'?null:{status:state==='throw'?'active':state} as any);
+  s.sched.bypassCampaignGateOnce('auto'); s.sched.start(); expect(s.env.started).toEqual([]);
+});
+test('queuedAutonomyRechecksAuthorityAfterBusyAwait',()=>{
+  let revoked=false; const s=setup({assertAutonomyCurrent:()=>{if(revoked) throw new Error('revoked');}});
+  s.add('auto',{campaignId:'campaign'}); s.store.updateAutonomySchedule('auto',{},T0,1);
+  jest.spyOn(s.store,'getCampaign').mockReturnValue({status:'active'} as any);
+  s.env.busy=true; s.sched.start(); expect(s.sched.queuedIds()).toEqual(['auto']);
+  revoked=true; s.env.busy=false; s.sched.onRunFinished(); expect(s.env.started).toEqual([]);
+});
+
+test('queuedAutonomyPreflightRunsOnlyWhenTheItemCanStart',()=>{
+  const authority=jest.fn(); const s=setup({assertAutonomyCurrent:authority});
+  s.add('auto',{campaignId:'campaign'}); s.store.updateAutonomySchedule('auto',{},T0,1);
+  jest.spyOn(s.store,'getCampaign').mockReturnValue({status:'active'} as any);
+  s.env.busy=true; s.sched.start(); expect(s.sched.queuedIds()).toEqual(['auto']);
+  const atEnqueue=authority.mock.calls.length;
+  for(let i=0;i<20;i++) s.sched.onResourcesChanged();
+  expect(authority.mock.calls.length).toBe(atEnqueue);
+  s.env.busy=false; s.sched.onResourcesChanged();
+  expect(authority.mock.calls.length).toBe(atEnqueue+1); expect(s.env.started).toEqual(['auto']);
+});
+
+test.each([['refused switch', false], ['real revocation', true]] as const)('autonomyOccurrenceDueWhileBusyIsQueuedWithoutPreflight (%s)', (_label, revoked) => {
+  let switching = true;
+  const s = setup({ assertAutonomyCurrent: () => { if (switching || revoked) throw new Error('not current'); } });
+  s.add('auto', { campaignId: 'campaign' }); s.store.updateAutonomySchedule('auto', {}, T0, 1);
+  jest.spyOn(s.store, 'getCampaign').mockReturnValue({ status: 'active' } as any);
+  s.env.busy = true; s.sched.start();
+  expect(s.sched.queuedIds()).toEqual(['auto']); expect(s.env.missed).toEqual([]);
+  switching = false; s.env.busy = false; s.sched.onResourcesChanged();
+  if (revoked) { expect(s.env.started).toEqual([]); expect(s.env.missed.map(m => m.reason)).toEqual(['Không kiểm được quyền lịch tự động']); }
+  else { expect(s.env.started).toEqual(['auto']); expect(s.env.missed).toEqual([]); }
+});
+
+describe('one live run per schedule', () => {
+  function recurring(live: Set<string>) {
+    const started: { id: string; options: RunStartOptions }[] = [];
+    const ctx = setup({ isScheduleRunning: id => live.has(id),
+      startRun: (_p, id, options) => { started.push({ id, options }); live.add(id); return { runId: `run-${id}-${started.length}` }; } });
+    ctx.add('daily', { kind: 'recurring', days: [0, 1, 2, 3, 4, 5, 6], time: '12:00', runAt: null });
+    return { ...ctx, started };
+  }
+
+  test('a due occurrence stays queued while the same schedule still runs, then starts with its original deadline', () => {
+    const live = new Set<string>();
+    const ctx = recurring(live);
+    ctx.sched.start();
+    expect(ctx.started.map(s => s.id)).toEqual(['daily']);
+    ctx.env.t = T0 + 24 * 60 * MIN;
+    ctx.store.updateSchedule('daily', { nextRunAt: ctx.env.t }, ctx.env.t);
+    ctx.live().slice(-1)[0].fn();
+    expect(ctx.sched.queuedIds()).toEqual(['daily']);
+    expect(ctx.started).toHaveLength(1);
+    const enqueuedAt = ctx.env.t;
+    const runs = ctx.store.listRuns({ limit: 50, offset: 0 }).runs.length;
+    ctx.env.t += 30 * MIN; ctx.sched.onResourcesChanged();
+    expect(ctx.started).toHaveLength(1);
+    expect(ctx.store.listRuns({ limit: 50, offset: 0 }).runs).toHaveLength(runs);
+    live.clear(); ctx.sched.onRunFinished();
+    expect(ctx.started.map(s => s.options)).toEqual([
+      { priority: 'scheduled', deadlineAt: T0 + QUEUE_MAX_WAIT_MS },
+      { priority: 'scheduled', deadlineAt: enqueuedAt + QUEUE_MAX_WAIT_MS },
+    ]);
+  });
+
+  test('an occurrence blocked by its own live run is missed at its original deadline', () => {
+    const live = new Set<string>();
+    const ctx = recurring(live);
+    ctx.sched.start();
+    ctx.env.t = T0 + 24 * 60 * MIN;
+    ctx.store.updateSchedule('daily', { nextRunAt: ctx.env.t }, ctx.env.t);
+    ctx.live().slice(-1)[0].fn();
+    expect(ctx.sched.queuedIds()).toEqual(['daily']);
+    ctx.env.t += QUEUE_MAX_WAIT_MS;
+    ctx.live().slice(-1)[0].fn();
+    expect(ctx.sched.queuedIds()).toEqual([]);
+    expect(ctx.started).toHaveLength(1);
+    expect(ctx.env.missed.map(m => m.reason)).toEqual([MISSED_QUEUE_TIMEOUT]);
+  });
+});
+
+describe('resource-aware scheduling', () => {
+  test('busy profile does not consume capacity or hide an independent schedule', () => {
+    let available = false;
+    const started: { id: string; options: RunStartOptions }[] = [];
+    const ctx = setup({
+      resolveParams: s => ({ kind: 'scan_groups', profileIds: [s.id], concurrency: 1, staggerMinSec: 0, staggerMaxSec: 0 }),
+      canStart: p => p.kind === 'scan_groups' && (p.profileIds[0] === 'schedule-y' || available),
+      startRun: (_p, id, options) => { started.push({ id, options }); return { runId: `run-${id}` }; },
+    });
+    ctx.add('schedule-x', { createdAt: 1 }); ctx.add('schedule-y', { createdAt: 2 });
+    ctx.sched.start();
+    expect(started.map(s => s.id)).toEqual(['schedule-y']);
+    expect(ctx.sched.queuedIds()).toEqual(['schedule-x']);
+    expect(ctx.store.getSchedule('schedule-x')!.lastRunId).toBeNull();
+    ctx.env.t += 60_000; available = true;
+    ctx.sched.onResourcesChanged();
+    expect(started.map(s => s.id)).toEqual(['schedule-y', 'schedule-x']);
+    expect(started.map(s => s.options)).toEqual([
+      { priority: 'scheduled', deadlineAt: T0 + 7_200_000 },
+      { priority: 'scheduled', deadlineAt: T0 + 7_200_000 },
+    ]);
+  });
+
+  test('queued profile update is resolved again without resetting the occurrence deadline', () => {
+    const options: RunStartOptions[] = [];
+    const ctx = setup({
+      resolveParams: s => s.params as StartParams,
+      canStart: p => p.kind === 'scan_groups' && p.profileIds[0] === 'available',
+      startRun: (_params, id, value) => { options.push(value); return { runId: `run-${id}` }; },
+    });
+    const params = { kind: 'scan_groups', profileIds: ['busy'], concurrency: 1, staggerMinSec: 0, staggerMaxSec: 0 };
+    ctx.add('edited', { params }); ctx.sched.start(); expect(options).toEqual([]);
+    ctx.env.t += 30_000;
+    ctx.store.updateSchedule('edited', { params: { ...params, profileIds: ['available'] } }, ctx.env.t);
+    ctx.sched.onResourcesChanged();
+    expect(options).toEqual([{ priority: 'scheduled', deadlineAt: T0 + 7_200_000 }]);
+    expect(ctx.sched.queuedIds()).toEqual([]);
+  });
+
+  test('stress: 200 queued schedules drain independent profiles drain without duplicate runs or reset deadlines', () => {
+    const available = new Set<string>();
+    const started: string[] = [];
+    const deadlines: number[] = [];
+    let ctx: ReturnType<typeof setup>;
+    ctx = setup({
+      resolveParams: s => ({ kind: 'scan_groups', profileIds: [s.id], concurrency: 1, staggerMinSec: 0, staggerMaxSec: 0 }),
+      canStart: p => p.kind === 'scan_groups' && available.has(p.profileIds[0]),
+      startRun: (_p, id, options) => {
+        started.push(id); deadlines.push(options.deadlineAt!); ctx.env.busy = true;
+        ctx.sched.onResourcesChanged(); // reservation notifications may be synchronous
+        return { runId: `run-${id}` };
+      },
+    });
+    for (let i = 0; i < 200; i++) ctx.add(`schedule-${i}`, { createdAt: i });
+    ctx.env.busy = true; ctx.sched.start();
+    expect(ctx.sched.queuedIds()).toHaveLength(200);
+    expect(ctx.store.listRuns({ limit: 10, offset: 0 }).total).toBe(0);
+    for (let i = 199; i >= 0; i--) {
+      available.add(`schedule-${i}`); ctx.env.busy = false; ctx.env.t += 1000;
+      ctx.sched.onResourcesChanged();
+      expect(started[started.length - 1]).toBe(`schedule-${i}`);
+    }
+    expect(new Set(started).size).toBe(200);
+    expect(new Set(deadlines)).toEqual(new Set([T0 + 7_200_000]));
+    expect(ctx.sched.queuedIds()).toEqual([]);
+    expect(ctx.env.timers.every(timer => timer.ms > 0)).toBe(true);
+  });
+
+  test('expires at exact deadline without rearming a zero-delay timer', () => {
+    const ctx = setup({ canStart: () => false }); ctx.add('blocked'); ctx.sched.start();
+    ctx.env.t = T0 + 7_200_000; ctx.live()[0].fn();
+    expect(ctx.env.started).toEqual([]);
+    expect(ctx.sched.queuedIds()).toEqual([]);
+    expect(ctx.env.missed[0].reason).toBe(MISSED_QUEUE_TIMEOUT);
+    expect(ctx.env.timers.every(timer => timer.ms > 0)).toBe(true);
+  });
+
+  test.each(['delete', 'draft', 'disable'])('removes %s while capacity remains exhausted', mutation => {
+    const ctx = setup(); ctx.add('queued'); ctx.env.busy = true; ctx.sched.start();
+    if (mutation === 'delete') ctx.store.deleteSchedule('queued');
+    else ctx.store.updateSchedule('queued', mutation === 'draft' ? { draft: true } : { enabled: false }, ctx.env.t);
+    ctx.sched.onResourcesChanged();
+    expect(ctx.sched.queuedIds()).toEqual([]);
+    expect(ctx.env.started).toEqual([]);
+    expect(ctx.store.listRuns({ limit: 10, offset: 0 }).total).toBe(0);
+  });
+});
 
 describe('FacebookPosterScheduler', () => {
   test('1. start() records a missed run for a schedule long overdue', () => {

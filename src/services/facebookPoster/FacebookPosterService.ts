@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { AutomationSession } from '../browser/BrowserProfileService';
+import type { ProfileJobLease, ProfileJobPriority, ProfileTaskContext } from '../browser/ProfileJobQueue';
 import type { FbPosterComment, FbPosterMode, FbPosterRun, LinkStatus } from '../../models/facebookPoster';
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import type { LaunchedPage, LogLevel, TaskDeps } from './types';
@@ -24,13 +25,17 @@ export type StartParams =
     | { kind: 'join'; profileId: string; keywords: string[]; limit: number; minDelaySec: number; maxDelaySec: number }
     | { kind: 'collect_comments'; profileId: string; postUrls: string[] };
 
-export interface ProfileProgress { profileId: string; state: 'waiting' | 'running' | 'done' | 'failed' | 'cancelled'; done: number; total: number; }
+export interface RunStartOptions { priority?: ProfileJobPriority; deadlineAt?: number; }
+export type RunSnapshot = { run: FbPosterRun; progress: ProgressSnapshot };
+export interface ProfileProgress { profileId: string; state: 'waiting' | 'running' | 'done' | 'failed' | 'cancelled'; done: number; total: number; waitingReason?: string; }
 export interface ProgressSnapshot { runId: string; done: number; total: number; profiles: ProfileProgress[]; }
 
 export interface FacebookPosterServiceDeps {
+    assertCurrent?: () => void;
+    createExecutionGuard?: (scheduleId: string, runId: string, params: StartParams) => import('../../models/pageCampaigns').AutonomyExecutionGuard;
     store: FacebookPosterStore;
     getProfile: (id: string) => ProfileInfo | null;
-    openForAutomation: (profileId: string) => Promise<AutomationSession>;
+    acquireProfile: (profileId: string, context: ProfileTaskContext) => Promise<ProfileJobLease>;
     emit: (channel: 'facebookPoster:log' | 'facebookPoster:progress' | 'facebookPoster:runFinished', data: unknown) => void;
     now?: () => number;
     random?: () => number;
@@ -62,7 +67,9 @@ const POST_FAILED_DEFAULT = 'Không đăng được, xem nhật ký';
 const UNCERTAIN_SUFFIX = ' — có thể bài đã lên, kiểm tra trước khi đăng lại';
 
 /** Mã lỗi của lỗi ném từ launch(): chưa đăng nhập, bị dừng khi đang mở, còn lại là không mở được profile. */
-function launchErrorCode(message: string): string {
+function launchErrorCode(message: string, error?: unknown): string {
+    const code = (error as { code?: string })?.code;
+    if (code === 'profile_wait_timeout' || code === 'profile_wait_cancelled') return code;
     if (message === NOT_LOGGED_IN_ERROR) return 'not_logged_in';
     if (message === STOPPED_REASON) return 'stopped';
     return 'launch_failed';
@@ -85,9 +92,10 @@ interface ProfilePlan {
     /** Có ít nhất một kết quả 'posted': tài khoản chắc chắn còn đăng nhập. */
     posted: boolean;
 }
-interface ActiveRun { run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number };
+interface ActiveRun { controller: AbortController; options: RunStartOptions; run: FbPosterRun; params: StartParams; plans: ProfilePlan[]; concurrency: number; staggerMs: { min: number; spread: number };
     /** Chỉ có khi bài có biến thể: chỉ số biến thể (0 = A) của cặp (profile, đích), chia một lần cho cả lượt. */
-    variantIndex?: (profileId: string, url: string) => number | undefined; }
+    variantIndex?: (profileId: string, url: string) => number | undefined;
+    autonomyGuard?: import('../../models/pageCampaigns').AutonomyExecutionGuard; }
 interface ResultRow { url: string; name: string; outcome: string; error: string; postUrl?: string | null; commentStatus?: string; pendingApproval?: boolean; identity?: string; errorCode?: string; attempts?: number; }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -131,8 +139,21 @@ export class FacebookPosterService {
         this.tasks = { postToTargets, scanGroups, searchAndJoinGroups, collectComments, ...deps.tasks };
     }
 
-    start(params: StartParams, scheduleId?: string): { runId: string } {
+    start(params: StartParams, scheduleId?: string, options: RunStartOptions = {}): { runId: string } {
         if (this.active || this.exclusive) throw new Error(BUSY_ERROR);
+        params = structuredClone(params);
+        this.deps.assertCurrent?.();
+        const runId=this.newId();
+        let autonomyGuard: ActiveRun['autonomyGuard'];
+        if (scheduleId !== undefined) {
+            const schedule = this.store.getSchedule(scheduleId);
+            if (!schedule) throw new Error('Lịch tự động chưa có bảo vệ thực thi');
+            if (schedule.authorityKind === 'autonomy') {
+                autonomyGuard=this.deps.createExecutionGuard?.(scheduleId,runId,params);
+                if (!autonomyGuard) throw new Error('Lịch tự động chưa có bảo vệ thực thi');
+                autonomyGuard.assertCurrent();
+            } else if (schedule.authorityKind !== 'owner') throw new Error('Lịch tự động chưa có bảo vệ thực thi');
+        }
         if (params.kind === 'post' && params.campaignId) {
             const campaign = this.store.getCampaign(params.campaignId);
             if (!campaign) throw new Error('Không tìm thấy chiến dịch');
@@ -140,9 +161,9 @@ export class FacebookPosterService {
         }
         const plans = this.plan(params);
         // Đếm trước khi tạo run để lượt mới không tự tính vào độ lệch.
-        const variantIndex = this.assignRunVariants(params, plans, scheduleId);
+        const variantIndex = autonomyGuard ? () => autonomyGuard.variantIndex : this.assignRunVariants(params, plans, scheduleId);
         const run: FbPosterRun = {
-            id: this.newId(),
+            id: runId,
             kind: params.kind,
             mode: params.kind === 'post' ? params.mode : '',
             params: params as unknown as Record<string, unknown>,
@@ -164,7 +185,7 @@ export class FacebookPosterService {
         const staggerMs = parallel
             ? { min: parallel.staggerMinSec * 1000, spread: Math.max(0, parallel.staggerMaxSec - parallel.staggerMinSec) * 1000 }
             : { min: STAGGER_MIN_MS, spread: STAGGER_SPREAD_MS };
-        this.active = { run, params, plans, concurrency, staggerMs, variantIndex };
+        this.active = { run, params, plans, concurrency, staggerMs, variantIndex, autonomyGuard, controller: new AbortController(), options: { ...options } };
         this.idle = this.execute(this.active);
         return { runId: run.id };
     }
@@ -190,6 +211,7 @@ export class FacebookPosterService {
     cancel(): void {
         if (!this.active) return;
         this.stopping = true;
+        this.active.controller.abort();
         // Closing a session rejects the profile's pending browser calls, so the task stops now instead of at its next check.
         for (const plan of this.active.plans) if (!plan.critical) this.closeSessions(plan);
     }
@@ -207,8 +229,8 @@ export class FacebookPosterService {
         this.cancel();
     }
 
-    current(): { run: FbPosterRun; progress: ProgressSnapshot } | null {
-        return this.active ? { run: { ...this.active.run }, progress: this.snapshot(this.active) } : null;
+    current(): RunSnapshot | null {
+        return this.active ? structuredClone({ run: this.active.run, progress: this.snapshot(this.active) }) : null;
     }
 
     whenIdle(): Promise<void> {
@@ -333,8 +355,14 @@ export class FacebookPosterService {
         const { run, params } = active;
         const { profileId } = plan;
         plan.started = true;
-        plan.progress.state = 'running';
         this.emitProgress(active);
+        let lease: ProfileJobLease | undefined;
+        const assertCurrent = () => {
+            this.deps.assertCurrent?.();
+            if (this.active !== active || active.controller.signal.aborted) throw Object.assign(new Error(STOPPED_REASON), { code: 'profile_wait_cancelled' });
+            if (active.options.deadlineAt !== undefined && this.now() >= active.options.deadlineAt) throw Object.assign(new Error('Hết thời gian chờ profile'), { code: 'profile_wait_timeout' });
+            active.autonomyGuard?.assertCurrent();
+        };
 
         let loginChecked = false;
         let launchError: unknown = null;
@@ -343,7 +371,8 @@ export class FacebookPosterService {
             try {
                 // A profile deleted after a schedule was saved fails only its own targets.
                 if (!this.deps.getProfile(profileId)) throw new Error('Không tìm thấy profile');
-                const session = await this.openWithRetry(profileId);
+                assertCurrent();
+                const session = await this.openWithRetry(lease!);
                 plan.sessions.push(session);
                 if (this.stopping) {
                     // Cancel came while the browser was still opening: nothing was started, so close it and stop.
@@ -358,6 +387,7 @@ export class FacebookPosterService {
                         throw new Error(NOT_LOGGED_IN_ERROR);
                     }
                 }
+                assertCurrent();
                 const ctx = session.context;
                 return { ctx, page: ctx.pages()[0] ?? await ctx.newPage() };
             } catch (err) {
@@ -366,11 +396,12 @@ export class FacebookPosterService {
             }
         };
         const taskDeps: TaskDeps = {
+            autonomyGuard: active.autonomyGuard,
             launch,
             getIsStopping: () => this.stopping,
             sendLog: (message: string, level: LogLevel) => this.emit('facebookPoster:log', { runId: run.id, profileId, level, message, at: this.now() }),
             updateProgress: () => undefined,
-            enterCritical: () => { plan.critical = true; plan.reachedCritical = true; },
+            enterCritical: () => { assertCurrent(); plan.critical = true; plan.reachedCritical = true; },
             leaveCritical: () => { plan.critical = false; },
             clearReachedCritical: () => { plan.reachedCritical = false; },
         };
@@ -385,6 +416,18 @@ export class FacebookPosterService {
         let failed = false;
         let loginProblemSeen = false;
         try {
+            try {
+                lease = await this.deps.acquireProfile(profileId, {
+                    jobId: run.id, signal: active.controller.signal,
+                    priority: active.options.priority ?? (run.scheduleId ? 'scheduled' : 'interactive'),
+                    deadlineAt: active.options.deadlineAt, assertCurrent,
+                    onWaiting: reason => { plan.progress.waitingReason = reason; this.emitProgress(active); },
+                });
+                assertCurrent();
+            } catch (err) { launchError = err; throw err; }
+            delete plan.progress.waitingReason;
+            plan.progress.state = 'running';
+            this.emitProgress(active);
             await this.runTask(active, plan, taskDeps);
             if (params.kind !== 'join') this.skipRemaining(active, plan);
         } catch (err) {
@@ -397,7 +440,7 @@ export class FacebookPosterService {
                 this.observeLogin(profileId, err.state);
                 this.failRemaining(active, plan, err.message, true, err.state === 'checkpoint' ? 'checkpoint' : 'not_logged_in');
             } else if (params.kind === 'join') {
-                this.record(active, plan, { url: '', name: '', outcome: 'failed', error: message, errorCode: err === launchError ? launchErrorCode(message) : '' });
+                this.record(active, plan, { url: '', name: '', outcome: 'failed', error: message, errorCode: err === launchError ? launchErrorCode(message, err) : '' });
             } else {
                 // Open/login errors hit every target alike; a mid-run error (window closed) fails only the one in progress.
                 if (err !== launchError && params.kind === 'post' && wasCritical) {
@@ -406,11 +449,13 @@ export class FacebookPosterService {
                 } else if (err instanceof BrowserClosedError && params.kind === 'post') {
                     this.failRemaining(active, plan, message, true, 'browser_closed');
                 } else {
-                    this.failRemaining(active, plan, message, err === launchError, err === launchError ? launchErrorCode(message) : 'unknown');
+                    this.failRemaining(active, plan, message, err === launchError, err === launchError ? launchErrorCode(message, err) : 'unknown');
                 }
             }
         } finally {
             await Promise.allSettled(plan.sessions.map((session) => session.close()));
+            lease?.release();
+            delete plan.progress.waitingReason;
         }
         // Đã báo checkpoint / đăng xuất thì không được ghi đè về 'ok' chỉ vì nhóm trước đó đăng được.
         if (plan.posted && !loginProblemSeen) this.observeLogin(profileId, 'ok');
@@ -422,15 +467,15 @@ export class FacebookPosterService {
     }
 
     /** Mở trình duyệt; lỗi thoáng qua (proxy, khởi động chậm) thì thử lại đúng một lần. */
-    private async openWithRetry(profileId: string): Promise<AutomationSession> {
+    private async openWithRetry(lease: ProfileJobLease): Promise<AutomationSession> {
         try {
-            return await this.deps.openForAutomation(profileId);
+            return await lease.open();
         } catch (err) {
             const message = errorMessage(err);
-            if (this.stopping || message === 'Không tìm thấy profile' || message.startsWith(ENGINE_MISSING_PREFIX) || message.startsWith(PROFILE_OPEN_PREFIX)) throw err;
+            if (['profile_wait_timeout', 'profile_wait_cancelled'].includes((err as { code?: string })?.code ?? '') || this.stopping || message === 'Không tìm thấy profile' || message.startsWith(ENGINE_MISSING_PREFIX) || message.startsWith(PROFILE_OPEN_PREFIX)) throw err;
             await this.sleep(LAUNCH_RETRY_DELAY_MS, () => this.stopping);
             if (this.stopping) throw err;
-            return this.deps.openForAutomation(profileId);
+            return lease.open();
         }
     }
 
@@ -533,8 +578,8 @@ export class FacebookPosterService {
                 targetName: row.name,
                 outcome: row.outcome,
                 error: row.error,
-                // Only posting records a code and attempts; other kinds keep the defaults.
-                errorCode: active.params.kind === 'post' ? row.errorCode ?? '' : '',
+                // Wait failures apply to every kind; other task codes and attempt counts remain posting-only.
+                errorCode: active.params.kind === 'post' || row.errorCode === 'profile_wait_timeout' || row.errorCode === 'profile_wait_cancelled' ? row.errorCode ?? '' : '',
                 attempts: active.params.kind === 'post' ? row.attempts ?? 1 : 1,
                 postUrl: row.postUrl ?? null,
                 commentStatus: row.commentStatus ?? 'not_requested',
@@ -542,6 +587,8 @@ export class FacebookPosterService {
                 variant: VARIANT_LABELS[active.variantIndex?.(plan.profileId, row.url) ?? -1] ?? '',
                 createdAt: this.now(),
             });
+            if (row.outcome === 'posted') active.autonomyGuard?.settle('posted',resultId);
+            else active.autonomyGuard?.settle('uncertain',resultId);
             this.trackPostedResult(active, plan, row, resultId);
         } catch (err) {
             this.rememberStoreError(err);

@@ -1,16 +1,22 @@
 import Logger from '../../utils/Logger';
 import { errorText } from './controlSecurity';
+import { PosterRunSelectionError } from '../facebookPoster/FacebookPosterCoordinator';
 import { BUSY_ERROR, ENGINE_MISSING_ERROR } from '../facebookPoster/FacebookPosterService';
 import { SCAN_NOT_FOUND_ERROR, UnknownProfilesError } from '../research/researchOperationsLogic';
 import { RenderError } from '../video/RenderClient';
 import { BRIEF_NOT_FOUND_ERROR } from '../dailyBrief/briefOperations';
 import type { PageIdentity } from '../../models/dailyBrief';
+import type { ControlPrincipal } from '../../models/pageOperations';
+import { PageBusinessError } from '../dailyBrief/PageBusinessStore';
+import { PageWorkError } from '../dailyBrief/PageWorkStore';
+import { authorizeMethod, type ControlAuthorizationResources } from './controlAuthorization';
 
 /** Mã lỗi cố định của giao thức (spec §3.2). */
 export type ControlErrorCode =
     | 'UNAUTHORIZED' | 'FORBIDDEN_IP' | 'RATE_LIMITED' | 'INVALID_PARAMS' | 'NOT_FOUND'
     | 'CONFIRMATION_REQUIRED' | 'BUSY' | 'ENGINE_MISSING' | 'LIMIT_REACHED'
-    | 'PAYLOAD_TOO_LARGE' | 'UNKNOWN_METHOD' | 'INTERNAL';
+    | 'PAYLOAD_TOO_LARGE' | 'UNKNOWN_METHOD' | 'INTERNAL'
+    | 'FORBIDDEN' | 'CONFLICT' | 'LIMIT_EXCEEDED' | 'NEEDS_REVIEW';
 
 export class ControlError extends Error {
     constructor(public readonly code: ControlErrorCode, message: string, public readonly details?: Record<string, unknown>) {
@@ -42,9 +48,13 @@ function fromRenderError(err: RenderError): ControlError {
  */
 export function toControlError(err: unknown): ControlError {
     if (err instanceof ControlError) return err;
+    if (err instanceof PageBusinessError || err instanceof PageWorkError) {
+        return new ControlError(err.code, err.code === 'INTERNAL' ? INTERNAL_MESSAGE : err.message);
+    }
     // Lớp con của Error nên phải xử lý trước nhánh "chỉ Error thuần".
     if (err instanceof UnknownProfilesError) return new ControlError('NOT_FOUND', err.message, { missing: err.missing });
     if (err instanceof RenderError) return fromRenderError(err);
+    if (err instanceof PosterRunSelectionError) return new ControlError(err.code, err.message);
     const plain = err instanceof Error && err.constructor === Error && typeof (err as { code?: unknown }).code !== 'string';
     if (!plain) return new ControlError('INTERNAL', INTERNAL_MESSAGE);
     const message = (err as Error).message;
@@ -56,7 +66,13 @@ export function toControlError(err: unknown): ControlError {
 }
 
 /** `signal` huỷ khi client ngắt kết nối (dùng cho long-poll). */
-export interface ControlContext { keyName?: string; signal?: AbortSignal }
+export interface ControlContext {
+    keyName?: string;
+    signal?: AbortSignal;
+    principal?: ControlPrincipal;
+    assertCurrent?: () => void;
+    resources?: ControlAuthorizationResources;
+}
 export type ControlParams = Record<string, any>;
 
 export interface ControlMethod {
@@ -70,6 +86,20 @@ export interface ControlMethod {
     run(params: ControlParams, ctx: ControlContext): Promise<unknown>;
 }
 
+/** Direct desktop/legacy calls remain compatible; scoped callers must carry a request-bound guard. */
+function assertMethodContext(ctx: ControlContext, method: string, params: ControlParams): void {
+    if (!ctx.principal || ctx.principal.kind === 'legacy') return;
+    if (!ctx.assertCurrent || !ctx.resources) throw new ControlError('FORBIDDEN', 'Không có quyền thực hiện thao tác này');
+    ctx.assertCurrent();
+    authorizeMethod(ctx.principal, method, params, ctx.resources);
+}
+
+function profileVisible(ctx: ControlContext, profileId: string): boolean {
+    if (!ctx.principal || ctx.principal.kind === 'legacy') return true;
+    const identity = ctx.resources!.getPageIdentity(profileId);
+    return !!identity && identity.profileId === profileId && identity.kind === 'page' && ctx.principal.assignments.some((entry) => entry.pageId === identity.pageId && entry.profileIds.includes(profileId));
+}
+
 /** Chỉ các thao tác ControlMethods dùng; khớp `posterOperations` (không có pickMedia/exportRunCsv/takeMissed). */
 export interface PosterPort {
     start(params: any): any;
@@ -79,7 +109,8 @@ export interface PosterPort {
     draftSave(params: any): any;
     draftGet(params: any): any;
     draftApprove(params: any): any;
-    cancel(params?: any): any;
+    cancel(params?: { runId?: string }): any;
+    active(params?: any): any;
     current(params?: any): any;
     listGroups(params: any): any;
     listRuns(params: any): any;
@@ -107,7 +138,7 @@ export interface BriefPort {
 }
 
 export interface PagePort {
-    learn(params: { profileIds: string[] | null; force: boolean }): { jobId: string };
+    learn(params: { profileIds: string[] | null; force: boolean }, assertCurrent?: () => void): { jobId: string };
     list(): { identities: PageIdentity[] };
 }
 
@@ -166,6 +197,7 @@ export interface ControlMethodDeps {
     videos: VideoPort;
     briefs?: BriefPort;
     pages?: PagePort;
+    protectedWritesEnabled?(): boolean;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
     checkLogins(profileIds: string[] | null): { checkId: string; profileIds: string[] };
@@ -297,7 +329,16 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             name: 'profiles.list', description: 'Danh sách profile: mã, tên, nhóm, trạng thái mở, ngày quét nhóm gần nhất, trạng thái đăng nhập Facebook đã lưu (loginState, loginCheckedAt, loginError).',
             destructive: false, paramsSchema: noParams,
             resultSchema: obj({ profiles: { type: 'array', items: { type: 'object' }, description: 'Danh sách profile' } }, ['profiles']),
-            run: async () => ({ profiles: await deps.listProfiles() }),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'profiles.list', p);
+                const profiles = await deps.listProfiles();
+                assertMethodContext(ctx, 'profiles.list', p);
+                if (!ctx.principal || ctx.principal.kind === 'legacy') return { profiles };
+                if (!Array.isArray(profiles)) throw new ControlError('INTERNAL', INTERNAL_MESSAGE);
+                const visible = profiles.filter((profile) => profile && typeof profile.id === 'string' && profileVisible(ctx, profile.id));
+                assertMethodContext(ctx, 'profiles.list', p);
+                return { profiles: visible };
+            },
         },
         {
             name: 'profiles.groups', description: 'Nhóm đã quét của các profile (url, tên).',
@@ -457,6 +498,11 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             run: async () => poster.current(),
         },
         {
+            name: 'runs.active', description: 'Các lượt đang chạy (tối đa 2) kèm tiến độ; mảng rỗng khi rảnh.',
+            destructive: false, paramsSchema: noParams, resultSchema: { type: 'array', items: { type: 'object' }, description: 'Danh sách lượt đang chạy, cũ nhất trước' },
+            run: async () => (await poster.active()).runs,
+        },
+        {
             name: 'runs.list', description: 'Lịch sử các lần chạy.',
             destructive: false,
             paramsSchema: obj({
@@ -473,11 +519,15 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             run: async (p) => poster.getRun({ runId: p.runId }),
         },
         {
-            name: 'runs.cancel', description: 'Dừng việc đang chạy. Cần confirm: true.',
-            destructive: true, paramsSchema: obj({ confirm: confirmProp }, ['confirm']), resultSchema: obj({ cancelled: { type: 'boolean' } }, ['cancelled']),
-            run: async () => {
-                await poster.cancel();
-                return { cancelled: true };
+            name: 'runs.cancel', description: 'Dừng việc đang chạy. Có từ 2 lượt đang chạy thì phải truyền runId (thiếu thì CONFLICT). runId của lượt đã xong trả cancelled: false, lạ thì NOT_FOUND. Cần confirm: true.',
+            destructive: true, paramsSchema: obj({ confirm: confirmProp, runId: str('Mã lượt cần dừng (bỏ trống khi chỉ có tối đa một lượt)') }, ['confirm']), resultSchema: obj({ cancelled: { type: 'boolean' } }, ['cancelled']),
+            run: async (p) => {
+                if (p.runId === undefined) {
+                    await poster.cancel();
+                    return { cancelled: true }; // legacy acknowledgment, không phải bằng chứng lượt đã dừng
+                }
+                const runId = requireString(p, 'runId');
+                return { cancelled: (await poster.cancel({ runId })).cancelled === true };
             },
         },
         {
@@ -584,13 +634,23 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                 force: { type: 'boolean', default: false },
             }),
             resultSchema: obj({ jobId: str('Mã lượt học') }, ['jobId']),
-            run: async (p) => {
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'pages.learn', p);
                 const raw = p.profileIds;
                 if (raw !== undefined && raw !== null && (!Array.isArray(raw) || !raw.length || raw.length > 50 || raw.some((id) => typeof id !== 'string' || !id))) {
                     throw new ControlError('INVALID_PARAMS', 'profileIds phải là danh sách 1–50 mã (chuỗi không rỗng)', { field: 'profileIds' });
                 }
                 if (p.force !== undefined && typeof p.force !== 'boolean') throw new ControlError('INVALID_PARAMS', 'force phải là boolean', { field: 'force' });
-                const { jobId } = await deps.pages.learn({ profileIds: raw == null ? null : [...new Set(raw as string[])], force: p.force ?? false });
+                assertMethodContext(ctx, 'pages.learn', p);
+                const params = { profileIds: raw == null ? null : [...new Set(raw as string[])], force: p.force ?? false };
+                const scoped = ctx.principal && ctx.principal.kind !== 'legacy';
+                const guard = () => {
+                    assertMethodContext(ctx, 'pages.learn', p);
+                    if (deps.protectedWritesEnabled?.() !== true) throw new ControlError('FORBIDDEN', 'Thao tác Page chưa được bật');
+                };
+                if (scoped) guard();
+                const { jobId } = await (scoped ? deps.pages.learn(params, guard) : deps.pages.learn(params));
+                assertMethodContext(ctx, 'pages.learn', p);
                 return { jobId };
             },
         },
@@ -598,7 +658,18 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             name: 'pages.list', description: 'Danh tính đã học của mọi profile trong workspace, kèm recentPosts, learnedAt và lỗi lần học gần nhất.',
             destructive: false, paramsSchema: noParams,
             resultSchema: obj({ identities: { type: 'array', items: { type: 'object' } } }, ['identities']),
-            run: async () => deps.pages.list(),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'pages.list', p);
+                const result = await deps.pages.list();
+                assertMethodContext(ctx, 'pages.list', p);
+                const principal = ctx.principal;
+                if (!principal || principal.kind === 'legacy') return result;
+                const identities = result.identities.filter((identity) =>
+                    identity.kind === 'page' && profileVisible(ctx, identity.profileId) &&
+                    principal.assignments.some((entry) => entry.pageId === identity.pageId && entry.profileIds.includes(identity.profileId)));
+                assertMethodContext(ctx, 'pages.list', p);
+                return { identities };
+            },
         },
         {
             name: 'briefs.list', description: 'Danh sách kế hoạch Page trong workspace, kèm pageName và trạng thái.',

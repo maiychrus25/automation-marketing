@@ -58,6 +58,10 @@ export class DailyBriefStore {
                 error_code TEXT NOT NULL DEFAULT '',
                 error TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS page_brief_handoffs (
+                profile_id TEXT PRIMARY KEY NOT NULL,
+                page_id TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS daily_briefs (
                 profile_id TEXT PRIMARY KEY,
                 niche TEXT NOT NULL DEFAULT '',
@@ -149,6 +153,12 @@ export class DailyBriefStore {
                 profileId === undefined ? [] : [profileId],
             ).map(mapBrief);
             for (const brief of briefs) {
+                // Handoff is permanent, including aliases learned after protection and disabled runners.
+                const protectedPage = this.db.queryOne<{ n: number }>(`SELECT COUNT(*) AS n FROM page_brief_handoffs h
+                    WHERE h.profile_id = ? OR h.page_id IN
+                        (SELECT page_id FROM fb_page_identities WHERE profile_id = ? AND kind = 'page')`,
+                [brief.profileId, brief.profileId]);
+                if (!protectedPage || protectedPage.n !== 0) continue;
                 if (brief.status === 'running') {
                     if (now - brief.claimedAt! < BRIEF_STALE_MS) continue;
                     // Settle the original claimed day before any eligibility or new-day reset.

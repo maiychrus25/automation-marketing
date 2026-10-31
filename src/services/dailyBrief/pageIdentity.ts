@@ -207,21 +207,29 @@ export function parsePagePosts(json: unknown): PagePostSample[] {
 }
 
 /** Một lần điều hướng có giới hạn; không bấm, gõ, cuộn hay chủ động gọi GraphQL. */
-export async function readPageIdentity(page: Page, opts?: { gotoTimeoutMs?: number }): Promise<PageIdentityRead> {
+export async function readPageIdentity(page: Page, opts?: { gotoTimeoutMs?: number; assertCurrent?: () => void }): Promise<PageIdentityRead> {
     const timeout = Number.isFinite(opts?.gotoTimeoutMs) && opts.gotoTimeoutMs > 0 ? opts.gotoTimeoutMs : GOTO_TIMEOUT_MS;
-    try {
-        const response = await page.goto(`${FB_ORIGIN}/me`, { waitUntil: 'load', timeout });
-        const problem = loginProblemAt(page.url());
-        if (problem) throw new PageLoginProblem(problem);
-        if (response && response.status() >= 400) throw new Error(`Không thể tải trang Facebook (HTTP ${response.status()})`);
-        const html = await page.content();
-        const finalUrl = page.url();
-        const finalProblem = loginProblemAt(finalUrl);
-        if (finalProblem) throw new PageLoginProblem(finalProblem);
-        return parseIdentityHtml(html, finalUrl);
-    } catch (error) {
+    const rethrowReadError = (error: unknown): never => {
+        opts?.assertCurrent?.();
         const problem = loginProblemAt(page.url());
         if (problem) throw new PageLoginProblem(problem);
         throw error;
-    }
+    };
+    opts?.assertCurrent?.();
+    let response: Awaited<ReturnType<Page['goto']>>;
+    try {
+        response = await page.goto(`${FB_ORIGIN}/me`, { waitUntil: 'load', timeout });
+    } catch (error) { rethrowReadError(error); }
+    finally { opts?.assertCurrent?.(); }
+    const problem = loginProblemAt(page.url());
+    if (problem) throw new PageLoginProblem(problem);
+    if (response && response.status() >= 400) throw new Error(`Không thể tải trang Facebook (HTTP ${response.status()})`);
+    let html: string;
+    try { html = await page.content(); }
+    catch (error) { rethrowReadError(error); }
+    finally { opts?.assertCurrent?.(); }
+    const finalUrl = page.url();
+    const finalProblem = loginProblemAt(finalUrl);
+    if (finalProblem) throw new PageLoginProblem(finalProblem);
+    return parseIdentityHtml(html, finalUrl);
 }
