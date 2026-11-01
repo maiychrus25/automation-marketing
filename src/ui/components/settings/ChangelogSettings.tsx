@@ -15,6 +15,35 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.33.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🔗 Bài đăng lên Page được lấy link và đo tương tác như bài trong nhóm',
+      '📊 Bot gửi báo cáo hiệu quả theo lịch anh đặt (hằng ngày / hằng tuần)',
+      '🎯 Khách tiềm năng mới được gom thành một tin thay vì báo từng người',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Bài Page: lưu link bài đã đăng, chưa lấy được thì tự tìm lại sau (trong 7 ngày), đo tương tác ở mốc 1 giờ, 1 ngày và 3 ngày',
+          'Chiến dịch Page dùng số đo thật của bài; lượt "chưa chắc đã đăng" được xác nhận khi tìm thấy bài, không đăng lại',
+          'Màn Hiệu quả: gom theo Page, ô Người theo dõi (hiện "chưa đủ dữ liệu" cho tới khi đọc được số)',
+          'Cài đặt "Báo cáo qua bot" và "Gom tin khách tiềm năng" (Gửi ngay / 15–240 phút) trong bánh răng theo dõi; mặc định báo cáo hằng tuần 8 giờ thứ Hai, gom 60 phút',
+          'API điều khiển cho chủ sở hữu: pages.metrics, notifications.config, notifications.setConfig',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Tin Telegram có nhãn riêng từng loại: 📊 Báo cáo hiệu quả, 🎯 khách tiềm năng, ⚠️ Đăng bài lỗi / Video lỗi / Đề xuất lỗi; bỏ tin 📈 sau mỗi lượt theo dõi',
+          'Theo dõi bài không còn nghỉ chờ vô ích khi không mở trình duyệt',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.32.0',
     date: '10/2026',
     type: 'minor',

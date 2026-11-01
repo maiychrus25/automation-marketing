@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-10-31-page-publish-proof-metrics.md` — anh duyệt ngày 31/10/2026; là nguồn thẩm quyền khi plan và spec lệch nhau.
 
-**Trạng thái:** Anh duyệt plan ngày 31/10/2026. Đã triển khai ở dev (2026-10-31) trên nhánh `feat/26.33-page-publish-proof-metrics`, chưa kiểm trên app Electron/Facebook thật, chưa phát hành; version không đổi.
+**Trạng thái:** Anh duyệt plan ngày 31/10/2026. Đã triển khai (2026-10-31) trên nhánh `feat/26.33-page-publish-proof-metrics`, gộp vào `main` và phát hành trong 26.33.0 (01/11/2026); chưa kiểm trên app Electron/Facebook thật.
 
 **Phương thức thực thi:** subagent-driven (anh đã chọn). Mỗi task một implementer mới + một reviewer mới, review toàn nhánh ở cuối.
 
