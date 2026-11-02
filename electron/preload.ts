@@ -990,6 +990,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getNotificationConfig: ()                     => ipcRenderer.invoke('facebookPoster:getNotificationConfig'),
     setNotificationConfig: (patch: any)           => ipcRenderer.invoke('facebookPoster:setNotificationConfig', patch),
     leadList:       (params?: any)                => ipcRenderer.invoke('facebookPoster:leadList', params || {}),
+    listLeadReplies: (params?: any)               => ipcRenderer.invoke('facebookPoster:listLeadReplies', params || {}),
     leadUpdate:     (params: any)                 => ipcRenderer.invoke('facebookPoster:leadUpdate', params),
     leadConfigGet:  ()                            => ipcRenderer.invoke('facebookPoster:leadConfigGet'),
     leadConfigSet:  (config: any)                 => ipcRenderer.invoke('facebookPoster:leadConfigSet', config),
@@ -997,5 +998,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     commentCollect: (params?: any)                => ipcRenderer.invoke('facebookPoster:commentCollect', params || {}),
     commentCollectStatus: ()                      => ipcRenderer.invoke('facebookPoster:commentCollectStatus'),
     commentCollectCancel: ()                      => ipcRenderer.invoke('facebookPoster:commentCollectCancel'),
+  },
+  autonomy: {
+    status:        ()                  => ipcRenderer.invoke('autonomy:status'),
+    setConfig:     (patch: any)        => ipcRenderer.invoke('autonomy:setConfig', patch),
+    stop:          ()                  => ipcRenderer.invoke('autonomy:stop'),
+    resume:        ()                  => ipcRenderer.invoke('autonomy:resume'),
+    resumeProfile: (profileId: string) => ipcRenderer.invoke('autonomy:resumeProfile', { profileId }),
+    changes:       (since?: number)    => ipcRenderer.invoke('autonomy:changes', { since }),
   },
 });

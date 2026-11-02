@@ -1,5 +1,6 @@
 import type { FbPosterSchedule } from '../../models/facebookPoster';
 import { TIME_RE, computeNextRun } from './scheduleTime';
+import type { AutonomyLimiter } from '../autonomy/AutonomyLimiter';
 
 const MAX_NAME = 100;
 const MIN_LEAD_MS = 60 * 1000;
@@ -60,4 +61,18 @@ export function planScheduleUpdate(
     fields.nextRunAt = merged.enabled ? computeNextRun(merged, now) : null;
     if (merged.enabled && fields.nextRunAt === null) throw new Error(LEAD_ERROR);
     return fields;
+}
+
+/**
+ * Control API update (spec §4.2): turning a schedule on or re-timing an enabled one hands it to the bot, so it becomes origin 'api' and,
+ * like approve when='schedule', needs the stop and master switches on. A rename or turning it off keeps its origin.
+ */
+export function apiScheduleOrigin(existing: FbPosterSchedule, fields: ScheduleUpdateFields, autonomy: Pick<AutonomyLimiter, 'check'>): { origin?: 'api' } {
+    const enabled = fields.enabled ?? existing.enabled;
+    const takesOver = enabled && (!existing.enabled || fields.runAt !== undefined || fields.days !== undefined || fields.time !== undefined);
+    if (!takesOver) return {};
+    const params = existing.params as { mode?: unknown; profiles?: unknown };
+    const profileId = Array.isArray(params.profiles) ? (params.profiles[0] as { profileId?: string } | undefined)?.profileId : undefined;
+    autonomy.check({ action: params.mode === 'page' ? 'page_post' : 'group_post', origin: 'api', profileId }, 'switches');
+    return { origin: 'api' };
 }

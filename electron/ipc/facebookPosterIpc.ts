@@ -30,6 +30,8 @@ import {
     POST_TRACKING_SETTING_KEY, parsePostTrackingConfig, validatePostTrackingConfig,
 } from '../../src/services/facebookPoster/postTracking';
 import { CommentCollector } from '../../src/services/facebookPoster/CommentCollector';
+import { LeadReplier } from '../../src/services/facebookPoster/LeadReplier';
+import { postFirstComment } from '../../src/services/facebookPoster/firstComment';
 import { CommentCollectScheduler } from '../../src/services/facebookPoster/CommentCollectScheduler';
 import { NotificationScheduler, buildMetricsReport, isDeferringLeads } from '../../src/services/facebookPoster/NotificationScheduler';
 import { LEAD_DIGEST_CURSOR_SETTING_KEY, NOTIFICATION_SETTING_KEY, mergeNotificationConfig, parseNotificationConfig, type NotificationConfig } from '../../src/services/facebookPoster/notificationRules';
@@ -42,10 +44,10 @@ import { collectComments } from '../../src/services/facebookPoster/collectCommen
 import { GraphqlSession } from '../../src/services/research/graphqlSession';
 import { checkProfileIds } from '../../src/services/research/researchOperationsLogic';
 import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
-import { planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
+import { apiScheduleOrigin, planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
-import { emitControlEvent, recordControlEvent, hasControlEventSink, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildPagesLearnFinished } from '../../src/services/control/controlEvents';
+import { emitControlEvent, recordControlEvent, hasControlEventSink, wakeControlEventWaiters, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildCommentsReplied, buildPagesLearnFinished } from '../../src/services/control/controlEvents';
 import { getResearchStore, getResearchService, isResearchRunning, cancelResearch, cancelAndWaitResearch, retireResearchService } from './researchIpc';
 import { getPageWorkVideoOperations } from './videoIpc';
 import { getInboxMediaStore } from './inboxMedia';
@@ -66,6 +68,13 @@ import { campaignBlockReason, readCampaignRef } from '../../src/services/faceboo
 import { scoreGroups } from '../../src/services/facebookPoster/groupScores';
 import { pickBestTimes } from '../../src/services/facebookPoster/bestTimes';
 import { createCampaignOperations } from '../../src/services/facebookPoster/campaignOperations';
+import { AutonomyLimiter } from '../../src/services/autonomy/AutonomyLimiter';
+import { createAutonomyOperations, type AutonomyOperations } from '../../src/services/autonomy/autonomyOperations';
+import { createAutonomyBudget } from '../../src/services/autonomy/autonomyBudget';
+import { cancelApiWork as cancelApiWorkFor } from '../../src/services/autonomy/cancelApiWork';
+import { cancelOwnerCampaignSchedules } from '../../src/services/control/ownerPageRunner';
+import { computeDueWork } from '../../src/services/autonomy/autonomyDueWork';
+import { CONTROL_CONFIG_SETTING_KEY, parseStoredConfig } from '../../src/services/control/controlConfig';
 
 
 let service: FacebookPosterCoordinator | null = null;
@@ -149,6 +158,9 @@ let tracker: PostTracker | null = null;
 let trackerDbPath: string | null = null;
 let trackerService: FacebookPosterCoordinator | null = null;
 let trackScheduler: PostTrackScheduler | null = null;
+let leadReplier: LeadReplier | null = null;
+let leadReplierDbPath: string | null = null;
+let leadReplierService: FacebookPosterCoordinator | null = null;
 let collector: CommentCollector | null = null;
 let collectorDbPath: string | null = null;
 let collectorService: FacebookPosterCoordinator | null = null;
@@ -319,6 +331,10 @@ function getService(): FacebookPosterCoordinator {
                 store: s,
                 newId: () => runId,
                 assertCurrent,
+                createAutonomyBudget: (ctx) => {
+                    assertCurrent();
+                    return createAutonomyBudget(getAutonomyBinding().limiter, ctx);
+                },
                 createExecutionGuard: (scheduleId,runId,params) => {
                     assertCurrent();
                     const guard=executionGuard(scheduleId,runId,params);
@@ -378,6 +394,56 @@ function getService(): FacebookPosterCoordinator {
     return service;
 }
 
+/** Huỷ việc do bot (origin='api') khi anh bấm dừng; lịch và lượt của anh (origin='app') giữ nguyên. */
+function cancelApiWork(): { cancelledRuns: number; disabledSchedules: number } {
+    const result = cancelApiWorkFor({
+        store: store(),
+        activeRuns: () => service?.active().map(({ run }) => run) ?? [],
+        cancelRun: (runId) => service?.cancel(runId) ?? false,
+        now: Date.now,
+        cancelOwnerCampaignSchedules: () => cancelOwnerCampaignSchedules(db(), Date.now(), systemClock),
+        wakeEventWaiters: wakeControlEventWaiters,
+    });
+    if (result.disabledSchedules) { scheduler?.reschedule(); emitSchedulesChanged(); }
+    return result;
+}
+
+let autonomyBinding: { db: DatabaseService; path: string; limiter: AutonomyLimiter; ops: AutonomyOperations } | null = null;
+
+/** Autonomy limiter + operations over the active workspace DB; rebuilt when the DB changes, like the other workspace-bound services. */
+function getAutonomyBinding() {
+    const boundDb = db();
+    const path = boundDb.getDbPath();
+    if (autonomyBinding?.db === boundDb && autonomyBinding.path === path) return autonomyBinding;
+    const limiter = new AutonomyLimiter(boundDb, {
+        now: () => Date.now(),
+        clock: systemClock,
+        protectedWritesEnabled: () => parseStoredConfig(boundDb.getSetting(CONTROL_CONFIG_SETTING_KEY)).protectedWritesEnabled,
+    });
+    limiter.ensureSchema();
+    const ops = createAutonomyOperations({
+        limiter: () => limiter,
+        dueWork: () => computeDueWork(boundDb, Date.now(), systemClock, {
+            masterOn: parseStoredConfig(boundDb.getSetting(CONTROL_CONFIG_SETTING_KEY)).protectedWritesEnabled, limiter }),
+        emit: (type, payload) => emitControlEvent(type, payload),
+        cancelApiWork,
+        now: () => Date.now(),
+        clock: systemClock,
+        masterOn: () => parseStoredConfig(boundDb.getSetting(CONTROL_CONFIG_SETTING_KEY)).protectedWritesEnabled,
+        log: (message) => Logger.error(message),
+    });
+    autonomyBinding = { db: boundDb, path, limiter, ops };
+    return autonomyBinding;
+}
+
+export function getAutonomyLimiter(): AutonomyLimiter {
+    return getAutonomyBinding().limiter;
+}
+
+export function getAutonomyOperations(): AutonomyOperations {
+    return getAutonomyBinding().ops;
+}
+
 /** Listener callbacks must never throw: a broken listener cannot turn a determined state into an error or break a run. */
 function safely(label: string, fn: () => void): void {
     try {
@@ -418,6 +484,8 @@ function getChecker(): LoginChecker {
                 if (!isCurrent()) return;
                 emitControlEvent('profile.loginProblem', buildLoginProblem(e));
                 emitStates();
+                // After the login event; pausing only follows checkpoint/logged_out (R5). isCurrent above makes db() === boundDb.
+                safely('autonomyPause', () => { getAutonomyOperations().pauseOnLoginProblem(e); });
             }),
             onFinished: (e) => {
                 if (!isSettled()) return;
@@ -607,6 +675,36 @@ function getDetector(boundStore = store(), readConfig = readLeadConfig): LeadDet
     });
 }
 
+/** Trả lời khách gắn với DB đang dùng (như PostTracker): mở profile qua hàng chờ nền, mọi lần gửi đi qua bộ giới hạn của workspace. */
+function getLeadReplier(): LeadReplier {
+    const svc = getService();
+    const dbPath = db().getDbPath();
+    if (leadReplier && (leadReplierDbPath !== dbPath || leadReplierService !== svc) && !leadReplier.isRunning()) leadReplier = null;
+    if (!leadReplier) {
+        leadReplierDbPath = dbPath;
+        leadReplierService = svc;
+        const boundDb = db();
+        const binding = getProfileJobBinding();
+        const observer = getBoundFacebookLoginObserver();
+        leadReplier = new LeadReplier({
+            store: new FacebookPosterStore(boundDb),
+            limiter: getAutonomyBinding().limiter,
+            assertCurrent: binding.assertCurrent,
+            openSession: async (profileId, context) => {
+                const opened = await openLoggedInSession(() => binding.openForAutomation(profileId, context), isLoggedIn);
+                return { page: opened.page, close: opened.close };
+            },
+            postComment: (page, input, deps) => postFirstComment(page, input, deps),
+            observeLogin: (profileId, state) => safely('replyObserveLogin', () => observer(profileId, state)),
+            emit: (type, payload) => {
+                try { binding.assertSettled(); } catch { return; }
+                safely('controlCommentsReplied', () => emitControlEvent(type, buildCommentsReplied(payload)));
+            },
+        });
+    }
+    return leadReplier;
+}
+
 /** Bộ thu bình luận gắn với DB đang dùng và khe việc chung của service; dựng lại khi DB / service đổi và không có lượt thu. */
 function getCollector(): CommentCollector {
     const svc = getService();
@@ -725,7 +823,7 @@ export function isFacebookPosterSchedulerRunning(): boolean {
 
 /** True while a poster or side job is active; the updater refuses to restart then. */
 export function isFacebookPosterBusy(): boolean {
-    return (profileQueue?.isBusy() ?? false) || isResearchRunning() || [...campaignExecutionWorkers.values()].some(worker => worker.isBusy()) || (service?.isBusy() ?? false) || (checker?.isRunning() ?? false) || (tracker?.isRunning() ?? false) || (campaignTracker?.isRunning() ?? false) || (collector?.isRunning() ?? false) || isPageLearnerRunning();
+    return (profileQueue?.isBusy() ?? false) || isResearchRunning() || [...campaignExecutionWorkers.values()].some(worker => worker.isBusy()) || (service?.isBusy() ?? false) || (checker?.isRunning() ?? false) || (tracker?.isRunning() ?? false) || (campaignTracker?.isRunning() ?? false) || (collector?.isRunning() ?? false) || (leadReplier?.isRunning() ?? false) || isPageLearnerRunning();
 }
 
 /** Stops a running job (if any). Called on app quit and before the workspace database is switched. */
@@ -733,7 +831,7 @@ export function cancelFacebookPosterJobs(): void {
     pauseFacebookJobAdmission();
     const cancellations = [
         () => campaignTracker?.cancel(), () => service?.cancelAll(), () => checker?.stop(),
-        () => tracker?.stop(), () => collector?.stop(), () => learner?.stop(), () => cancelResearch(),
+        () => tracker?.stop(), () => collector?.stop(), () => leadReplier?.cancel(), () => learner?.stop(), () => cancelResearch(),
         ...[...campaignExecutionWorkers.values()].map(worker => () => worker.cancel()),
     ];
     for (const cancel of cancellations) safely('cancelJob', cancel);
@@ -746,7 +844,7 @@ export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
     const queue = profileQueue;
     const generation = posterGeneration;
     const managed = [...new Set(campaignExecutionWorkers.values())];
-    const sideJobs = [checker, tracker, collector, learner, campaignTracker];
+    const sideJobs = [checker, tracker, collector, learner, campaignTracker, leadReplier];
     cancelFacebookPosterJobs();
     const waitForSide = async (job: { isRunning(): boolean; whenIdle(): Promise<void> } | null): Promise<boolean> => {
         if (!job?.isRunning()) return true;
@@ -780,7 +878,7 @@ const emitSchedulesChanged = (): void => {
 };
 
 function draftDeps(): DraftDeps {
-    return { store: store(), env: startEnv, baseDir: scheduleBaseDir(), now: () => Date.now(), newId: () => randomUUID(), maxSchedules: MAX_SCHEDULES };
+    return { store: store(), env: startEnv, baseDir: scheduleBaseDir(), now: () => Date.now(), newId: () => randomUUID(), maxSchedules: MAX_SCHEDULES, autonomy: { check: (req, scope) => getAutonomyBinding().limiter.check(req, scope) } };
 }
 
 /** Internal capability factory for Tasks6/7; no renderer or HTTP registration. */
@@ -941,11 +1039,14 @@ export function startFacebookPosterScheduler(): void {
     resumeFacebookJobAdmission();
     const dbPath = db().getDbPath();
     if (scheduler && schedulerDbPath === dbPath) return;
+    safely('leadReplyRecover', () => getLeadReplier().recover());
     stopFacebookPosterScheduler();
     pendingMissed = [];
     schedulerDbPath = dbPath;
     const boundStore = store();
     const boundDb = db();
+    // The report counts the bot's work on the scheduler's own DB, like boundStore.
+    const boundLimiter = getAutonomyBinding().limiter;
     const boundService = getService();
     const binding = getProfileJobBinding();
     const boundBaseDir = path.dirname(dbPath);
@@ -1082,7 +1183,7 @@ export function startFacebookPosterScheduler(): void {
         publish: recordControlEvent,
         buildReport: (period, cadence) => {
             const identities = new DailyBriefStore(boundDb).listIdentities();
-            return buildMetricsReport(boundStore, period, cadence, (pageId) => identities.find((i) => i.pageId === pageId)?.pageName || pageId);
+            return buildMetricsReport(boundStore, period, cadence, (pageId) => identities.find((i) => i.pageId === pageId)?.pageName || pageId, (from, to) => boundLimiter.summary(from, to));
         },
         leadsAfter: (cursor) => boundStore.listLeadsAfter(cursor),
         latestLeadCursor: () => boundStore.latestLeadCursor(),
@@ -1194,7 +1295,8 @@ export const posterOperations = {
         };
     },
 
-    scheduleUpdate: (params: any) => {
+    // `origin` is 'api' only from the Control API port (controlApiIpc): enabling or re-timing hands the schedule to the bot's limits.
+    scheduleUpdate: (params: any, origin: 'api' | 'app' = 'app') => {
         const now = Date.now();
         const theStore = store();
         const current = typeof params.id === 'string' ? theStore.getSchedule(params.id) : null;
@@ -1202,7 +1304,8 @@ export const posterOperations = {
         const fields = planScheduleUpdate(current, params, now);
         // Giữ nguyên khi không đổi (kể cả chiến dịch đã lưu trữ); chỉ kiểm khi gắn sang chiến dịch khác.
         const campaignId = params.campaignId === current.campaignId ? undefined : readCampaignRef(params.campaignId, (cid) => theStore.getCampaign(cid));
-        theStore.updateSchedule(current.id, { ...fields, campaignId }, now);
+        const takeover = origin === 'api' ? apiScheduleOrigin(current, fields, getAutonomyBinding().limiter) : {};
+        theStore.updateSchedule(current.id, { ...fields, campaignId, ...takeover }, now);
         // Chỉ đổi giờ chạy mới huỷ "Đăng ngay"; đổi tên / chiến dịch thì lượt đang chờ vẫn được chạy.
         if (fields.nextRunAt !== undefined) scheduler?.clearCampaignGateBypass(current.id);
         scheduler?.reschedule();
@@ -1229,8 +1332,9 @@ export const posterOperations = {
 
     draftGet: (params: any) => getDraft(draftDeps(), params.id),
 
-    draftApprove: (params: any) => {
-        const schedule = approveDraft(draftDeps(), params);
+    // `origin` is 'api' only from the Control API port (controlApiIpc); IPC from the app keeps the default.
+    draftApprove: (params: any, origin: 'api' | 'app' = 'app') => {
+        const schedule = approveDraft(draftDeps(), params, origin);
         afterDraftApproval(schedule, params?.when);
         return { schedule };
     },
@@ -1542,6 +1646,19 @@ export const leadOperations = {
 
     collectCancel: () => ({ cancelled: collector?.cancel() ?? false }),
 
+    /** Trả lời một khách (bot gọi qua Control API, nên luôn origin 'api' qua bộ giới hạn). Kiểm tham số nằm trong LeadReplier. */
+    reply: (params: any) => {
+        const p = params ?? {};
+        if (!Number.isInteger(p.leadId) || p.leadId < 1) throw new Error('leadId không hợp lệ');
+        if (admissionPaused || isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        return getLeadReplier().enqueue({ leadId: p.leadId, text: p.text });
+    },
+
+    listReplies: (params?: any) => {
+        const p = params ?? {};
+        return { replies: store().listLeadReplies(clampLimit(p.limit, 100, MAX_LEAD_LIST_LIMIT), offsetOf(p.offset)) };
+    },
+
     /** Danh sách bình luận đã thu; `since` (ms) chỉ lấy bình luận thu từ mốc đó. */
     comments: (params?: any) => {
         const p = params ?? {};
@@ -1604,6 +1721,13 @@ export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:commentCollect', leadOperations.collect);
     handle('facebookPoster:commentCollectStatus', leadOperations.collectStatus);
     handle('facebookPoster:commentCollectCancel', leadOperations.collectCancel);
+    handle('facebookPoster:listLeadReplies', leadOperations.listReplies);
+    handle('autonomy:status', () => ({ status: getAutonomyOperations().status() }));
+    handle('autonomy:setConfig', (patch) => getAutonomyOperations().setConfig(patch, 'app'));
+    handle('autonomy:stop', () => getAutonomyOperations().stop('app'));
+    handle('autonomy:resume', () => getAutonomyOperations().resume('app'));
+    handle('autonomy:resumeProfile', (params) => getAutonomyOperations().resumeProfile(String(params.profileId ?? ''), 'app'));
+    handle('autonomy:changes', (params) => getAutonomyOperations().changes(Number.isFinite(params.since) ? params.since : 0));
     handle('facebookPoster:getLoginStates', () => ({ states: listFacebookLoginStates() }));
     handle('facebookPoster:getLoginCheckConfig', () => ({ config: parseLoginCheckConfig(db().getSetting(LOGIN_CHECK_SETTING_KEY)) }));
     handle('facebookPoster:setLoginCheckConfig', (params) => {

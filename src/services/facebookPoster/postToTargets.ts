@@ -432,7 +432,9 @@ export type PostErrorCode =
   | 'navigation_failed' | 'composer_not_found' | 'media_failed' | 'editor_not_focusable'
   | 'submit_not_ready' | 'submit_not_found' | 'unexpected_error' | 'uncertain_after_submit'
   | 'draft_conflict' | 'not_logged_in' | 'launch_failed' | 'stopped' | 'unknown'
-  | 'checkpoint' | 'browser_closed';
+  | 'checkpoint' | 'browser_closed'
+  // Bộ giới hạn tự vận hành từ chối đích này (không bấm, không thử lại).
+  | 'limit_reached';
 
 /** Profile bị yêu cầu xác minh hoặc bị đá ra đăng nhập: dừng cả profile, không thử lại. */
 export class LoginProblemError extends Error {
@@ -578,7 +580,7 @@ async function postToSingleTarget(
   ctx: BrowserContext,
   target: { url: string; kind: 'group' | 'page' },
   { text, mediaPaths, comment, commentDelayMin = 0 }: { text: string; mediaPaths: string[]; comment: string | null; commentDelayMin?: number },
-  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog' | 'enterCritical' | 'autonomyGuard' | 'expectedPageId' | 'now'> & {
+  deps: Pick<TaskDeps, 'getIsStopping' | 'sendLog' | 'enterCritical' | 'autonomyGuard' | 'autonomyBudget' | 'expectedPageId' | 'now'> & {
     attachShortfall?: () => boolean;
     /** Lần thử thứ mấy (1-based). Từ lần 2 phải xoá bản nháp cũ trước khi gõ. */
     attempt?: number;
@@ -593,6 +595,17 @@ async function postToSingleTarget(
   const failed = (errorCode: PostErrorCode, error: string, afterSubmit = false): SingleTargetOutcome =>
     ({ ok: false, postUrl: null, identity, errorCode, error, afterSubmit });
   const stopped = () => failed('stopped', 'Đã dừng');
+
+  // Kiểm trước, không giữ chỗ: đích đã bị chặn thì không điều hướng, không gõ gì. Giữ chỗ + ghi nhận trước cú bấm vẫn là kiểm chặn chính.
+  if (deps.autonomyBudget) {
+    try {
+      deps.autonomyBudget.check(url);
+    } catch (e) {
+      if ((e as { code?: string }).code !== 'LIMIT_REACHED') throw e;
+      sendLog(`[${kind}] Bộ giới hạn tự vận hành từ chối: ${(e as Error).message}: ${url}`, 'warning');
+      return failed('limit_reached', clip((e as Error).message));
+    }
+  }
 
   sendLog(`[Đăng Bài] Đang truy cập: ${url}`, 'info');
   try {
@@ -830,6 +843,13 @@ async function postToSingleTarget(
   let published = false;
   let dialogClosed = false;
   let publishedAt: number | undefined;
+  // Giữ chỗ của bộ giới hạn cho lần thử này: ghi nhận ngay trước cú bấm, trả lại nếu thoát mà chưa bấm.
+  let reservation: number | null = null;
+  const commitReservation = () => {
+    if (reservation === null) return;
+    deps.autonomyBudget!.commit(reservation);
+    reservation = null;
+  };
   try {
     // Nút Đăng đang tắt nghĩa là Facebook chưa ghi nhận chữ — bấm cũng vô ích.
     // Báo đúng nguyên nhân ngay, thay vì bấm hụt rồi chờ 30 giây báo mơ hồ.
@@ -839,6 +859,15 @@ async function postToSingleTarget(
     }
     // Lần kiểm cuối: Hủy bấm trong lúc chờ ở trên thì không được bấm Đăng.
     if (getIsStopping()) return stopped();
+    if (deps.autonomyBudget) {
+      try {
+        reservation = deps.autonomyBudget.reserve(url);
+      } catch (e) {
+        if ((e as { code?: string }).code !== 'LIMIT_REACHED') throw e;
+        sendLog(`[${kind}] Bộ giới hạn tự vận hành từ chối: ${(e as Error).message}: ${url}`, 'warning');
+        return failed('limit_reached', clip((e as Error).message));
+      }
+    }
     // Từ đây là điểm không quay lại: Hủy không được đóng trình duyệt tới khi có kết quả.
     if (!deps.autonomyGuard) deps.enterCritical?.();
     sendLog('[Đăng Bài] Đang click nút Đăng bài...', 'info');
@@ -858,6 +887,7 @@ async function postToSingleTarget(
       // Click tin cậy qua locator. Nếu click ném lỗi thì published vẫn là true:
       // không có bằng chứng nào ở đây cả, quyết định nằm ở phép chờ dialog đóng
       // / rời /post/create bên dưới (bằng chứng dương), không phải ở việc click.
+      commitReservation();
       try {
         await page.locator('[data-maihub-target="publish"]').first().click({ timeout: 10000 });
       } catch (e) {
@@ -885,6 +915,7 @@ async function postToSingleTarget(
         // Từ lúc gọi humanClick, ngoại lệ nào cũng có thể đến sau mouse.down()/click:
         // coi như cú bấm đã đi và để phép chờ dialog đóng quyết định.
         published = true;
+        commitReservation();
         try {
           if (deps.autonomyGuard) await fallbackButton.click({timeout:10000});
           else await humanClick(page, fallback);
@@ -940,6 +971,8 @@ async function postToSingleTarget(
     }
   } finally {
     page.off('response', listenToResponse);
+    // Còn giữ chỗ nghĩa là chưa có cú bấm nào: trả lại để lần thử lại hoặc lượt sau không bị tính oan.
+    if (reservation !== null) deps.autonomyBudget!.release(reservation);
   }
 
   // Chế độ Page: bằng chứng theo dõi chỉ khi chủ bài trong phản hồi đúng Page đang đăng (không dùng đường dự phòng DOM).
@@ -949,15 +982,16 @@ async function postToSingleTarget(
     : null;
   const proof = pageMode ? { verifiedPostUrl: verifiedPageUrl, publishedAt } : {};
 
-  // An own-feed match never binds a post to this publish request; only an owner-verified Page capture does. Still no comment (sub-project B).
-  if (deps.autonomyGuard) {
+  // An own-feed match never binds a post to this publish request; only an owner-verified Page capture does.
+  // Under a guard the first comment is posted only on that verified URL; without proof it is skipped with a reason.
+  if (deps.autonomyGuard && !(verifiedPageUrl && String(comment ?? '').trim())) {
     const requested=!!String(comment ?? '').trim();
     if (requested) sendLog('[Đăng Bài] Đã đăng; chưa có bằng chứng định danh đúng bài vừa gửi nên không tự bình luận.', 'warning');
     return {ok:true,postUrl:verifiedPageUrl,...proof,commentStatus:requested?'no_post_url':'not_requested',identity,waitedMs:0};
   }
 
-  let postUrl = buildPostUrl({ url }, capturedId, capturedOwner);
-  if (!postUrl) {
+  let postUrl = deps.autonomyGuard ? verifiedPageUrl : buildPostUrl({ url }, capturedId, capturedOwner);
+  if (!postUrl && !deps.autonomyGuard) {
     postUrl = await findOwnPostUrl(page, ctx);
   }
   const pendingApproval = !postUrl && (await detectPendingApproval(page));
@@ -1145,7 +1179,7 @@ export async function postToTargets(
           }
           try {
             const single = await postToSingleTarget(page, ctx, target, { text: textFor?.(target.url) ?? text, mediaPaths: files, comment, commentDelayMin },
-              { getIsStopping, sendLog, autonomyGuard: deps.autonomyGuard, expectedPageId: deps.expectedPageId, now: deps.now, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall, attempt, onNavigated: dropDialogHandler });
+              { getIsStopping, sendLog, autonomyGuard: deps.autonomyGuard, autonomyBudget: deps.autonomyBudget, expectedPageId: deps.expectedPageId, now: deps.now, enterCritical: () => { enteredCritical = true; deps.enterCritical?.(); }, attachShortfall: () => chooserShortfall, attempt, onNavigated: dropDialogHandler });
             // postToSingleTarget trả ok:false mà không ném lỗi: lý do đã nằm trong nhật ký.
             // Nơi ghi lịch sử điền câu mặc định khi error là null (FB Poster: normalizeResults).
             ok = single.ok;
@@ -1175,7 +1209,7 @@ export async function postToTargets(
           lastAfterSubmit = afterSubmit;
 
           // Ảnh chẩn đoán lúc màn hình còn nguyên: trước khi bỏ bản nháp / tải lại trang.
-          if (!ok && errorCode && errorCode !== 'stopped' && !getIsStopping() && !pageIsClosed(page)) {
+          if (!ok && errorCode && errorCode !== 'stopped' && errorCode !== 'limit_reached' && !getIsStopping() && !pageIsClosed(page)) {
             await captureDiagnostic(deps, page, { targetUrl: target.url, attempt, errorCode });
           }
 

@@ -6,7 +6,8 @@ import TrackConfigPopover from './TrackConfigPopover';
 import { formatCount, formatRate } from './researchFormat';
 import { GROUP_BY_OPTIONS, RANGE_OPTIONS, gradeChip, formatBestTimes, followerSummary } from './trackingFormat';
 import type { GroupScore } from '../../../services/facebookPoster/groupScores';
-import type { PageMetrics, PostStatsGroupBy, PostStatsReportRow } from '../../../models/facebookPoster';
+import { formatFollowers, leadReplyRows } from '@/components/settings/autonomyView';
+import type { FbPosterLeadReply, PageMetrics, PostStatsGroupBy, PostStatsReportRow } from '../../../models/facebookPoster';
 
 // Giới hạn của thao tác theo dõi (trackingOperations.track): đọc tối đa 14 ngày bài gần nhất.
 const MAX_TRACK_SINCE_DAYS = 14;
@@ -14,6 +15,7 @@ const MAX_TRACK_SINCE_DAYS = 14;
 const DAY_MS = 86_400_000;
 const FOCUS = 'focus-visible:ring-2 focus-visible:ring-blue-500';
 const TH = 'px-2 py-1.5 text-left font-medium whitespace-nowrap';
+const REPLY_TONE = { ok: 'border-green-500/40 text-green-500', warn: 'border-amber-500/40 text-amber-500', bad: 'border-red-500/40 text-red-400', info: 'border-blue-500/40 text-blue-400', muted: 'border-gray-600 text-gray-400' } as const;
 const TD = 'px-2 py-1.5 whitespace-nowrap';
 
 interface Props {
@@ -22,7 +24,7 @@ interface Props {
   scheduleId?: string;
 }
 
-const formatChange = (n: number | null): string => (n === null ? 'chưa đủ dữ liệu' : `${n > 0 ? '+' : ''}${n.toLocaleString('vi-VN')}`);
+const formatChange = (n: number | null, approx = false): string => (n === null ? 'chưa đủ dữ liệu' : `${approx ? '≈ ' : ''}${n > 0 ? '+' : ''}${n.toLocaleString('vi-VN')}`);
 
 export default function PerformancePanel({ campaignId, scheduleId }: Props = {}) {
   const showNotification = useAppStore((s) => s.showNotification);
@@ -39,6 +41,9 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
   const [openReasons, setOpenReasons] = useState<string | null>(null);
   const [bestLine, setBestLine] = useState('');
   const [pageMetrics, setPageMetrics] = useState<PageMetrics[]>([]);
+  const [replies, setReplies] = useState<FbPosterLeadReply[]>([]);
+  const [repliesState, setRepliesState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [profileNames, setProfileNames] = useState<Record<string, string>>({});
   const aliveRef = useRef(true);
 
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
@@ -78,6 +83,20 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
     }).catch(() => { /* ẩn ô người theo dõi */ });
     return () => { cancelled = true; };
   }, [groupBy, reloadTick]);
+
+  // Trả lời khách gần đây (20 dòng); lỗi chỉ hiện trong mục này, không chặn bảng.
+  useEffect(() => {
+    let cancelled = false;
+    setRepliesState('loading');
+    ipc.browserProfile?.list().then((res) => {
+      if (!cancelled && res?.success) setProfileNames(Object.fromEntries((res.profiles || []).map((p) => [p.id, p.name])));
+    }).catch(() => { /* hiện mã profile */ });
+    ipc.facebookPoster?.listLeadReplies({ limit: 20 }).then((res) => {
+      if (cancelled) return;
+      if (res?.success) { setReplies(res.replies || []); setRepliesState('ready'); } else setRepliesState('error');
+    }).catch(() => { if (!cancelled) setRepliesState('error'); });
+    return () => { cancelled = true; };
+  }, [reloadTick]);
 
   // Gợi ý giờ đăng: khoảng mặc định 60 ngày của dịch vụ, chỉ lọc theo chiến dịch.
   useEffect(() => {
@@ -177,13 +196,14 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
             {pageMetrics.map((m) => {
               const f = followerSummary(m.followers);
               const lastOn = m.followers.reduce<string | null>((a, r) => (a === null || r.capturedOn > a ? r.capturedOn : a), null);
+              const approx = !!m.followers.find((r) => r.capturedOn === lastOn)?.approximate;
               return (
                 <div key={m.pageId} className="rounded-lg border border-gray-700 p-2 text-xs min-w-0">
                   <p className="truncate text-gray-300" title={m.pageName}>{m.pageName}</p>
                   <dl className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-                    <div><dt className="text-gray-400">Hiện tại</dt><dd className="text-gray-200" title={lastOn ? `Ghi ngày ${lastOn.split('-').reverse().join('/')}` : undefined}>{f.current === null ? 'chưa đủ dữ liệu' : f.current.toLocaleString('vi-VN')}</dd></div>
-                    <div><dt className="text-gray-400">7 ngày</dt><dd className="text-gray-200">{formatChange(f.change7)}</dd></div>
-                    <div><dt className="text-gray-400">30 ngày</dt><dd className="text-gray-200">{formatChange(f.change30)}</dd></div>
+                    <div><dt className="text-gray-400">Hiện tại</dt><dd className="text-gray-200" title={lastOn ? `Ghi ngày ${lastOn.split('-').reverse().join('/')}${approx ? ' (số làm tròn)' : ''}` : undefined}>{formatFollowers(f.current, approx)}</dd></div>
+                    <div><dt className="text-gray-400">7 ngày</dt><dd className="text-gray-200">{formatChange(f.change7, approx)}</dd></div>
+                    <div><dt className="text-gray-400">30 ngày</dt><dd className="text-gray-200">{formatChange(f.change30, approx)}</dd></div>
                   </dl>
                 </div>
               );
@@ -252,6 +272,29 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
         </div>
       )}
       {bestLine && <p className="text-xs text-gray-400">{bestLine}</p>}
+      <section aria-labelledby="lead-replies-title" className="space-y-1">
+        <h4 id="lead-replies-title" className="text-xs font-medium text-gray-300">Trả lời khách</h4>
+        {repliesState === 'loading' ? <div className="flex justify-center py-2"><Spinner size={4} /></div>
+          : repliesState === 'error' ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span role="alert" className="text-red-400">Không tải được danh sách trả lời khách</span>
+              <button type="button" onClick={() => setReloadTick((n) => n + 1)} className={`px-2.5 py-1 rounded-lg border border-gray-600 text-gray-300 hover:border-gray-400 ${FOCUS}`}>Thử lại</button>
+            </div>
+          ) : replies.length === 0 ? <p className="text-xs text-gray-400">Chưa có lượt trả lời khách nào.</p>
+            : (
+              <ul className="divide-y divide-gray-800 text-xs">
+                {leadReplyRows(replies, profileNames).map((r) => (
+                  <li key={r.id} className="py-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-w-0">
+                    <span className={`px-1.5 rounded border text-[11px] whitespace-nowrap ${REPLY_TONE[r.tone]}`}>{r.statusLabel}</span>
+                    <span className="text-gray-400 truncate max-w-[10rem]" title={r.profileId}>{r.profileName}</span>
+                    <span className="text-gray-400 whitespace-nowrap">{new Date(r.at).toLocaleString('vi-VN')}</span>
+                    <span className="text-gray-200 min-w-0 flex-1 basis-[14rem] break-words">{r.text}</span>
+                    {r.reason && <span className="text-gray-400 break-words basis-full">Lý do: {r.reason}</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+      </section>
     </section>
   );
 }

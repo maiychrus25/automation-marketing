@@ -4,7 +4,7 @@ import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPoste
 import { FacebookPosterScheduler } from '../../services/facebookPoster/FacebookPosterScheduler';
 import { ControlStore, CONTROL_SCHEMA_SQL } from '../../services/control/ControlStore';
 import { ControlEventRecorder } from '../../services/control/ControlEventRecorder';
-import { buildLeadsDigest, buildLeadsFound, buildScheduleMissed, emitControlEvent, hasControlEventSink, recordControlEvent, setControlEventSink } from '../../services/control/controlEvents';
+import { buildLeadsDigest, buildLeadsFound, buildScheduleMissed, emitControlEvent, hasControlEventSink, recordControlEvent, setControlEventSink, wakeControlEventWaiters } from '../../services/control/controlEvents';
 
 afterEach(() => setControlEventSink(null));
 
@@ -42,6 +42,23 @@ describe('ControlEventRecorder', () => {
     await waiting;
     expect(a.listEventsAfter(0, 10)).toHaveLength(0);
     expect(b.listEventsAfter(0, 10)).toHaveLength(1);
+  });
+
+  test('wakeControlEventWaiters wakes long-polls for rows written straight to the store, and is a no-op when inactive', async () => {
+    const recorder = new ControlEventRecorder();
+    const store = controlStore();
+    expect(() => wakeControlEventWaiters()).not.toThrow();
+    recorder.sync(true, false, () => store);
+    const waiting = recorder.notifier.waitForEvent(0, 60_000);
+    expect(recorder.notifier.pending).toBe(1);
+    wakeControlEventWaiters();
+    await waiting;
+    expect(recorder.notifier.pending).toBe(0);
+    recorder.deactivate();
+    const later = recorder.notifier.waitForEvent(0, 20);
+    wakeControlEventWaiters();
+    expect(recorder.notifier.pending).toBe(1);
+    await later;
   });
 
   test('an overdue schedule fired by scheduler.start() right after sync() leaves a schedule.missed row', () => {

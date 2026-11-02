@@ -529,11 +529,32 @@ describe('buildMetricsReport and lead cursor store', () => {
             { resultId: 7, targetKind: 'group', text: 'bài 7', postUrl: 'https://www.facebook.com/groups/1/posts/7/', engagement: 3 },
         ]);
         expect(report.followers).toEqual([
-            { pageId: 'pg1', pageName: 'Page pg1', current: 1010, change: 10 },
-            { pageId: 'pg2', pageName: 'Page pg2', current: 500, change: null },
-            { pageId: 'pg3', pageName: 'Page pg3', current: null, change: null },
-            { pageId: 'pg4', pageName: 'Page pg4', current: 800, change: null },
+            { pageId: 'pg1', pageName: 'Page pg1', current: 1010, change: 10, approximate: false },
+            { pageId: 'pg2', pageName: 'Page pg2', current: 500, change: null, approximate: false },
+            { pageId: 'pg3', pageName: 'Page pg3', current: null, change: null, approximate: false },
+            { pageId: 'pg4', pageName: 'Page pg4', current: 800, change: null, approximate: false },
         ]);
+    });
+
+    test('approximateChangeBelowStepIsUnchanged', () => {
+        const period = latestReportPeriod(DEFAULT_NOTIFICATION_CONFIG, MON_NOV_02, NY)!;
+        const run = (before: [number, string], after: [number, string]) => {
+            const s = store();
+            s.recordPageFollowers({ pageId: 'pg1', profileId: 'p1', capturedOn: '2026-10-25', capturedAt: MON_OCT_26 - 24 * 60 * MIN, followers: before[0], followersText: before[1], approximate: true });
+            s.recordPageFollowers({ pageId: 'pg1', profileId: 'p1', capturedOn: '2026-11-01', capturedAt: MON_NOV_02 - 24 * 60 * MIN, followers: after[0], followersText: after[1], approximate: true });
+            return buildMetricsReport(s, period, 'weekly', (id) => id).followers[0];
+        };
+        expect(run([1300, '1,3K'], [1300, '1,3K'])).toMatchObject({ current: 1300, change: 0, approximate: true });
+        expect(run([1300, '1,3K'], [1400, '1,4K'])).toMatchObject({ current: 1400, change: 100, approximate: true });
+        expect(run([1300, '1,3K'], [1340, '1,3K'])).toMatchObject({ change: 0 });
+    });
+
+    test('formatCoarseningUsesLargerStep', () => {
+        const period = latestReportPeriod(DEFAULT_NOTIFICATION_CONFIG, MON_NOV_02, NY)!;
+        const s = store();
+        s.recordPageFollowers({ pageId: 'pg1', profileId: 'p1', capturedOn: '2026-10-25', capturedAt: MON_OCT_26 - 24 * 60 * MIN, followers: 10000, followersText: '10K', approximate: true });
+        s.recordPageFollowers({ pageId: 'pg1', profileId: 'p1', capturedOn: '2026-11-01', capturedAt: MON_NOV_02 - 24 * 60 * MIN, followers: 9900, followersText: '9,9K', approximate: true });
+        expect(buildMetricsReport(s, period, 'weekly', (id) => id).followers[0]).toMatchObject({ current: 9900, change: 0, approximate: true });
     });
 
     test('top posts show the original posted text (run params + variant), falling back to the normalized head', () => {
@@ -553,6 +574,20 @@ describe('buildMetricsReport and lead cursor store', () => {
     test('an empty period reports null engagement, never a fake 0', () => {
         const report = buildMetricsReport(store(), latestReportPeriod(DEFAULT_NOTIFICATION_CONFIG, MON_NOV_02, NY)!, 'weekly', (id) => id);
         expect(report).toMatchObject({ posts: 0, measured: 0, engagement: null, notFound: 0, top: [], followers: [] });
+    });
+
+    test('metricsReportIncludesAutonomySummary', () => {
+        const s = store();
+        const period = latestReportPeriod(DEFAULT_NOTIFICATION_CONFIG, MON_NOV_02, NY)!;
+        const summary = { pagePosts: 3, groupPosts: 0, leadReplies: 4, videos: 1, blocked: 2, pauses: 0 };
+        const seen: number[][] = [];
+        const report = buildMetricsReport(s, period, 'weekly', (id) => id, (from, to) => { seen.push([from, to]); return summary; });
+        expect(report.autonomy).toEqual(summary);
+        expect(seen).toEqual([[period.from, period.to - 1]]);
+        // No autonomy activity, or no provider: the field is omitted so the report stays unchanged.
+        const zero = { pagePosts: 0, groupPosts: 0, leadReplies: 0, videos: 0, blocked: 0, pauses: 0 };
+        expect('autonomy' in buildMetricsReport(s, period, 'weekly', (id) => id, () => zero)).toBe(false);
+        expect('autonomy' in buildMetricsReport(s, period, 'weekly', (id) => id)).toBe(false);
     });
 
     // Hợp đồng đổi ở bản sửa cuối (M1): hàng chờ theo id (thứ tự ghi), không theo detected_at, để đồng hồ bị lùi không làm rơi lead.

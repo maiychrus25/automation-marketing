@@ -193,6 +193,31 @@ export class DailyBriefStore {
         return result.claimed;
     }
 
+    /** Read-only mirror of `claimDue`'s due conditions (no eligibility callback, no state change). */
+    countDue(now: number): number {
+        const today = this.clock.date(now);
+        const minutes = this.clock.minutes(now);
+        let due = 0;
+        for (const brief of this.db.query<any>('SELECT * FROM daily_briefs ORDER BY profile_id').map(mapBrief)) {
+            const protectedPage = this.db.queryOne<{ n: number }>(`SELECT COUNT(*) AS n FROM page_brief_handoffs h
+                WHERE h.profile_id = ? OR h.page_id IN
+                    (SELECT page_id FROM fb_page_identities WHERE profile_id = ? AND kind = 'page')`,
+            [brief.profileId, brief.profileId]);
+            if (!protectedPage || protectedPage.n !== 0) continue;
+            let attemptDate = brief.attemptDate;
+            let attemptCount = brief.attempts;
+            if (brief.status === 'running') {
+                if (now - brief.claimedAt! < BRIEF_STALE_MS) continue;
+                attemptDate = brief.claimedDate;
+                attemptCount += 1;
+            }
+            const attempts = attemptDate === today ? attemptCount : 0;
+            const [hours, minute] = brief.time.split(':').map(Number);
+            if (brief.enabled && brief.lastRunDate !== today && minutes >= hours * 60 + minute && attempts < BRIEF_MAX_ATTEMPTS_PER_DAY) due++;
+        }
+        return due;
+    }
+
     finishBrief(profileId: string, ok: boolean, now: number, claimedAt: number): DailyBrief {
         const brief = this.getBrief(profileId);
         if (!brief || brief.status !== 'running' || brief.claimedAt !== claimedAt) throw new Error(BRIEF_NOT_RUNNING_ERROR);

@@ -125,3 +125,15 @@ test('adStepText hiện đúng tên bước, chịu được tên lạ và step 
     expect(adStepText(undefined, 40)).toBe('');
     expect(adStepText(undefined, 0)).toBe('');
 });
+
+test('adVideoOnlyKey403MapsToInvalid', async () => {
+    server.failCreate = [403, { ok: false, error: 'key_chi_dung_cho_ad_video' }];
+    const err = await caught(() => client().createJob({}));
+    expect(err.code).toBe('invalid');
+    expect(err.message).toBe('Khoá AHV AI này chỉ dùng cho video quảng cáo');
+    server.failCreate = [403, { error: `forbidden ${AHV_KEY}` }];
+    const other = await caught(() => client().createJob({}));
+    expect(other.code).toBe('invalid');
+    expect(other.message).not.toContain(AHV_KEY);
+    expect((await caught(() => client().job('khong-co'))).code).toBe('not_found'); // job của khoá khác
+});

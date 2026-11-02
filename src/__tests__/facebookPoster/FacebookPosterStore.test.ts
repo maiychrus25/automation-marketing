@@ -45,7 +45,7 @@ test('createRun rồi getRun trả lại params JSON và trạng thái running',
   const got = s.getRun('r1')!;
   assert.deepStrictEqual(got.run, {
     id: 'r1', kind: 'post', mode: 'group', params: { text: 'xin chào', n: 2 },
-    status: 'running', error: '', startedAt: 100, finishedAt: null, scheduleId: null, scheduleName: null, campaignId: null,
+    status: 'running', error: '', startedAt: 100, finishedAt: null, scheduleId: null, scheduleName: null, campaignId: null, origin: 'app',
   });
   assert.deepStrictEqual(got.results, []);
   assert.strictEqual(s.getRun('nope'), null);
@@ -1123,9 +1123,18 @@ describe('page followers snapshots', () => {
     const s = store();
     expect(s.recordPageFollowers(base)).toBe(true);
     expect(s.recordPageFollowers({ ...base, capturedAt: 2, followers: 1300 })).toBe(false);
-    expect(s.listPageFollowers({ sinceDay: '2026-10-01' })).toEqual([base]);
+    expect(s.listPageFollowers({ sinceDay: '2026-10-01' })).toEqual([{ ...base, followersText: '', approximate: false }]);
     expect(s.hasPageFollowersOn('777', '2026-10-31')).toBe(true);
     expect(s.hasPageFollowersOn('777', '2026-10-30')).toBe(false);
+  });
+  test('oldRowsReadAsExact', () => {
+    const db = memoryDb();
+    const s = new FacebookPosterStore(db);
+    s.ensureSchema();
+    db.run(`INSERT INTO fb_poster_page_followers (page_id, profile_id, captured_on, captured_at, followers) VALUES ('777','p1','2026-10-31',1,1200)`);
+    expect(s.listPageFollowers({ sinceDay: '2026-10-01' })).toEqual([{ ...base, followersText: '', approximate: false }]);
+    s.recordPageFollowers({ ...base, capturedOn: '2026-11-01', followers: 1300, followersText: '1,3K', approximate: true });
+    expect(s.listPageFollowers({ sinceDay: '2026-11-01' })).toMatchObject([{ followers: 1300, followersText: '1,3K', approximate: true }]);
   });
   test('listFiltersByPageAndSinceDayOrdered', () => {
     const s = store();

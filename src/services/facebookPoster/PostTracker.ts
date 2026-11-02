@@ -384,7 +384,7 @@ export class PostTracker {
         if (typeof read.followers === 'number' && Number.isFinite(read.followers)) {
             try {
                 if (!this.deps.store.hasPageFollowersOn(pageId, today)) {
-                    this.deps.store.recordPageFollowers({ pageId, profileId: pair.profileId, capturedOn: today, capturedAt: now, followers: read.followers });
+                    this.deps.store.recordPageFollowers({ pageId, profileId: pair.profileId, capturedOn: today, capturedAt: now, followers: read.followers, followersText: read.followersText ?? '', approximate: read.followersApproximate === true });
                 }
             } catch (err) {
                 // Ghi người theo dõi lỗi không được làm mất số liệu bài của cùng lượt đọc.

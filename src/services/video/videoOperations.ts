@@ -5,6 +5,7 @@ import { buildVideoFinished } from '../control/controlEvents';
 import { AUDIO_EXTENSIONS } from '../facebookPoster/mediaRules';
 import type { AdResult, VideoJob, VideoStatus } from '../../models/video';
 import { buildAdPayload, type AdAssetResolver } from './adVideoPayload';
+import type { AutonomyLimiter } from '../autonomy/AutonomyLimiter';
 import type { AhvAdClient } from './AhvAdClient';
 import type { AhvSettings } from './ahvSettings';
 import { RenderError, type RenderClient } from './RenderClient';
@@ -29,6 +30,8 @@ export interface VideoOperationsDeps {
     loadAhvSettings(): AhvSettings;
     saveAhvSettings(input: { baseUrl: string; apiKey?: string }): AhvSettings;
     adClient(): Pick<AhvAdClient, 'health' | 'voices'>;
+    /** Bộ giới hạn tự động của workspace hiện tại (video tính cả app lẫn bot; bot không được dùng suất cuối). Bỏ trống = không giới hạn. */
+    autonomy?: () => Pick<AutonomyLimiter, 'reserve' | 'commit' | 'release'>;
     /** mediaId của hộp thư Control API -> đường dẫn tệp (ném lỗi nếu lạ hoặc hết hạn). */
     resolveMedia(mediaIds: string[]): string[];
     /** Hộp thoại lưu tệp; null = người dùng đóng hộp thoại. */
@@ -240,8 +243,22 @@ export function createVideoOperations(deps: VideoOperationsDeps) {
             const name = typeof p.name === 'string' ? p.name.trim() : '';
             if (!name || name.length > MAX_NAME_LENGTH) bad(`Tên video phải có 1–${MAX_NAME_LENGTH} ký tự`);
             const draft = buildAdPayload(p, assetResolver(origin));
-            const job = await deps.service().adCreate({ name, source: origin, draft });
-            return { videoId: job.id, status: job.status };
+            // Giữ chỗ sau khi kiểm tham số, trước mọi lần tải tệp lên AHV; từ chối thì ném LIMIT_REACHED.
+            const limiter = deps.autonomy?.();
+            const slot = limiter?.reserve({ action: 'video', origin: origin === 'bot' ? 'api' : 'app' }) ?? null;
+            let accepted = false;
+            // AHV nhận job -> chốt suất ngay; commit lỗi cũng không hoàn (suất vẫn 'reserved' nên vẫn được đếm).
+            const onAccepted = () => {
+                accepted = true;
+                if (limiter && slot !== null) { try { limiter.commit(slot); } catch { /* suất vẫn bị đếm */ } }
+            };
+            try {
+                const job = await deps.service().adCreate({ name, source: origin, draft, onAccepted });
+                return { videoId: job.id, status: job.status };
+            } catch (err) {
+                if (limiter && slot !== null && !accepted) limiter.release(slot);
+                throw err;
+            }
         },
 
         cancel: async (params: any) => deps.service().cancel(readVideoId(params)),

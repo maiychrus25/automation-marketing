@@ -13,6 +13,7 @@ import { ControlError, toControlError, EVENTS_PAGE_LIMIT, EVENTS_MAX_TIMEOUT_SEC
 import { authorizeMethod, isPageRunnerMutation } from './controlAuthorization';
 import { ControlStore } from './ControlStore';
 import { projectPageCampaignEvent, projectPageWorkEvent } from './controlEvents';
+import { isOwnerKey, ownerRunnerPrincipal, startOwnerCampaign, stopOwnerCampaign } from './ownerPageRunner';
 
 /** Captured once for this request, on the SAME handle used by preparation and receiver approvals. */
 export interface PageOperationRequest {
@@ -103,6 +104,7 @@ const schemas: Record<string, Schema> = {
     'pageCampaigns.cancelSchedule':object({...lease,scheduleId:text,expectedExecutionRevision:{...integer,minimum:1}}),
     'pageCampaigns.list':object({pageId:text}), 'pageCampaigns.get':object({pageId:text, campaignId:text}),
     'pageCampaigns.propose':object({...lease, input:campaignInput, expectedRevision:{oneOf:[{...integer, minimum:1}, {type:'null'}]}}),
+    'pageCampaigns.start':object({proposalId:text, expectedRevision:{...integer, minimum:1}}), 'pageCampaigns.stop':object({campaignId:text}),
     'system.capabilities': object({}), 'pageBusiness.get': object({ pageId: text }),
     'pageBusiness.propose': object({ ...lease, expectedRevision: integer, fact }),
     'pageWork.list': object({}), 'pageWork.get': object({ workId: text }), 'pageWork.claimDue': object({ pageId: text }),
@@ -133,6 +135,8 @@ const resultSchemas: Record<string, Schema> = {
     'pageCampaigns.get':object({campaign:{type:'object'}, grants:array({type:'object'}),
         latestDecision:{oneOf:[{type:'null'},object({decision:campaignDecision,evidenceAvailable:{type:'boolean'}})]}}),
     'pageCampaigns.propose':{type:'object'},
+    'pageCampaigns.start':object({campaignId:text, grantId:text}),
+    'pageCampaigns.stop':object({revokedGrants:integer, cancelledSchedules:integer}),
     'system.capabilities': object({ pageOperations: integer, principal: object({ kind: text, workspaceId: text, assignments: array(object({ pageId: text, profileIds: array(text) })) }), protectedWritesEnabled: { type: 'boolean' } }),
     'pageBusiness.get': object({ business: nullable('object'), evidenceAvailability: array(object({ factId: text, available: { type: 'boolean' } })) }),
     'pageBusiness.propose': object({ business: { type: 'object' } }), 'pageWork.list': object({ items: array({ type: 'object' }) }),
@@ -147,23 +151,31 @@ const resultSchemas: Record<string, Schema> = {
     'pageWork.events': object({ events: array({ type: 'object' }), nextCursor: integer, workspaceId: text }),
 };
 
+/** Owner (legacy) key only; scoped keys never see or run these. */
+const OWNER_ONLY = new Set(['pageCampaigns.start', 'pageCampaigns.stop']);
+
 /** Public module only: registration and pre-cache authorization are deliberately owned by runtime assembly. */
 export function createPageOperationMethods(deps: PageOperationMethodDeps): ControlMethod[] {
     return Object.entries(schemas).map(([name, paramsSchema]) => ({
-        name, description: `Thao tác Page có phạm vi: ${name}`, destructive: false, paramsSchema,
+        name, description: OWNER_ONLY.has(name) ? `Thao tác Page chỉ khoá chủ: ${name}` : `Thao tác Page có phạm vi: ${name}`, destructive: false, paramsSchema,
         resultSchema: resultSchemas[name] ?? object({ work: nullable('object') }),
         async run(params: ControlParams, ctx: ControlContext): Promise<unknown> {
             let recheck: (() => void) | undefined;
             try {
-                if (!ctx.principal || ctx.principal.kind === 'legacy' || !ctx.assertCurrent || !ctx.resources) forbidden();
+                if (!ctx.principal || !ctx.assertCurrent) forbidden();
+                const legacy = ctx.principal.kind === 'legacy';
+                if (!legacy && (!ctx.resources || OWNER_ONLY.has(name))) forbidden();
                 ctx.assertCurrent();
-                const principal = { ...ctx.principal, assignments: ctx.principal.assignments.map(a => ({ pageId: a.pageId, profileIds: [...a.profileIds] })) };
                 const bound = deps.bindRequest(ctx);
+                const events = new ControlStore(bound.db);
+                // Plan R1: the owner key works as a runner over every learned Page, checked live like a scoped key.
+                if (legacy && !isOwnerKey(events, ctx.principal.keyId)) forbidden();
+                const principal = ctx.principal.kind === 'legacy' ? ownerRunnerPrincipal(bound.db, bound.workspaceId, ctx.principal.keyId)
+                    : { ...ctx.principal, assignments: ctx.principal.assignments.map(a => ({ pageId: a.pageId, profileIds: [...a.profileIds] })) };
                 const works = new PageWorkStore(bound.db, bound.clock);
                 const business = new PageBusinessStore(bound.db);
                 const briefs = new DailyBriefStore(bound.db, bound.clock);
                 const research = new ResearchStore(bound.db);
-                const events = new ControlStore(bound.db);
                 const campaigns = new PageCampaignStore(bound.db);
                 const resources = { ...ctx.resources, protectedWritesEnabled: bound.protectedWritesEnabled, workspaceId: bound.workspaceId, assertCurrent: () => { ctx.assertCurrent!(); bound.assertCurrent(); },
                     getWork: (id: string) => works.get(id), getResourceOwner: (ref: Parameters<PageWorkStore['getResourceOwner']>[0]) => works.getResourceOwner(ref),
@@ -172,13 +184,14 @@ export function createPageOperationMethods(deps: PageOperationMethodDeps): Contr
                         : kind === 'proposal' ? campaigns.getProposal(id) : campaigns.getGrant(id) };
                 const guard = () => {
                     resources.assertCurrent();
+                    if (legacy && !isOwnerKey(events, principal.keyId)) forbidden();
                     if (principal.workspaceId !== bound.workspaceId) forbidden();
                     if (isPageRunnerMutation(name) && bound.protectedWritesEnabled() !== true) forbidden();
-                    authorizeMethod(principal, name, params, resources);
+                    if (!OWNER_ONLY.has(name)) authorizeMethod(principal, name, params, resources);
                 };
                 recheck = guard;
                 guard(); validate(params, paramsSchema);
-                if (['pageCampaigns.optimize','pageCampaigns.schedule','pageCampaigns.updateSchedule','pageCampaigns.cancelSchedule'].includes(name))
+                if (['pageCampaigns.optimize','pageCampaigns.schedule','pageCampaigns.updateSchedule','pageCampaigns.cancelSchedule',...OWNER_ONLY].includes(name))
                     new PageCampaignExecutionStore(bound.db,bound.clock).ensureSchema();
                 const visible = (work: PageWork) => work.workspaceId === principal.workspaceId && principal.assignments.some(a => a.pageId === work.pageId && a.profileIds.includes(work.profileId));
                 const context = (id: string): PageContext => {
@@ -251,6 +264,9 @@ export function createPageOperationMethods(deps: PageOperationMethodDeps): Contr
                     case 'pageCampaigns.list': result = campaignOperations().list(params.pageId); break;
                     case 'pageCampaigns.get': result = campaignOperations().get(params.pageId, params.campaignId); break;
                     case 'pageCampaigns.propose': result = campaignOperations().propose({workId:params.workId, claimedAt:params.claimedAt}, params.input, params.expectedRevision); break;
+                    case 'pageCampaigns.start': result = startOwnerCampaign({db:bound.db, principal, now:bound.now, clock:bound.clock,
+                        protectedWritesEnabled:bound.protectedWritesEnabled}, params.proposalId, params.expectedRevision); break;
+                    case 'pageCampaigns.stop': result = stopOwnerCampaign({db:bound.db, principal, now:bound.now, clock:bound.clock}, params.campaignId); break;
                     case 'system.capabilities': result = { pageOperations: 1, principal: { kind: principal.kind, workspaceId: principal.workspaceId, assignments: principal.assignments }, protectedWritesEnabled: bound.protectedWritesEnabled() === true }; break;
                     case 'pageBusiness.get': {
                         const row = business.get(params.pageId);
@@ -349,7 +365,7 @@ export function createPageOperationMethods(deps: PageOperationMethodDeps): Contr
                     default: throw new ControlError('UNKNOWN_METHOD', 'Không tìm thấy phương thức');
                 }
                 guard();
-                if (isPageRunnerMutation(name) || name === 'pageApprovals.confirm') { try { bound.notify(); } catch { /* committed state wins */ } }
+                if (isPageRunnerMutation(name) || OWNER_ONLY.has(name) || name === 'pageApprovals.confirm') { try { bound.notify(); } catch { /* committed state wins */ } }
                 return result;
             } catch (error) {
                 try { recheck?.(); } catch (stale) { throw toControlError(stale); }

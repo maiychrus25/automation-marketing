@@ -432,14 +432,15 @@ function pageSuccessful({ graphqlBody = null, graphqlBodies, graphqlThrows = fal
 }
 
 // Spec 2026-10-31 §4.1: lượt autonomy không còn trả postUrl:null cố định — link được giữ khi chủ bài (từ phản hồi
-// mutation tạo bài) đúng Page đang đăng; vẫn không tự bình luận. Chế độ Page bỏ qua phản hồi không phải mutation tạo bài
+// mutation tạo bài) đúng Page đang đăng. Spec 2026-11-01 §5: có link đã xác minh thì bình luận đầu đúng link đó; thiếu bằng chứng thì không bình luận. Chế độ Page bỏ qua phản hồi không phải mutation tạo bài
 // (kể cả có "__typename":"Story"), nên 'unrelated-story' không có link; thiếu chủ cũng không có link.
+const VERIFIED_URL='https://www.facebook.com/12345/posts/20002';
 test.each([
   ['old-feed', null],
   ['unrelated-story', null],
-  ['mutation-shaped-current-id', 'https://www.facebook.com/12345/posts/20002'],
+  ['mutation-shaped-current-id', VERIFIED_URL],
   ['mutation-without-owner', null],
-])('autonomyDoesNotTreatUnboundPostEvidenceAsCommentAuthority(%s)',async (source,expectedUrl)=>{
+])('autonomyFirstCommentRequiresVerifiedPostUrl(%s)',async (source,expectedUrl)=>{
   const clicked:string[]=[]; const navigated:string[]=[];
   const story=source==='mutation-without-owner'?{__typename:'Story',post_id:'20002'}:{__typename:'Story',post_id:'20002',id:Buffer.from('S:_I12345:20002').toString('base64')};
   const graphqlBody=source==='old-feed'?null:JSON.stringify({data:source==='unrelated-story'?{unrelated:story}:{story_create:{story}}});
@@ -459,9 +460,19 @@ test.each([
   const guard={variantIndex:0,assertPost:()=>{},assertCurrent:()=>{},beforeEffect:async()=>{},settle:()=>{}};
   const result=await runWithFakeTimers(()=>postToTargets({text:'Same first forty characters on the old and new posts',comment:'First comment',targets:['https://www.facebook.com/'],minDelay:0,maxDelay:0},makeDeps(loggedInCtx([]),page,{autonomyGuard:guard,expectedPageId:'12345'})));
   expect(result.posted).toBe(1); expect(result.results[0].ok).toBe(true);
-  expect(clicked).not.toContain('comment-send'); expect(clicked).not.toContain('Enter');
-  expect(navigated).toEqual(['https://www.facebook.com/','https://www.facebook.com/']);
-  expect(result.results[0].postUrl).toBe(expectedUrl); expect(result.results[0].verifiedPostUrl).toBe(expectedUrl); expect(result.results[0].commentStatus).toBe('no_post_url');
+  expect(clicked).not.toContain('Enter');
+  if (expectedUrl) {
+    // verifiedCampaignPostGetsFirstComment: the comment goes to exactly the verified URL, once.
+    expect(clicked.filter(c=>c==='comment-send')).toHaveLength(1);
+    expect(navigated).toEqual(['https://www.facebook.com/','https://www.facebook.com/',expectedUrl]);
+    expect(result.results[0].commentStatus).toBe('posted');
+  } else {
+    // missingProofSkipsCommentWithReason
+    expect(clicked).not.toContain('comment-send');
+    expect(navigated).toEqual(['https://www.facebook.com/','https://www.facebook.com/']);
+    expect(result.results[0].commentStatus).toBe('no_post_url');
+  }
+  expect(result.results[0].postUrl).toBe(expectedUrl); expect(result.results[0].verifiedPostUrl).toBe(expectedUrl);
 });
 
 // --- Spec 2026-10-31 §4.1: chế độ Page chỉ xác nhận bài (verifiedPostUrl) khi chủ bài đúng Page đang đăng ---

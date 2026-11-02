@@ -1,5 +1,6 @@
 import type { Page } from 'playwright-core';
 import type { PageIdentityKind, PagePostSample } from '../../models/dailyBrief';
+import { readPageFollowers } from './pageFollowers';
 import { loginProblemAt } from '../facebookPoster/loginCheck';
 
 const MAX_POSTS = 10;
@@ -20,6 +21,9 @@ export interface PageIdentityRead {
     recentPosts: PagePostSample[];
     /** Vắng/null = chưa xác minh. */
     followers?: number | null;
+    /** Chữ gốc ('1,3K') và cờ làm tròn; chỉ có khi `followers` có giá trị. */
+    followersText?: string;
+    followersApproximate?: boolean;
 }
 
 export class PageLoginProblem extends Error {
@@ -71,7 +75,8 @@ function embeddedJson(html: string): unknown[] {
 /** Chỉ nối những User ở đúng ngữ cảnh đã quan sát; không tìm đệ quy Page/actor bất kỳ. */
 export function parseIdentityHtml(html: string, finalUrl: string): PageIdentityRead {
     if (typeof html !== 'string' || !facebookUrl(finalUrl)) return emptyIdentity();
-    const roots = embeddedJson(html).map((root) => ({ root, depth: 0 }));
+    const embedded = embeddedJson(html);
+    const roots = embedded.map((root) => ({ root, depth: 0 }));
     const currentIds = new Set<string>();
     const payloads: unknown[] = [];
     for (let index = 0; index < roots.length; index++) {
@@ -144,10 +149,11 @@ export function parseIdentityHtml(html: string, finalUrl: string): PageIdentityR
     }
     if (names.size > 1 || categories.size > 1 || descriptions.size > 1) return emptyIdentity();
     const feeds = payloads.filter((data) => at(data, 'user', 'id') === activeId && at(data, 'user', 'delegate_page', 'id') === pageId);
-    // shortcut: followers chưa có mẫu phản hồi thật đã lọc; giữ undefined tới khi có fixture page-followers.html
+    const followers = readPageFollowers(html, embedded, finalUrl, pageId);
     return {
         kind: 'page', pageId, pageName: [...names][0] ?? '', category: [...categories][0] ?? '',
         about: ([...descriptions][0] ?? '').slice(0, MAX_ABOUT), recentPosts: postsFromFeeds(feeds),
+        ...(followers && { followers: followers.followers, followersText: followers.text, followersApproximate: followers.approximate }),
     };
 }
 

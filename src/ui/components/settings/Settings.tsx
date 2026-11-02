@@ -17,12 +17,13 @@ import LockScreenSettings from './LockScreenSettings';
 import AccountSettings from './AccountSettings';
 import TunnelSettings from './TunnelSettings';
 import ControlApiSettings from './ControlApiSettings';
+import AutonomySettings from './AutonomySettings';
 import RenderServerSettings from './RenderServerSettings';
 import LogViewer from './LogViewer';
 import { loadSeenTabs, markTabSeen, SETTINGS_WATCHLIST, hasUnseenChangelog, markChangelogSeen } from '@/utils/settingsSeenTabs';
 import { isZalo, isFacebook, isTelegram } from '@/lib/channelHelper';
 
-type SettingsTab = 'notifications' | 'accounts' | 'storage' | 'conversation' | 'employees' | 'workspace' | 'introduction' | 'changelog' | 'appearance' | 'proxy' | 'security' | 'webhooks' | 'controlApi' | 'renderServer' | 'logs';
+type SettingsTab = 'notifications' | 'accounts' | 'storage' | 'conversation' | 'employees' | 'workspace' | 'introduction' | 'changelog' | 'appearance' | 'proxy' | 'security' | 'webhooks' | 'controlApi' | 'autonomy' | 'renderServer' | 'logs';
 
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('conversation');
@@ -168,6 +169,7 @@ export default function Settings() {
     { id: 'security',      icon: <ShieldIcon className="w-4 h-4" />, label: 'Bảo mật' },
     { id: 'webhooks',      icon: <LinkIcon className="w-4 h-4" />, label: 'Webhooks' },
     { id: 'controlApi',    icon: <BotIcon className="w-4 h-4" />, label: 'Điều khiển từ bot' },
+    { id: 'autonomy',       icon: <LightningIcon className="w-4 h-4" />, label: 'Tự vận hành' },
     { id: 'renderServer',   icon: <GlobeIcon className="w-4 h-4" />, label: 'Máy chủ render video' },
     { id: 'employees',     icon: <UsersIcon className="w-4 h-4" />, label: 'Nhân viên', requiredPerm: 'settings_employees' },
     { id: 'workspace',     icon: <FolderIcon className="w-4 h-4" />, label: 'Workspace' },
@@ -183,7 +185,7 @@ export default function Settings() {
     if (!perm) return true; // no permission required
     return useEmployeeStore.getState().hasPermission(perm);
   };
-  const visibleNavItems = NAV_ITEMS.filter(item => hasSettingsPerm(item.requiredPerm) && (!['controlApi', 'renderServer'].includes(item.id) || empMode !== 'employee'));
+  const visibleNavItems = NAV_ITEMS.filter(item => hasSettingsPerm(item.requiredPerm) && (!['controlApi', 'autonomy', 'renderServer'].includes(item.id) || empMode !== 'employee'));
 
   // Guard: nếu activeTab không còn trong visibleNavItems (do đổi workspace/quyền) → reset về tab đầu tiên
   useEffect(() => {
@@ -558,6 +560,7 @@ export default function Settings() {
         {activeTab === 'proxy' && <ProxySettings />}
         {activeTab === 'webhooks' && <TunnelSettings />}
         {activeTab === 'controlApi' && empMode !== 'employee' && <ControlApiSettings />}
+        {activeTab === 'autonomy' && empMode !== 'employee' && <AutonomySettings />}
         {activeTab === 'renderServer' && empMode !== 'employee' && <RenderServerSettings />}
         {activeTab === 'employees' && <EmployeeSettings />}
         {activeTab === 'workspace' && <WorkspaceSettings />}

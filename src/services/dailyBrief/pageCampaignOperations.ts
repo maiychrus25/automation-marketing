@@ -14,6 +14,7 @@ import { PageCampaignExecutionStore, campaignFormat } from './PageCampaignExecut
 import type { ControlPrincipal, PageContext, WorkLease } from '../../models/pageOperations';
 import { ControlError } from '../control/ControlMethods';
 import { ControlStore } from '../control/ControlStore';
+import { campaignKeyAuthorized } from '../control/ownerPageRunner';
 import { FacebookPosterStore, type SqlDatabase } from '../facebookPoster/FacebookPosterStore';
 import { DailyBriefStore, systemClock, type LocalClock } from './DailyBriefStore';
 import { PageBusinessStore } from './PageBusinessStore';
@@ -63,10 +64,8 @@ export function assertCampaignCollection(db:SqlDatabase,scope:CampaignScope,camp
         ||!business?.enabled||business.primaryProfileId!==scope.profileId||new FacebookPosterStore(db).getCampaign(campaignId)?.status!=='active')deny();
     const grant=campaigns.listGrants(campaignId).find(g=>g.status==='active' && g.campaignRevision===link!.revision && now>=g.policy.startsAt && now<g.policy.expiresAt);
     if(!grant) return deny();
-    for(const [id,kind] of [[runnerKeyId,'page_runner'],[grant.receiverKeyId,'page_receiver']]){
-        const policy=new ControlStore(db).findActiveKeyById(id)?.policy;
-        if(!policy||policy.kind!==kind||policy.workspaceId!==scope.workspaceId||!policy.assignments.some(a=>a.pageId===scope.pageId&&a.profileIds.includes(scope.profileId)))deny();
-    }
+    const control=new ControlStore(db);
+    if(!campaignKeyAuthorized(control,runnerKeyId,'page_runner',scope)||!campaignKeyAuthorized(control,grant.receiverKeyId,'page_receiver',scope))deny();
 }
 
 /** Local campaign authority; collector runtime readiness is not advertised. */
@@ -226,11 +225,9 @@ export function createPageCampaignOperations(deps: PageCampaignOperationsDeps) {
                 const row=scopedRow(lease,draftId),action=saved?.action ?? (row.draft?'schedulePost':'updateScheduledPost');
                 const check=()=>{
                     const current=authority(lease,input,action);
-                    for(const [id,kind] of [[principal.keyId,'page_runner'],[current.grant.receiverKeyId,'page_receiver']]){
-                        const policy=new ControlStore(deps.db).findActiveKeyById(id)?.policy;
-                        if(!policy || policy.kind!==kind || policy.workspaceId!==current.context.workspaceId
-                            || !policy.assignments.some(a=>a.pageId===current.context.pageId&&a.profileIds.includes(current.context.profileId)))forbidden();
-                    }
+                    const control=new ControlStore(deps.db);
+                    if(!campaignKeyAuthorized(control,principal.keyId,'page_runner',current.context)
+                        || !campaignKeyAuthorized(control,current.grant.receiverKeyId,'page_receiver',current.context))forbidden();
                     return current;
                 };
                 const {context,grant}=check();

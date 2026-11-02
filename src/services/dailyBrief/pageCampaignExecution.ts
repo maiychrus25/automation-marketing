@@ -6,6 +6,8 @@ import { resolveScheduleMedia } from '../facebookPoster/scheduleMedia';
 import { GRACE_MS } from '../facebookPoster/FacebookPosterScheduler';
 import { ControlStore } from '../control/ControlStore';
 import { ControlError } from '../control/ControlMethods';
+import { campaignKeyAuthorized, isOwnerKey } from '../control/ownerPageRunner';
+import { AutonomyLimiter } from '../autonomy/AutonomyLimiter';
 import { DailyBriefStore, systemClock, type LocalClock } from './DailyBriefStore';
 import { PageBusinessStore } from './PageBusinessStore';
 import { PageCampaignStore } from './PageCampaignStore';
@@ -48,7 +50,8 @@ export function createPageCampaignExecutionGuard(deps:PageCampaignExecutionDeps,
     const works=new PageWorkStore(deps.db,deps.clock);
     const control=new ControlStore(deps.db);
     const clock=deps.clock ?? systemClock;
-    function assertCurrent():void {
+    // A first comment may follow commentDelayMin, so it skips only the publish-window checks (allowed minute, planned date).
+    function assertCurrent(publishWindow=true):void {
         deps.assertCurrent();
         if (!deps.protectedWritesEnabled() || !deps.profileExists(initial!.profileId)) deny();
         const execution=executions.get(scheduleId);
@@ -66,17 +69,15 @@ export function createPageCampaignExecutionGuard(deps:PageCampaignExecutionDeps,
             || grant.campaignId!==initial!.campaignId || link.deletedAt!==null
             || deps.now()<grant.policy.startsAt || deps.now()>=grant.policy.expiresAt || !grant.policy.actions.includes('schedulePost')
             || grant.policy.timeZone!==(deps.clock?.timeZone?.() ?? Intl.DateTimeFormat().resolvedOptions().timeZone)
-            || !grant.policy.allowedMinutes.includes(clock.minutes(deps.now())) || clock.date(deps.now())!==initial!.plannedDate
+            || publishWindow && (!grant.policy.allowedMinutes.includes(clock.minutes(deps.now())) || clock.date(deps.now())!==initial!.plannedDate)
             || !profile?.enabled || profile.primaryProfileId!==initial!.profileId || !briefs.getBrief(initial!.profileId)?.enabled
             || identity?.kind!=='page' || identity.pageId!==initial!.pageId || identity.errorCode
             || row.authorityKind!=='autonomy' || row.draft || !row.enabled || row.kind!=='once' || row.runAt===null || row.runAt>deps.now()
             || row.campaignId!==initial!.campaignId || poster.getCampaign(initial!.campaignId)?.status!=='active'
             || row.params.mode!=='page' || !same(row.params.profiles,[{profileId:initial!.profileId,targets:['https://www.facebook.com/']}])) deny();
-        for (const [keyId,kind] of [[initial!.runnerKeyId,'page_runner'],[grant.receiverKeyId,'page_receiver']]) {
-            const policy=control.findActiveKeyById(keyId)?.policy;
-            if (!policy || policy.kind!==kind || policy.workspaceId!==deps.workspaceId
-                || !policy.assignments.some(a=>a.pageId===initial!.pageId && a.profileIds.includes(initial!.profileId))) deny();
-        }
+        const keyScope={workspaceId:deps.workspaceId,pageId:initial!.pageId,profileId:initial!.profileId};
+        if (!campaignKeyAuthorized(control,initial!.runnerKeyId,'page_runner',keyScope)
+            || !campaignKeyAuthorized(control,grant.receiverKeyId,'page_receiver',keyScope)) deny();
         for (const ref of [{kind:'draft' as const,id:scheduleId},...((row.params.mediaIds ?? []) as string[]).map(id=>({kind:'media' as const,id}))]) {
             const owner=works.getResourceOwner(ref);
             if (!owner || owner.workId!==initial!.workId || owner.workspaceId!==initial!.workspaceId || owner.pageId!==initial!.pageId) deny();
@@ -104,13 +105,26 @@ export function createPageCampaignExecutionGuard(deps:PageCampaignExecutionDeps,
                 || !same(input.mediaPaths,resolveScheduleMedia(deps.baseDir,row.id,(row.params.mediaPaths ?? []) as string[]))) deny();
         },
         async beforeEffect(page,kind) {
-            assertCurrent();
-            // shortcut: no supported request-correlated post evidence yet; add it before enabling autonomous comments.
-            if (kind==='firstComment') throw new ControlError('NEEDS_REVIEW','Chưa chứng minh được định danh bài vừa đăng để bình luận');
+            const publishWindow=kind!=='firstComment';
+            assertCurrent(publishWindow);
             const identity=await readPostingIdentity(page);
-            assertCurrent();
+            assertCurrent(publishWindow);
             if (identity.kind!=='page' || identity.pageId!==initial.pageId) deny();
-            executions.beginSubmit(scheduleId,runId,deps.now());
+            if (kind==='firstComment') {
+                // Not counted against caps (spec 4.1): only this run's own submitted effect may be commented on.
+                const execution=executions.get(scheduleId);
+                if (execution?.runId!==runId || !['submitting','posted'].includes(execution.status)) deny();
+                return;
+            }
+            // Owner-confirmed grants are bot work (origin 'api'): reserve the autonomy quota right before the click (spec 4.2).
+            // A refusal throws LIMIT_REACHED and leaves the execution reserved for the existing missed-run path.
+            const limiter=isOwnerKey(control,campaigns.getGrant(initial.grantId)!.receiverKeyId)
+                ? new AutonomyLimiter(deps.db,{now:deps.now,clock,protectedWritesEnabled:deps.protectedWritesEnabled}) : null;
+            limiter?.ensureSchema();
+            const reservation=limiter?.reserve({action:'page_post',origin:'api',profileId:initial.profileId,ref:scheduleId}) ?? null;
+            try { executions.beginSubmit(scheduleId,runId,deps.now()); }
+            catch (error) { if (reservation!==null) limiter!.release(reservation); throw error; }
+            if (reservation!==null) limiter!.commit(reservation);
             assertCurrent();
         },
         settle(outcome,resultId) {

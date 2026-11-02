@@ -10,6 +10,7 @@ import type { PageIdentity } from '../../models/dailyBrief';
 import type { ControlPrincipal } from '../../models/pageOperations';
 import { PageBusinessError } from '../dailyBrief/PageBusinessStore';
 import { PageWorkError } from '../dailyBrief/PageWorkStore';
+import { DEFAULT_AUTONOMY_POLICY, mergeAutonomyPolicy } from '../autonomy/autonomyPolicy';
 import { authorizeMethod, type ControlAuthorizationResources } from './controlAuthorization';
 
 /** Mã lỗi cố định của giao thức (spec §3.2). */
@@ -163,6 +164,17 @@ export interface NotificationPort {
     setConfig(params: any): any;
 }
 
+/** Tự vận hành có giới hạn (`autonomyOperations`); `actor` là tên khoá gọi. */
+export interface AutonomyPort {
+    status(): any;
+    config(): any;
+    setConfig(patch: unknown, actor: string): any;
+    stop(actor: string): any;
+    resume(actor: string): any;
+    resumeProfile(profileId: string, actor: string): any;
+    recordAgentRun(params: { outcome: 'ok' | 'error' | 'timeout' }): any;
+}
+
 /** Các thao tác chiến dịch (`campaignOperations`); kiểm tra tham số nằm ở đó. */
 export interface CampaignPort {
     list(params?: any): any;
@@ -192,6 +204,7 @@ export interface LeadPort {
     collectStatus(): any;
     collectCancel(): any;
     comments(params?: any): any;
+    reply(params: any): any;
 }
 
 export interface ControlEventRow { seq: number; type: string; payload: unknown; createdAt: number }
@@ -206,6 +219,7 @@ export interface ControlMethodDeps {
     briefs?: BriefPort;
     pages?: PagePort;
     notifications?: NotificationPort;
+    autonomy?: AutonomyPort;
     protectedWritesEnabled?(): boolean;
     listProfiles(): unknown | Promise<unknown>;
     /** Bắt đầu kiểm tra đăng nhập nền (null = mọi profile). Ném BUSY_ERROR khi đang có việc. */
@@ -978,6 +992,17 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
             run: async (p) => deps.leads.update(pick(p, ['id', 'status', 'note'])),
         },
         {
+            name: 'comments.reply',
+            description: 'Chỉ owner. Trả lời một khách (leads.list) đã bình luận dưới bài do chính MaiHub đăng, bằng một bình luận mới dưới bài đó; mỗi khách và mỗi người trên mỗi bài chỉ một lần. Xếp hàng chạy nền, trả replyId ngay; xong có sự kiện comments.replied. Tối đa 10 lượt/ngày/profile và nằm trong tổng thao tác Facebook của bộ giới hạn: hết trần, giờ im lặng hoặc công tắc tắt → LIMIT_REACHED kèm details.reason và retryAt. Khách không thuộc bài do app đăng → INVALID_PARAMS; đã có lượt trả lời → CONFLICT; id lạ → NOT_FOUND.',
+            destructive: false,
+            paramsSchema: obj({
+                leadId: int('Mã khách (leads.list)', { minimum: 1 }),
+                text: { type: 'string', minLength: 1, maxLength: 1000, description: 'Nội dung trả lời (1–1000 ký tự)' },
+            }, ['leadId', 'text']),
+            resultSchema: obj({ replyId: int('Mã lượt trả lời'), status: { type: 'string', enum: ['queued'] } }, ['replyId', 'status']),
+            run: async (p) => deps.leads.reply(pick(p, ['leadId', 'text'])),
+        },
+        {
             name: 'leads.config',
             description: 'Đọc hoặc lưu cấu hình phát hiện khách và tự thu bình luận. Không truyền config = chỉ đọc; có config = lưu rồi trả cấu hình mới. Cấu hình: autoCollect (boolean), collectAtMinutes (1–10 số tăng dần, 30–20160 phút), keywords (1–100 mục, mỗi mục 1–40 ký tự), detectPhone (boolean), aiEnabled (boolean), aiMinScore (0–100).',
             destructive: false,
@@ -1024,6 +1049,103 @@ export function createControlMethods(deps: ControlMethodDeps): ControlMethod[] {
                 assertMethodContext(ctx, 'notifications.setConfig', p);
                 mergeNotificationConfig({ ...DEFAULT_NOTIFICATION_CONFIG }, p); // trường lạ / ngoài miền → INVALID_PARAMS trước khi chạm port
                 return deps.notifications.setConfig(pick(p, ['reportCadence', 'reportHour', 'reportWeekday', 'leadDigestMinutes']));
+            },
+        },
+        {
+            name: 'autonomy.status',
+            description: 'Chỉ owner. Trạng thái tự vận hành: policy, enabled, masterOn (công tắc ghi Facebook), quietNow (đang trong giờ im lặng), usage và remaining (lượt đã dùng/còn lại hôm nay theo profile và toàn workspace), pausedProfiles (profile bị dừng vì checkpoint/đăng xuất), due (việc đang chờ), now, timeZone. Khi một thao tác bị chặn, lỗi LIMIT_REACHED mang details.reason và details.retryAt; dùng status để biết còn lượt nào.',
+            destructive: false, paramsSchema: noParams,
+            resultSchema: obj({ policy: { type: 'object' }, enabled: { type: 'boolean' }, masterOn: { type: 'boolean' }, quietNow: { type: 'boolean' }, usage: { type: 'object' }, remaining: { type: 'object' }, pausedProfiles: { type: 'array', items: { type: 'object' } }, due: { type: 'object' }, now: { type: 'integer' }, timeZone: { type: 'string' } }, ['policy', 'enabled', 'masterOn', 'quietNow', 'usage', 'remaining', 'pausedProfiles', 'due', 'now', 'timeZone']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'autonomy.status', p);
+                rejectUnknown(p, []);
+                return deps.autonomy.status();
+            },
+        },
+        {
+            name: 'autonomy.config',
+            description: 'Chỉ owner. Đọc chính sách tự vận hành hiện hành (bật/tắt, giờ im lặng, trần theo ngày). Thao tác vượt chính sách bị từ chối bằng LIMIT_REACHED với details.reason và details.retryAt.',
+            destructive: false, paramsSchema: noParams,
+            resultSchema: obj({ policy: { type: 'object', description: 'Chính sách hiện hành' } }, ['policy']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'autonomy.config', p);
+                rejectUnknown(p, []);
+                return deps.autonomy.config();
+            },
+        },
+        {
+            name: 'autonomy.setConfig',
+            description: 'Chỉ owner. Đổi một phần chính sách tự vận hành (chỉ gửi trường muốn đổi): enabled, quietStart/quietEnd (HH:MM), pageCampaignDays, pagePostsPerDay, pagePostsTotal, pageWindowStart/pageWindowEnd, groupPostsPerDay, groupRepeatDays, leadRepliesPerDay, facebookActionsPerDay, videosPerDay, videoReserveLast, agentRunsPerDay. Trường lạ hoặc ngoài miền: INVALID_PARAMS. Mỗi thay đổi được ghi lại (ai, trước/sau) và phát sự kiện autonomy.changed. Sau đó mọi thao tác vượt chính sách bị từ chối bằng LIMIT_REACHED (details.reason, details.retryAt).',
+            destructive: false,
+            paramsSchema: obj({
+                enabled: { type: 'boolean', description: 'Bật/tắt tự vận hành' },
+                quietStart: str('Bắt đầu giờ im lặng, HH:MM'),
+                quietEnd: str('Kết thúc giờ im lặng, HH:MM'),
+                pageCampaignDays: int('Số ngày chiến dịch Page (1–30)', { minimum: 1, maximum: 30 }),
+                pagePostsPerDay: int('Bài Page mỗi ngày mỗi Page', { minimum: 0 }),
+                pagePostsTotal: int('Tổng bài Page mỗi chiến dịch', { minimum: 0 }),
+                pageWindowStart: str('Giờ sớm nhất đăng Page, HH:MM'),
+                pageWindowEnd: str('Giờ muộn nhất đăng Page, HH:MM'),
+                groupPostsPerDay: int('Bài nhóm mỗi ngày mỗi profile', { minimum: 0 }),
+                groupRepeatDays: int('Số ngày tối thiểu giữa hai bài vào cùng nhóm', { minimum: 0 }),
+                leadRepliesPerDay: int('Lượt trả lời khách mỗi ngày mỗi profile', { minimum: 0 }),
+                facebookActionsPerDay: int('Tổng thao tác Facebook mỗi ngày mỗi profile', { minimum: 0 }),
+                videosPerDay: int('Video mỗi ngày toàn workspace', { minimum: 0 }),
+                videoReserveLast: { type: 'boolean', description: 'Giữ lượt video cuối cho anh (bot không dùng được)' },
+                agentRunsPerDay: int('Lượt AI mỗi ngày', { minimum: 0 }),
+            }),
+            resultSchema: obj({ policy: { type: 'object' }, changes: { type: 'array', items: { type: 'object' } } }, ['policy', 'changes']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'autonomy.setConfig', p);
+                mergeAutonomyPolicy({ ...DEFAULT_AUTONOMY_POLICY }, p); // trường lạ / ngoài miền → INVALID_PARAMS trước khi chạm port
+                return deps.autonomy.setConfig(p, ctx.keyName ?? 'bot');
+            },
+        },
+        {
+            name: 'autonomy.stop',
+            description: 'Chỉ owner. Tắt tự vận hành ngay: enabled = false, huỷ mọi lượt đang chạy do bot khởi tạo và tắt các lịch do bot tạo. Việc anh tự tạo trong app không bị đụng tới. Phát sự kiện autonomy.stopped. Sau khi tắt, thao tác Facebook của bot bị từ chối bằng LIMIT_REACHED (details.reason = stopped).',
+            destructive: false, paramsSchema: noParams,
+            resultSchema: obj({ enabled: { type: 'boolean' }, cancelledRuns: { type: 'integer' }, disabledSchedules: { type: 'integer' } }, ['enabled', 'cancelledRuns', 'disabledSchedules']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'autonomy.stop', p);
+                rejectUnknown(p, []);
+                return deps.autonomy.stop(ctx.keyName ?? 'bot');
+            },
+        },
+        {
+            name: 'autonomy.resume',
+            description: 'Chỉ owner. Bật lại tự vận hành (enabled = true). Không gỡ dừng của profile (dùng autonomy.resumeProfile). Thao tác vượt chính sách vẫn bị từ chối bằng LIMIT_REACHED (details.reason, details.retryAt).',
+            destructive: false, paramsSchema: noParams,
+            resultSchema: obj({ enabled: { type: 'boolean' } }, ['enabled']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'autonomy.resume', p);
+                rejectUnknown(p, []);
+                return deps.autonomy.resume(ctx.keyName ?? 'bot');
+            },
+        },
+        {
+            name: 'autonomy.resumeProfile',
+            description: 'Chỉ owner. Gỡ dừng tự động của một profile đã gặp checkpoint hoặc bị đăng xuất (sau khi anh đã đăng nhập lại). resumed = false nếu profile không bị dừng. Khi còn dừng, thao tác của profile đó bị từ chối bằng LIMIT_REACHED (details.reason = profile_paused).',
+            destructive: false,
+            paramsSchema: obj({ profileId: str('Mã profile') }, ['profileId']),
+            resultSchema: obj({ resumed: { type: 'boolean' } }, ['resumed']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'autonomy.resumeProfile', p);
+                rejectUnknown(p, ['profileId']);
+                return deps.autonomy.resumeProfile(requireString(p, 'profileId'), ctx.keyName ?? 'bot');
+            },
+        },
+        {
+            name: 'autonomy.recordAgentRun',
+            description: 'Chỉ owner. Ghi nhận một lượt AI của bot (outcome: ok, error hoặc timeout) và trừ vào trần agentRunsPerDay. Bị từ chối bằng LIMIT_REACHED với details.reason (quota khi hết lượt trong ngày, stopped khi tắt tự vận hành) và details.retryAt (mili giây epoch hoặc null).',
+            destructive: false,
+            paramsSchema: obj({ outcome: { type: 'string', enum: ['ok', 'error', 'timeout'], description: 'Kết quả lượt AI' } }, ['outcome']),
+            resultSchema: obj({ recorded: { type: 'boolean' }, remaining: { type: 'integer', description: 'Lượt AI còn lại hôm nay' } }, ['recorded', 'remaining']),
+            run: async (p, ctx) => {
+                assertMethodContext(ctx, 'autonomy.recordAgentRun', p);
+                rejectUnknown(p, ['outcome']);
+                if (!['ok', 'error', 'timeout'].includes(p.outcome)) throw new ControlError('INVALID_PARAMS', 'outcome phải là ok, error hoặc timeout', { field: 'outcome' });
+                return deps.autonomy.recordAgentRun({ outcome: p.outcome });
             },
         },
         {

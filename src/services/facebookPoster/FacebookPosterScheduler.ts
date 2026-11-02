@@ -165,7 +165,7 @@ export class FacebookPosterScheduler {
             try {
                 const params = this.deps.resolveParams(s);
                 if (!this.deps.canStart(params)) continue;
-                runId = this.deps.startRun(params, s.id, { priority: 'scheduled', deadlineAt }).runId;
+                runId = this.deps.startRun(params, s.id, { priority: 'scheduled', deadlineAt, ...(s.origin === 'api' ? { origin: 'api' as const } : {}) }).runId;
                 remove();
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);

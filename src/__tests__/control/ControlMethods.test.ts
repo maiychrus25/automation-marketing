@@ -75,7 +75,7 @@ describe('pages.*', () => {
     });
     it('adds two non-destructive methods with the public response schema', () => {
         const { methods } = setupPages();
-        expect(methods).toHaveLength(63); // 60 + pages.metrics + notifications.config + notifications.setConfig (spec 2026-10-31 §6)
+        expect(methods).toHaveLength(71); // 60 + pages.metrics + notifications.config + notifications.setConfig (spec 2026-10-31 §6) + 7 autonomy.* (spec 2026-11-01 §6.1) + comments.reply (§7)
         const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('pages.')) as any[];
         expect(found.map((m) => m.name).sort()).toEqual(['pages.learn', 'pages.list', 'pages.metrics']);
         expect(found.every((m) => m.destructive === false)).toBe(true);
@@ -502,8 +502,9 @@ describe('describe', () => {
             'briefs.list', 'briefs.get', 'briefs.save', 'briefs.delete', 'briefs.claimDue', 'briefs.finish',
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
-            'comments.collect', 'comments.collectStatus', 'comments.collectCancel', 'comments.list', 'leads.list', 'leads.update', 'leads.config',
+            'comments.collect', 'comments.collectStatus', 'comments.collectCancel', 'comments.list', 'leads.list', 'leads.update', 'comments.reply', 'leads.config',
             'notifications.config', 'notifications.setConfig',
+            'autonomy.status', 'autonomy.config', 'autonomy.setConfig', 'autonomy.stop', 'autonomy.resume', 'autonomy.resumeProfile', 'autonomy.recordAgentRun',
             'videos.templates', 'videos.render', 'videos.adCreate', 'videos.status', 'videos.list', 'videos.cancel',
         ]);
         for (const m of d.methods) {
@@ -929,10 +930,10 @@ describe('lead and comment methods', () => {
         expect(leads.collectCancel).toHaveBeenCalledTimes(1);
     });
 
-    it('describes the seven methods as non-destructive', () => {
+    it('describes the eight methods as non-destructive', () => {
         const { methods } = setupLeads();
         const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('leads.') || m.name.startsWith('comments.')) as any[];
-        expect(found).toHaveLength(7);
+        expect(found).toHaveLength(8);
         for (const m of found) expect(m.destructive).toBe(false);
         expect(found.find((m) => m.name === 'comments.collect').description).toMatch(/leads\.found/);
         expect(found.find((m) => m.name === 'comments.collect').description).toMatch(/comments\.collectFinished/);

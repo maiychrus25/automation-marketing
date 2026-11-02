@@ -1,6 +1,8 @@
 import type { FbPosterLead, TrackTargetKind } from '../../models/facebookPoster';
 import { engagementOf, type FacebookPosterStore } from './FacebookPosterStore';
 import { buildLeadsFoundPayload } from './LeadDetector';
+import { parseFollowerCount } from '../dailyBrief/pageFollowers';
+import type { AutonomySummary } from '../autonomy/AutonomyLimiter';
 import { buildLeadsDigest } from '../control/controlEvents';
 import {
     LEAD_DIGEST_BUSY_ERROR, LEAD_DIGEST_CURSOR_SETTING_KEY, NOTIFICATION_TICK_MS, REPORT_PERIOD_SETTING_KEY,
@@ -27,7 +29,9 @@ export interface MetricsReportPayload {
     notFound: number;
     top: { resultId: number; targetKind: TrackTargetKind; text: string; postUrl: string | null; engagement: number }[];
     /** `current`/`change` null nghĩa là chưa đủ dữ liệu. */
-    followers: { pageId: string; pageName: string; current: number | null; change: number | null }[];
+    followers: { pageId: string; pageName: string; current: number | null; change: number | null; approximate: boolean }[];
+    /** Việc bot tự làm trong kỳ; bỏ trường khi không có hoạt động tự vận hành. */
+    autonomy?: AutonomySummary;
 }
 
 export interface NotificationSchedulerDeps {
@@ -202,6 +206,7 @@ export class NotificationScheduler {
 export function buildMetricsReport(
     store: Pick<FacebookPosterStore, 'listTracking' | 'latestStats' | 'listPageFollowers' | 'postTexts'>,
     period: ReportPeriod, cadence: 'daily' | 'weekly', pageName: (pageId: string) => string,
+    autonomySummary?: (from: number, to: number) => AutonomySummary,
 ): MetricsReportPayload {
     const rows = store.listTracking({ sinceMs: period.from, untilMs: period.to - 1, limit: REPORT_ROWS_LIMIT });
     const latest = new Map(store.latestStats(rows.map((r) => r.resultId)).map((s) => [s.resultId, s]));
@@ -218,27 +223,39 @@ export function buildMetricsReport(
     for (const t of top) t.text = (texts.get(t.resultId) ?? t.text).slice(0, 100);
 
     // Người theo dõi: hiện tại = mốc cuối trước `to`; thay đổi chỉ khi có cả mốc trong kỳ và mốc cuối trước `from`, thiếu thì null.
-    const pages = new Map<string, { current: number | null; currentAt: number; base: number | null }>();
-    const entryOf = (pageId: string) => pages.get(pageId) ?? { current: null, currentAt: 0, base: null };
+        type Entry = { current: number | null; currentAt: number; base: number | null; approximate: boolean; step: number; baseStep: number };
+    const pages = new Map<string, Entry>();
+    const entryOf = (pageId: string): Entry => pages.get(pageId) ?? { current: null, currentAt: 0, base: null, approximate: false, step: 1, baseStep: 1 };
     for (const row of rows) if (row.targetKind === 'page' && row.pageId) pages.set(row.pageId, entryOf(row.pageId));
     for (const f of store.listPageFollowers({ sinceDay: '' })) {
         if (f.capturedAt >= period.to) continue;
         const entry = entryOf(f.pageId);
         entry.current = f.followers; // sắp theo ngày tăng dần nên dòng sau ghi đè
         entry.currentAt = f.capturedAt;
-        if (f.capturedAt < period.from) entry.base = f.followers;
+        entry.approximate = f.approximate === true;
+        // Bước làm tròn của dòng; dòng chính xác = 1.
+        const step = (f.approximate === true && f.followersText ? parseFollowerCount(f.followersText)?.step : 1) ?? 1;
+        entry.step = step;
+        if (f.capturedAt < period.from) { entry.base = f.followers; entry.baseStep = step; }
         pages.set(f.pageId, entry);
     }
-    const followers = [...pages.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([pageId, { current, currentAt, base }]) => ({
-        pageId, pageName: pageName(pageId), current, change: current !== null && base !== null && currentAt >= period.from ? current - base : null,
-    }));
+    const followers = [...pages.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([pageId, { current, currentAt, base, approximate, step, baseStep }]) => {
+        let change = current !== null && base !== null && currentAt >= period.from ? current - base : null;
+        // Ít nhất một đầu làm tròn: đổi nhỏ hơn bước lớn hơn của hai đầu coi như không đổi.
+        if (change !== null && Math.abs(change) < Math.max(step, baseStep)) change = 0;
+        return { pageId, pageName: pageName(pageId), current, change, approximate };
+    });
 
+    // `to` là mốc loại trừ còn summary tính cả hai đầu.
+    const summary = autonomySummary?.(period.from, period.to - 1);
+    const autonomy = summary && Object.values(summary).some((n) => n > 0) ? summary : undefined;
     return {
         cadence, periodKey: period.key, from: period.from, to: period.to, label: period.label,
         posts: rows.length, measured: measured.length,
         engagement: measured.length ? measured.reduce((sum, m) => sum + m.engagement, 0) : null,
         notFound: rows.filter((r) => r.linkStatus === 'not_found').length,
         top, followers,
+        ...(autonomy ? { autonomy } : {}),
     };
 }
 

@@ -166,6 +166,23 @@ CREATE TABLE IF NOT EXISTS fb_poster_leads (
 );
 CREATE INDEX IF NOT EXISTS idx_fb_poster_leads_status ON fb_poster_leads(status, detected_at);
 CREATE INDEX IF NOT EXISTS idx_fb_poster_leads_campaign ON fb_poster_leads(campaign_id);
+
+-- Trả lời khách dưới bài của app (bình luận mới dưới bài; không dùng fb_poster_comments là bảng bình luận thu được)
+CREATE TABLE IF NOT EXISTS fb_poster_lead_replies (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id        INTEGER NOT NULL,
+    profile_id     TEXT NOT NULL,
+    post_url       TEXT NOT NULL,
+    author_id      TEXT NOT NULL DEFAULT '',
+    text           TEXT NOT NULL,
+    status         TEXT NOT NULL,            -- queued | running | posted | skipped | failed | uncertain
+    reason         TEXT NOT NULL DEFAULT '',
+    reservation_id INTEGER DEFAULT NULL,
+    created_at     INTEGER NOT NULL,
+    finished_at    INTEGER DEFAULT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_lead_replies_lead ON fb_poster_lead_replies(lead_id);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_lead_replies_author ON fb_poster_lead_replies(post_url, author_id);
 `;
 
 // Chạy sau FB_POSTER_SCHEMA_SQL, từng câu trong try/catch (cột đã có thì ALTER ném lỗi, bỏ qua).
@@ -193,4 +210,10 @@ export const FB_POSTER_MIGRATIONS: string[] = [
     "ALTER TABLE fb_poster_post_tracking ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'group'",
     "ALTER TABLE fb_poster_post_tracking ADD COLUMN page_id TEXT NOT NULL DEFAULT ''",
     'CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_page ON fb_poster_post_tracking(profile_id, target_kind, page_id)',
+    // Tự vận hành có giới hạn: nguồn lệnh của lịch/lượt ('api' = bot qua Control API, 'app' = anh thao tác). Dòng cũ tự là 'app'.
+    "ALTER TABLE fb_poster_schedules ADD COLUMN origin TEXT NOT NULL DEFAULT 'app'",
+    "ALTER TABLE fb_poster_runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'app'",
+    // Số người theo dõi dạng làm tròn ("1,3K"): dòng cũ là số chính xác.
+    "ALTER TABLE fb_poster_page_followers ADD COLUMN followers_text TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE fb_poster_page_followers ADD COLUMN approximate INTEGER NOT NULL DEFAULT 0',
 ];

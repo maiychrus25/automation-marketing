@@ -51,6 +51,8 @@ export interface AdRenderInput {
     source: VideoSource;
     draft: AdPayloadDraft;
     webhookUrl?: string;
+    /** Gọi ngay khi AHV nhận job (trước mọi bước ghi cục bộ): từ đây job đã tốn tài nguyên, lỗi sau đó không được hoàn suất. */
+    onAccepted?: () => void;
 }
 
 export interface VideoServiceDeps {
@@ -204,6 +206,7 @@ export class VideoService {
         for (const file of input.draft.uploads) urls.push(await client.upload(file.path, file.name));
         const payload = fillAdUploads(input.draft.payload, urls) as Record<string, unknown>;
         const created = await client.createJob(payload, input.webhookUrl);
+        input.onAccepted?.();
         const job: VideoJob = {
             id: randomUUID(), remoteId: created.jobId, name, source: input.source, engine: 'ahv_ad',
             templateId: null, aspect: '9:16', specJson: JSON.stringify(payload),

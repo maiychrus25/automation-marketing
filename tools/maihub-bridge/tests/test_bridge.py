@@ -5114,5 +5114,266 @@ class BriefTickTests(unittest.TestCase):
         self.assertEqual(self.agent_calls, [])
 
 
+def auto_status(**over):
+    status = {
+        "policy": {"enabled": True}, "enabled": True, "masterOn": True, "quietNow": False,
+        "remaining": {"videos": 2, "agentRuns": 5, "profileDefault": {"pagePosts": 1, "groupPosts": 3, "leadReplies": 10, "facebookActions": 12}, "profiles": {}},
+        "pausedProfiles": [], "now": 1800000000000, "timeZone": "Asia/Ho_Chi_Minh",
+        "due": {"briefs": 0, "campaignSchedules": 0, "commentPosts": 0, "unrepliedLeads": 0, "videosPending": 0},
+    }
+    due = over.pop("due", {})
+    status["due"] = dict(status["due"], **due)
+    status.update(over)
+    return status
+
+
+class AutoTickTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state_path = os.path.join(self.tmp.name, "state", "auto-state.json")
+        self.clock = FakeClock(now=1800000000.0)
+        self.status = auto_status(due={"briefs": 1})
+        self.calls = []
+        self.errors = {}
+        self.agent_calls = []
+        self.agent_result = (0, False)
+        self.client = mock.Mock(call=self.call)
+
+    def call(self, method, params=None, idempotency_key=None):
+        self.calls.append((method, params))
+        if method in self.errors:
+            raise self.errors[method]
+        if method == "autonomy.status":
+            return self.status
+        if method == "autonomy.recordAgentRun":
+            return {"recorded": True, "remaining": 4}
+        raise AssertionError("Unexpected method: %s" % method)
+
+    def run_agent(self, cmd, prompt, timeout_sec):
+        self.agent_calls.append((cmd, prompt, timeout_sec))
+        if isinstance(self.agent_result, BaseException):
+            raise self.agent_result
+        return self.agent_result
+
+    def tick(self, env=None):
+        self.assertTrue(callable(getattr(bridge, "auto_tick", None)), "auto_tick chưa được triển khai")
+        with mock.patch.object(time, "monotonic", self.clock):
+            return bridge.auto_tick(self.client, env or {}, self.state_path, run_agent=self.run_agent, clock=self.clock)
+
+    def records(self):
+        return [params for method, params in self.calls if method == "autonomy.recordAgentRun"]
+
+    def assert_skipped(self, reason):
+        self.assertEqual(self.tick(), {"skipped": reason})
+        self.assertEqual(self.agent_calls, [])
+        self.assertEqual(self.records(), [])
+
+    def test_auto_tick_skips_without_agent_when_disabled(self):
+        self.status["enabled"] = False
+        self.assert_skipped("disabled")
+
+    def test_auto_tick_skips_without_agent_when_quiet(self):
+        self.status["quietNow"] = True
+        self.assert_skipped("quiet_hours")
+
+    def test_auto_tick_skips_without_agent_when_no_agent_runs(self):
+        self.status["remaining"]["agentRuns"] = 0
+        self.assert_skipped("no_agent_runs")
+
+    def test_auto_tick_skips_without_agent_when_nothing_due(self):
+        self.status = auto_status()
+        self.assert_skipped("nothing_due")
+
+    def test_auto_tick_skips_when_campaign_and_lead_work_cleared(self):
+        # The app clears campaignSchedules once the next post is reserved and unrepliedLeads once handled, capped, paused or master off.
+        self.status = auto_status(due={"campaignSchedules": 0, "unrepliedLeads": 0})
+        self.status["usage"] = {"profiles": {"p1": {"leadReplies": 10}}}
+        self.assert_skipped("nothing_due")
+
+    def test_auto_tick_unknown_method_warns_and_exits_zero(self):
+        self.errors["autonomy.status"] = bridge.BridgeError("UNKNOWN_METHOD", "x")
+        result = self.tick()
+        self.assertEqual(result["warnings"], ["MaiHub cần bản có Tự vận hành"])
+        self.assertEqual(self.agent_calls, [])
+        env_path = os.path.join(self.tmp.name, ".env")
+        with open(env_path, "w") as handle:
+            handle.write("MAIHUB_URL=https://hub:7443\nMAIHUB_API_KEY=test\nMAIHUB_CERT_SHA256=" + PIN + "\n")
+        with mock.patch.object(bridge, "MaiHubClient", return_value=self.client), \
+                mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(bridge.main(["--env-file", env_path, "auto-tick"]), 0)
+
+    def test_auto_tick_runs_agent_once_and_records_run(self):
+        result = self.tick({"MAIHUB_AGENT_CMD": "codex exec -", "MAIHUB_AGENT_TIMEOUT_SEC": "123"})
+        self.assertEqual(len(self.agent_calls), 1)
+        self.assertEqual(self.agent_calls[0][0], ["codex", "exec", "-"])
+        self.assertEqual(self.agent_calls[0][1], bridge.build_auto_prompt(self.status))
+        self.assertEqual(self.agent_calls[0][2], 123)
+        self.assertEqual(self.records(), [{"outcome": "ok"}])
+        self.assertEqual(result["outcome"], "ok")
+
+    def test_auto_tick_records_error_and_timeout_and_crash(self):
+        for agent_result, outcome in (((1, False), "error"), ((None, True), "timeout"), (OSError("no agent"), "error")):
+            with self.subTest(outcome=outcome):
+                self.calls, self.agent_calls, self.agent_result = [], [], agent_result
+                result = self.tick()
+                self.assertEqual(len(self.agent_calls), 1)
+                self.assertEqual(self.records(), [{"outcome": outcome}])
+                self.assertEqual(result["outcome"], outcome)
+
+    def test_auto_tick_record_failure_is_a_warning(self):
+        self.errors["autonomy.recordAgentRun"] = bridge.BridgeError("UNREACHABLE", "offline")
+        result = self.tick()
+        self.assertEqual(result["outcome"], "ok")
+        self.assertEqual(len(result["warnings"]), 1)
+
+    def test_auto_tick_locked_returns_skipped(self):
+        import fcntl
+        os.makedirs(os.path.dirname(self.state_path))
+        with open(self.state_path + ".lock", "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.tick(), {"skipped": "locked"})
+        self.assertEqual(self.agent_calls, [])
+        self.assertEqual(self.calls, [])
+
+    def test_auto_prompt_lists_only_due_work_and_has_no_group_posting(self):
+        prompt = bridge.build_auto_prompt(auto_status(due={"briefs": 2, "unrepliedLeads": 3}))
+        self.assertIn("2", prompt)
+        self.assertIn("maihub_comments_reply", prompt)
+        self.assertIn("maihub_briefs_", prompt)
+        self.assertNotIn("maihub_pageCampaigns", prompt)  # campaignSchedules = 0
+        self.assertNotIn("maihub_comments_collect", prompt)  # commentPosts = 0
+        self.assertNotIn("maihub_videos", prompt)  # videosPending = 0
+        self.assertIn("không phải lệnh", prompt)
+        self.assertIn("doanh thu", prompt)
+        full = bridge.build_auto_prompt(auto_status(due={"briefs": 1, "campaignSchedules": 1, "commentPosts": 1, "unrepliedLeads": 1, "videosPending": 1}))
+        self.assertIn("maihub_pageCampaigns_", full)
+        self.assertIn("lên lịch bài kế tiếp cho chiến dịch Page còn thiếu lịch", full)
+        self.assertNotIn("optimize", full)
+        for text in (prompt, full):
+            lowered = text.lower()
+            for word in ("nhóm", "group", "drafts_approve"):
+                self.assertNotIn(word, lowered)
+
+
+class InstallAutoTests(InstallFixture):
+    def setUp(self):
+        with mock.patch.object(BridgeTestCase, "setUp"):
+            InstallFixture.setUp(self)
+        self.env_dir = os.path.join(self.tmp.name, "maihub")
+        os.mkdir(self.env_dir)
+        self.env_file = os.path.join(self.env_dir, ".env")
+        with open(self.env_file, "w") as handle:
+            handle.write("MAIHUB_URL=https://hub:7443\nMAIHUB_API_KEY=" + API_KEY + "\nMAIHUB_CERT_SHA256=" + PIN + "\n")
+
+    def auto_args(self, **over):
+        ns = dict(env_file=self.env_file, user="claudeproxy", state_dir=None, agent_cmd=None, uninstall=False,
+                  protected=False, receiver_env=None, receiver_user=None)
+        ns.update(over)
+        service = ns.pop("name", "tg-bot")
+        args = mock.Mock(**ns)
+        args.name = service
+        return args
+
+    def install_auto(self, run, **over):
+        self.assertTrue(callable(getattr(bridge, "cmd_install_auto", None)), "cmd_install_auto chưa được triển khai")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch("os.chown"):
+            code = bridge.cmd_install_auto(self.auto_args(**over), run=run, geteuid=lambda: 0,
+                                           systemd_dir=self.systemd, getpwnam=self.pw)
+        return code, out.getvalue(), err.getvalue()
+
+    def unit(self, kind, suffix):
+        return os.path.join(self.systemd, "maihub-%s-tg-bot.%s" % (kind, suffix))
+
+    def test_install_auto_dry_run_and_units(self):
+        run = FakeRun()
+
+        def checked_run(cmd, **kwargs):
+            if "--dry-run" in cmd:
+                self.assertEqual(os.listdir(self.systemd), [])
+            return run(cmd, **kwargs)
+
+        code, out, err = self.install_auto(checked_run)
+        self.assertEqual(code, 0, out + err)
+        state = os.path.join(self.env_dir, "state")
+        self.assertEqual(run.calls[0][0], ["sudo", "-u", "claudeproxy", "-H", "python3", "-I", os.path.abspath(bridge.__file__),
+                                           "auto-tick", "--env-file", self.env_file, "--state",
+                                           os.path.join(state, "auto-state.json"), "--dry-run"])
+        self.assertEqual([c[0] for c in run.calls[1:]], [["systemctl", "daemon-reload"],
+                         ["systemctl", "enable", "--now", "maihub-auto-tg-bot.timer"]])
+        service = open(self.unit("auto", "service"), encoding="utf-8").read()
+        timer = open(self.unit("auto", "timer"), encoding="utf-8").read()
+        for line in ["Type=oneshot", "User=claudeproxy", "ReadWritePaths=" + state, "TimeoutStartSec=3600",
+                     "ExecStart=/usr/bin/python3 -I %s auto-tick --env-file %s --state %s" % (
+                         os.path.abspath(bridge.__file__), self.env_file, os.path.join(state, "auto-state.json"))]:
+            self.assertIn(line + "\n", service)
+        for line in ["OnCalendar=*:0/15", "Unit=maihub-auto-tg-bot.service", "WantedBy=timers.target"]:
+            self.assertIn(line + "\n", timer)
+        self.assertNotIn(API_KEY, out + err)
+
+    def test_install_auto_refuses_when_brief_timer_exists(self):
+        open(self.unit("brief", "timer"), "w").close()
+        run = FakeRun()
+        code, _, err = self.install_auto(run)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("maihub-brief-tg-bot.timer", err)
+        self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(self.unit("auto", "timer")))
+
+    def test_install_brief_refuses_when_auto_timer_exists(self):
+        open(self.unit("auto", "timer"), "w").close()
+        run = FakeRun()
+        out, err = io.StringIO(), io.StringIO()
+        args = mock.Mock(env_file=self.env_file, user="claudeproxy", state_dir=None, agent_cmd=None,
+                         protected=False, receiver_env=None, receiver_user=None)
+        args.name = "tg-bot"
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch("os.chown"):
+            code = bridge.cmd_install_brief(args, run=run, geteuid=lambda: 0, systemd_dir=self.systemd, getpwnam=self.pw)
+        self.assertEqual(code, bridge.EXIT_CONFIG)
+        self.assertIn("maihub-auto-tg-bot.timer", err.getvalue())
+        self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(self.unit("brief", "timer")))
+
+    def test_install_auto_uninstall(self):
+        run = FakeRun()
+        self.assertEqual(self.install_auto(run)[0], 0)
+        run.calls.clear()
+        code, out, err = self.install_auto(run, uninstall=True)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([c[0] for c in run.calls], [["systemctl", "disable", "--now", "maihub-auto-tg-bot.timer"],
+                                                      ["systemctl", "daemon-reload"]])
+        self.assertEqual(os.listdir(self.systemd), [])
+
+
+class FormatAutonomyTests(unittest.TestCase):
+    def fmt(self, etype, payload):
+        return bridge.format_event({"seq": 1, "type": etype, "payload": payload, "createdAt": 1}, lambda r: None)
+
+    def test_format_autonomy_events(self):
+        self.assertEqual(self.fmt("autonomy.changed", {"actor": "app", "changes": [
+            {"at": 1, "field": "enabled", "before": False, "after": True},
+            {"at": 2, "field": "pagePostsPerDay", "before": 1, "after": 2}]}),
+            "⚙️ Đổi chính sách tự vận hành (app): enabled false → true; pagePostsPerDay 1 → 2")
+        self.assertEqual(self.fmt("autonomy.paused", {"profileId": "p1", "profileName": "Mai Shop", "reason": "checkpoint"}),
+                         "🛑 Dừng tự vận hành cho Mai Shop: checkpoint. Bật lại trong app hoặc nhắn bot.")
+        self.assertEqual(self.fmt("autonomy.stopped", {"actor": "app", "cancelledRuns": 2, "disabledSchedules": 1}),
+                         "🛑 Đã dừng khẩn tự vận hành (2 lượt huỷ, 1 lịch tắt).")
+        self.assertIsNone(self.fmt("comments.replied", {"replyId": 1}))
+
+    def test_format_profile_resumed(self):
+        self.assertEqual(self.fmt("autonomy.changed", {"actor": "bot", "profileId": "p1", "changes": [
+            {"at": 1, "field": "profileResumed", "before": "checkpoint", "after": "resumed"}]}),
+            "⚙️ Bật lại tự vận hành cho profile p1 (bot): checkpoint → resumed")
+
+    def test_metrics_lines_include_autonomy_summary(self):
+        payload = {"cadence": "weekly", "periodKey": "k", "from": 1, "to": 2, "label": "24/10–30/10", "posts": 1,
+                   "autonomy": {"pagePosts": 3, "groupPosts": 1, "leadReplies": 4, "videos": 2, "blocked": 5, "pauses": 1}}
+        lines = self.fmt("metrics.report", payload).split("\n")
+        self.assertIn("Bot đã tự làm: 3 bài Page, 1 bài nhóm, 4 câu trả lời khách, 2 video; 5 lần bị chặn vì trần, 1 lần dừng profile.", lines)
+        del payload["autonomy"]
+        self.assertNotIn("Bot đã tự làm", self.fmt("metrics.report", payload))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -139,6 +139,9 @@ jest.mock('../../../electron/ipc/researchIpc', () => ({
 jest.mock('../../../electron/ipc/workspaceIpc', () => ({ isWorkspaceSwitchInProgress: () => mockSwitching }));
 jest.mock('../../services/control/controlEvents', () => ({
     buildPagesLearnFinished: jest.requireActual('../../services/control/controlEvents').buildPagesLearnFinished,
+    buildAutonomyChanged: jest.requireActual('../../services/control/controlEvents').buildAutonomyChanged,
+    buildAutonomyPaused: jest.requireActual('../../services/control/controlEvents').buildAutonomyPaused,
+    buildAutonomyStopped: jest.requireActual('../../services/control/controlEvents').buildAutonomyStopped,
     emitControlEvent: jest.fn(), hasControlEventSink: () => mockSink, buildRunStarted: jest.fn(), buildRunFinished: jest.fn(), buildScheduleMissed: jest.fn(),
     buildDraftApproved: jest.fn(), buildLoginProblem: jest.fn(), buildCheckFinished: jest.fn(), buildTrackFinished: jest.fn(), buildLeadsFound: jest.fn((p: unknown) => p), buildCollectFinished: jest.fn((p: unknown) => p),
     recordControlEvent: jest.fn(), buildLeadsDigest: jest.requireActual('../../services/control/controlEvents').buildLeadsDigest,
@@ -715,6 +718,19 @@ describe('facebookPosterIpc wiring', () => {
             expect(replacementStore.listLoginStates()).toEqual([]);
             expect(emit).not.toHaveBeenCalled(); expect(control).not.toHaveBeenCalled(); expect(mockRunFinished).not.toHaveBeenCalled();
         } finally { mockDatabaseInstance = original; }
+    });
+
+    test('loginProblemPausesAutonomyProfileOnce: checkpoint and logged_out pause, ok does not', async () => {
+        await currentWorkerDeps();
+        const control = require('../../services/control/controlEvents').emitControlEvent as jest.Mock;
+        const paused = () => control.mock.calls.filter(call => call[0] === 'autonomy.paused').map(call => call[1]);
+        mockServiceDeps.onLoginObserved('pause-profile', 'ok');
+        control.mockClear();
+        mockServiceDeps.onLoginObserved('pause-profile', 'checkpoint');
+        mockServiceDeps.onLoginObserved('pause-profile', 'checkpoint');
+        mockServiceDeps.onLoginObserved('pause-profile', 'logged_out');
+        expect(paused()).toEqual([expect.objectContaining({ profileId: 'pause-profile', reason: 'checkpoint' })]);
+        expect(control.mock.calls.filter(call => call[0] === 'profile.loginProblem').length).toBeGreaterThanOrEqual(1);
     });
 
     test('publish and tracker Page callbacks bind campaign posts on the captured DB only', async () => {
@@ -1462,5 +1478,83 @@ describe('page metrics and notification config (spec 2026-10-31 §6)', () => {
         expect(await control('pages.metrics', { pageId: 'pm-page', days: 7 })).toMatchObject({ pages: [{ pageId: 'pm-page' }] });
         const schema: any = createControlMethods({} as any).find((m) => m.name === 'pages.metrics')!.paramsSchema;
         expect(schema.properties.days.maximum).toBe(MAX_PAGE_METRICS_DAYS); // Control and IPC limits stay equal
+    });
+});
+
+describe('bounded autonomy: schedules.update from the Control API and the report limiter', () => {
+    const ipcModule = () => require('../../../electron/ipc/facebookPosterIpc');
+    const { CONTROL_CONFIG_SETTING_KEY } = require('../../services/control/controlConfig');
+    const body = { kind: 'recurring', days: [1], time: '09:30', params: { mode: 'group', text: 'Bài', profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123456789'] }] } };
+    let settingSpy: jest.SpyInstance;
+    let master = true;
+    const limiter = () => ipcModule().getAutonomyLimiter();
+    const create = (enabled: boolean) => {
+        const id = posterOperations.scheduleCreate(body).schedule!.id;
+        if (!enabled) posterOperations.scheduleUpdate({ id, enabled: false });
+        return id;
+    };
+    const origin = (id: string) => new FacebookPosterStore(mockDb).getSchedule(id)!.origin;
+    beforeEach(() => {
+        mockDb.run('DELETE FROM fb_poster_schedules');
+        master = true;
+        settingSpy = jest.spyOn(mockDatabaseInstance as { getSetting(key: string): string | null }, 'getSetting').mockImplementation((key: string) =>
+            key === CONTROL_CONFIG_SETTING_KEY ? JSON.stringify({ protectedWritesEnabled: master }) : null);
+        limiter().setPolicy({ enabled: true }, 'test');
+    });
+    afterEach(() => { limiter().setPolicy({ enabled: false }, 'test'); settingSpy.mockRestore(); });
+
+    test('apiScheduleUpdateEnablingTagsApiOrigin', () => {
+        const id = create(false);
+        // A rename or turning it off through the API leaves the operator's schedule alone.
+        posterOperations.scheduleUpdate({ id, name: 'Đổi tên' }, 'api');
+        posterOperations.scheduleUpdate({ id, enabled: false }, 'api');
+        posterOperations.scheduleUpdate({ id, time: '10:00' }, 'api'); // re-timing while off does not run anything
+        expect(origin(id)).toBe('app');
+        expect(posterOperations.scheduleUpdate({ id, enabled: true }, 'api').schedule).toMatchObject({ enabled: true, origin: 'api' });
+    });
+
+    test('apiScheduleUpdateRetimingTagsApiOrigin', () => {
+        const id = create(true);
+        posterOperations.scheduleUpdate({ id, enabled: true }, 'api'); // already on: not a takeover
+        expect(origin(id)).toBe('app');
+        expect(posterOperations.scheduleUpdate({ id, time: '10:45' }, 'api').schedule).toMatchObject({ time: '10:45', origin: 'api' });
+    });
+
+    test('apiScheduleUpdateRefusedWhenStopped', () => {
+        const id = create(false);
+        limiter().setPolicy({ enabled: false }, 'test');
+        expect(() => posterOperations.scheduleUpdate({ id, enabled: true }, 'api')).toThrow(expect.objectContaining({ code: 'LIMIT_REACHED', details: expect.objectContaining({ reason: 'stopped' }) }));
+        limiter().setPolicy({ enabled: true }, 'test');
+        master = false;
+        expect(() => posterOperations.scheduleUpdate({ id, enabled: true, time: '11:00' }, 'api')).toThrow(expect.objectContaining({ code: 'LIMIT_REACHED', details: expect.objectContaining({ reason: 'master_off' }) }));
+        expect(new FacebookPosterStore(mockDb).getSchedule(id)).toMatchObject({ enabled: false, time: '09:30', origin: 'app' });
+    });
+
+    test('appScheduleUpdateKeepsOrigin', () => {
+        const id = create(false);
+        limiter().setPolicy({ enabled: false }, 'test'); // the operator is never limited
+        expect(posterOperations.scheduleUpdate({ id, enabled: true }).schedule).toMatchObject({ enabled: true, origin: 'app' });
+        posterOperations.scheduleUpdate({ id, time: '10:45' });
+        expect(origin(id)).toBe('app');
+        limiter().setPolicy({ enabled: true }, 'test');
+        posterOperations.scheduleUpdate({ id, time: '11:00' }, 'api');
+        posterOperations.scheduleUpdate({ id, time: '11:15' });
+        expect(origin(id)).toBe('api');
+    });
+
+    test('buildReport reads the autonomy summary from the scheduler DB, not the live one', () => {
+        new (require('../../services/dailyBrief/DailyBriefStore').DailyBriefStore)(mockDb).ensureSchema();
+        startFacebookPosterScheduler();
+        const deps = mockNotificationDeps;
+        limiter().commit(limiter().reserve({ action: 'video', origin: 'api' })!);
+        const original = mockDatabaseInstance;
+        const replacement = memoryDb(); new FacebookPosterStore(replacement).ensureSchema();
+        const query = jest.spyOn(replacement, 'query');
+        mockDatabaseInstance = { ...original, ...replacement };
+        try {
+            const report = deps.buildReport({ key: 'k', label: 'l', from: NOW - 3_600_000, to: Date.now() + 3_600_000 }, 'daily');
+            expect(report.autonomy).toMatchObject({ videos: 1 });
+            expect(query.mock.calls.some((call) => String(call[0]).includes('autonomy_actions'))).toBe(false);
+        } finally { mockDatabaseInstance = original; mockDb.run("DELETE FROM autonomy_actions WHERE action = 'video'"); }
     });
 });

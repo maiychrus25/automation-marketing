@@ -5,6 +5,7 @@ import type { LearnResult } from '../dailyBrief/PageLearner';
 import type { ControlPrincipal, PageWork } from '../../models/pageOperations';
 import type { CampaignGrant, CampaignProposal, PageCampaignLink } from '../../models/pageCampaigns';
 import type { ControlEvent } from './ControlStore';
+import type { PolicyChange } from '../autonomy/AutonomyLimiter';
 
 export function projectPageCampaignEvent(event: ControlEvent, principal: ControlPrincipal, store: {
     getLink(id: string): PageCampaignLink | null;
@@ -40,7 +41,7 @@ export function projectPageWorkEvent(event: ControlEvent, principal: ControlPrin
         ...(event.type === 'pageWork.draftSaved' && typeof p.draftId === 'string' && work.draftIds.includes(p.draftId) ? { draftId: p.draftId } : {}) };
 }
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'briefs.finished' | 'pages.learnFinished' | 'metrics.report' | 'leads.digest';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'comments.replied' | 'briefs.finished' | 'pages.learnFinished' | 'metrics.report' | 'leads.digest' | 'autonomy.changed' | 'autonomy.paused' | 'autonomy.stopped';
 
 export function buildPagesLearnFinished(e: { jobId: string; results: LearnResult[] }) {
     return {
@@ -85,6 +86,22 @@ export function buildDraftApproved(schedule: Pick<FbPosterSchedule, 'id' | 'name
 
 export function buildLoginProblem(e: { profileId: string; profileName: string; state: LoginState; source: 'check' | 'run' }) {
     return { profileId: e.profileId, profileName: e.profileName, state: e.state, source: e.source };
+}
+
+/** Chính sách tự vận hành đổi; `changes` là từng trường đổi (trước/sau). Bật lại một profile: `profileId` + trường `profileResumed`. */
+export function buildAutonomyChanged(e: { actor: string; changes: (Omit<PolicyChange, 'field'> & { field: string })[]; profileId?: string }) {
+    return { actor: e.actor, ...(e.profileId ? { profileId: e.profileId } : {}),
+        changes: e.changes.map((c) => ({ at: c.at, field: c.field, before: c.before, after: c.after })) };
+}
+
+/** Profile bị dừng tự động vì checkpoint hoặc đăng xuất, cho tới `autonomy.resumeProfile`. */
+export function buildAutonomyPaused(e: { profileId: string; profileName: string; reason: 'checkpoint' | 'logged_out' }) {
+    return { profileId: e.profileId, profileName: e.profileName, reason: e.reason };
+}
+
+/** Anh hoặc bot tắt tự vận hành; kèm số lượt chạy và lịch của bot đã bị huỷ/tắt. */
+export function buildAutonomyStopped(e: { actor: string; cancelledRuns: number; disabledSchedules: number }) {
+    return { actor: e.actor, cancelledRuns: e.cancelledRuns, disabledSchedules: e.disabledSchedules };
 }
 
 /** `error` chỉ có khi lần kiểm tra của profile đó lỗi. */
@@ -140,6 +157,11 @@ export function buildCollectFinished(e: { jobId: string; auto: boolean; cancelle
     return { jobId: e.jobId, auto: e.auto, cancelled: e.cancelled, posts: e.posts, collected: e.collected, leads: e.leads, errors: e.errors };
 }
 
+/** Một lượt trả lời khách đã xong: `status` = posted | skipped | failed | uncertain; `reason` rỗng khi posted. */
+export function buildCommentsReplied(e: { replyId: number; leadId: number; status: string; reason: string }) {
+    return { replyId: e.replyId, leadId: e.leadId, status: e.status, reason: e.reason };
+}
+
 /**
  * Video render xong, lỗi hoặc bị huỷ (`cancelled: true`, kèm `ok: false`); `error` chỉ khi lỗi/huỷ,
  * `mediaId` chỉ với video do bot tạo, `warnings` chỉ với video quảng cáo AI có cảnh báo (bot nên cho người xem lại).
@@ -158,10 +180,17 @@ export function buildVideoFinished(e: { videoId: string; name: string; ok: boole
 
 type Sink = (type: ControlEventType, payload: unknown) => void;
 let sink: Sink | null = null;
+let wake: (() => void) | null = null;
 
 /** Control API đặt sink khi chạy (ghi vào ControlStore rồi notify) và gỡ khi dừng; nơi phát sự kiện không cần biết API có bật hay không. */
-export function setControlEventSink(next: Sink | null): void {
+export function setControlEventSink(next: Sink | null, nextWake: (() => void) | null = null): void {
     sink = next;
+    wake = next ? nextWake : null;
+}
+
+/** Đánh thức long-poll sau khi dòng sự kiện được ghi thẳng vào ControlStore (không qua sink); không bao giờ ném. */
+export function wakeControlEventWaiters(): void {
+    try { wake?.(); } catch (err) { Logger.error('[control] Không đánh thức được người chờ sự kiện:', errorText(err)); }
 }
 
 export function hasControlEventSink(): boolean {

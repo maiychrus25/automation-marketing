@@ -12,7 +12,7 @@ import { VideoStore } from '../../src/services/video/VideoStore';
 import { createVideoOperations, routeVideoEvent, type VideoOperationsDeps } from '../../src/services/video/videoOperations';
 import { createSafeStorageCrypto, loadVideoSettings, saveVideoSettings } from '../../src/services/video/videoSettings';
 import { getInboxMediaStore } from './inboxMedia';
-import { isFacebookPosterEmployeeBlocked } from './facebookPosterIpc';
+import { getAutonomyLimiter, isFacebookPosterEmployeeBlocked } from './facebookPosterIpc';
 
 let service: VideoService | null = null;
 let preparedDbPath: string | null = null;
@@ -62,6 +62,7 @@ const videoDeps: VideoOperationsDeps = {
     loadAhvSettings: () => loadAhvSettings(db(), crypto),
     saveAhvSettings: (input) => saveAhvSettings(db(), crypto, input),
     adClient,
+    autonomy: getAutonomyLimiter,
     resolveMedia: (ids) => getInboxMediaStore().resolve(ids),
     pickSavePath: async (defaultName) => {
         const result = await dialog.showSaveDialog({ defaultPath: defaultName, filters: [{ name: 'Video MP4', extensions: ['mp4'] }] });

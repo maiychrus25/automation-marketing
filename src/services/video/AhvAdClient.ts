@@ -43,7 +43,7 @@ const RESULT_TIMEOUT_MS = 3 * 60_000;
 function classify(status: number): RenderErrorCode {
     if (status === 429 || status === 503) return 'limit';
     if (status === 404) return 'not_found';
-    if (status === 400 || status === 401 || status === 413 || status === 415) return 'invalid';
+    if (status === 400 || status === 401 || status === 403 || status === 413 || status === 415) return 'invalid';
     return 'server';
 }
 
@@ -160,6 +160,7 @@ export class AhvAdClient {
         if (res.status === 401) return 'Khoá API AHV AI không đúng';
         let body: any = null;
         try { body = await res.json(); } catch { /* thân không phải JSON */ }
+        if (res.status === 403 && body?.error === 'key_chi_dung_cho_ad_video') return 'Khoá AHV AI này chỉ dùng cho video quảng cáo';
         const text = typeof body?.error === 'object' && body?.error
             ? String(body.error.message ?? body.error.reason ?? '')
             : String(body?.error ?? body?.detail ?? '');

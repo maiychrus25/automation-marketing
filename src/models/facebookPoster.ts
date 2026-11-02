@@ -27,6 +27,8 @@ export interface FbPosterRun {
     scheduleId: string | null;
     scheduleName: string | null; // null khi lịch đã bị xóa
     campaignId: string | null;
+    /** Nguồn lệnh: 'api' = bot duyệt qua Control API (bị bộ giới hạn tự vận hành chặn bớt), 'app' = anh thao tác. */
+    origin?: 'api' | 'app';
 }
 
 export interface FbPosterSchedule {
@@ -43,6 +45,8 @@ export interface FbPosterSchedule {
     draft: boolean;
     /** Server provenance only; optional for legacy in-memory shapes, required on persisted rows. */
     authorityKind?: 'owner' | 'autonomy';
+    /** Nguồn lệnh khi duyệt bản nháp; lượt từ lịch kế thừa. Dòng cũ là 'app'. */
+    origin?: 'api' | 'app';
     campaignId: string | null;
     nextRunAt: number | null;
     lastRunId: string | null;
@@ -151,6 +155,10 @@ export interface PageFollowerRow {
     capturedOn: string;
     capturedAt: number;
     followers: number;
+    /** Chữ gốc trên Facebook ('1,3K'); '' với dòng cũ. */
+    followersText?: string;
+    /** Số đã làm tròn theo đơn vị K/Tr; vắng = chính xác. */
+    approximate?: boolean;
 }
 
 export interface PostTrackingRow {
@@ -234,3 +242,20 @@ export interface PostStatsReportRow {
         snapshots: PostStatsSnapshot[];
     };
 }
+
+export type LeadReplyStatus = 'queued' | 'running' | 'posted' | 'skipped' | 'failed' | 'uncertain';
+export interface FbPosterLeadReply {
+    id: number;
+    leadId: number;
+    profileId: string;
+    postUrl: string;
+    authorId: string;
+    text: string;
+    status: LeadReplyStatus;
+    reason: string;
+    reservationId: number | null;
+    createdAt: number;
+    finishedAt: number | null;
+}
+/** Khách + bài gốc để trả lời; `fromAppPost` chỉ đúng khi khách thuộc kết quả `posted` của một lượt `kind='post'`. */
+export interface LeadReplySource { leadId: number; postUrl: string; authorId: string; profileId: string; fromAppPost: boolean; postText: string }

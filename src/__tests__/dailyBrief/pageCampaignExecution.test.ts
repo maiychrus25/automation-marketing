@@ -22,7 +22,7 @@ const dirs:string[]=[];
 afterAll(()=>dirs.forEach(dir=>fs.rmSync(dir,{recursive:true,force:true})));
 async function setup(withMedia=false) {
     const db=memoryDb(); db.exec(CONTROL_SCHEMA_SQL);
-    const clock={date:(n:number)=>new Date(n).toISOString().slice(0,10),minutes:()=>600};
+    let minutes=600; const clock={date:(n:number)=>new Date(n).toISOString().slice(0,10),minutes:()=>minutes};
     const scope={workspaceId:'workspace',pageId:'12345',profileId:'profile'};
     const baseDir=fs.mkdtempSync(path.join(os.tmpdir(),'campaign-effect-')); dirs.push(baseDir);
     const poster=new FacebookPosterStore(db); poster.ensureSchema();
@@ -55,7 +55,7 @@ async function setup(withMedia=false) {
         const data={viewer:{actor},user:{id:'99999',delegate_page:{id:pageId,name:'Page',viewer:{actor}}}};
         return '<script type="application/json">'+JSON.stringify({define:[['CurrentUserInitialData',[],{USER_ID:'99999'}]],require:[['RelayPrefetchedStreamCache','next',[],[null,{__bbox:{result:{data}}}]]]})+'</script>';
     }} as any);
-    return {db,poster,executions,control,runner,receiver,deps,payload,page,guard:()=>createPageCampaignExecutionGuard(deps,'draft','run'),retire:()=>{current=false;},disable:()=>{gate=false;}};
+    return {db,poster,executions,control,runner,receiver,deps,payload,page,guard:()=>createPageCampaignExecutionGuard(deps,'draft','run'),setMinutes:(m:number)=>{minutes=m;},retire:()=>{current=false;},disable:()=>{gate=false;}};
 }
 it.each(['direct','fallback'] as const)('browserEffectAndCrashRecoveryUseRealGuard(%s)',async route=>{
     const s=await setup(); const guard=s.guard(); let clicks=0;
@@ -116,10 +116,37 @@ it('revocationDuringIdentityAwaitPreventsSubmit',async()=>{
     page.content=async()=>{const value=await read(); s.control.revokeKey(s.runner.id); return value;};
     await expect(guard.beforeEffect(page,'publish')).rejects.toThrow(); expect(s.executions.get('draft')!.status).toBe('reserved');
 });
-it('currentPageIdentityAloneCannotAuthorizeAnAutonomousCommentTarget',async()=>{
+it('firstCommentAllowedForOwnSubmittedRunOnVerifiedPage',async()=>{
     const s=await setup(); const guard=s.guard(); await guard.beforeEffect(s.page(),'publish');
-    await expect(guard.beforeEffect(s.page(),'firstComment')).rejects.toThrow();
+    await expect(guard.beforeEffect(s.page(),'firstComment')).resolves.toBeUndefined();
     guard.settle('posted',null); expect(s.executions.get('draft')!.status).toBe('posted');
+});
+it('firstCommentDeniedWhenIdentityChanged',async()=>{
+    const s=await setup(); const guard=s.guard(); await guard.beforeEffect(s.page(),'publish');
+    await expect(guard.beforeEffect(s.page('54321'),'firstComment')).rejects.toThrow();
+});
+it('firstCommentDeniedForOtherRun',async()=>{
+    const s=await setup(); const guard=s.guard(); await guard.beforeEffect(s.page(),'publish');
+    const real=PageCampaignExecutionStore.prototype.get; let n=0;
+    // Calls 1-2 are assertCurrent (before/after the identity read); call 3 is the dedicated firstComment check.
+    const calls=jest.spyOn(PageCampaignExecutionStore.prototype,'get').mockImplementation(function(this:PageCampaignExecutionStore,id:string){
+        const row=real.call(this,id); return row && ++n===3?{...row,runId:'other-run'}:row;});
+    try { await expect(guard.beforeEffect(s.page(),'firstComment')).rejects.toThrow(); expect(n).toBe(3); } finally { calls.mockRestore(); }
+});
+it('delayedFirstCommentOutsideAllowedMinuteStillPosts',async()=>{
+    const s=await setup(); const guard=s.guard(); await guard.beforeEffect(s.page(),'publish');
+    s.setMinutes(601); // allowedMinutes is [600]; the comment follows a commentDelayMin wait
+    await expect(guard.beforeEffect(s.page(),'firstComment')).resolves.toBeUndefined();
+    await expect(guard.beforeEffect(s.page(),'publish')).rejects.toThrow();
+});
+it('firstCommentDeniedWhenGrantRevokedDuringDelay',async()=>{
+    const s=await setup(); const guard=s.guard(); await guard.beforeEffect(s.page(),'publish');
+    s.setMinutes(601); s.control.revokeKey(s.receiver.id);
+    await expect(guard.beforeEffect(s.page(),'firstComment')).rejects.toThrow();
+});
+it('firstCommentDeniedBeforePublishReserved',async()=>{
+    const s=await setup();
+    await expect(s.guard().beforeEffect(s.page(),'firstComment')).rejects.toThrow();
 });
 it('firstCommentHasOwnBarrierAndRevocationCannotErasePostedOutcome',async()=>{
     const s=await setup(); const guard=s.guard(); await guard.beforeEffect(s.page(),'publish');

@@ -228,6 +228,19 @@ sudo -u <user> -H python3 -I <bridge> brief-tick --env-file <.env MaiHub> --dry-
 
 Dry-run gọi `system.status`, kiểm phần tử đầu của lệnh agent có trong `PATH` bằng `shutil.which`, rồi thoát (mã 0 = được). Không gọi Claude, không nhận brief, không tạo nháp và không ghi trạng thái. CLI agent cần có trong `PATH` của user bot khi chạy dưới `sudo` và systemd, không chỉ trong shell tương tác. Theo dõi bằng `systemctl status maihub-brief-<tên-service>.timer` và `journalctl -u maihub-brief-<tên-service>.service`; dừng lịch bằng `sudo systemctl disable --now maihub-brief-<tên-service>.timer`.
 
+### Tự vận hành mỗi 15 phút (`auto-tick`, `install-auto`) — dev, chưa phát hành
+
+```bash
+sudo python3 maihub_bridge.py install-auto --env-file <.env MaiHub> --user <user> --name <tên-service-bot> [--state-dir <thư mục>] [--agent-cmd 'codex exec -']
+sudo python3 maihub_bridge.py install-auto --env-file <.env MaiHub> --user <user> --name <tên-service-bot> --uninstall
+```
+
+`install-auto` cài `maihub-auto-<tên>.service` (`Type=oneshot`, chạy `auto-tick --state <state-dir>/auto-state.json`) và `.timer` (`OnCalendar=*:0/15`) theo đúng các bước của `install-brief` (kiểm đầu vào, `auto-tick --dry-run` dưới quyền user, ghi unit nguyên tử, `daemon-reload`, `enable --now`). Hai timer loại trừ nhau theo tên service: `install-auto` từ chối nếu đã có `maihub-brief-<tên>.timer` và `install-brief` từ chối nếu đã có `maihub-auto-<tên>.timer`; muốn đổi thì gỡ timer cũ trước. `--uninstall` chạy `systemctl disable --now`, xoá hai unit rồi `daemon-reload`.
+
+`auto-tick` hỏi `autonomy.status` và **không gọi AI** khi `enabled=false`, đang trong giờ im lặng, hết lượt AI trong ngày hoặc `due` toàn 0 (in `{"skipped": "disabled|quiet_hours|no_agent_runs|nothing_due"}`); khoá tệp `<state>.lock` chặn chạy chồng (`{"skipped": "locked"}`). MaiHub cũ chưa có `autonomy.status` thì cảnh báo "MaiHub cần bản có Tự vận hành" và thoát 0. Có việc thì gọi agent đúng một lần với lời nhắc chỉ liệt kê việc trong `due` (brief Page, lịch chiến dịch Page, bài cần thu bình luận, khách chưa trả lời, video chờ) và trần còn lại, rồi **luôn** gọi `autonomy.recordAgentRun` với `ok|error|timeout`. Đăng nhóm không nằm trong vòng này. Dùng chung `MAIHUB_AGENT_CMD`, `MAIHUB_AGENT_TIMEOUT_SEC` và budget tick với `brief-tick`; app tự áp mọi trần nên bridge chỉ quyết định có gọi AI hay không.
+
+`watch` thêm tin cho `autonomy.changed` (⚙️), `autonomy.paused` và `autonomy.stopped` (🛑), và dòng "Bot đã tự làm: …" trong 📊 khi `metrics.report` có `autonomy`; `comments.replied` không gửi tin riêng. Lỗi `LIMIT_REACHED` được hướng dẫn cho agent: đợi `details.retryAt`, không thử lại ngay.
+
 ## Page Operations Task 8 — opt-in local/dev, chưa kích hoạt vận hành
 
 **Gate vẫn false. Installation/isolation và đường receiver Telegram thật chưa được chứng minh; hiện chỉ bàn giao proposal/read-only, không bật timer hoặc protected writes.** Không dùng hướng dẫn legacy ở trên để cài receiver chung user/env/MCP với bot. Không thêm public JSON listener hoặc poller `getUpdates` thứ hai.

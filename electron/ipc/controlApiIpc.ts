@@ -17,6 +17,7 @@ import { AuthLockout, RateLimiter } from '../../src/services/control/controlSecu
 import { ControlApiServer } from '../../src/services/control/ControlApiServer';
 import { createControlMethods, ControlError, type ControlContext, type PosterPort } from '../../src/services/control/ControlMethods';
 import { createPageOperationMethods } from '../../src/services/control/pageOperationMethods';
+import { isOwnerKey, ownerRunnerPrincipal } from '../../src/services/control/ownerPageRunner';
 import type { ControlPrincipal, PageContext } from '../../src/models/pageOperations';
 import { PageWorkStore } from '../../src/services/dailyBrief/PageWorkStore';
 import { PageCampaignStore } from '../../src/services/dailyBrief/PageCampaignStore';
@@ -31,7 +32,7 @@ import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
     CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, withStoredPublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
-import { getBoundPageCampaignCollector, setPageCampaignExecutionContext, stopPageCampaignExecution, checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, createBoundPageWorkDependencies, createBoundPageApprovalDependencies, posterOperations, trackingOperations, campaignOperations, leadOperations, notificationOperations } from './facebookPosterIpc';
+import { getBoundPageCampaignCollector, setPageCampaignExecutionContext, stopPageCampaignExecution, checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, createBoundPageWorkDependencies, createBoundPageApprovalDependencies, posterOperations, trackingOperations, campaignOperations, leadOperations, notificationOperations, getAutonomyOperations } from './facebookPosterIpc';
 import { researchOperations, cancelOwnedResearchScan } from './researchIpc';
 import { briefOperations, pageOperations, getDailyBriefStore } from './dailyBriefIpc';
 import { videoOperations } from './videoIpc';
@@ -95,7 +96,8 @@ export async function stopPagePreparationForWorkspaceSwitch(timeoutMs = 20000): 
     } catch { return false; }
 }
 const recorder = new ControlEventRecorder();
-const poster: PosterPort = posterOperations;
+// The bot's approvals and schedule updates are the api-origin paths: the limiter sees them, the operator's own IPC calls stay unlimited.
+const poster: PosterPort = { ...posterOperations, draftApprove: (p) => posterOperations.draftApprove(p, 'api'), scheduleUpdate: (p) => posterOperations.scheduleUpdate(p, 'api') };
 /** Mức module: vé ghép nối phải sống qua mọi lần apply() dừng/chạy lại server. */
 const pairing = new PairingTickets();
 let bridge: { buffer: Buffer; sha256: string } | null = null;
@@ -239,6 +241,15 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             getConfig: () => notificationOperations.getConfig(),
             setConfig: (p) => notificationOperations.setConfig(p),
         },
+        autonomy: {
+            status: () => getAutonomyOperations().status(),
+            config: () => getAutonomyOperations().config(),
+            setConfig: (patch, actor) => getAutonomyOperations().setConfig(patch, actor),
+            stop: (actor) => getAutonomyOperations().stop(actor),
+            resume: (actor) => getAutonomyOperations().resume(actor),
+            resumeProfile: (profileId, actor) => getAutonomyOperations().resumeProfile(profileId, actor),
+            recordAgentRun: (p) => getAutonomyOperations().recordAgentRun(p),
+        },
         campaigns: {
             list: campaignOperations.list,
             get: campaignOperations.get,
@@ -255,6 +266,7 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             collectStatus: leadOperations.collectStatus,
             collectCancel: leadOperations.collectCancel,
             comments: leadOperations.comments,
+            reply: leadOperations.reply,
         },
         videos: {
             templates: videoOperations.templates,
@@ -374,9 +386,12 @@ async function startRuntime(config: ControlConfig): Promise<void> {
     };
     methods.push(...createPageOperationMethods({ bindRequest: (ctx: ControlContext) => {
         assertRuntimeCurrent(); ctx.assertCurrent?.();
-        const principal = ctx.principal;
-        if (!principal || principal.kind === 'legacy') return deny();
-        const guard = () => { assertRuntimeCurrent(); ctx.assertCurrent!(); };
+        const caller = ctx.principal;
+        if (!caller) return deny();
+        // The owner (legacy) key has no server-side scope check: keep it live here, like a scoped key's policy hash.
+        const guard = () => { assertRuntimeCurrent(); ctx.assertCurrent!(); if (caller.kind === 'legacy' && !isOwnerKey(boundControl, caller.keyId)) deny(); };
+        guard();
+        const principal = caller.kind === 'legacy' ? ownerRunnerPrincipal(boundDb, workspaceId, caller.keyId) : caller;
         const context = (id: string): PageContext => {
             guard(); const row = works.get(id);
             if (!row || row.workspaceId !== workspaceId || !principal.assignments.some(a => a.pageId === row.pageId && a.profileIds.includes(row.profileId))) deny();
@@ -394,10 +409,9 @@ async function startRuntime(config: ControlConfig): Promise<void> {
         const run = method.run;
         method.run = (params, context) => {
             const pending = run(params, context);
-            if (context.principal?.kind !== 'legacy') {
-                protectedCalls.add(pending);
-                void pending.then(() => protectedCalls.delete(pending), () => protectedCalls.delete(pending));
-            }
+            // Owner-key calls run the same Page operations now, so a workspace switch waits for them too.
+            protectedCalls.add(pending);
+            void pending.then(() => protectedCalls.delete(pending), () => protectedCalls.delete(pending));
             return pending;
         };
     }

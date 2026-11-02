@@ -5,6 +5,7 @@ import { copyScheduleMedia, replaceScheduleMedia, resolveScheduleMedia, removeSc
 import { readName, readTiming } from './scheduleUpdate';
 import { computeNextRun } from './scheduleTime';
 import { readCampaignRef } from './campaigns';
+import type { AutonomyLimiter } from '../autonomy/AutonomyLimiter';
 
 /**
  * Bản nháp (GĐ2): một dòng fb_poster_schedules với draft = 1, luôn enabled = 0 và next_run_at = NULL nên scheduler
@@ -17,6 +18,8 @@ export interface DraftDeps {
     now: () => number;
     newId: () => string;
     maxSchedules: number;
+    /** Bộ giới hạn tự vận hành; chỉ dùng khi bản nháp được bot duyệt (origin 'api'). */
+    autonomy?: Pick<AutonomyLimiter, 'check'>;
 }
 export interface SaveDraftInput { id?: unknown; expectedRevision?: unknown; name?: unknown; plannedAt?: unknown; campaignId?: unknown; params: unknown }
 export interface DraftForEdit { draft: FbPosterSchedule; media: { path: string; size: number }[] }
@@ -157,12 +160,13 @@ export function getDraft(deps: DraftDeps, id: unknown): DraftForEdit {
     return { draft, media: paths.map((p) => ({ path: p, size: deps.env.fileExists(p) ? deps.env.fileSize(p) : 0 })) };
 }
 
-export function approveDraft(deps: DraftDeps, input: ApproveDraftInput): FbPosterSchedule {
-    return promoteDraft(deps, input, 'owner');
+/** `origin` 'api' = bot duyệt qua Control API: lịch mang nguồn 'api' và bị bộ giới hạn tự vận hành kiểm trước khi ghi. */
+export function approveDraft(deps: DraftDeps, input: ApproveDraftInput, origin: 'api' | 'app' = 'app'): FbPosterSchedule {
+    return promoteDraft(deps, input, 'owner', origin);
 }
 
 /** Shared validated promotion, without owner tickets or owner-approval events. Trusted service only. */
-export function promoteDraft(deps: DraftDeps, input: ApproveDraftInput, authority: 'owner' | 'autonomy'): FbPosterSchedule {
+export function promoteDraft(deps: DraftDeps, input: ApproveDraftInput, authority: 'owner' | 'autonomy', origin: 'api' | 'app' = 'app'): FbPosterSchedule {
     const { store, env, baseDir } = deps;
     const write: FacebookPosterStore['updateSchedule'] = (id, fields, at, revision) => authority === 'autonomy'
         ? store.updateAutonomySchedule(id, fields, at, revision!) : store.updateSchedule(id, fields, at, revision);
@@ -177,21 +181,33 @@ export function promoteDraft(deps: DraftDeps, input: ApproveDraftInput, authorit
     if (checked.kind !== 'post') throw new Error('Loại lịch không hợp lệ');
     const params = { ...checked, mediaPaths: names, ...(Array.isArray(draft.params.mediaIds) ? {mediaIds:draft.params.mediaIds} : {}) };
     const campaignId = readCampaignChange(deps, input.campaignId, draft.campaignId);
+    if (origin === 'api') checkApiApproval(deps, input.when, params);
 
     if (input.when === 'now') {
         // Đăng ngay vào chiến dịch đã lưu trữ sẽ chỉ thất bại muộn ở service.start: từ chối sớm, trước khi ghi.
         const effectiveId = campaignId === undefined ? draft.campaignId : campaignId;
         if (effectiveId && deps.store.getCampaign(effectiveId)?.status === 'archived') throw new Error('Chiến dịch đã lưu trữ');
         write(draft.id, {
-            kind: 'once', runAt: now, days: [], time: '', params, campaignId, draft: false, enabled: true, nextRunAt: now,
+            kind: 'once', runAt: now, days: [], time: '', params, campaignId, draft: false, enabled: true, nextRunAt: now, origin,
         }, now, input.expectedRevision);
     } else {
         if (input.kind !== 'once' && input.kind !== 'recurring') throw new Error('Loại lịch không hợp lệ');
         const kind: 'once' | 'recurring' = input.kind;
         const timing = readTiming(kind, input, now);
         write(draft.id, {
-            kind, ...timing, params, campaignId, draft: false, enabled: true, nextRunAt: computeNextRun({ kind, ...timing }, now),
+            kind, ...timing, params, campaignId, draft: false, enabled: true, nextRunAt: computeNextRun({ kind, ...timing }, now), origin,
         }, now, input.expectedRevision);
     }
     return store.getSchedule(draft.id)!;
+}
+
+/** Bot approval: 'now' is refused early per (profile, action); 'schedule' only needs the stop and master switches on (each target is checked again when it posts). */
+function checkApiApproval(deps: DraftDeps, when: 'now' | 'schedule', params: { mode: string; profiles: { profileId: string }[] }): void {
+    if (!deps.autonomy) return;
+    const action = params.mode === 'page' ? 'page_post' : 'group_post';
+    if (when === 'schedule') {
+        deps.autonomy.check({ action, origin: 'api', profileId: params.profiles[0]?.profileId }, 'switches');
+        return;
+    }
+    for (const { profileId } of params.profiles) deps.autonomy.check({ action, origin: 'api', profileId });
 }

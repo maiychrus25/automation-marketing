@@ -763,6 +763,13 @@ describe('Page source (spec page-publish-proof-metrics 4.4, 5)', () => {
         expect(due(h)).toEqual([]);
     });
 
+    test('followersTextAndApproximateAreRecorded', async () => {
+        const h = pageSetup(() => reading([], { followers: 1300, followersText: '1,3K', followersApproximate: true }));
+        addPageRow(h.store);
+        await run(h, { pairs: [pagePair()] });
+        expect(h.store.listPageFollowers({ sinceDay: '1970-01-01' })).toMatchObject([{ followers: 1300, followersText: '1,3K', approximate: true }]);
+    });
+
     test('followersRecordedOncePerLocalDay', async () => {
         let clock = NOW;
         let followers: number | null | undefined = 1234;
@@ -775,7 +782,7 @@ describe('Page source (spec page-publish-proof-metrics 4.4, 5)', () => {
         await run(h, { pairs: [pagePair()] });
         expect(record).toHaveBeenCalledTimes(1);
         expect(h.store.listPageFollowers({ sinceDay: '1970-01-01' })).toEqual([
-            { pageId: '777', profileId: 'p1', capturedOn: new Date(NOW).toISOString().slice(0, 10), capturedAt: NOW, followers: 1234 },
+            { pageId: '777', profileId: 'p1', capturedOn: new Date(NOW).toISOString().slice(0, 10), capturedAt: NOW, followers: 1234, followersText: '', approximate: false },
         ]);
         clock = NOW + DAY;
         await run(h, { pairs: [pagePair()] });

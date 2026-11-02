@@ -20,7 +20,7 @@ export class ControlEventRecorder {
         setControlEventSink((type, payload) => {
             store.addEvent(type, payload);
             this.notifier.notify();
-        });
+        }, () => this.notifier.notify());
     }
 
     deactivate(): void {

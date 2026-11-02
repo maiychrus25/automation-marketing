@@ -395,3 +395,65 @@ test('resultJson hỏng hoặc rỗng thì adResult là null, không ném', () =
     const { ops: ops2 } = setup();
     expect((ops2.status({ videoId: 'v1' }, 'bot').video as any).adResult).toBeNull();
 });
+
+describe('adCreate và hạn mức tự động (2 video/ngày)', () => {
+    const { memoryDb } = require('../facebookPoster/helpers');
+    const { AutonomyLimiter } = require('../../services/autonomy/AutonomyLimiter');
+    const NOW = Date.UTC(2026, 10, 3, 3, 0);
+    const clock = { date: (ms: number) => new Date(ms + 7 * 3600_000).toISOString().slice(0, 10), minutes: (ms: number) => Math.floor(((ms + 7 * 3600_000) % 86_400_000) / 60_000) };
+    const withLimiter = () => {
+        const limiter = new AutonomyLimiter(memoryDb(), { now: () => NOW, clock, protectedWritesEnabled: () => true });
+        limiter.ensureSchema();
+        limiter.setPolicy({ enabled: true }, 'test');
+        return { limiter, ...setup({ autonomy: () => limiter }) };
+    };
+
+    test('thirdVideoOfDayIsRejectedBeforeAhvCall', async () => {
+        const { ops, service, limiter } = withLimiter();
+        limiter.reserve({ action: 'video', origin: 'app' });
+        limiter.reserve({ action: 'video', origin: 'app' });
+        service.adCreate.mockClear();
+        await expect(ops.adCreate(adParams(), 'app')).rejects.toMatchObject({ code: 'LIMIT_REACHED', details: { reason: 'quota' } });
+        expect(service.adCreate).not.toHaveBeenCalled();
+    });
+
+    test('botCannotUseLastSlot', async () => {
+        const { ops, service, limiter } = withLimiter();
+        limiter.reserve({ action: 'video', origin: 'app' });
+        await expect(ops.adCreate(adParams(), 'bot')).rejects.toMatchObject({ code: 'LIMIT_REACHED', details: { reason: 'quota' } });
+        expect(service.adCreate).not.toHaveBeenCalled();
+    });
+
+    test('appCanUseLastSlot', async () => {
+        const { ops, service, limiter } = withLimiter();
+        await ops.adCreate(adParams(), 'bot'); // slot 1
+        await expect(ops.adCreate(adParams(), 'bot')).rejects.toMatchObject({ code: 'LIMIT_REACHED' });
+        await expect(ops.adCreate(adParams(), 'app')).resolves.toMatchObject({ videoId: 'ad1' });
+        expect(service.adCreate).toHaveBeenCalledTimes(2);
+        await expect(ops.adCreate(adParams(), 'app')).rejects.toMatchObject({ code: 'LIMIT_REACHED' });
+        expect(limiter.usage().workspace.videos).toBe(2);
+    });
+
+    test('failureAfterAhvAcceptedKeepsSlot', async () => {
+        const { ops, service, limiter } = withLimiter();
+        service.adCreate.mockImplementationOnce(async (input: any) => { input.onAccepted(); throw new Error('store.create failed'); });
+        await expect(ops.adCreate(adParams(), 'app')).rejects.toThrow('store.create failed');
+        expect(limiter.usage().workspace.videos).toBe(1);
+    });
+
+    test('failureBeforeAhvAcceptsReleasesSlot', async () => {
+        const { ops, service, limiter } = withLimiter();
+        service.adCreate.mockRejectedValueOnce(new RenderError('unreachable', 'Không kết nối được AHV AI'));
+        await expect(ops.adCreate(adParams(), 'bot')).rejects.toMatchObject({ code: 'unreachable' });
+        await expect(ops.adCreate(adParams(), 'bot')).resolves.toMatchObject({ videoId: 'ad1' }); // slot was freed
+        expect(limiter.usage().workspace.videos).toBe(1);
+    });
+
+    test('invalid params never take a slot', async () => {
+        const { ops, limiter } = withLimiter();
+        await expect(ops.adCreate(adParams({ name: ' ' }), 'bot')).rejects.toMatchObject({ code: 'invalid' });
+        expect(limiter.usage().workspace.videos).toBe(0);
+        await expect(ops.adCreate(adParams(), 'bot')).resolves.toBeDefined();
+        expect(limiter.usage().workspace.videos).toBe(1);
+    });
+});

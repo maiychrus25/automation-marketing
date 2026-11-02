@@ -26,6 +26,17 @@ const storyOf = (data: any) => data.user.timeline_list_feed_units.edges[0].node;
 const renderersOf = (story: any) => story.comet_sections.feedback.story.story_ufi_container.story.feedback_context
     .feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.adaptive_ufi_action_renderers;
 
+describe('parseIdentityHtml followers', () => {
+    it('identityIncludesFollowersFromFixture', () => {
+        const withFollowers = parseIdentityHtml(pageHtml + fixture('page-followers.html'), finalUrl);
+        expect(withFollowers).toMatchObject({ kind: 'page', followers: 1300, followersText: '1,3K', followersApproximate: true });
+        const without = parseIdentityHtml(pageHtml, finalUrl);
+        expect(without.kind).toBe('page');
+        expect(without.followers).toBeUndefined();
+        expect(parseIdentityHtml(personHtml + fixture('page-followers.html'), finalUrl).followers).toBeUndefined();
+    });
+});
+
 describe('parseIdentityHtml', () => {
     it('review F1: reads the observed transport wrapper and the minimized root identically', () => {
         expect(fixtureRoot().require[0].slice(0, 3)).toEqual(['ScheduledServerJS', 'handle', null]);

@@ -3,7 +3,7 @@ import type { AutomationSession } from '../browser/BrowserProfileService';
 import type { ProfileJobLease, ProfileJobPriority, ProfileTaskContext } from '../browser/ProfileJobQueue';
 import type { FbPosterComment, FbPosterMode, FbPosterRun, LinkStatus, PostTrackingRow } from '../../models/facebookPoster';
 import type { FacebookPosterStore } from './FacebookPosterStore';
-import type { LaunchedPage, LogLevel, TaskDeps } from './types';
+import type { AutonomyBudget, LaunchedPage, LogLevel, TaskDeps } from './types';
 import { collectComments } from './collectComments';
 import { DEFAULT_LEAD_CONFIG, computeNextCommentAt, type LeadConfig } from './leadRules';
 import { searchAndJoinGroups } from './joinGroups';
@@ -25,13 +25,15 @@ export type StartParams =
     | { kind: 'join'; profileId: string; keywords: string[]; limit: number; minDelaySec: number; maxDelaySec: number }
     | { kind: 'collect_comments'; profileId: string; postUrls: string[] };
 
-export interface RunStartOptions { priority?: ProfileJobPriority; deadlineAt?: number; }
+export interface RunStartOptions { priority?: ProfileJobPriority; deadlineAt?: number; /** Nguồn lệnh của lượt; mặc định 'app'. */ origin?: 'api' | 'app'; }
 export type RunSnapshot = { run: FbPosterRun; progress: ProgressSnapshot };
 export interface ProfileProgress { profileId: string; state: 'waiting' | 'running' | 'done' | 'failed' | 'cancelled'; done: number; total: number; waitingReason?: string; }
 export interface ProgressSnapshot { runId: string; done: number; total: number; profiles: ProfileProgress[]; }
 
 export interface FacebookPosterServiceDeps {
     assertCurrent?: () => void;
+    /** Tạo giới hạn tự vận hành cho một profile của lượt origin 'api' (chỉ gọi cho bài đăng không có autonomyGuard). */
+    createAutonomyBudget?: (ctx: { profileId: string; mode: FbPosterMode; runId: string }) => AutonomyBudget;
     createExecutionGuard?: (scheduleId: string, runId: string, params: StartParams) => import('../../models/pageCampaigns').AutonomyExecutionGuard;
     store: FacebookPosterStore;
     getProfile: (id: string) => ProfileInfo | null;
@@ -180,8 +182,9 @@ export class FacebookPosterService {
             scheduleId: scheduleId ?? null,
             campaignId: params.kind === 'post' ? params.campaignId ?? null : null,
             scheduleName: null,
+            origin: options.origin === 'api' ? 'api' : 'app',
         };
-        this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt, scheduleId: run.scheduleId, campaignId: run.campaignId });
+        this.store.createRun({ id: run.id, kind: run.kind, mode: run.mode, params: run.params, startedAt: run.startedAt, scheduleId: run.scheduleId, campaignId: run.campaignId, origin: run.origin });
         this.stopping = false;
         this.forced = false;
         this.storeError = null;
@@ -411,6 +414,9 @@ export class FacebookPosterService {
             leaveCritical: () => { plan.critical = false; },
             clearReachedCritical: () => { plan.reachedCritical = false; },
         };
+        if (run.origin === 'api' && params.kind === 'post' && !active.autonomyGuard) {
+            taskDeps.autonomyBudget = this.deps.createAutonomyBudget?.({ profileId, mode: params.mode, runId: run.id });
+        }
         if (params.kind === 'post' && params.mode === 'page') {
             taskDeps.expectedPageId = plan.pageId = this.deps.resolvePageId?.(profileId) ?? '';
             taskDeps.now = this.now;

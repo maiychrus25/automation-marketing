@@ -9,7 +9,7 @@ import { VARIANT_LABELS, variantText } from './variants';
 import type {
     FbPosterComment, FbPosterLead, LeadStatus, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
     CampaignStatus, FbPosterCampaign, FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
-    LinkStatus, PostStatsGroupBy, PostStatsReportRow, PostStatsSnapshot, PageFollowerRow, PostTrackingRow, TrackTargetKind,
+    LinkStatus, LeadReplySource, LeadReplyStatus, FbPosterLeadReply, PostStatsGroupBy, PostStatsReportRow, PostStatsSnapshot, PageFollowerRow, PostTrackingRow, TrackTargetKind,
 } from '../../models/facebookPoster';
 
 /**
@@ -27,9 +27,17 @@ export interface SqlDatabase {
     queryOne<T>(sql: string, params?: any[]): T | undefined;
 }
 
-type ScheduleFields = Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId' | 'kind' | 'draft' | 'params' | 'campaignId'>>;
+type ScheduleFields = Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId' | 'kind' | 'draft' | 'params' | 'campaignId' | 'origin'>>;
 
+export const INTERRUPTED_REPLY_REASON = 'App đóng khi đang gửi; cần xem lại bài trên Facebook.';
 const INTERRUPTED_RUN_ERROR = 'App đóng khi việc đang chạy. Đích đang đăng dở (nếu có) cần kiểm tra trên Facebook.';
+
+function mapLeadReply(row: any): FbPosterLeadReply {
+    return {
+        id: row.id, leadId: row.lead_id, profileId: row.profile_id, postUrl: row.post_url, authorId: row.author_id, text: row.text,
+        status: row.status, reason: row.reason, reservationId: row.reservation_id, createdAt: row.created_at, finishedAt: row.finished_at,
+    };
+}
 
 function mapRun(row: any): FbPosterRun {
     return {
@@ -44,6 +52,7 @@ function mapRun(row: any): FbPosterRun {
         scheduleId: row.schedule_id ?? null,
         scheduleName: row.schedule_name ?? null,
         campaignId: row.campaign_id ?? null,
+        origin: row.origin === 'api' ? 'api' : 'app',
     };
 }
 
@@ -68,6 +77,7 @@ function mapSchedule(row: any): FbPosterSchedule {
         enabled: row.enabled === 1,
         draft: row.draft === 1,
         authorityKind: row.authority_kind,
+        origin: row.origin === 'api' ? 'api' : 'app',
         campaignId: row.campaign_id ?? null,
         nextRunAt: row.next_run_at ?? null,
         lastRunId: row.last_run_id ?? null,
@@ -218,10 +228,10 @@ export class FacebookPosterStore {
 
     // ─── Runs ────────────────────────────────────────────────────────────────
 
-    createRun(run: { id: string; kind: FbPosterKind; mode: FbPosterMode | ''; params: Record<string, unknown>; startedAt: number; scheduleId?: string | null; campaignId?: string | null }): void {
+    createRun(run: { id: string; kind: FbPosterKind; mode: FbPosterMode | ''; params: Record<string, unknown>; startedAt: number; scheduleId?: string | null; campaignId?: string | null; origin?: 'api' | 'app' }): void {
         this.db.run(
-            `INSERT INTO fb_poster_runs (id, kind, mode, params_json, status, started_at, schedule_id, campaign_id) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)`,
-            [run.id, run.kind, run.mode, JSON.stringify(run.params), run.startedAt, run.scheduleId ?? null, run.campaignId ?? null],
+            `INSERT INTO fb_poster_runs (id, kind, mode, params_json, status, started_at, schedule_id, campaign_id, origin) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
+            [run.id, run.kind, run.mode, JSON.stringify(run.params), run.startedAt, run.scheduleId ?? null, run.campaignId ?? null, run.origin ?? 'app'],
         );
     }
 
@@ -357,6 +367,7 @@ export class FacebookPosterStore {
         if (fields.draft !== undefined) set('draft', fields.draft ? 1 : 0);
         if (fields.params !== undefined) set('params_json', JSON.stringify(fields.params));
         if (fields.campaignId !== undefined) set('campaign_id', fields.campaignId);
+        if (fields.origin !== undefined) set('origin', fields.origin);
         set('updated_at', updatedAt);
         this.db.run(`UPDATE fb_poster_schedules SET ${sets.join(', ')} WHERE id = ?${expectedRevision === undefined ? '' : ` AND revision = ?${autonomy ? '' : ' AND draft = 1'}`}`,
             [...values, id, ...(expectedRevision === undefined ? [] : [expectedRevision])]);
@@ -672,8 +683,8 @@ export class FacebookPosterStore {
 
     recordPageFollowers(row: PageFollowerRow): boolean {
         this.db.run(
-            `INSERT OR IGNORE INTO fb_poster_page_followers (page_id, profile_id, captured_on, captured_at, followers) VALUES (?, ?, ?, ?, ?)`,
-            [row.pageId, row.profileId, row.capturedOn, row.capturedAt, row.followers],
+            `INSERT OR IGNORE INTO fb_poster_page_followers (page_id, profile_id, captured_on, captured_at, followers, followers_text, approximate) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [row.pageId, row.profileId, row.capturedOn, row.capturedAt, row.followers, row.followersText ?? '', row.approximate ? 1 : 0],
         );
         return this.db.queryOne<{ n: number }>('SELECT changes() AS n')?.n === 1;
     }
@@ -687,7 +698,7 @@ export class FacebookPosterStore {
         const params = filter.pageId === undefined ? [filter.sinceDay] : [filter.sinceDay, filter.pageId];
         return this.db.query<any>(
             `SELECT * FROM fb_poster_page_followers WHERE ${where.join(' AND ')} ORDER BY page_id, captured_on`, params,
-        ).map((r) => ({ pageId: r.page_id, profileId: r.profile_id, capturedOn: r.captured_on, capturedAt: r.captured_at, followers: r.followers }));
+        ).map((r) => ({ pageId: r.page_id, profileId: r.profile_id, capturedOn: r.captured_on, capturedAt: r.captured_at, followers: r.followers, followersText: r.followers_text ?? '', approximate: r.approximate === 1 }));
     }
 
     // ─── Thu bình luận tự động ───────────────────────────────────────────────
@@ -784,6 +795,65 @@ export class FacebookPosterStore {
             this.db.run('DELETE FROM fb_poster_leads WHERE detected_at < ?', [ms]);
             return before - this.count('SELECT COUNT(*) AS n FROM fb_poster_leads');
         });
+    }
+
+    /** Khách + lượt đăng sinh ra bài của khách; `kind`/`outcome` NULL khi khách không gắn với lượt đăng của app. */
+    leadReplySource(leadId: number): LeadReplySource | null {
+        const row = this.db.queryOne<any>(
+            `SELECT l.id, l.post_url, l.author_id, l.variant, r.profile_id AS result_profile_id, r.outcome, u.kind, u.params_json
+             FROM fb_poster_leads l
+             LEFT JOIN fb_poster_results r ON r.id = l.result_id
+             LEFT JOIN fb_poster_runs u ON u.id = r.run_id WHERE l.id = ?`, [leadId]);
+        if (!row) return null;
+        let params: { text?: unknown; variants?: unknown } = {};
+        try { params = JSON.parse(row.params_json ?? '{}') ?? {}; } catch { /* lượt cũ hỏng: không có nội dung bài */ }
+        const variants = Array.isArray(params.variants) ? params.variants.filter((v): v is string => typeof v === 'string') : [];
+        const text = typeof params.text === 'string' ? params.text : '';
+        return {
+            leadId: row.id, postUrl: row.post_url, authorId: row.author_id, profileId: row.result_profile_id ?? '',
+            fromAppPost: row.kind === 'post' && row.outcome === 'posted',
+            postText: variantText({ text, variants }, Math.max(0, VARIANT_LABELS.indexOf(row.variant))),
+        };
+    }
+
+    /** Có lượt trả lời đang chờ/đang chạy/đã gửi/lỗi/chưa rõ cho khách này hoặc cho cùng người trên cùng bài. */
+    hasLeadReply(leadId: number, postUrl: string, authorId: string): boolean {
+        const live = "status IN ('queued','running','posted','failed','uncertain')";
+        return this.count(`SELECT COUNT(*) AS n FROM fb_poster_lead_replies WHERE ${live} AND (lead_id = ? OR (? <> '' AND post_url = ? AND author_id = ?))`,
+            [leadId, authorId, postUrl, authorId]) > 0;
+    }
+
+    insertLeadReply(r: { leadId: number; profileId: string; postUrl: string; authorId: string; text: string; reservationId: number | null }, at: number): number {
+        return this.db.runInsert(
+            `INSERT INTO fb_poster_lead_replies (lead_id, profile_id, post_url, author_id, text, status, reservation_id, created_at)
+             VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`, [r.leadId, r.profileId, r.postUrl, r.authorId, r.text, r.reservationId, at]);
+    }
+
+    getLeadReply(id: number): FbPosterLeadReply | null {
+        const row = this.db.queryOne<any>('SELECT * FROM fb_poster_lead_replies WHERE id = ?', [id]);
+        return row ? mapLeadReply(row) : null;
+    }
+
+    setLeadReplyStatus(id: number, status: LeadReplyStatus, reason: string, finishedAt: number | null): void {
+        this.db.run('UPDATE fb_poster_lead_replies SET status = ?, reason = ?, finished_at = ? WHERE id = ?', [status, reason, finishedAt, id]);
+    }
+
+    nextQueuedLeadReply(): FbPosterLeadReply | null {
+        const row = this.db.queryOne<any>("SELECT * FROM fb_poster_lead_replies WHERE status = 'queued' ORDER BY id LIMIT 1");
+        return row ? mapLeadReply(row) : null;
+    }
+
+    /** Khởi động lại: lượt đang chạy dở không biết đã gửi chưa nên giữ chỗ và đánh dấu chưa rõ. */
+    markRunningLeadRepliesUncertain(at: number): number {
+        return this.db.transaction(() => {
+            const n = this.count("SELECT COUNT(*) AS n FROM fb_poster_lead_replies WHERE status = 'running'");
+            this.db.run("UPDATE fb_poster_lead_replies SET status = 'uncertain', reason = ?, finished_at = ? WHERE status = 'running'", [INTERRUPTED_REPLY_REASON, at]);
+            return n;
+        });
+    }
+
+    listLeadReplies(limit: number, offset: number): FbPosterLeadReply[] {
+        return this.db.query<any>('SELECT * FROM fb_poster_lead_replies ORDER BY id DESC LIMIT ? OFFSET ?', [limit, offset]).map(mapLeadReply);
     }
 
     /** Trong các khoá bình luận đã cho, những khoá đã thành khách. */

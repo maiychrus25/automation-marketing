@@ -10,7 +10,7 @@ import type { UpdateState, ActionResult as UpdateActionResult } from '../../serv
 import type { ResearchConfig } from '../../services/research/researchConfig';
 import type { AdVideoRequest, AdVoiceOption, VideoJob, VideoStatus } from '../../models/video';
 import type { ResearchItem, ResearchScan, ResearchSort, ResearchSource } from '../../models/research';
-import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterLead, LeadStatus, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, PageMetrics, CampaignStatus } from '../../models/facebookPoster';
+import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterLead, FbPosterLeadReply, LeadStatus, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, PageMetrics, CampaignStatus } from '../../models/facebookPoster';
 import type { GroupScore } from '../../services/facebookPoster/groupScores';
 import type { BestTimes } from '../../services/facebookPoster/bestTimes';
 import type { CampaignView } from '../../services/facebookPoster/campaignOperations';
@@ -18,6 +18,9 @@ import type { PostTrackingConfig } from '../../services/facebookPoster/postTrack
 import type { TrackStatus } from '../../services/facebookPoster/PostTracker';
 import type { LeadConfig } from '../../services/facebookPoster/leadRules';
 import type { NotificationConfig } from '../../services/facebookPoster/notificationRules';
+import type { AutonomyPolicy } from '../../services/autonomy/autonomyPolicy';
+import type { PolicyChange } from '../../services/autonomy/AutonomyLimiter';
+import type { AutonomyStatus } from '../../services/autonomy/autonomyOperations';
 import type { CommentCollectStatus } from '../../services/facebookPoster/CommentCollector';
 import type { RunSnapshot } from '../../services/facebookPoster/FacebookPosterService';
 
@@ -772,6 +775,7 @@ declare global {
         getNotificationConfig: () => Promise<{ success: boolean; config?: NotificationConfig; error?: string }>;
         setNotificationConfig: (patch: Partial<NotificationConfig>) => Promise<{ success: boolean; config?: NotificationConfig; error?: string }>;
         leadList:       (params?: { status?: LeadStatus; campaignId?: string; from?: number; to?: number; search?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; leads?: FbPosterLead[]; total?: number; error?: string }>;
+        listLeadReplies: (params?: { limit?: number; offset?: number }) => Promise<{ success: boolean; replies?: FbPosterLeadReply[]; error?: string }>;
         leadUpdate:     (params: { id: number; status?: LeadStatus; note?: string }) => Promise<{ success: boolean; lead?: FbPosterLead; error?: string }>;
         leadConfigGet:  () => Promise<{ success: boolean; config?: LeadConfig; error?: string }>;
         leadConfigSet:  (config: LeadConfig) => Promise<{ success: boolean; config?: LeadConfig; error?: string }>;
@@ -779,6 +783,14 @@ declare global {
         commentCollect: (params?: { postUrls?: string[] }) => Promise<{ success: boolean; jobId?: string; posts?: number; error?: string }>;
         commentCollectStatus: () => Promise<({ success: boolean; error?: string }) & Partial<CommentCollectStatus>>;
         commentCollectCancel: () => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
+      };
+      autonomy: {
+        status:        () => Promise<{ success: boolean; status?: AutonomyStatus; error?: string }>;
+        setConfig:     (patch: Partial<AutonomyPolicy>) => Promise<{ success: boolean; policy?: AutonomyPolicy; changes?: PolicyChange[]; error?: string }>;
+        stop:          () => Promise<{ success: boolean; enabled?: boolean; cancelledRuns?: number; disabledSchedules?: number; error?: string }>;
+        resume:        () => Promise<{ success: boolean; enabled?: boolean; error?: string }>;
+        resumeProfile: (profileId: string) => Promise<{ success: boolean; resumed?: boolean; error?: string }>;
+        changes:       (since?: number) => Promise<{ success: boolean; changes?: PolicyChange[]; error?: string }>;
       };
       erp: {
       projectList:         (params?: { archived?: boolean }) => Promise<{ success: boolean; projects: any[]; error?: string }>;
@@ -939,6 +951,7 @@ export const ipc = {
   browserProfile: window.electronAPI?.browserProfile,
   controlApi: window.electronAPI?.controlApi,
   facebookPoster: window.electronAPI?.facebookPoster,
+  autonomy: window.electronAPI?.autonomy,
   research: window.electronAPI?.research,
   video: window.electronAPI?.video,
   update: window.electronAPI?.update,

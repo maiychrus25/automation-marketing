@@ -196,7 +196,7 @@ describe('public Page operation core', () => {
     });
     test('exact method metadata and strict params with no legacy authority', async () => {
         const s = coreSetup();
-        expect(s.methods.map((m: any) => m.name).sort()).toEqual(['pageCampaigns.optimize', 'pageCampaigns.collect', 'pageCampaigns.report', 'pageCampaigns.schedule', 'pageCampaigns.updateSchedule', 'pageCampaigns.cancelSchedule', 'pageCampaigns.list', 'pageCampaigns.get', 'pageCampaigns.propose', 'system.capabilities', 'pageBusiness.get', 'pageBusiness.propose',
+        expect(s.methods.map((m: any) => m.name).sort()).toEqual(['pageCampaigns.optimize', 'pageCampaigns.collect', 'pageCampaigns.report', 'pageCampaigns.schedule', 'pageCampaigns.updateSchedule', 'pageCampaigns.cancelSchedule', 'pageCampaigns.list', 'pageCampaigns.get', 'pageCampaigns.propose', 'pageCampaigns.start', 'pageCampaigns.stop', 'system.capabilities', 'pageBusiness.get', 'pageBusiness.propose',
             'pageWork.list', 'pageWork.get', 'pageWork.claimDue', 'pageWork.research', 'pageWork.researchResult', 'pageWork.saveDraft', 'pageWork.draft',
             'pageWork.waitVideo', 'pageWork.reconcile', 'pageWork.finish', 'pageWork.fail', 'pageApprovals.prepare', 'pageApprovals.bindMessage', 'pageApprovals.confirm', 'pageWork.events'].sort());
         for (const method of s.methods) { expect(method.description).toBeTruthy(); expect(method.paramsSchema).toMatchObject({ additionalProperties: false }); expect(method.resultSchema).toBeDefined(); expect(method.destructive).toBe(false); }
