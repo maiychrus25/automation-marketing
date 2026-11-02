@@ -10,7 +10,7 @@ import type { UpdateState, ActionResult as UpdateActionResult } from '../../serv
 import type { ResearchConfig } from '../../services/research/researchConfig';
 import type { AdVideoRequest, AdVoiceOption, VideoJob, VideoStatus } from '../../models/video';
 import type { ResearchItem, ResearchScan, ResearchSort, ResearchSource } from '../../models/research';
-import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterLead, FbPosterLeadReply, LeadStatus, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, PageMetrics, CampaignStatus } from '../../models/facebookPoster';
+import type { FbPosterKind, FbPosterRun, FbPosterResult, FbPosterGroup, FbPosterComment, FbPosterLead, FbPosterLeadReply, FbPosterEngagementItem, EngagementStatus, LeadStatus, FbPosterSchedule, FbPosterScheduleView, ProfileLoginState, LinkStatus, PostTrackingRow, PostStatsSnapshot, PostStatsGroupBy, PostStatsReportRow, PageMetrics, CampaignStatus } from '../../models/facebookPoster';
 import type { GroupScore } from '../../services/facebookPoster/groupScores';
 import type { BestTimes } from '../../services/facebookPoster/bestTimes';
 import type { CampaignView } from '../../services/facebookPoster/campaignOperations';
@@ -776,6 +776,10 @@ declare global {
         setNotificationConfig: (patch: Partial<NotificationConfig>) => Promise<{ success: boolean; config?: NotificationConfig; error?: string }>;
         leadList:       (params?: { status?: LeadStatus; campaignId?: string; from?: number; to?: number; search?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; leads?: FbPosterLead[]; total?: number; error?: string }>;
         listLeadReplies: (params?: { limit?: number; offset?: number }) => Promise<{ success: boolean; replies?: FbPosterLeadReply[]; error?: string }>;
+        engagementList:    (params?: { status?: EngagementStatus; profileId?: string; limit?: number; offset?: number }) => Promise<{ success: boolean; total?: number; items?: FbPosterEngagementItem[]; error?: string }>;
+        engagementApprove: (params: { id: number; text?: string }) => Promise<{ success: boolean; id?: number; status?: 'approved'; error?: string }>;
+        engagementReject:  (params: { id: number; reason?: string }) => Promise<{ success: boolean; id?: number; status?: 'rejected'; error?: string }>;
+        engagementCancel:  (params: { id: number }) => Promise<{ success: boolean; id?: number; status?: 'skipped'; error?: string }>;
         leadUpdate:     (params: { id: number; status?: LeadStatus; note?: string }) => Promise<{ success: boolean; lead?: FbPosterLead; error?: string }>;
         leadConfigGet:  () => Promise<{ success: boolean; config?: LeadConfig; error?: string }>;
         leadConfigSet:  (config: LeadConfig) => Promise<{ success: boolean; config?: LeadConfig; error?: string }>;
@@ -787,7 +791,7 @@ declare global {
       autonomy: {
         status:        () => Promise<{ success: boolean; status?: AutonomyStatus; error?: string }>;
         setConfig:     (patch: Partial<AutonomyPolicy>) => Promise<{ success: boolean; policy?: AutonomyPolicy; changes?: PolicyChange[]; error?: string }>;
-        stop:          () => Promise<{ success: boolean; enabled?: boolean; cancelledRuns?: number; disabledSchedules?: number; error?: string }>;
+        stop:          () => Promise<{ success: boolean; enabled?: boolean; cancelledRuns?: number; disabledSchedules?: number; cancelledEngagement?: number; error?: string }>;
         resume:        () => Promise<{ success: boolean; enabled?: boolean; error?: string }>;
         resumeProfile: (profileId: string) => Promise<{ success: boolean; resumed?: boolean; error?: string }>;
         changes:       (since?: number) => Promise<{ success: boolean; changes?: PolicyChange[]; error?: string }>;

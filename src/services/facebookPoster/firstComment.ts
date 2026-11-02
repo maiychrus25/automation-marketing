@@ -29,7 +29,8 @@ import type { TaskDeps } from './types';
  */
 
 export type CommentStatus = 'not_requested' | 'posted' | 'no_post_url' | 'pending_approval' | 'post_not_found' | 'failed';
-export interface CommentOutcome { status: CommentStatus; reason: string; }
+/** `sent`: true once the send button was clicked or Enter pressed (from then on a failure may still have posted). */
+export interface CommentOutcome { status: CommentStatus; reason: string; sent?: boolean; }
 
 // Nút mở ô nhập. Đo được nhãn tiếng Anh "Leave a comment"; nhãn tiếng Việt
 // kèm theo cho máy đã đổi ngôn ngữ.
@@ -295,6 +296,9 @@ export async function postFirstComment(
     };
   }
 
+  // Set the moment the send click is attempted: a rejected click can still have dispatched.
+  let sendAttempted = false;
+  const result = (o: CommentOutcome): CommentOutcome => (sendAttempted ? { ...o, sent: true } : o);
   const assertTarget = () => {
     if (!deps.autonomyGuard) return;
     deps.autonomyGuard.assertCurrent();
@@ -365,10 +369,11 @@ export async function postFirstComment(
         if (getIsStopping()) return {status:'failed',reason:'Đã huỷ giữa chừng.'};
         assertTarget();
       }
+      sendAttempted = true;
       const sent = await page.locator('[data-maihub-target="comment-send"]').first().click({ timeout: 5000 }).then(() => true, () => false);
       if (!sent) {
         // A rejected click can have dispatched; authority revalidation cannot make a retry safe.
-        if (deps.autonomyGuard) return {status:'failed',reason:'Kết quả gửi bình luận chưa rõ; không gửi lại bằng Enter.'};
+        if (deps.autonomyGuard) return result({status:'failed',reason:'Kết quả gửi bình luận chưa rõ; không gửi lại bằng Enter.'});
         await page.keyboard.press('Enter');
       }
     } finally {
@@ -382,8 +387,8 @@ export async function postFirstComment(
     const textFound = await page.evaluate(commentTextVisibleInPage, matchSnippet(body));
     const verdict = evaluateComment(before, after, textFound);
     sendLog(`[Bình luận] ${verdict.reason}`, verdict.ok ? 'success' : 'warning');
-    return { status: verdict.ok ? 'posted' : 'failed', reason: verdict.reason };
+    return result({ status: verdict.ok ? 'posted' : 'failed', reason: verdict.reason });
   } catch (err) {
-    return { status: 'failed', reason: `Lỗi khi bình luận: ${(err as Error).message}` };
+    return result({ status: 'failed', reason: `Lỗi khi bình luận: ${(err as Error).message}` });
   }
 }

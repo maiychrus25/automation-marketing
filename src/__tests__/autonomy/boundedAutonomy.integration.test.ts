@@ -157,7 +157,7 @@ test('emergencyStopMidRun', async () => {
     const first = budget.reserve('https://www.facebook.com/groups/111111111'); budget.commit(first);
     w.events.length = 0;
 
-    expect(w.ops.stop('app')).toEqual({ enabled: false, cancelledRuns: 1, disabledSchedules: 2 });
+    expect(w.ops.stop('app')).toEqual({ enabled: false, cancelledRuns: 1, disabledSchedules: 2, cancelledEngagement: 0 });
     expect(w.cancelled).toEqual(['api-run']);
     expect(w.poster.getSchedule('group')).toMatchObject({ enabled: false, nextRunAt: null });
     expect(w.executions.get('draft')!.status).toBe('cancelled');

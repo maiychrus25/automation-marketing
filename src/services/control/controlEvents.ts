@@ -41,7 +41,7 @@ export function projectPageWorkEvent(event: ControlEvent, principal: ControlPrin
         ...(event.type === 'pageWork.draftSaved' && typeof p.draftId === 'string' && work.draftIds.includes(p.draftId) ? { draftId: p.draftId } : {}) };
 }
 
-export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'comments.replied' | 'briefs.finished' | 'pages.learnFinished' | 'metrics.report' | 'leads.digest' | 'autonomy.changed' | 'autonomy.paused' | 'autonomy.stopped';
+export type ControlEventType = 'run.started' | 'run.finished' | 'schedule.missed' | 'draft.approved' | 'profile.loginProblem' | 'profiles.checkFinished' | 'research.finished' | 'posts.trackFinished' | 'leads.found' | 'videos.finished' | 'comments.collectFinished' | 'comments.replied' | 'briefs.finished' | 'pages.learnFinished' | 'metrics.report' | 'leads.digest' | 'autonomy.changed' | 'autonomy.paused' | 'autonomy.stopped' | 'engagement.suggested' | 'engagement.decided' | 'engagement.finished';
 
 export function buildPagesLearnFinished(e: { jobId: string; results: LearnResult[] }) {
     return {
@@ -100,8 +100,8 @@ export function buildAutonomyPaused(e: { profileId: string; profileName: string;
 }
 
 /** Anh hoặc bot tắt tự vận hành; kèm số lượt chạy và lịch của bot đã bị huỷ/tắt. */
-export function buildAutonomyStopped(e: { actor: string; cancelledRuns: number; disabledSchedules: number }) {
-    return { actor: e.actor, cancelledRuns: e.cancelledRuns, disabledSchedules: e.disabledSchedules };
+export function buildAutonomyStopped(e: { actor: string; cancelledRuns: number; disabledSchedules: number; cancelledEngagement: number }) {
+    return { actor: e.actor, cancelledRuns: e.cancelledRuns, disabledSchedules: e.disabledSchedules, cancelledEngagement: e.cancelledEngagement };
 }
 
 /** `error` chỉ có khi lần kiểm tra của profile đó lỗi. */
@@ -160,6 +160,21 @@ export function buildCollectFinished(e: { jobId: string; auto: boolean; cancelle
 /** Một lượt trả lời khách đã xong: `status` = posted | skipped | failed | uncertain; `reason` rỗng khi posted. */
 export function buildCommentsReplied(e: { replyId: number; leadId: number; status: string; reason: string }) {
     return { replyId: e.replyId, leadId: e.leadId, status: e.status, reason: e.reason };
+}
+
+/** Có gợi ý bình luận mới chờ duyệt; không mang nội dung câu hay bài (bot đọc qua engagement.list). */
+export function buildEngagementSuggested(e: { id: number; profileId: string; kind: string }) {
+    return { id: e.id, profileId: e.profileId, kind: e.kind };
+}
+
+/** Anh duyệt/bỏ hoặc bot rút một gợi ý. */
+export function buildEngagementDecided(e: { id: number; decision: string }) {
+    return { id: e.id, decision: e.decision };
+}
+
+/** Kết quả đăng một gợi ý đã duyệt (EngagementPoster); `reason` là mã ngắn, không có nội dung của người khác. */
+export function buildEngagementFinished(e: { id: number; status: string; reason: string }) {
+    return { id: e.id, status: e.status, reason: e.reason };
 }
 
 /**

@@ -31,6 +31,10 @@ import {
 } from '../../src/services/facebookPoster/postTracking';
 import { CommentCollector } from '../../src/services/facebookPoster/CommentCollector';
 import { LeadReplier } from '../../src/services/facebookPoster/LeadReplier';
+import { readEngagementComments } from '../../src/services/facebookPoster/EngagementReader';
+import { EngagementPoster } from '../../src/services/facebookPoster/EngagementPoster';
+import { ENGAGEMENT_RESEARCH_SETTING_KEY } from '../../src/services/facebookPoster/engagementRules';
+import { createEngagementOperations, STOPPED_BY_OPERATOR, type EngagementOperations } from '../../src/services/facebookPoster/engagementOperations';
 import { postFirstComment } from '../../src/services/facebookPoster/firstComment';
 import { CommentCollectScheduler } from '../../src/services/facebookPoster/CommentCollectScheduler';
 import { NotificationScheduler, buildMetricsReport, isDeferringLeads } from '../../src/services/facebookPoster/NotificationScheduler';
@@ -47,7 +51,7 @@ import { computeNextRun } from '../../src/services/facebookPoster/scheduleTime';
 import { apiScheduleOrigin, planScheduleUpdate, readName, readTiming } from '../../src/services/facebookPoster/scheduleUpdate';
 import { copyScheduleMedia, removeScheduleMedia, resolveScheduleMedia } from '../../src/services/facebookPoster/scheduleMedia';
 import { getBrowserProfileService, isBrowserEngineInstalled } from './browserProfileIpc';
-import { emitControlEvent, recordControlEvent, hasControlEventSink, wakeControlEventWaiters, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildCommentsReplied, buildPagesLearnFinished } from '../../src/services/control/controlEvents';
+import { emitControlEvent, recordControlEvent, hasControlEventSink, wakeControlEventWaiters, buildRunStarted, buildRunFinished, buildScheduleMissed, buildDraftApproved, buildLoginProblem, buildCheckFinished, buildTrackFinished, buildLeadsFound, buildCollectFinished, buildCommentsReplied, buildPagesLearnFinished, buildEngagementSuggested, buildEngagementDecided, buildEngagementFinished } from '../../src/services/control/controlEvents';
 import { getResearchStore, getResearchService, isResearchRunning, cancelResearch, cancelAndWaitResearch, retireResearchService } from './researchIpc';
 import { getPageWorkVideoOperations } from './videoIpc';
 import { getInboxMediaStore } from './inboxMedia';
@@ -161,6 +165,9 @@ let trackScheduler: PostTrackScheduler | null = null;
 let leadReplier: LeadReplier | null = null;
 let leadReplierDbPath: string | null = null;
 let leadReplierService: FacebookPosterCoordinator | null = null;
+let engagementPoster: EngagementPoster | null = null;
+let engagementPosterDbPath: string | null = null;
+let engagementPosterService: FacebookPosterCoordinator | null = null;
 let collector: CommentCollector | null = null;
 let collectorDbPath: string | null = null;
 let collectorService: FacebookPosterCoordinator | null = null;
@@ -427,6 +434,7 @@ function getAutonomyBinding() {
             masterOn: parseStoredConfig(boundDb.getSetting(CONTROL_CONFIG_SETTING_KEY)).protectedWritesEnabled, limiter }),
         emit: (type, payload) => emitControlEvent(type, payload),
         cancelApiWork,
+        cancelApprovedEngagement: () => getEngagementOperations().cancelAllApproved(STOPPED_BY_OPERATOR),
         now: () => Date.now(),
         clock: systemClock,
         masterOn: () => parseStoredConfig(boundDb.getSetting(CONTROL_CONFIG_SETTING_KEY)).protectedWritesEnabled,
@@ -442,6 +450,31 @@ export function getAutonomyLimiter(): AutonomyLimiter {
 
 export function getAutonomyOperations(): AutonomyOperations {
     return getAutonomyBinding().ops;
+}
+
+let engagementBinding: { db: DatabaseService; path: string; ops: EngagementOperations } | null = null;
+
+/** Engagement queue over the active workspace DB (store and limiter share the same handle); rebuilt when the DB changes. */
+function getEngagementOperations(): EngagementOperations {
+    const boundDb = db();
+    const path = boundDb.getDbPath();
+    if (engagementBinding?.db === boundDb && engagementBinding.path === path) return engagementBinding.ops;
+    const { limiter } = getAutonomyBinding();
+    const ops = createEngagementOperations({
+        store: new FacebookPosterStore(boundDb),
+        limiter: () => limiter,
+        now: () => Date.now(),
+        emit: (type, payload) => emitControlEvent(type,
+            type === 'engagement.suggested' ? buildEngagementSuggested(payload as any)
+                : type === 'engagement.finished' ? buildEngagementFinished(payload as any) : buildEngagementDecided(payload as any)),
+        profileExists: (id) => !!boundDb.getBrowserProfileById(id),
+        researchLog: { read: () => boundDb.getSetting(ENGAGEMENT_RESEARCH_SETTING_KEY), write: (value) => boundDb.setSetting(ENGAGEMENT_RESEARCH_SETTING_KEY, value) },
+        enqueuePost: (id) => getEngagementPoster().enqueue(id),
+        onCancelled: (id) => engagementPoster?.forget(id),
+        log: (message) => Logger.warn(`[facebookPosterIpc] ${message}`),
+    });
+    engagementBinding = { db: boundDb, path, ops };
+    return ops;
 }
 
 /** Listener callbacks must never throw: a broken listener cannot turn a determined state into an error or break a run. */
@@ -705,6 +738,37 @@ function getLeadReplier(): LeadReplier {
     return leadReplier;
 }
 
+/** Đăng gợi ý đã duyệt: dựng như LeadReplier (cùng DB/limiter/hàng chờ nền của workspace). */
+function getEngagementPoster(): EngagementPoster {
+    const svc = getService();
+    const dbPath = db().getDbPath();
+    if (engagementPoster && (engagementPosterDbPath !== dbPath || engagementPosterService !== svc) && !engagementPoster.isRunning()) engagementPoster = null;
+    if (!engagementPoster) {
+        engagementPosterDbPath = dbPath;
+        engagementPosterService = svc;
+        const boundDb = db();
+        const binding = getProfileJobBinding();
+        const observer = getBoundFacebookLoginObserver();
+        engagementPoster = new EngagementPoster({
+            store: new FacebookPosterStore(boundDb),
+            limiter: getAutonomyBinding().limiter,
+            assertCurrent: binding.assertCurrent,
+            openSession: async (profileId, context) => {
+                const opened = await openLoggedInSession(() => binding.openForAutomation(profileId, context), isLoggedIn);
+                return { page: opened.page, close: opened.close };
+            },
+            postComment: (page, input, deps) => postFirstComment(page, input, deps),
+            log: (message) => Logger.warn(`[facebookPosterIpc] ${message}`),
+            observeLogin: (profileId, state) => safely('engagementObserveLogin', () => observer(profileId, state)),
+            emit: (type, payload) => {
+                try { binding.assertSettled(); } catch { return; }
+                safely('controlEngagementFinished', () => emitControlEvent(type, buildEngagementFinished(payload)));
+            },
+        });
+    }
+    return engagementPoster;
+}
+
 /** Bộ thu bình luận gắn với DB đang dùng và khe việc chung của service; dựng lại khi DB / service đổi và không có lượt thu. */
 function getCollector(): CommentCollector {
     const svc = getService();
@@ -823,7 +887,7 @@ export function isFacebookPosterSchedulerRunning(): boolean {
 
 /** True while a poster or side job is active; the updater refuses to restart then. */
 export function isFacebookPosterBusy(): boolean {
-    return (profileQueue?.isBusy() ?? false) || isResearchRunning() || [...campaignExecutionWorkers.values()].some(worker => worker.isBusy()) || (service?.isBusy() ?? false) || (checker?.isRunning() ?? false) || (tracker?.isRunning() ?? false) || (campaignTracker?.isRunning() ?? false) || (collector?.isRunning() ?? false) || (leadReplier?.isRunning() ?? false) || isPageLearnerRunning();
+    return (profileQueue?.isBusy() ?? false) || isResearchRunning() || [...campaignExecutionWorkers.values()].some(worker => worker.isBusy()) || (service?.isBusy() ?? false) || (checker?.isRunning() ?? false) || (tracker?.isRunning() ?? false) || (campaignTracker?.isRunning() ?? false) || (collector?.isRunning() ?? false) || (leadReplier?.isRunning() ?? false) || (engagementPoster?.isRunning() ?? false) || isPageLearnerRunning();
 }
 
 /** Stops a running job (if any). Called on app quit and before the workspace database is switched. */
@@ -831,7 +895,7 @@ export function cancelFacebookPosterJobs(): void {
     pauseFacebookJobAdmission();
     const cancellations = [
         () => campaignTracker?.cancel(), () => service?.cancelAll(), () => checker?.stop(),
-        () => tracker?.stop(), () => collector?.stop(), () => leadReplier?.cancel(), () => learner?.stop(), () => cancelResearch(),
+        () => tracker?.stop(), () => collector?.stop(), () => leadReplier?.cancel(), () => engagementPoster?.cancel(), () => learner?.stop(), () => cancelResearch(),
         ...[...campaignExecutionWorkers.values()].map(worker => () => worker.cancel()),
     ];
     for (const cancel of cancellations) safely('cancelJob', cancel);
@@ -844,7 +908,7 @@ export async function cancelAndWaitFacebookPosterJobs(): Promise<boolean> {
     const queue = profileQueue;
     const generation = posterGeneration;
     const managed = [...new Set(campaignExecutionWorkers.values())];
-    const sideJobs = [checker, tracker, collector, learner, campaignTracker, leadReplier];
+    const sideJobs = [checker, tracker, collector, learner, campaignTracker, leadReplier, engagementPoster];
     cancelFacebookPosterJobs();
     const waitForSide = async (job: { isRunning(): boolean; whenIdle(): Promise<void> } | null): Promise<boolean> => {
         if (!job?.isRunning()) return true;
@@ -1040,6 +1104,7 @@ export function startFacebookPosterScheduler(): void {
     const dbPath = db().getDbPath();
     if (scheduler && schedulerDbPath === dbPath) return;
     safely('leadReplyRecover', () => getLeadReplier().recover());
+    safely('engagementRecover', () => getEngagementPoster().recover());
     stopFacebookPosterScheduler();
     pendingMissed = [];
     schedulerDbPath = dbPath;
@@ -1580,6 +1645,37 @@ function readLeadFilter(p: any) {
 }
 
 /** Khách tiềm năng và thu bình luận: thân xử lý dùng chung cho IPC và control API (kiểm tham số nằm ở đây). */
+/** Hàng chờ bình luận góp ý cho Control API: chỉ gợi ý, đọc và rút. Duyệt/bỏ không nằm ở đây (IPC của app, Task 3). */
+export const engagementOperations = {
+    suggest: (params: any) => {
+        if (admissionPaused || isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        return getEngagementOperations().suggest(params ?? {});
+    },
+    list: (params?: any) => getEngagementOperations().list(params ?? {}),
+    markResearched: (params: any) => getEngagementOperations().markResearched(params ?? {}),
+    /** Đọc bình luận bài ứng viên: việc phụ nền trên profile, không ghi kho; giờ im lặng / profile dừng chặn trước khi mở trình duyệt. */
+    readComments: (params: any) => {
+        if (admissionPaused || isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        const boundDb = db();
+        const binding = getProfileJobBinding();
+        const observer = getBoundFacebookLoginObserver();
+        const { limiter } = getAutonomyBinding();
+        return readEngagementComments({
+            profileExists: (id) => !!boundDb.getBrowserProfileById(id),
+            gate: (id) => limiter.checkGates(id),
+            launchFor: (profileId, context) => openLoggedInSession(() => binding.openForAutomation(profileId, context), isLoggedIn),
+            collect: collectComments,
+            observeLogin: (profileId, state) => safely('engagementReadObserveLogin', () => observer(profileId, state)),
+            assertCurrent: binding.assertCurrent,
+            now: () => Date.now(),
+        }, params ?? {});
+    },
+    withdraw: (params: any) => {
+        if (admissionPaused || isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        return getEngagementOperations().withdraw(params ?? {});
+    },
+};
+
 export const leadOperations = {
     list: (params?: any) => {
         const p = params ?? {};
@@ -1713,6 +1809,14 @@ export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:pageMetrics', trackingOperations.pageMetrics);
     handle('facebookPoster:getNotificationConfig', notificationOperations.getConfig);
     handle('facebookPoster:setNotificationConfig', notificationOperations.setConfig);
+    // Duyệt/bỏ gợi ý chỉ dành cho renderer của app: không qua relay nhân viên, không có trong Control API.
+    handle('engagement:list', (p) => getEngagementOperations().list(p));
+    handle('engagement:approve', (p) => {
+        if (admissionPaused || isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
+        return getEngagementOperations().approve(p?.id, p?.text);
+    });
+    handle('engagement:reject', (p) => getEngagementOperations().reject(p?.id, p?.reason));
+    handle('engagement:cancel', (p) => getEngagementOperations().cancel(p?.id));
     handle('facebookPoster:leadList', leadOperations.list);
     handle('facebookPoster:leadUpdate', leadOperations.update);
     handle('facebookPoster:leadConfigGet', leadOperations.getConfig);

@@ -75,11 +75,11 @@ export default function AutonomySettings() {
     setBusy(true);
     try {
       const out = await confirmThenCall(
-        () => showConfirm({ title: 'Dừng khẩn tự vận hành?', message: 'Tắt công tắc, huỷ các lượt đang chạy và tắt các lịch do bot tạo. Lịch của anh giữ nguyên.', confirmText: 'Dừng khẩn', variant: 'danger' }),
+        () => showConfirm({ title: 'Dừng khẩn tự vận hành?', message: 'Tắt công tắc, huỷ các lượt đang chạy, tắt các lịch do bot tạo và huỷ các bình luận đã duyệt chưa đăng (bình luận đang gửi dở không dừng được). Lịch của anh giữ nguyên.', confirmText: 'Dừng khẩn', variant: 'danger' }),
         () => ipc.autonomy!.stop(),
       );
       if (!out.ran) return;
-      if (out.value?.success) { showNotification(`Đã dừng: huỷ ${out.value.cancelledRuns ?? 0} lượt, tắt ${out.value.disabledSchedules ?? 0} lịch`, 'success'); await load(); }
+      if (out.value?.success) { showNotification(`Đã dừng: huỷ ${out.value.cancelledRuns ?? 0} lượt, tắt ${out.value.disabledSchedules ?? 0} lịch${out.value.cancelledEngagement ? `, huỷ ${out.value.cancelledEngagement} bình luận đã duyệt` : ''}`, 'success'); await load(); }
       else showNotification(out.value?.error || 'Không dừng được', 'error');
     } finally { setBusy(false); }
   };
@@ -187,7 +187,7 @@ export default function AutonomySettings() {
                   <span className="text-sm text-gray-200 truncate max-w-full" title={p.profileId}>{p.name}</span>
                   {p.paused && <span className="px-2 py-0.5 rounded-full text-xs bg-red-500/15 text-red-400">Đang dừng</span>}
                 </div>
-                <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
                   {p.cells.map((c) => (
                     <div key={c.key} className="min-w-0"><dt className="text-gray-400">{c.label}</dt><dd className={c.remaining === 0 ? 'text-amber-500' : 'text-gray-200'}>{c.used}/{c.cap}</dd></div>
                   ))}

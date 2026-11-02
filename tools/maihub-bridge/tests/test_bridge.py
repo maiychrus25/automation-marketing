@@ -1091,6 +1091,8 @@ class FakeWatchClient(object):
         self.runs = runs or {}
         self.drafts = drafts or {}
         self.briefs = briefs or {}
+        self.engagement = []  # trả lời engagement.list (danh sách hoặc Exception)
+        self.profiles = []  # trả lời profiles.list
         self.status = {"workspace": None}  # trả lời system.status (không lấy từ script events.wait)
 
     def call(self, method, params=None, idempotency_key=None):
@@ -1104,6 +1106,12 @@ class FakeWatchClient(object):
             if isinstance(item, Exception):
                 raise item
             return item
+        if method == "engagement.list":
+            if isinstance(self.engagement, Exception):
+                raise self.engagement
+            return {"total": len(self.engagement), "items": self.engagement}
+        if method == "profiles.list":
+            return {"profiles": self.profiles}
         if method in ("drafts.get", "briefs.get"):
             item = self.drafts[params["id"]] if method == "drafts.get" else self.briefs[params["profileId"]]
             if isinstance(item, Exception):
@@ -3063,6 +3071,72 @@ def video_event(seq, **over):
     payload = {"videoId": "v1", "name": "Flash sale", "ok": True, "durationSec": 20.4, "sizeBytes": 1000, "mediaId": "m1"}
     payload.update(over)
     return {"seq": seq, "type": "videos.finished", "payload": payload, "createdAt": 1}
+
+
+class EngagementDigestTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state_path = os.path.join(self.tmp.name, "state", "watch-state.json")
+        self.clock = FakeClock()
+        self.sender = FakeSender()
+
+    def watcher(self, script):
+        self.client = FakeWatchClient(script)
+        return bridge.Watcher(self.client, self.sender, self.state_path, clock=self.clock, sleep=self.clock.sleep)
+
+    def state(self):
+        with open(self.state_path, "r") as handle:
+            return json.load(handle)
+
+    def suggested(self, seq, item_id, profile="p1"):
+        return {"seq": seq, "type": "engagement.suggested", "payload": {"id": item_id, "profileId": profile, "kind": "comment"}, "createdAt": 1}
+
+    def item(self, item_id, profile="p1", text="Gợi ý số %d"):
+        return {"id": item_id, "profileId": profile, "status": "pending", "suggestedText": text % item_id if "%d" in text else text}
+
+    def test_one_digest_for_a_batch_of_suggestions(self):
+        w = self.watcher([page([]), page([self.suggested(1, 7), self.suggested(2, 8, "p2"), finished(3)])])
+        w.step()
+        w.client.engagement = [self.item(8, "p2", "x" * 200), self.item(7), self.item(5)]  # 5 không thuộc lô này
+        w.client.profiles = [{"id": "p1", "name": "Page Một"}, {"id": "p2", "name": "Page Hai"}]
+        w.step()
+        digests = [m for m in self.sender.sent if m.startswith("🗂")]
+        self.assertEqual(len(digests), 1)
+        lines = digests[0].split("\n")
+        self.assertEqual(lines[0], "🗂 Có 2 gợi ý bình luận mới chờ anh duyệt trong MaiHub:")
+        self.assertEqual(lines[1:], ["• Page Hai: " + "x" * 79 + "…", "• Page Một: Gợi ý số 7"])
+        self.assertEqual(len(self.sender.sent), 2)  # digest + run.finished; không tin riêng cho từng sự kiện
+        self.assertIn(("engagement.list", {"status": "pending", "limit": 200}), self.client.calls)
+        self.assertEqual(self.state()["cursor"], 3)
+
+    def test_digest_caps_lines_and_ignores_decided_events(self):
+        events = [self.suggested(i, i) for i in range(1, 14)]
+        w = self.watcher([page([]), page(events + [{"seq": 14, "type": "engagement.decided", "payload": {"id": 1, "decision": "rejected"}, "createdAt": 1},
+                                                  {"seq": 15, "type": "engagement.finished", "payload": {"id": 2, "status": "posted", "reason": ""}, "createdAt": 1}])])
+        w.step()
+        w.client.engagement = [self.item(i) for i in range(1, 14)]
+        w.step()
+        self.assertEqual(len(self.sender.sent), 1)
+        lines = self.sender.sent[0].split("\n")
+        self.assertEqual(lines[0], "🗂 Có 13 gợi ý bình luận mới chờ anh duyệt trong MaiHub:")
+        self.assertEqual(len(lines), 12)
+        self.assertEqual(lines[-1], "… và 3 gợi ý khác")
+        self.assertTrue(lines[1].startswith("• p1: "))  # chưa biết tên thì dùng mã profile
+
+    def test_digest_falls_back_to_count_when_list_fails(self):
+        w = self.watcher([page([]), page([self.suggested(1, 7)])])
+        w.step()
+        w.client.engagement = bridge.BridgeError("UNREACHABLE", "offline")
+        w.step()
+        self.assertEqual(self.sender.sent, ["🗂 Có 1 gợi ý bình luận mới chờ anh duyệt trong MaiHub."])
+
+    def test_digest_skips_suggestions_already_decided(self):
+        w = self.watcher([page([]), page([self.suggested(1, 7)])])
+        w.step()
+        w.client.engagement = []  # đã duyệt/bỏ/hết hạn trước khi bot kịp báo
+        w.step()
+        self.assertEqual(self.sender.sent, [])
 
 
 class WatcherVideoTests(unittest.TestCase):
@@ -5119,7 +5193,7 @@ def auto_status(**over):
         "policy": {"enabled": True}, "enabled": True, "masterOn": True, "quietNow": False,
         "remaining": {"videos": 2, "agentRuns": 5, "profileDefault": {"pagePosts": 1, "groupPosts": 3, "leadReplies": 10, "facebookActions": 12}, "profiles": {}},
         "pausedProfiles": [], "now": 1800000000000, "timeZone": "Asia/Ho_Chi_Minh",
-        "due": {"briefs": 0, "campaignSchedules": 0, "commentPosts": 0, "unrepliedLeads": 0, "videosPending": 0},
+        "due": {"briefs": 0, "campaignSchedules": 0, "commentPosts": 0, "unrepliedLeads": 0, "videosPending": 0, "engagementSlots": 0, "engagementProfiles": []},
     }
     due = over.pop("due", {})
     status["due"] = dict(status["due"], **due)
@@ -5148,6 +5222,8 @@ class AutoTickTests(unittest.TestCase):
             return self.status
         if method == "autonomy.recordAgentRun":
             return {"recorded": True, "remaining": 4}
+        if method == "engagement.markResearched":
+            return {"marked": len(params["profileIds"])}
         raise AssertionError("Unexpected method: %s" % method)
 
     def run_agent(self, cmd, prompt, timeout_sec):
@@ -5256,6 +5332,52 @@ class AutoTickTests(unittest.TestCase):
                 self.assertNotIn(word, lowered)
 
 
+    def test_auto_prompt_engagement_has_no_posting_tool(self):
+        prompt = bridge.build_auto_prompt(auto_status(due={"engagementSlots": 4}))
+        self.assertIn("4", prompt)
+        self.assertIn("maihub_engagement_suggest", prompt)
+        self.assertIn("maihub_engagement_readComments", prompt)
+        self.assertIn("maihub_research_", prompt)
+        self.assertIn("Anh sẽ duyệt trong app", prompt)
+        self.assertIn("không đăng được bình luận vào bài của người khác", prompt)
+        self.assertIn("kind: comment", prompt)
+        self.assertIn("chưa hỗ trợ", prompt)  # trả lời bình luận
+        lowered = prompt.lower()
+        for word in ("approve", "post", "duyệt hộ", "nhóm", "group", "reply"):
+            self.assertNotIn(word, lowered.replace("không đăng được", ""), word)
+        self.assertNotIn("maihub_engagement", bridge.build_auto_prompt(auto_status(due={"briefs": 1})))
+
+    def test_auto_prompt_lists_slots_per_profile(self):
+        prompt = bridge.build_auto_prompt(auto_status(due={"engagementSlots": 5, "engagementProfiles": [
+            {"profileId": "p1", "profileName": "Page Một", "slots": 3}, {"profileId": "p2", "profileName": "Page Hai", "slots": 2}]}))
+        self.assertIn("p1 (Page Một): 3", prompt)
+        self.assertIn("p2 (Page Hai): 2", prompt)
+
+    def test_auto_tick_marks_researched_profiles(self):
+        profiles = [{"profileId": "p1", "profileName": "A", "slots": 3}, {"profileId": "p2", "profileName": "B", "slots": 1}]
+        self.status = auto_status(due={"engagementSlots": 4, "engagementProfiles": profiles})
+        self.assertEqual(self.tick()["outcome"], "ok")
+        marks = [params for method, params in self.calls if method == "engagement.markResearched"]
+        self.assertEqual(marks, [{"profileIds": ["p1", "p2"]}])
+        order = [m for m, _ in self.calls]
+        self.assertLess(order.index("engagement.markResearched"), order.index("autonomy.recordAgentRun") + 1)
+        # Best-effort: a failing mark is a warning and never hides the outcome; no slots, no call.
+        self.calls.clear()
+        self.errors["engagement.markResearched"] = bridge.BridgeError("UNKNOWN_METHOD", "old")
+        result = self.tick()
+        self.assertEqual(result["outcome"], "ok")
+        self.assertEqual(len(result["warnings"]), 1)
+        self.calls.clear()
+        self.status = auto_status(due={"briefs": 1})
+        self.tick()
+        self.assertNotIn("engagement.markResearched", [m for m, _ in self.calls])
+
+    def test_auto_tick_runs_agent_when_only_engagement_slots(self):
+        self.status = auto_status(due={"engagementSlots": 2, "engagementProfiles": [{"profileId": "p1", "profileName": "A", "slots": 2}]})
+        self.assertEqual(self.tick()["outcome"], "ok")
+        self.assertEqual(len(self.agent_calls), 1)
+
+
 class InstallAutoTests(InstallFixture):
     def setUp(self):
         with mock.patch.object(BridgeTestCase, "setUp"):
@@ -5359,6 +5481,10 @@ class FormatAutonomyTests(unittest.TestCase):
                          "🛑 Dừng tự vận hành cho Mai Shop: checkpoint. Bật lại trong app hoặc nhắn bot.")
         self.assertEqual(self.fmt("autonomy.stopped", {"actor": "app", "cancelledRuns": 2, "disabledSchedules": 1}),
                          "🛑 Đã dừng khẩn tự vận hành (2 lượt huỷ, 1 lịch tắt).")
+        self.assertEqual(self.fmt("autonomy.stopped", {"actor": "app", "cancelledRuns": 2, "disabledSchedules": 1, "cancelledEngagement": 3}),
+                         "🛑 Đã dừng khẩn tự vận hành (2 lượt huỷ, 1 lịch tắt, 3 bình luận đã duyệt bị huỷ).")
+        self.assertEqual(self.fmt("autonomy.stopped", {"actor": "app", "cancelledRuns": 0, "disabledSchedules": 0, "cancelledEngagement": 0}),
+                         "🛑 Đã dừng khẩn tự vận hành (0 lượt huỷ, 0 lịch tắt).")
         self.assertIsNone(self.fmt("comments.replied", {"replyId": 1}))
 
     def test_format_profile_resumed(self):
@@ -5373,6 +5499,17 @@ class FormatAutonomyTests(unittest.TestCase):
         self.assertIn("Bot đã tự làm: 3 bài Page, 1 bài nhóm, 4 câu trả lời khách, 2 video; 5 lần bị chặn vì trần, 1 lần dừng profile.", lines)
         del payload["autonomy"]
         self.assertNotIn("Bot đã tự làm", self.fmt("metrics.report", payload))
+
+    def test_metrics_lines_engagement(self):
+        payload = {"cadence": "weekly", "periodKey": "k", "from": 1, "to": 2, "label": "24/10–30/10", "posts": 1, "engagement": 340,
+                   "commentSuggestions": {"suggested": 8, "approved": 5, "posted": 4, "rejected": 2, "expired": 1}}
+        lines = self.fmt("metrics.report", payload).split("\n")
+        self.assertIn("Bình luận góp ý: 8 gợi ý, 5 đã duyệt, 4 đã đăng, 2 đã bỏ, 1 hết hạn.", lines)
+        self.assertIn("Tương tác: 340", " ".join(lines))  # tổng tương tác vẫn giữ nguyên
+        payload["commentSuggestions"] = {"suggested": 8, "approved": "x"}  # sai kiểu thì bỏ dòng
+        self.assertNotIn("Bình luận góp ý", self.fmt("metrics.report", payload))
+        del payload["commentSuggestions"]
+        self.assertNotIn("Bình luận góp ý", self.fmt("metrics.report", payload))
 
 
 if __name__ == "__main__":

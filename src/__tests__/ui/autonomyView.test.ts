@@ -46,6 +46,18 @@ describe('autonomyView', () => {
     ]);
   });
 
+  test('engagementUsageCellsAndHint', () => {
+    const [p1] = buildProfileRows(status({
+      usage: { date: '2026-11-02', workspace: { videos: 0, agentRuns: 0 }, profiles: { p1: { pagePosts: 0, groupPosts: 0, leadReplies: 0, facebookActions: 3, engagementSuggestions: 4, engagementComments: 10 } } },
+    }));
+    expect(p1.cells.find((c) => c.key === 'engagementSuggestions')).toMatchObject({ label: 'Gợi ý bình luận', used: 4, cap: 20, remaining: 16 });
+    expect(p1.cells.find((c) => c.key === 'engagementComments')).toMatchObject({ label: 'Bình luận được duyệt', used: 10, cap: 10, remaining: 0 });
+    // A profile with no engagement usage yet still shows both cells at zero.
+    const [other] = buildProfileRows(status({ pausedProfiles: [{ profileId: 'p9', reason: 'checkpoint', pausedAt: 1 }] }));
+    expect(other.cells.filter((c) => c.key.startsWith('engagement')).map((c) => c.used)).toEqual([0, 0]);
+    expect(buildPolicyRows(policy()).find((r) => r.key === 'facebookActionsPerDay')?.hint).toBe('Gồm đăng, trả lời khách và bình luận được duyệt');
+  });
+
   test('invalidCapShowsFieldError', () => {
     expect(fieldFromError('pagePostsPerDay phải là số nguyên không âm')).toEqual({ field: 'pagePostsPerDay', message: 'pagePostsPerDay phải là số nguyên không âm' });
     expect(fieldFromError('pageCampaignDays phải từ 1 đến 30')?.field).toBe('pageCampaignDays');

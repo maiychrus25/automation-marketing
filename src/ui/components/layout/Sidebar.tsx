@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import ipc from '@/lib/ipc';
 import { useAppStore, type FacebookPosterSection } from '@/store/appStore';
 import { useEmployeeStore } from '@/store/employeeStore';
 import SidebarAccounts from './SidebarAccounts';
@@ -48,6 +49,21 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
   const facebookPosterSection = useAppStore(s => s.facebookPosterSection);
   const openFacebookPoster = useAppStore(s => s.openFacebookPoster);
   const [posterOpen, setPosterOpen] = useState(view === 'facebookPoster');
+  const engagementPending = useAppStore(s => s.engagementPendingCount);
+  const setEngagementPending = useAppStore(s => s.setEngagementPendingCount);
+  // Huy hiệu "Chờ duyệt": chỉ boss/standalone, chỉ khi nhóm Đăng Facebook đang mở; tab Chờ duyệt cũng cập nhật số này sau mỗi lần tải.
+  useEffect(() => {
+    if (!posterOpen || empMode === 'employee') return;
+    let alive = true;
+    const refresh = () => {
+      Promise.resolve(ipc.facebookPoster?.engagementList({ status: 'pending', limit: 1 })).then((res) => {
+        if (alive && res?.success && typeof res.total === 'number') setEngagementPending(res.total);
+      }).catch(() => { /* Giữ số cũ. */ });
+    };
+    refresh();
+    const timer = setInterval(refresh, 60_000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [posterOpen, empMode, setEngagementPending]);
   const crmRequestUnseenByAccount = useAppStore(s => s.crmRequestUnseenByAccount);
   const forceRail = useIsMobile(FORCE_RAIL_BELOW);
   const collapsed = sidebarCollapsed || forceRail;
@@ -135,7 +151,7 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
             onClick={() => setPosterOpen(v => !v)}
           />
           {posterOpen && FACEBOOK_POSTER_ITEMS.map(item => (
-            <NavItem key={item.section} icon={item.icon} label={item.label} collapsed={collapsed} sub
+            <NavItem key={item.section} icon={item.icon} label={item.label} collapsed={collapsed} sub count={item.section === 'engagement' ? engagementPending : undefined}
               active={view === 'facebookPoster' && facebookPosterSection === item.section}
               onClick={() => openFacebookPoster(item.section)} />
           ))}
@@ -228,12 +244,14 @@ function AppMark() {
   );
 }
 
-function NavItem({ icon, label, active, onClick, dot, collapsed, expanded, sub }: {
+function NavItem({ icon, label, active, onClick, dot, count, collapsed, expanded, sub }: {
   icon: string;
   label: string;
   active: boolean;
   onClick: () => void;
   dot?: boolean;
+  /** Số đếm hiện dạng huy hiệu; thanh icon thu gọn chỉ hiện chấm. */
+  count?: number;
   collapsed: boolean;
   /** Có giá trị khi mục mở/đóng được một nhóm con. */
   expanded?: boolean;
@@ -244,7 +262,7 @@ function NavItem({ icon, label, active, onClick, dot, collapsed, expanded, sub }
       type="button"
       onClick={onClick}
       title={label}
-      aria-label={label}
+      aria-label={count ? `${label} (${count})` : label}
       aria-current={active ? 'page' : undefined}
       aria-expanded={expanded}
       className={`app-nav-item ${active ? 'is-active' : ''} ${sub && !collapsed ? 'is-sub' : ''}`}
@@ -255,6 +273,7 @@ function NavItem({ icon, label, active, onClick, dot, collapsed, expanded, sub }
         <svg className="app-nav-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M9 6l6 6-6 6" /></svg>
       )}
       {dot && <span className="app-nav-dot" aria-hidden="true" />}
+      {!!count && (collapsed ? <span className="app-nav-dot" aria-hidden="true" /> : <span className="app-nav-count">{count > 99 ? '99+' : count}</span>)}
     </button>
   );
 }
@@ -267,6 +286,7 @@ const FACEBOOK_POSTER_ITEMS: { section: FacebookPosterSection; label: string; ic
   { section: 'comments', label: 'Thu bình luận', icon: 'chat' },
   { section: 'leads', label: 'Khách tiềm năng', icon: 'posterLead' },
   { section: 'research', label: 'Nghiên cứu', icon: 'analytics' },
+  { section: 'engagement', label: 'Chờ duyệt', icon: 'posterEngagement' },
   { section: 'history', label: 'Lịch sử', icon: 'posterHistory' },
 ];
 
@@ -379,6 +399,12 @@ function NavIcon({ name }: { name: string }) {
       return (
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3"/>
+        </svg>
+      );
+    case 'posterEngagement':
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="m8.5 10 2 2 4-4"/>
         </svg>
       );
     case 'posterHistory':

@@ -5,7 +5,7 @@ import {
     AUTONOMY_POLICY_SETTING_KEY, inQuietHours, mergeAutonomyPolicy, minutesOf, parseAutonomyPolicy, type AutonomyPolicy,
 } from './autonomyPolicy';
 
-export type AutonomyAction = 'page_post' | 'group_post' | 'lead_reply' | 'video' | 'agent_run';
+export type AutonomyAction = 'page_post' | 'group_post' | 'lead_reply' | 'video' | 'agent_run' | 'engagement_suggest' | 'engagement_comment';
 export type AutonomyOrigin = 'api' | 'app';
 export type LimitReason = 'quota' | 'quiet_hours' | 'profile_paused' | 'stopped' | 'master_off';
 
@@ -22,9 +22,9 @@ export interface ProfilePause { profileId: string; reason: string; pausedAt: num
 export interface AutonomyUsage {
     date: string;
     workspace: { videos: number; agentRuns: number };
-    profiles: Record<string, { pagePosts: number; groupPosts: number; leadReplies: number; facebookActions: number }>;
+    profiles: Record<string, { pagePosts: number; groupPosts: number; leadReplies: number; facebookActions: number; engagementSuggestions: number; engagementComments: number }>;
 }
-export interface AutonomySummary { pagePosts: number; groupPosts: number; leadReplies: number; videos: number; blocked: number; pauses: number }
+export interface AutonomySummary { pagePosts: number; groupPosts: number; leadReplies: number; videos: number; engagementSuggested: number; engagementPosted: number; blocked: number; pauses: number }
 
 export interface AutonomyLimiterDeps {
     now(): number;
@@ -35,7 +35,7 @@ export interface AutonomyLimiterDeps {
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 export const POLICY_CHANGE_RETENTION_DAYS = 30;
-const FACEBOOK_ACTIONS: readonly AutonomyAction[] = ['page_post', 'group_post', 'lead_reply'];
+const FACEBOOK_ACTIONS: readonly AutonomyAction[] = ['page_post', 'group_post', 'lead_reply', 'engagement_comment'];
 const FACEBOOK_LIST = FACEBOOK_ACTIONS.map((a) => `'${a}'`).join(',');
 
 const MESSAGES: Record<LimitReason, string> = {
@@ -49,7 +49,10 @@ const MESSAGES: Record<LimitReason, string> = {
 interface Denial { reason: LimitReason; retryAt: number | null }
 interface ActionRow { id: number; action: AutonomyAction; profile_id: string; origin: AutonomyOrigin; status: string; ref: string }
 
+const emptyProfileUsage = () => ({ pagePosts: 0, groupPosts: 0, leadReplies: 0, facebookActions: 0, engagementSuggestions: 0, engagementComments: 0 });
 const isFacebook = (action: AutonomyAction) => FACEBOOK_ACTIONS.includes(action);
+/** R3: approved-engagement actions are always counted (any origin) and never gated by the master/stop switches. */
+const isEngagement = (action: AutonomyAction) => action === 'engagement_suggest' || action === 'engagement_comment';
 
 export class AutonomyLimiter {
     constructor(private readonly db: SqlDatabase, private readonly deps: AutonomyLimiterDeps) {}
@@ -120,11 +123,19 @@ export class AutonomyLimiter {
         if (denial) this.deny(req, denial);
     }
 
-    reserve(req: LimitRequest): number | null {
-        if (req.origin === 'app' && req.action !== 'video') return null;
+    /** Quiet hours + paused profile only, no counting and no blocked row: for read-only Facebook jobs (`engagement.readComments`). */
+    checkGates(profileId: string): void {
+        const req: LimitRequest = { action: 'engagement_comment', origin: 'app', profileId };
+        const denial = this.evaluate(req, false);
+        if (denial) this.deny(req, denial);
+    }
+
+    /** `capsOnly`: only the caps apply (no quiet-hours / pause / switch gates); the gates are re-checked by `assertEffect` at effect time. */
+    reserve(req: LimitRequest, opts: { capsOnly?: boolean } = {}): number | null {
+        if (req.origin === 'app' && req.action !== 'video' && !isEngagement(req.action)) return null;
         let denial: Denial | null = null;
         const id = this.db.transaction(() => {
-            denial = this.evaluate(req, true);
+            denial = this.evaluate(req, true, false, opts.capsOnly === true);
             if (denial) return null;
             return this.db.runInsert(
                 `INSERT INTO autonomy_actions (action, profile_id, target_key, origin, local_date, status, ref, created_at)
@@ -158,8 +169,8 @@ export class AutonomyLimiter {
     /** Re-checks the gates (not the caps) right before the real effect. */
     assertEffect(id: number): void {
         const row = this.db.queryOne<ActionRow>('SELECT id, action, profile_id, origin, status, ref FROM autonomy_actions WHERE id = ?', [id]);
-        if (!row || row.origin !== 'api') return;
-        const req: LimitRequest = { action: row.action, origin: 'api', profileId: row.profile_id || undefined, ref: row.ref || undefined };
+        if (!row || (row.origin !== 'api' && !isEngagement(row.action))) return;
+        const req: LimitRequest = { action: row.action, origin: row.origin, profileId: row.profile_id || undefined, ref: row.ref || undefined };
         const denial = this.evaluate(req, false);
         if (denial) this.deny(req, denial);
     }
@@ -202,11 +213,14 @@ export class AutonomyLimiter {
             if (r.action === 'video') usage.workspace.videos += r.n;
             else if (r.action === 'agent_run') usage.workspace.agentRuns += r.n;
             else if (isFacebook(r.action as AutonomyAction)) {
-                const p = (usage.profiles[r.profile_id] ??= { pagePosts: 0, groupPosts: 0, leadReplies: 0, facebookActions: 0 });
+                const p = (usage.profiles[r.profile_id] ??= emptyProfileUsage());
                 if (r.action === 'page_post') p.pagePosts += r.n;
                 else if (r.action === 'group_post') p.groupPosts += r.n;
+                else if (r.action === 'engagement_comment') p.engagementComments += r.n;
                 else p.leadReplies += r.n;
                 p.facebookActions += r.n;
+            } else if (r.action === 'engagement_suggest') {
+                (usage.profiles[r.profile_id] ??= emptyProfileUsage()).engagementSuggestions += r.n;
             }
         }
         return usage;
@@ -222,7 +236,7 @@ export class AutonomyLimiter {
     summary(from: number, to: number): AutonomySummary {
         const rows = this.db.query<{ action: string; status: string; origin: string; n: number }>(
             'SELECT action, status, origin, COUNT(*) AS n FROM autonomy_actions WHERE created_at >= ? AND created_at <= ? GROUP BY action, status, origin', [from, to]);
-        const out: AutonomySummary = { pagePosts: 0, groupPosts: 0, leadReplies: 0, videos: 0, blocked: 0, pauses: 0 };
+        const out: AutonomySummary = { pagePosts: 0, groupPosts: 0, leadReplies: 0, videos: 0, engagementSuggested: 0, engagementPosted: 0, blocked: 0, pauses: 0 };
         for (const r of rows) {
             if (r.status === 'blocked') out.blocked += r.n;
             else if (r.action === 'profile_pause') out.pauses += r.n;
@@ -230,6 +244,8 @@ export class AutonomyLimiter {
                 if (r.action === 'page_post') out.pagePosts += r.n;
                 else if (r.action === 'group_post') out.groupPosts += r.n;
                 else if (r.action === 'lead_reply') out.leadReplies += r.n;
+                else if (r.action === 'engagement_suggest') out.engagementSuggested += r.n;
+                else if (r.action === 'engagement_comment') out.engagementPosted += r.n;
                 // "Bot đã tự làm": the operator's own videos share the cap but are not the bot's work.
                 else if (r.action === 'video' && r.origin === 'api') out.videos += r.n;
             }
@@ -252,23 +268,24 @@ export class AutonomyLimiter {
         return now + (1440 - this.deps.clock.minutes(now)) * MINUTE_MS;
     }
 
-    private evaluate(req: LimitRequest, withCaps: boolean, switchesOnly = false): Denial | null {
+    private evaluate(req: LimitRequest, withCaps: boolean, switchesOnly = false, capsOnly = false): Denial | null {
         const policy = this.policy();
         const now = this.deps.now();
         const facebook = isFacebook(req.action);
-        if (req.origin === 'api') {
+        const engagement = isEngagement(req.action);
+        if (!capsOnly && req.origin === 'api' && !engagement) {
             if (facebook && !this.deps.protectedWritesEnabled()) return { reason: 'master_off', retryAt: null };
             if (!policy.enabled) return { reason: 'stopped', retryAt: null };
-            if (switchesOnly) return null;
-            if (facebook) {
-                const minute = this.deps.clock.minutes(now);
-                if (inQuietHours(policy, minute)) {
-                    const wait = (minutesOf(policy.quietEnd) - minute + 1440) % 1440;
-                    return { reason: 'quiet_hours', retryAt: now + wait * MINUTE_MS };
-                }
-                const profileId = req.profileId ?? '';
-                if (this.db.queryOne('SELECT 1 FROM autonomy_profile_pauses WHERE profile_id = ?', [profileId])) return { reason: 'profile_paused', retryAt: null };
+        }
+        if (switchesOnly) return null;
+        if (!capsOnly && facebook && (req.origin === 'api' || engagement)) {
+            const minute = this.deps.clock.minutes(now);
+            if (inQuietHours(policy, minute)) {
+                const wait = (minutesOf(policy.quietEnd) - minute + 1440) % 1440;
+                return { reason: 'quiet_hours', retryAt: now + wait * MINUTE_MS };
             }
+            const profileId = req.profileId ?? '';
+            if (this.db.queryOne('SELECT 1 FROM autonomy_profile_pauses WHERE profile_id = ?', [profileId])) return { reason: 'profile_paused', retryAt: null };
         }
         if (!withCaps) return null;
         const effective = this.effectiveNow();
@@ -282,7 +299,7 @@ export class AutonomyLimiter {
             perProfile ? [date, action, profileId] : [date, action]);
 
         if (facebook) {
-            const cap = { page_post: policy.pagePostsPerDay, group_post: policy.groupPostsPerDay, lead_reply: policy.leadRepliesPerDay }[req.action as 'page_post' | 'group_post' | 'lead_reply'];
+            const cap = { page_post: policy.pagePostsPerDay, group_post: policy.groupPostsPerDay, lead_reply: policy.leadRepliesPerDay, engagement_comment: policy.engagementCommentsPerDay }[req.action as 'page_post' | 'group_post' | 'lead_reply' | 'engagement_comment'];
             if (dayCount(req.action, true) >= cap) return quota;
             if (countWhere(`local_date = ? AND profile_id = ? AND action IN (${FACEBOOK_LIST})`, [date, profileId]) >= policy.facebookActionsPerDay) return quota;
             if (req.action === 'group_post') {
@@ -292,6 +309,8 @@ export class AutonomyLimiter {
                     [profileId, req.targetKey ?? '', effective - policy.groupRepeatDays * DAY_MS])?.t;
                 if (oldest != null) return { reason: 'quota', retryAt: oldest + policy.groupRepeatDays * DAY_MS };
             }
+        } else if (req.action === 'engagement_suggest') {
+            if (dayCount('engagement_suggest', true) >= policy.engagementSuggestionsPerDay) return quota;
         } else if (req.action === 'video') {
             const used = dayCount('video', false);
             const keepLast = req.origin === 'api' && policy.videoReserveLast ? 1 : 0;

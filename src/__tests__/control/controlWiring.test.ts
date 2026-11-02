@@ -403,7 +403,7 @@ describe('daily brief IPC wiring', () => {
         jest.doMock(mockedModules[1], () => ({ ControlEventRecorder: class { sync() {} deactivate() {} } }));
         jest.doMock(mockedModules[2], () => ({ createControlMethods: (deps: any) => { captured = deps; throw new Error('Captured before opening sockets'); } }));
         jest.doMock(mockedModules[3], () => ({ stopPageCampaignExecution: async () => true, setPageCampaignExecutionContext() {}, isFacebookPosterEmployeeBlocked: () => false,
-            posterOperations: {}, trackingOperations: {}, campaignOperations: {}, leadOperations: {} }));
+            posterOperations: {}, trackingOperations: {}, campaignOperations: {}, leadOperations: {}, engagementOperations: {} }));
         jest.doMock(mockedModules[4], () => ({ researchOperations: {} }));
         jest.doMock(mockedModules[5], () => ({ videoOperations: {} }));
         jest.doMock(mockedModules[6], () => ({ getInboxMediaStore: () => ({}) }));
@@ -1072,7 +1072,7 @@ describe('protected runtime registry and request resources', () => {
         jest.doMock(modules[2], () => ({ __esModule: true, default: { getInstance: () => ({ getActiveWorkspace: () => ({ id: workspace }) }) } }));
         jest.doMock(modules[3], () => ({ ControlApiServer: class { constructor(o: any) { options = o; } async start() {} async stop() {} } }));
         jest.doMock(modules[4], () => ({ CertificateStore: class { async ensure() { await certificateGate(); return {}; } }, CertificateKeyUnreadableError: class extends Error {} }));
-        jest.doMock(modules[5], () => ({ stopPageCampaignExecution: async () => true, setPageCampaignExecutionContext() {}, isFacebookPosterEmployeeBlocked: () => blocked, posterOperations: {}, trackingOperations: {}, campaignOperations: {}, leadOperations: {}, learnPages() {} }));
+        jest.doMock(modules[5], () => ({ stopPageCampaignExecution: async () => true, setPageCampaignExecutionContext() {}, isFacebookPosterEmployeeBlocked: () => blocked, posterOperations: {}, trackingOperations: {}, campaignOperations: {}, leadOperations: {}, engagementOperations: {}, learnPages() {} }));
         jest.doMock(modules[6], () => ({ researchOperations: {} }));
         jest.doMock(modules[7], () => ({ videoOperations: {} }));
         jest.doMock(modules[8], () => ({ getInboxMediaStore: () => ({ cleanup() {}, resolve: () => [] }) }));
@@ -1171,7 +1171,7 @@ describe('trusted local scope provisioning', () => {
         jest.doMock(modules[4], () => ({ DEFAULT_CONTROL_PORT: 47321, ControlApiServer: class { async start() { onStart(); } async stop() {} } }));
         jest.doMock(modules[5], () => ({ CertificateStore: class { async ensure() { return {}; } fingerprint() { return 'abc'; } }, CertificateKeyUnreadableError: class extends Error {} }));
         jest.doMock(modules[6], () => ({ stopPageCampaignExecution: async () => true, setPageCampaignExecutionContext() {}, isFacebookPosterEmployeeBlocked: () => blocked,
-            posterOperations: {}, trackingOperations: {}, campaignOperations: {}, leadOperations: {} }));
+            posterOperations: {}, trackingOperations: {}, campaignOperations: {}, leadOperations: {}, engagementOperations: {} }));
         jest.doMock(modules[7], () => ({ researchOperations: {} }));
         jest.doMock(modules[8], () => ({ videoOperations: {} }));
         jest.doMock(modules[9], () => ({ getInboxMediaStore: () => ({ cleanup() {} }) }));

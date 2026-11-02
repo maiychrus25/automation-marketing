@@ -1857,11 +1857,42 @@ def _metrics_lines(payload):
             lines.append("%s: %s" % (clip(_one_line(f["pageName"]), MAX_FIELD_CHARS), detail))
         if len(followers) > MAX_FOLLOWER_LINES:
             lines.append("… và %d Page khác" % (len(followers) - MAX_FOLLOWER_LINES))
+    suggestions = payload.get("commentSuggestions")
+    suggestion_keys = ("suggested", "approved", "posted", "rejected", "expired")
+    if isinstance(suggestions, dict) and all(_is_num(suggestions.get(k)) for k in suggestion_keys):
+        lines.append("Bình luận góp ý: %d gợi ý, %d đã duyệt, %d đã đăng, %d đã bỏ, %d hết hạn." % tuple(suggestions[k] for k in suggestion_keys))
     auto = payload.get("autonomy")
     keys = ("pagePosts", "groupPosts", "leadReplies", "videos", "blocked", "pauses")
     if isinstance(auto, dict) and all(_is_num(auto.get(k)) for k in keys):
         lines.append("Bot đã tự làm: %d bài Page, %d bài nhóm, %d câu trả lời khách, %d video; %d lần bị chặn vì trần, %d lần dừng profile." % tuple(auto[k] for k in keys))
     return lines
+
+
+ENGAGEMENT_DIGEST_LINES = 10
+ENGAGEMENT_DIGEST_TEXT_CHARS = 80
+
+
+def format_engagement_digest(ids, fetch_pending, fetch_profiles):
+    """🗂 Một tin gom các gợi ý bình luận mới (id trong `ids`) còn chờ duyệt; None nếu không còn gợi ý nào.
+    Chỉ mang câu gợi ý của bot (không có nội dung của người khác); lỗi đọc danh sách thì chỉ báo số lượng."""
+    wanted = set(ids)
+    try:
+        items = [i for i in fetch_pending() if isinstance(i, dict) and i.get("id") in wanted and i.get("status") == "pending"]
+    except BridgeError:
+        return "🗂 Có %d gợi ý bình luận mới chờ anh duyệt trong MaiHub." % len(wanted)
+    if not items:
+        return None
+    try:
+        names = {p.get("id"): p.get("name") for p in fetch_profiles() if isinstance(p, dict)}
+    except BridgeError:
+        names = {}
+    lines = ["🗂 Có %d gợi ý bình luận mới chờ anh duyệt trong MaiHub:" % len(items)]
+    for item in items[:ENGAGEMENT_DIGEST_LINES]:
+        name = _one_line(names.get(item.get("profileId")) or item.get("profileId"))
+        lines.append("• %s: %s" % (clip(name, MAX_FIELD_CHARS), clip(_one_line(item.get("suggestedText")), ENGAGEMENT_DIGEST_TEXT_CHARS)))
+    if len(items) > ENGAGEMENT_DIGEST_LINES:
+        lines.append("… và %d gợi ý khác" % (len(items) - ENGAGEMENT_DIGEST_LINES))
+    return "\n".join(lines)
 
 
 def format_event(event, fetch_run):
@@ -1915,8 +1946,10 @@ def format_event(event, fetch_run):
         lines = ["🛑 Dừng tự vận hành cho %s: %s. Bật lại trong app hoặc nhắn bot." % (
             clip(_one_line(payload.get("profileName")), MAX_FIELD_CHARS), clip(_one_line(payload.get("reason")), MAX_FIELD_CHARS))]
     elif etype == "autonomy.stopped":
-        lines = ["🛑 Đã dừng khẩn tự vận hành (%d lượt huỷ, %d lịch tắt)." % (
-            int(payload.get("cancelledRuns") or 0), int(payload.get("disabledSchedules") or 0))]
+        engagement = int(payload.get("cancelledEngagement") or 0)
+        lines = ["🛑 Đã dừng khẩn tự vận hành (%d lượt huỷ, %d lịch tắt%s)." % (
+            int(payload.get("cancelledRuns") or 0), int(payload.get("disabledSchedules") or 0),
+            ", %d bình luận đã duyệt bị huỷ" % engagement if engagement > 0 else "")]
     elif etype == "videos.finished":
         name = clip(_one_line(payload.get("name")), MAX_FIELD_CHARS)
         if payload.get("cancelled") is True:
@@ -2151,8 +2184,11 @@ class Watcher(object):
                 self.state["workspaceId"] = workspace
             if not result.get("events") and self.clock() - started < WATCH_MIN_POLL_SEC:
                 self.sleep(WATCH_MIN_POLL_SEC)  # trả rỗng ngay: tránh vòng lặp nóng
+            suggested = []
             for event in result.get("events") or []:
-                if event.get("type") == "briefs.finished":
+                if event.get("type") == "engagement.suggested":  # gom thành một tin 🗂 sau lô, không báo từng sự kiện
+                    suggested.append((event.get("payload") or {}).get("id"))
+                elif event.get("type") == "briefs.finished":
                     messages = format_brief_messages(event,
                                                      lambda draft_id: self.client.call("drafts.get", {"id": draft_id}),
                                                      lambda profile_id: self.client.call("briefs.get", {"profileId": profile_id}))
@@ -2164,6 +2200,13 @@ class Watcher(object):
                         self.sender.send(text)
                 self.state["cursor"] = event["seq"]
                 self._save()
+            if suggested:
+                digest = format_engagement_digest(
+                    suggested,
+                    lambda: self.client.call("engagement.list", {"status": "pending", "limit": 200}).get("items") or [],
+                    lambda: self.client.call("profiles.list").get("profiles") or [])
+                if digest:
+                    self.sender.send(digest)
         except BridgeError as err:
             self._on_error(err)
 
@@ -2413,6 +2456,13 @@ def build_auto_prompt(status):
         work.append("- %d khách chưa được trả lời: đọc maihub_leads_list (status new), viết câu trả lời ngắn, đúng ngữ cảnh rồi gửi bằng maihub_comments_reply." % due["unrepliedLeads"])
     if due.get("videosPending"):
         work.append("- %d video đang chờ: kiểm tra maihub_videos_list và xử lý video đã xong." % due["videosPending"])
+    if due.get("engagementSlots"):
+        places = "; ".join("%s (%s): %d" % (p.get("profileId"), _one_line(p.get("profileName")), p.get("slots", 0))
+                           for p in (due.get("engagementProfiles") or []) if isinstance(p, dict))
+        work.append("- Còn %d chỗ gợi ý bình luận%s: tìm bài hoặc bình luận đáng góp ý hoặc giải đáp theo chủ đề của Page bằng maihub_research_* và maihub_engagement_readComments, "
+                    "soạn câu hữu ích, không chèn link, rồi gửi từng gợi ý bằng maihub_engagement_suggest (kind: comment; trả lời một bình luận cụ thể chưa hỗ trợ). "
+                    "Mỗi lần gợi ý một câu; gặp CONFLICT hoặc LIMIT_REACHED thì bỏ qua bài đó. Anh sẽ duyệt trong app, bot không đăng được bình luận vào bài của người khác."
+                    % (due["engagementSlots"], " (profileId (tên Page): số chỗ) " + places if places else ""))
     caps = ["lượt AI %s" % remaining.get("agentRuns", 0), "video %s" % remaining.get("videos", 0),
             "bài Page mỗi profile %s" % per_profile.get("pagePosts", 0), "trả lời khách mỗi profile %s" % per_profile.get("leadReplies", 0)]
     return "\n".join([AUTO_PROMPT_HEADER, "Việc đến hạn:"] + work + ["Trần còn lại hôm nay: " + ", ".join(caps) + "."] + AUTO_PROMPT_RULES)
@@ -2454,6 +2504,12 @@ def auto_tick(client, env, state_path, run_agent=run_agent, clock=time.time):
         except OSError as err:
             result["warnings"].append(str(err))
         finally:
+            marked = [p["profileId"] for p in (status.get("due") or {}).get("engagementProfiles") or [] if isinstance(p, dict) and p.get("profileId")]
+            if marked and (status.get("due") or {}).get("engagementSlots"):
+                try:  # best-effort: bắt đầu thời gian chờ nghiên cứu cho cả vòng không gợi ý được gì
+                    client.call("engagement.markResearched", {"profileIds": marked}, idempotency_key=str(uuid.uuid4()))
+                except BridgeError as err:
+                    result["warnings"].append(str(err))
             try:
                 client.call("autonomy.recordAgentRun", {"outcome": outcome}, idempotency_key=str(uuid.uuid4()))
             except BridgeError as err:

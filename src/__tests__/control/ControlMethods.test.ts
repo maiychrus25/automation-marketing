@@ -75,7 +75,7 @@ describe('pages.*', () => {
     });
     it('adds two non-destructive methods with the public response schema', () => {
         const { methods } = setupPages();
-        expect(methods).toHaveLength(71); // 60 + pages.metrics + notifications.config + notifications.setConfig (spec 2026-10-31 §6) + 7 autonomy.* (spec 2026-11-01 §6.1) + comments.reply (§7)
+        expect(methods).toHaveLength(76); // 60 + pages.metrics + notifications.config + notifications.setConfig (spec 2026-10-31 §6) + 7 autonomy.* (spec 2026-11-01 §6.1) + comments.reply (§7) + engagement.suggest/list/withdraw/readComments (spec 2026-11-02 §5) + engagement.markResearched (research cooldown)
         const found = describeMethods(methods).methods.filter((m) => m.name.startsWith('pages.')) as any[];
         expect(found.map((m) => m.name).sort()).toEqual(['pages.learn', 'pages.list', 'pages.metrics']);
         expect(found.every((m) => m.destructive === false)).toBe(true);
@@ -502,7 +502,7 @@ describe('describe', () => {
             'briefs.list', 'briefs.get', 'briefs.save', 'briefs.delete', 'briefs.claimDue', 'briefs.finish',
             'posts.track', 'posts.trackStatus', 'posts.trackCancel', 'posts.list', 'posts.stats', 'posts.groupScores', 'posts.bestTimes', 'posts.trackConfig',
             'campaigns.list', 'campaigns.get', 'campaigns.create', 'campaigns.update', 'campaigns.delete',
-            'comments.collect', 'comments.collectStatus', 'comments.collectCancel', 'comments.list', 'leads.list', 'leads.update', 'comments.reply', 'leads.config',
+            'comments.collect', 'comments.collectStatus', 'comments.collectCancel', 'comments.list', 'leads.list', 'leads.update', 'comments.reply', 'engagement.suggest', 'engagement.readComments', 'engagement.list', 'engagement.withdraw', 'engagement.markResearched', 'leads.config',
             'notifications.config', 'notifications.setConfig',
             'autonomy.status', 'autonomy.config', 'autonomy.setConfig', 'autonomy.stop', 'autonomy.resume', 'autonomy.resumeProfile', 'autonomy.recordAgentRun',
             'videos.templates', 'videos.render', 'videos.adCreate', 'videos.status', 'videos.list', 'videos.cancel',

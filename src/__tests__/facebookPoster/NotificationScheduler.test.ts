@@ -579,15 +579,45 @@ describe('buildMetricsReport and lead cursor store', () => {
     test('metricsReportIncludesAutonomySummary', () => {
         const s = store();
         const period = latestReportPeriod(DEFAULT_NOTIFICATION_CONFIG, MON_NOV_02, NY)!;
-        const summary = { pagePosts: 3, groupPosts: 0, leadReplies: 4, videos: 1, blocked: 2, pauses: 0 };
+        const summary = { pagePosts: 3, groupPosts: 0, leadReplies: 4, videos: 1, engagementSuggested: 0, engagementPosted: 0, blocked: 2, pauses: 0 };
         const seen: number[][] = [];
         const report = buildMetricsReport(s, period, 'weekly', (id) => id, (from, to) => { seen.push([from, to]); return summary; });
         expect(report.autonomy).toEqual(summary);
         expect(seen).toEqual([[period.from, period.to - 1]]);
         // No autonomy activity, or no provider: the field is omitted so the report stays unchanged.
-        const zero = { pagePosts: 0, groupPosts: 0, leadReplies: 0, videos: 0, blocked: 0, pauses: 0 };
+        const zero = { pagePosts: 0, groupPosts: 0, leadReplies: 0, videos: 0, engagementSuggested: 0, engagementPosted: 0, blocked: 0, pauses: 0 };
         expect('autonomy' in buildMetricsReport(s, period, 'weekly', (id) => id, () => zero)).toBe(false);
         expect('autonomy' in buildMetricsReport(s, period, 'weekly', (id) => id)).toBe(false);
+    });
+
+    test('metricsReportIncludesEngagement', () => {
+        const s = store();
+        const period = latestReportPeriod(DEFAULT_NOTIFICATION_CONFIG, MON_NOV_02, NY)!;
+        // No engagement activity: the field is omitted so the report stays unchanged.
+        // (`engagement` is already the total interactions, so the comment-suggestion block is `commentSuggestions`.)
+        expect('commentSuggestions' in buildMetricsReport(s, period, 'weekly', (id) => id)).toBe(false);
+        const inside = period.from + 60 * MIN;
+        const add = (i: number, at: number) => s.insertEngagementItem({ profileId: 'p1', kind: 'comment', postUrl: `https://www.facebook.com/x/${i}`, postKey: `k${i}`, targetCommentId: '', targetAuthor: '', targetExcerpt: '', postExcerpt: 'x', suggestedText: 't', reason: '', sourceRef: '' }, at, at + 1000);
+        const posted = add(1, inside); s.approveEngagementItem(posted, 'ok', null, inside + 1); s.settleEngagement(posted, 'posted', '', inside + 2);
+        const rejected = add(2, inside); s.rejectEngagementItem(rejected, '', inside + 1);
+        add(3, inside); // expires inside the period
+        add(4, period.from - 5 * MIN); // suggested and expired in the previous period
+        s.expireDueEngagement(inside + 1000);
+        expect(buildMetricsReport(s, period, 'weekly', (id) => id).commentSuggestions).toEqual({ suggested: 3, approved: 1, posted: 1, rejected: 1, expired: 1 });
+    });
+
+    test('metricsReportCountsPendingThatLapsedInPeriodAsExpired', () => {
+        const s = store();
+        const period = latestReportPeriod(DEFAULT_NOTIFICATION_CONFIG, MON_NOV_02, NY)!;
+        const inside = period.from + 60 * MIN;
+        // No list/approve call has swept it yet: still 'pending' in the DB although its 24h ran out inside the period.
+        const id = s.insertEngagementItem({ profileId: 'p1', kind: 'comment', postUrl: 'https://www.facebook.com/x/1', postKey: 'k1', targetCommentId: '', targetAuthor: '', targetExcerpt: '', postExcerpt: 'x', suggestedText: 't', reason: '', sourceRef: '' }, inside, inside + 1000);
+        expect(buildMetricsReport(s, period, 'weekly', (x) => x).commentSuggestions).toMatchObject({ suggested: 1, expired: 1 });
+        expect(s.getEngagementItem(id)!.status).toBe('expired');
+        // One still pending after the period end is left alone.
+        const later = s.insertEngagementItem({ profileId: 'p1', kind: 'comment', postUrl: 'https://www.facebook.com/x/2', postKey: 'k2', targetCommentId: '', targetAuthor: '', targetExcerpt: '', postExcerpt: 'x', suggestedText: 't', reason: '', sourceRef: '' }, period.to - MIN, period.to + 1000);
+        buildMetricsReport(s, period, 'weekly', (x) => x);
+        expect(s.getEngagementItem(later)!.status).toBe('pending');
     });
 
     // Hợp đồng đổi ở bản sửa cuối (M1): hàng chờ theo id (thứ tự ghi), không theo detected_at, để đồng hồ bị lùi không làm rơi lead.

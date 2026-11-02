@@ -25,6 +25,7 @@ describe('isEmployeeChannelAllowed', () => {
     'facebookPoster:postStats', 'facebookPoster:groupScores', 'facebookPoster:bestTimes', 'facebookPoster:getTrackConfig', 'facebookPoster:setTrackConfig',
     'facebookPoster:leadList', 'facebookPoster:leadUpdate', 'facebookPoster:leadConfigGet', 'facebookPoster:leadConfigSet', 'facebookPoster:leadExport',
     'facebookPoster:commentCollect', 'facebookPoster:commentCollectStatus', 'facebookPoster:commentCollectCancel', 'facebookPoster:listLeadReplies',
+    'engagement:list', 'engagement:approve', 'engagement:reject', 'engagement:cancel',
     'facebookPoster:campaignList', 'facebookPoster:campaignGet', 'facebookPoster:campaignCreate',
     'facebookPoster:campaignUpdate', 'facebookPoster:campaignDelete',
     'research:getConfig', 'research:setConfig', 'research:search', 'research:scanGroupFeeds', 'research:list',

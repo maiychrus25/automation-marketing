@@ -9,7 +9,15 @@ describe('autonomyPolicy', () => {
             pageCampaignDays: 7, pagePostsPerDay: 1, pagePostsTotal: 7, pageWindowStart: '08:00', pageWindowEnd: '21:00',
             groupPostsPerDay: 3, groupRepeatDays: 3, leadRepliesPerDay: 10, facebookActionsPerDay: 12,
             videosPerDay: 2, videoReserveLast: true, agentRunsPerDay: 12,
+            engagementSuggestionsPerDay: 20, engagementCommentsPerDay: 10,
         });
+    });
+
+    it('engagementDefaultsMatchSpec', () => {
+        expect(DEFAULT_AUTONOMY_POLICY.engagementSuggestionsPerDay).toBe(20);
+        expect(DEFAULT_AUTONOMY_POLICY.engagementCommentsPerDay).toBe(10);
+        expect(() => validateAutonomyPolicy({ ...DEFAULT_AUTONOMY_POLICY, engagementCommentsPerDay: -1 })).toThrow(/^engagementCommentsPerDay /);
+        expect(mergeAutonomyPolicy(DEFAULT_AUTONOMY_POLICY, { engagementSuggestionsPerDay: 0 }).engagementSuggestionsPerDay).toBe(0);
     });
 
     it('rejectsUnknownKeyAndOutOfRange', () => {

@@ -9,7 +9,7 @@ import { VARIANT_LABELS, variantText } from './variants';
 import type {
     FbPosterComment, FbPosterLead, LeadStatus, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
     CampaignStatus, FbPosterCampaign, FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
-    LinkStatus, LeadReplySource, LeadReplyStatus, FbPosterLeadReply, PostStatsGroupBy, PostStatsReportRow, PostStatsSnapshot, PageFollowerRow, PostTrackingRow, TrackTargetKind,
+    LinkStatus, FbPosterEngagementItem, EngagementStatus, LeadReplySource, LeadReplyStatus, FbPosterLeadReply, PostStatsGroupBy, PostStatsReportRow, PostStatsSnapshot, PageFollowerRow, PostTrackingRow, TrackTargetKind,
 } from '../../models/facebookPoster';
 
 /**
@@ -36,6 +36,16 @@ function mapLeadReply(row: any): FbPosterLeadReply {
     return {
         id: row.id, leadId: row.lead_id, profileId: row.profile_id, postUrl: row.post_url, authorId: row.author_id, text: row.text,
         status: row.status, reason: row.reason, reservationId: row.reservation_id, createdAt: row.created_at, finishedAt: row.finished_at,
+    };
+}
+
+function mapEngagement(row: any): FbPosterEngagementItem {
+    return {
+        id: row.id, profileId: row.profile_id, kind: row.kind, postUrl: row.post_url, postKey: row.post_key,
+        targetCommentId: row.target_comment_id, targetAuthor: row.target_author, targetExcerpt: row.target_excerpt, postExcerpt: row.post_excerpt,
+        suggestedText: row.suggested_text, approvedText: row.approved_text, reason: row.reason, sourceRef: row.source_ref,
+        status: row.status, rejectReason: row.reject_reason, resultReason: row.result_reason,
+        suggestedAt: row.suggested_at, expiresAt: row.expires_at, decidedAt: row.decided_at, postedAt: row.posted_at, reservationId: row.reservation_id,
     };
 }
 
@@ -854,6 +864,108 @@ export class FacebookPosterStore {
 
     listLeadReplies(limit: number, offset: number): FbPosterLeadReply[] {
         return this.db.query<any>('SELECT * FROM fb_poster_lead_replies ORDER BY id DESC LIMIT ? OFFSET ?', [limit, offset]).map(mapLeadReply);
+    }
+
+    /** Còn hiệu lực = chiếm chỗ của bài (pending/approved/posting/posted/failed/uncertain); rejected/expired/skipped thì nhả bài. */
+    hasLiveEngagementPost(profileId: string, postKey: string): boolean {
+        return this.count("SELECT COUNT(*) AS n FROM fb_poster_engagement_items WHERE profile_id = ? AND post_key = ? AND status IN ('pending','approved','posting','posted','failed','uncertain')",
+            [profileId, postKey]) > 0;
+    }
+
+    insertEngagementItem(r: Pick<FbPosterEngagementItem, 'profileId' | 'kind' | 'postUrl' | 'postKey' | 'targetCommentId' | 'targetAuthor' | 'targetExcerpt' | 'postExcerpt' | 'suggestedText' | 'reason' | 'sourceRef'>, at: number, expiresAt: number): number {
+        return this.db.runInsert(
+            `INSERT INTO fb_poster_engagement_items (profile_id, kind, post_url, post_key, target_comment_id, target_author, target_excerpt, post_excerpt, suggested_text, reason, source_ref, status, suggested_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            [r.profileId, r.kind, r.postUrl, r.postKey, r.targetCommentId, r.targetAuthor, r.targetExcerpt, r.postExcerpt, r.suggestedText, r.reason, r.sourceRef, at, expiresAt]);
+    }
+
+    getEngagementItem(id: number): FbPosterEngagementItem | null {
+        const row = this.db.queryOne<any>('SELECT * FROM fb_poster_engagement_items WHERE id = ?', [id]);
+        return row ? mapEngagement(row) : null;
+    }
+
+    listEngagementItems(f: { status?: EngagementStatus; profileId?: string; limit: number; offset: number }): { total: number; items: FbPosterEngagementItem[] } {
+        const where = [f.status ? 'status = ?' : '', f.profileId ? 'profile_id = ?' : ''].filter(Boolean).join(' AND ');
+        const params = [f.status, f.profileId].filter((v): v is string => !!v);
+        const clause = where ? ` WHERE ${where}` : '';
+        return {
+            total: this.count(`SELECT COUNT(*) AS n FROM fb_poster_engagement_items${clause}`, params),
+            items: this.db.query<any>(`SELECT * FROM fb_poster_engagement_items${clause} ORDER BY id DESC LIMIT ? OFFSET ?`, [...params, f.limit, f.offset]).map(mapEngagement),
+        };
+    }
+
+    /** Gợi ý bình luận trong [from, to): gợi ý theo `suggested_at`, duyệt/bỏ theo `decided_at`, đăng theo `posted_at`, hết hạn theo `expires_at`. */
+    engagementCounts(from: number, to: number): { suggested: number; approved: number; posted: number; rejected: number; expired: number } {
+        const n = (col: string) => this.count(`SELECT COUNT(*) AS n FROM fb_poster_engagement_items WHERE ${col} >= ? AND ${col} < ?`, [from, to]);
+        return {
+            suggested: n('suggested_at'),
+            approved: this.count("SELECT COUNT(*) AS n FROM fb_poster_engagement_items WHERE approved_text <> '' AND decided_at >= ? AND decided_at < ?", [from, to]),
+            posted: n('posted_at'),
+            rejected: this.count("SELECT COUNT(*) AS n FROM fb_poster_engagement_items WHERE status = 'rejected' AND decided_at >= ? AND decided_at < ?", [from, to]),
+            expired: this.count("SELECT COUNT(*) AS n FROM fb_poster_engagement_items WHERE status = 'expired' AND expires_at >= ? AND expires_at < ?", [from, to]),
+        };
+    }
+
+    /** `pending` quá hạn thành `expired`; trả số dòng đổi. */
+    expireDueEngagement(now: number): number {
+        return this.db.transaction(() => {
+            const n = this.count("SELECT COUNT(*) AS n FROM fb_poster_engagement_items WHERE status = 'pending' AND expires_at <= ?", [now]);
+            if (n) this.db.run("UPDATE fb_poster_engagement_items SET status = 'expired' WHERE status = 'pending' AND expires_at <= ?", [now]);
+            return n;
+        });
+    }
+
+    /** Chỉ đổi khi dòng còn `pending`: app duyệt. */
+    approveEngagementItem(id: number, approvedText: string, reservationId: number | null, at: number): void {
+        this.db.run("UPDATE fb_poster_engagement_items SET status = 'approved', approved_text = ?, reservation_id = ?, decided_at = ? WHERE id = ? AND status = 'pending'",
+            [approvedText, reservationId, at, id]);
+    }
+
+    /** Chỉ đổi khi dòng còn `pending`: anh bỏ hoặc bot rút. */
+    rejectEngagementItem(id: number, reason: string, at: number): void {
+        this.db.run("UPDATE fb_poster_engagement_items SET status = 'rejected', reject_reason = ?, decided_at = ? WHERE id = ? AND status = 'pending'", [reason, at, id]);
+    }
+
+    /** Gợi ý đã duyệt chờ đăng, theo thứ tự duyệt. */
+    listApprovedEngagement(): FbPosterEngagementItem[] {
+        return this.db.query<any>("SELECT * FROM fb_poster_engagement_items WHERE status = 'approved' ORDER BY id").map(mapEngagement);
+    }
+
+    /** approved -> posting ngay trước khi mở trình duyệt; trả false nếu dòng không còn `approved`. */
+    startEngagementPosting(id: number): boolean {
+        return this.db.transaction(() => {
+            if (!this.count("SELECT COUNT(*) AS n FROM fb_poster_engagement_items WHERE id = ? AND status = 'approved'", [id])) return false;
+            this.db.run("UPDATE fb_poster_engagement_items SET status = 'posting' WHERE id = ?", [id]);
+            return true;
+        });
+    }
+
+    /** Anh huỷ (hoặc dừng khẩn) trước khi đăng: chỉ đổi khi dòng còn `approved`; trả false nếu đã sang posting/xong. */
+    cancelApprovedEngagement(id: number, reason: string): boolean {
+        return this.db.transaction(() => {
+            if (!this.count("SELECT COUNT(*) AS n FROM fb_poster_engagement_items WHERE id = ? AND status = 'approved'", [id])) return false;
+            this.db.run("UPDATE fb_poster_engagement_items SET status = 'skipped', result_reason = ? WHERE id = ?", [reason, id]);
+            return true;
+        });
+    }
+
+    /** Kết thúc một gợi ý đã duyệt (posted | skipped | failed | uncertain) hoặc trả về `approved` (huỷ trước khi bấm gửi). */
+    settleEngagement(id: number, status: EngagementStatus, reason: string, postedAt: number | null): void {
+        this.db.run('UPDATE fb_poster_engagement_items SET status = ?, result_reason = ?, posted_at = ? WHERE id = ?', [status, reason, postedAt, id]);
+    }
+
+    /** Duyệt xong mà không xếp được job đăng: trả về `pending` như chưa duyệt. */
+    revertEngagementToPending(id: number): void {
+        this.db.run("UPDATE fb_poster_engagement_items SET status = 'pending', approved_text = '', reservation_id = NULL, decided_at = NULL WHERE id = ? AND status = 'approved'", [id]);
+    }
+
+    /** Khởi động lại: dòng `posting` không biết đã gửi chưa nên giữ chỗ và đánh dấu `uncertain`. */
+    markPostingEngagementUncertain(): number {
+        return this.db.transaction(() => {
+            const n = this.count("SELECT COUNT(*) AS n FROM fb_poster_engagement_items WHERE status = 'posting'");
+            if (n) this.db.run("UPDATE fb_poster_engagement_items SET status = 'uncertain', result_reason = 'interrupted' WHERE status = 'posting'");
+            return n;
+        });
     }
 
     /** Trong các khoá bình luận đã cho, những khoá đã thành khách. */

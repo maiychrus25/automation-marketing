@@ -49,6 +49,65 @@ describe.each([HCM, NY])('AutonomyLimiter (%s)', (zone) => {
         expect(count(db, 'reserved')).toBe(1);
     });
 
+    it('suggestCountsWhenAutonomyDisabled', () => {
+        const { limiter, db } = setup(zone, false, false);
+        const id = limiter.reserve({ action: 'engagement_suggest', origin: 'app', profileId: 'p1' });
+        expect(id).toEqual(expect.any(Number));
+        expect(limiter.usage().profiles.p1.engagementSuggestions).toBe(1);
+        expect(limiter.usage().profiles.p1.facebookActions).toBe(0);
+        expect(count(db, 'reserved')).toBe(1);
+    });
+
+    it('suggestCapIsPerProfile', () => {
+        const { limiter } = setup(zone, false);
+        const req = (profileId: string): LimitRequest => ({ action: 'engagement_suggest', origin: 'api', profileId });
+        for (let i = 0; i < 20; i++) expect(limiter.reserve(req('p1'))).toEqual(expect.any(Number));
+        expect(thrown(() => limiter.reserve(req('p1'))).details).toMatchObject({ reason: 'quota' });
+        expect(limiter.reserve(req('p2'))).toEqual(expect.any(Number));
+    });
+
+    it('engagementCommentIgnoresSwitchesButRespectsQuietAndPause', () => {
+        const { limiter, h } = setup(zone, false, false);
+        const req: LimitRequest = { action: 'engagement_comment', origin: 'app', profileId: 'p1' };
+        const id = limiter.reserve(req);
+        expect(id).toEqual(expect.any(Number));
+        expect(() => limiter.assertEffect(id!)).not.toThrow();
+        limiter.pauseProfile('p1', 'checkpoint');
+        expect(thrown(() => limiter.reserve(req)).details).toMatchObject({ reason: 'profile_paused' });
+        expect(thrown(() => limiter.assertEffect(id!)).details).toMatchObject({ reason: 'profile_paused' });
+        limiter.resumeProfile('p1');
+        h.now += 13 * HOUR; // 23:00 local, inside quiet hours
+        expect(thrown(() => limiter.reserve(req)).details).toMatchObject({ reason: 'quiet_hours' });
+        expect(thrown(() => limiter.reserve({ ...req, origin: 'api' })).details).toMatchObject({ reason: 'quiet_hours' });
+        // suggestions are not Facebook operations: quiet hours and pause do not apply
+        limiter.pauseProfile('p1', 'logged_out');
+        expect(limiter.reserve({ action: 'engagement_suggest', origin: 'app', profileId: 'p1' })).toEqual(expect.any(Number));
+    });
+
+    it('engagementCommentCountsTowardFacebookActions', () => {
+        const { limiter } = setup(zone);
+        for (let i = 0; i < 8; i++) limiter.reserve({ action: 'engagement_comment', origin: 'app', profileId: 'p1' });
+        for (let i = 0; i < 4; i++) limiter.reserve({ action: 'lead_reply', origin: 'api', profileId: 'p1' });
+        expect(limiter.usage().profiles.p1).toMatchObject({ engagementComments: 8, leadReplies: 4, facebookActions: 12 });
+        expect(thrown(() => limiter.reserve({ action: 'engagement_comment', origin: 'app', profileId: 'p1' })).details).toMatchObject({ reason: 'quota' });
+        expect(thrown(() => limiter.reserve({ action: 'lead_reply', origin: 'api', profileId: 'p1' })).details).toMatchObject({ reason: 'quota' });
+    });
+
+    it('engagementCommentOwnCapApplies', () => {
+        const { limiter } = setup(zone);
+        limiter.setPolicy({ facebookActionsPerDay: 50, engagementCommentsPerDay: 2 }, 'test');
+        for (let i = 0; i < 2; i++) limiter.reserve({ action: 'engagement_comment', origin: 'app', profileId: 'p1' });
+        expect(thrown(() => limiter.reserve({ action: 'engagement_comment', origin: 'app', profileId: 'p1' })).details).toMatchObject({ reason: 'quota' });
+    });
+
+    it('summaryCountsEngagement', () => {
+        const { limiter } = setup(zone);
+        limiter.reserve({ action: 'engagement_suggest', origin: 'app', profileId: 'p1' });
+        limiter.reserve({ action: 'engagement_suggest', origin: 'api', profileId: 'p1' });
+        limiter.reserve({ action: 'engagement_comment', origin: 'app', profileId: 'p1' });
+        expect(limiter.summary(START[zone] - 1, START[zone] + HOUR)).toMatchObject({ engagementSuggested: 2, engagementPosted: 1, leadReplies: 0 });
+    });
+
     it('masterOffBlocksFacebookActionsOnly', () => {
         const { limiter, h } = setup(zone);
         h.writes = false;
@@ -94,7 +153,7 @@ describe.each([HCM, NY])('AutonomyLimiter (%s)', (zone) => {
         // 3 group + 9 replies = 12 actions: next reply is under the reply cap (10) but over the total (12).
         expect(thrown(() => limiter.reserve({ action: 'lead_reply', origin: 'api', profileId: 'p1' })).details).toMatchObject({ reason: 'quota' });
         expect(limiter.reserve({ action: 'lead_reply', origin: 'api', profileId: 'p2' })).toEqual(expect.any(Number));
-        expect(limiter.usage().profiles.p1).toEqual({ pagePosts: 0, groupPosts: 3, leadReplies: 9, facebookActions: 12 });
+        expect(limiter.usage().profiles.p1).toEqual({ pagePosts: 0, groupPosts: 3, leadReplies: 9, facebookActions: 12, engagementSuggestions: 0, engagementComments: 0 });
     });
 
     it('groupRepeatWithinThreeDaysBlocked', () => {
@@ -198,7 +257,7 @@ describe.each([HCM, NY])('AutonomyLimiter (%s)', (zone) => {
         expect(count(db, 'blocked')).toBe(2);
         expect(limiter.usage().profiles.p1.pagePosts).toBe(1);
         limiter.pauseProfile('p9', 'logged_out');
-        expect(limiter.summary(0, Number.MAX_SAFE_INTEGER)).toEqual({ pagePosts: 1, groupPosts: 0, leadReplies: 0, videos: 0, blocked: 2, pauses: 1 });
+        expect(limiter.summary(0, Number.MAX_SAFE_INTEGER)).toEqual({ pagePosts: 1, groupPosts: 0, leadReplies: 0, videos: 0, engagementSuggested: 0, engagementPosted: 0, blocked: 2, pauses: 1 });
     });
 
     it('assertEffectRechecksGatesWithoutCountingAgain', () => {
@@ -235,5 +294,27 @@ describe.each([HCM, NY])('AutonomyLimiter (%s)', (zone) => {
         expect(err.code).toBe('LIMIT_REACHED');
         expect(err.details).toEqual({ reason: 'stopped', retryAt: null });
         expect(err.message).toMatch(/[ăâêôơưđ]/i);
+    });
+});
+
+describe('reserve capsOnly', () => {
+    const eng: LimitRequest = { action: 'engagement_comment', origin: 'app', profileId: 'p1' };
+    it('skips quiet hours and pauses but still enforces the caps', () => {
+        const { limiter, h } = setup(HCM, false, false);
+        h.now = START[HCM] + 13 * HOUR; // 23:00 local, inside quiet hours
+        expect(thrown(() => limiter.reserve(eng)).details).toMatchObject({ reason: 'quiet_hours' });
+        limiter.pauseProfile('p1', 'checkpoint');
+        h.now = START[HCM];
+        expect(thrown(() => limiter.reserve(eng)).details).toMatchObject({ reason: 'profile_paused' }); // default behaviour unchanged
+        h.now = START[HCM] + 13 * HOUR;
+        for (let i = 0; i < 10; i++) expect(limiter.reserve(eng, { capsOnly: true })).toEqual(expect.any(Number));
+        expect(thrown(() => limiter.reserve(eng, { capsOnly: true })).details).toMatchObject({ reason: 'quota' });
+    });
+    it('capsOnly still enforces facebookActionsPerDay', () => {
+        const { limiter } = setup(HCM, true, true);
+        limiter.setPolicy({ facebookActionsPerDay: 2 }, 'test');
+        limiter.reserve({ action: 'lead_reply', origin: 'api', profileId: 'p1' });
+        limiter.reserve({ action: 'lead_reply', origin: 'api', profileId: 'p1' });
+        expect(thrown(() => limiter.reserve(eng, { capsOnly: true })).details).toMatchObject({ reason: 'quota' });
     });
 });

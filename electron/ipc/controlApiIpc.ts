@@ -32,7 +32,7 @@ import { toSafeProfiles } from '../../src/services/control/controlProfiles';
 import {
     CONTROL_CONFIG_SETTING_KEY, ControlConfigError, buildFirewallCommand, buildInstallCommand, buildPairingCode, detectPublicIpv4, parseBotIp, parseStoredConfig, validatePublicHost, withStoredPublicHost, resolveAppVersion, validateConfigInput, type ControlConfig,
 } from '../../src/services/control/controlConfig';
-import { getBoundPageCampaignCollector, setPageCampaignExecutionContext, stopPageCampaignExecution, checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, createBoundPageWorkDependencies, createBoundPageApprovalDependencies, posterOperations, trackingOperations, campaignOperations, leadOperations, notificationOperations, getAutonomyOperations } from './facebookPosterIpc';
+import { getBoundPageCampaignCollector, setPageCampaignExecutionContext, stopPageCampaignExecution, checkFacebookLogins, listFacebookLoginStates, isFacebookPosterEmployeeBlocked, isFacebookPosterSchedulerRunning, createBoundPageWorkDependencies, createBoundPageApprovalDependencies, posterOperations, trackingOperations, campaignOperations, leadOperations, engagementOperations, notificationOperations, getAutonomyOperations } from './facebookPosterIpc';
 import { researchOperations, cancelOwnedResearchScan } from './researchIpc';
 import { briefOperations, pageOperations, getDailyBriefStore } from './dailyBriefIpc';
 import { videoOperations } from './videoIpc';
@@ -267,6 +267,13 @@ async function startRuntime(config: ControlConfig): Promise<void> {
             collectCancel: leadOperations.collectCancel,
             comments: leadOperations.comments,
             reply: leadOperations.reply,
+        },
+        engagement: {
+            suggest: engagementOperations.suggest,
+            list: engagementOperations.list,
+            withdraw: engagementOperations.withdraw,
+            readComments: engagementOperations.readComments,
+            markResearched: engagementOperations.markResearched,
         },
         videos: {
             templates: videoOperations.templates,

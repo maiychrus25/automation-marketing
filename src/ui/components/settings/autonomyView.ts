@@ -4,7 +4,7 @@ import type { FbPosterLeadReply, LeadReplyStatus } from '../../../models/faceboo
 
 // Logic thuần của tab "Tự vận hành" và mục "Trả lời khách": tách khỏi React để test trong môi trường node.
 
-type CountKey = 'pageCampaignDays' | 'pagePostsPerDay' | 'pagePostsTotal' | 'groupPostsPerDay' | 'groupRepeatDays' | 'leadRepliesPerDay' | 'facebookActionsPerDay' | 'videosPerDay' | 'agentRunsPerDay';
+type CountKey = 'pageCampaignDays' | 'pagePostsPerDay' | 'pagePostsTotal' | 'groupPostsPerDay' | 'groupRepeatDays' | 'leadRepliesPerDay' | 'facebookActionsPerDay' | 'videosPerDay' | 'agentRunsPerDay' | 'engagementSuggestionsPerDay' | 'engagementCommentsPerDay';
 type TimeKey = 'quietStart' | 'quietEnd' | 'pageWindowStart' | 'pageWindowEnd';
 export type PolicyFieldKey = CountKey | TimeKey | 'videoReserveLast';
 
@@ -31,10 +31,12 @@ const FIELDS: { key: PolicyFieldKey; label: string; kind: PolicyRow['kind']; hin
   { key: 'groupPostsPerDay', label: 'Đăng nhóm mỗi ngày (mỗi profile)', kind: 'count', min: 0 },
   { key: 'groupRepeatDays', label: 'Cùng nhóm cách tối thiểu (ngày)', kind: 'count', min: 0 },
   { key: 'leadRepliesPerDay', label: 'Trả lời khách mỗi ngày (mỗi profile)', kind: 'count', min: 0 },
-  { key: 'facebookActionsPerDay', label: 'Tổng thao tác Facebook mỗi ngày (mỗi profile)', kind: 'count', min: 0, hint: 'Gồm đăng và trả lời' },
+  { key: 'facebookActionsPerDay', label: 'Tổng thao tác Facebook mỗi ngày (mỗi profile)', kind: 'count', min: 0, hint: 'Gồm đăng, trả lời khách và bình luận được duyệt' },
   { key: 'videosPerDay', label: 'Video mỗi ngày (cả workspace)', kind: 'count', min: 0 },
   { key: 'videoReserveLast', label: 'Giữ lượt video cuối cho anh', kind: 'flag' },
   { key: 'agentRunsPerDay', label: 'Lượt AI mỗi ngày', kind: 'count', min: 0 },
+  { key: 'engagementSuggestionsPerDay', label: 'Gợi ý bình luận mỗi ngày (mỗi profile)', kind: 'count', min: 0 },
+  { key: 'engagementCommentsPerDay', label: 'Bình luận được duyệt mỗi ngày (mỗi profile)', kind: 'count', min: 0 },
 ];
 
 export const policyFieldLabel = (key: string): string => FIELDS.find((f) => f.key === key)?.label ?? (key === 'enabled' ? 'Công tắc tự vận hành' : key);
@@ -48,7 +50,7 @@ export function buildPolicyRows(policy: AutonomyPolicy): PolicyRow[] {
   }));
 }
 
-export interface UsageCell { key: 'pagePosts' | 'groupPosts' | 'leadReplies' | 'facebookActions'; label: string; used: number; cap: number; remaining: number }
+export interface UsageCell { key: 'pagePosts' | 'groupPosts' | 'leadReplies' | 'facebookActions' | 'engagementSuggestions' | 'engagementComments'; label: string; used: number; cap: number; remaining: number }
 export interface ProfileRow {
   profileId: string;
   /** Tên profile, không biết thì dùng mã. */
@@ -68,6 +70,8 @@ const CELLS: { key: UsageCell['key']; label: string; cap: keyof AutonomyPolicy }
   { key: 'groupPosts', label: 'Đăng nhóm', cap: 'groupPostsPerDay' },
   { key: 'leadReplies', label: 'Trả lời khách', cap: 'leadRepliesPerDay' },
   { key: 'facebookActions', label: 'Tổng thao tác', cap: 'facebookActionsPerDay' },
+  { key: 'engagementSuggestions', label: 'Gợi ý bình luận', cap: 'engagementSuggestionsPerDay' },
+  { key: 'engagementComments', label: 'Bình luận được duyệt', cap: 'engagementCommentsPerDay' },
 ];
 
 /** Hợp profile đã dùng hôm nay và profile đang dừng; profile chưa dùng lấy `profileDefault`. */
@@ -80,7 +84,13 @@ export function buildProfileRows(status: AutonomyStatus, names: Record<string, s
     return {
       profileId,
       name: names[profileId] || profileId,
-      cells: CELLS.map((c) => ({ key: c.key, label: c.label, used: used?.[c.key] ?? 0, cap: status.policy[c.cap] as number, remaining: remaining[c.key] })),
+      cells: CELLS.map((c) => {
+        const usedToday = used?.[c.key] ?? 0;
+        const cap = status.policy[c.cap] as number;
+        // `remaining` chỉ có bốn ô đầu; hai ô bình luận tính còn lại từ trần và số đã dùng.
+        const left = c.key === 'engagementSuggestions' || c.key === 'engagementComments' ? Math.max(0, cap - usedToday) : remaining[c.key];
+        return { key: c.key, label: c.label, used: usedToday, cap, remaining: left };
+      }),
       paused: pause ? { reason: pause.reason, reasonLabel: PAUSE_LABELS[pause.reason] ?? pause.reason, pausedAt: pause.pausedAt } : null,
       canResume: !!pause,
     };

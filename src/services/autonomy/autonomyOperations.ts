@@ -15,6 +15,8 @@ export interface AutonomyOperationsDeps {
     dueWork(): AutonomyDueWork;
     emit(type: ControlEventType, payload: unknown): void;
     cancelApiWork(): { cancelledRuns: number; disabledSchedules: number };
+    /** Dừng khẩn cũng huỷ các bình luận đã duyệt chưa đăng (`approved`); trả số dòng đã huỷ. */
+    cancelApprovedEngagement?(): number;
     now(): number;
     clock: LocalClock;
     masterOn(): boolean;
@@ -46,8 +48,12 @@ export function createAutonomyOperations(deps: AutonomyOperationsDeps) {
         let disabledSchedules = 0;
         try { ({ cancelledRuns, disabledSchedules } = deps.cancelApiWork()); }
         catch (err) { deps.log?.(`[autonomy] cancelApiWork failed: ${err instanceof Error ? err.message : String(err)}`); }
-        deps.emit('autonomy.stopped', buildAutonomyStopped({ actor, cancelledRuns, disabledSchedules }));
-        return { cancelledRuns, disabledSchedules };
+        let cancelledEngagement = 0;
+        try { cancelledEngagement = deps.cancelApprovedEngagement?.() ?? 0; }
+        catch (err) { deps.log?.(`[autonomy] cancelApprovedEngagement failed: ${err instanceof Error ? err.message : String(err)}`); }
+        if (cancelledEngagement) deps.log?.(`[autonomy] emergency stop cancelled ${cancelledEngagement} approved comment(s)`);
+        deps.emit('autonomy.stopped', buildAutonomyStopped({ actor, cancelledRuns, disabledSchedules, cancelledEngagement }));
+        return { cancelledRuns, disabledSchedules, cancelledEngagement };
     };
 
     return {

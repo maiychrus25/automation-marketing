@@ -32,6 +32,8 @@ export interface MetricsReportPayload {
     followers: { pageId: string; pageName: string; current: number | null; change: number | null; approximate: boolean }[];
     /** Việc bot tự làm trong kỳ; bỏ trường khi không có hoạt động tự vận hành. */
     autonomy?: AutonomySummary;
+    /** Gợi ý bình luận trong kỳ; bỏ trường khi toàn 0. (`engagement` đã là tổng tương tác.) */
+    commentSuggestions?: { suggested: number; approved: number; posted: number; rejected: number; expired: number };
 }
 
 export interface NotificationSchedulerDeps {
@@ -204,7 +206,7 @@ export class NotificationScheduler {
 
 /** Tổng hợp một kỳ: mọi bài (nhóm + Page) có `postedAt` trong [from, to); tương tác chỉ từ số đo thật. */
 export function buildMetricsReport(
-    store: Pick<FacebookPosterStore, 'listTracking' | 'latestStats' | 'listPageFollowers' | 'postTexts'>,
+    store: Pick<FacebookPosterStore, 'listTracking' | 'latestStats' | 'listPageFollowers' | 'postTexts' | 'engagementCounts' | 'expireDueEngagement'>,
     period: ReportPeriod, cadence: 'daily' | 'weekly', pageName: (pageId: string) => string,
     autonomySummary?: (from: number, to: number) => AutonomySummary,
 ): MetricsReportPayload {
@@ -249,6 +251,10 @@ export function buildMetricsReport(
     // `to` là mốc loại trừ còn summary tính cả hai đầu.
     const summary = autonomySummary?.(period.from, period.to - 1);
     const autonomy = summary && Object.values(summary).some((n) => n > 0) ? summary : undefined;
+    // Gợi ý chỉ chuyển `expired` khi có lần đọc hàng chờ; quét trước để số hết hạn đúng. `to` là mốc gửi đã qua nên không hết hạn sớm.
+    store.expireDueEngagement(period.to);
+    const counts = store.engagementCounts(period.from, period.to);
+    const commentSuggestions = Object.values(counts).some((n) => n > 0) ? counts : undefined;
     return {
         cadence, periodKey: period.key, from: period.from, to: period.to, label: period.label,
         posts: rows.length, measured: measured.length,
@@ -256,6 +262,7 @@ export function buildMetricsReport(
         notFound: rows.filter((r) => r.linkStatus === 'not_found').length,
         top, followers,
         ...(autonomy ? { autonomy } : {}),
+        ...(commentSuggestions ? { commentSuggestions } : {}),
     };
 }
 

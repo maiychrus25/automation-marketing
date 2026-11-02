@@ -257,5 +257,32 @@ export interface FbPosterLeadReply {
     createdAt: number;
     finishedAt: number | null;
 }
+export type EngagementKind = 'comment' | 'reply';
+export type EngagementStatus = 'pending' | 'approved' | 'posting' | 'posted' | 'skipped' | 'failed' | 'uncertain' | 'rejected' | 'expired';
+export const ENGAGEMENT_STATUSES: readonly EngagementStatus[] = ['pending', 'approved', 'posting', 'posted', 'skipped', 'failed', 'uncertain', 'rejected', 'expired'];
+/** Bình luận góp ý bot gợi ý (bảng `fb_poster_engagement_items`); `approvedText` chỉ app ghi. */
+export interface FbPosterEngagementItem {
+    id: number;
+    profileId: string;
+    kind: EngagementKind;
+    postUrl: string;
+    postKey: string;
+    targetCommentId: string;
+    targetAuthor: string;
+    targetExcerpt: string;
+    postExcerpt: string;
+    suggestedText: string;
+    approvedText: string;
+    reason: string;
+    sourceRef: string;
+    status: EngagementStatus;
+    rejectReason: string;
+    resultReason: string;
+    suggestedAt: number;
+    expiresAt: number;
+    decidedAt: number | null;
+    postedAt: number | null;
+    reservationId: number | null;
+}
 /** Khách + bài gốc để trả lời; `fromAppPost` chỉ đúng khi khách thuộc kết quả `posted` của một lượt `kind='post'`. */
 export interface LeadReplySource { leadId: number; postUrl: string; authorId: string; profileId: string; fromAppPost: boolean; postText: string }

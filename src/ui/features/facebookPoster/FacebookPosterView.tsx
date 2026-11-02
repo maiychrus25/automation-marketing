@@ -10,6 +10,7 @@ import CampaignsTab from './CampaignsTab';
 import VideoTab from './VideoTab';
 import LeadsTab from './LeadsTab';
 import ResearchTab from './ResearchTab';
+import EngagementTab from './EngagementTab';
 import RunPanel from './RunPanel';
 import ChannelsPanel, { type PosterChannel } from './ChannelsPanel';
 import { initialRunState, reduceRunState, MAX_LIVE_RUNS, type PosterLog, type PosterRunAction, type ProgressSnapshot, type RunSnapshot } from './runState';
@@ -23,6 +24,7 @@ const SECTIONS: Record<FacebookPosterSection, { label: string; description?: str
   comments: { label: 'Thu bình luận', description: 'Thu bình luận từ các bài đã đăng và tìm kiếm kết quả.' },
   leads: { label: 'Khách tiềm năng', description: 'Bình luận có ý định mua được lọc tự động từ các bài đã đăng.' },
   research: { label: 'Nghiên cứu', description: 'Quét bài, nhóm, fanpage theo chủ đề để lên chiến dịch.' },
+  engagement: { label: 'Chờ duyệt', description: 'Bình luận bot gợi ý vào bài của người khác. Bot không tự đăng: chỉ câu anh duyệt mới được đăng.' },
   history: { label: 'Lịch sử', description: 'Theo dõi kết quả từng lượt chạy và xuất dữ liệu CSV.' },
 };
 const FACEBOOK_PROVIDER = { id: 'facebook', name: 'Facebook', badge: 'f' };
@@ -206,6 +208,7 @@ export default function FacebookPosterView() {
               {section === 'comments' && <CommentsTab atCapacity={atCapacity} onStarted={onStarted} />}
               {section === 'leads' && <LeadsTab />}
               {section === 'research' && <ResearchTab />}
+              {section === 'engagement' && <EngagementTab />}
               {section === 'history' && <HistoryTab />}
             </div>}
           </main>

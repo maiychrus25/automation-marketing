@@ -183,6 +183,33 @@ CREATE TABLE IF NOT EXISTS fb_poster_lead_replies (
 );
 CREATE INDEX IF NOT EXISTS idx_fb_poster_lead_replies_lead ON fb_poster_lead_replies(lead_id);
 CREATE INDEX IF NOT EXISTS idx_fb_poster_lead_replies_author ON fb_poster_lead_replies(post_url, author_id);
+
+-- Bình luận góp ý bot gợi ý, chờ anh duyệt trong app (spec 2026-11-02 §4); approved_text chỉ app ghi
+CREATE TABLE IF NOT EXISTS fb_poster_engagement_items (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id        TEXT NOT NULL,
+    kind              TEXT NOT NULL,            -- comment | reply
+    post_url          TEXT NOT NULL,
+    post_key          TEXT NOT NULL,
+    target_comment_id TEXT NOT NULL DEFAULT '',
+    target_author     TEXT NOT NULL DEFAULT '',
+    target_excerpt    TEXT NOT NULL DEFAULT '',
+    post_excerpt      TEXT NOT NULL DEFAULT '',
+    suggested_text    TEXT NOT NULL,
+    approved_text     TEXT NOT NULL DEFAULT '',
+    reason            TEXT NOT NULL DEFAULT '',
+    source_ref        TEXT NOT NULL DEFAULT '',
+    status            TEXT NOT NULL,            -- pending | approved | posting | posted | skipped | failed | uncertain | rejected | expired
+    reject_reason     TEXT NOT NULL DEFAULT '',
+    result_reason     TEXT NOT NULL DEFAULT '',
+    suggested_at      INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    decided_at        INTEGER DEFAULT NULL,
+    posted_at         INTEGER DEFAULT NULL,
+    reservation_id    INTEGER DEFAULT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_engagement_post ON fb_poster_engagement_items(profile_id, post_key);
+CREATE INDEX IF NOT EXISTS idx_fb_poster_engagement_status ON fb_poster_engagement_items(status, expires_at);
 `;
 
 // Chạy sau FB_POSTER_SCHEMA_SQL, từng câu trong try/catch (cột đã có thì ALTER ném lỗi, bỏ qua).

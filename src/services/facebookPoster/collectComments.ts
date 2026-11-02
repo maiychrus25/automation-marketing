@@ -24,7 +24,7 @@ export function keyOf(c: Pick<CollectedComment, 'authorId' | 'postUrl' | 'text'>
 }
 
 /** Identity only: never replace the stored URL used for attribution/navigation. */
-function commentPostIdentity(raw: string): string {
+export function commentPostIdentity(raw: string): string {
     let url: URL;
     try { url = new URL(raw); } catch { return raw; }
     if (url.protocol !== 'https:' || url.username || url.password || url.port

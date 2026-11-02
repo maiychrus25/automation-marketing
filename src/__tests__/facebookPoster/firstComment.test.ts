@@ -353,3 +353,53 @@ test('postFirstComment: bấm được nút gửi thì KHÔNG nhấn thêm Enter
   assert.strictEqual(out.status, 'posted', JSON.stringify(out));
   assert.ok(!calls.includes('press:Enter'), JSON.stringify(calls));
 });
+
+// `sent` tells a caller whether anything may have reached Facebook (EngagementPoster releases the slot only when it is not set).
+describe('postFirstComment sent flag', () => {
+  const run = (over: Record<string, () => unknown>, patch: (page: any) => void = () => {}) => {
+    const page = commentPage(over, []) as any;
+    patch(page);
+    return runWithFakeTimers(() => postFirstComment(page as Page, { postUrl: 'https://www.facebook.com/groups/1/posts/2/', comment: 'hi', text: 'Bài' }));
+  };
+
+  test.each([
+    ['post not visible', { readPostStateInPage: () => ({ found: false, pendingMarker: null }) }],
+    ['no open button', { openCommentBoxInPage: () => false }],
+    ['no comment box', { markCommentBoxInPage: () => false }],
+    ['text not typed', { commentTypedInPage: () => false }],
+    ['no send button', { markCommentSendButtonInPage: () => false }],
+  ] as [string, Record<string, () => unknown>][])('sentIsFalseBeforeClick: %s', async (_label, over) => {
+    const out = await run(over);
+    expect(out.status).not.toBe('posted');
+    expect(out.sent).toBeFalsy();
+  });
+
+  test('sentIsFalseWhenNavigationFails', async () => {
+    const out = await run({}, (page) => { page.goto = async () => { throw new Error('net down'); }; });
+    expect(out).toMatchObject({ status: 'failed' });
+    expect(out.sent).toBeFalsy();
+  });
+
+  test('sentIsTrueAfterClickEvenWhenVerificationFails', async () => {
+    const out = await run({ commentTextVisibleInPage: () => false });
+    expect(out).toMatchObject({ status: 'failed', sent: true });
+  });
+
+  test('sentIsTrueWhenClickRejectedAndEnterPressed', async () => {
+    const out = await run({ commentTextVisibleInPage: () => false }, (page) => {
+      const base = page.locator;
+      page.locator = (sel: string) => ({ ...base(sel), first: () => ({ click: async () => { throw new Error('intercepted'); } }) });
+    });
+    expect(out).toMatchObject({ status: 'failed', sent: true });
+  });
+
+  test('sentIsTrueWhenReadBackThrowsAfterClick', async () => {
+    let n = 0;
+    const out = await run({ countCommentBlocksInPage: () => { n += 1; if (n > 1) throw new Error('page closed'); return 3; } });
+    expect(out).toMatchObject({ status: 'failed', sent: true });
+  });
+
+  test('sentIsTrueOnPosted', async () => {
+    expect(await run({})).toMatchObject({ status: 'posted', sent: true });
+  });
+});

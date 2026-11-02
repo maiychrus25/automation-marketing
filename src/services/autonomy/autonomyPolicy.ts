@@ -16,6 +16,8 @@ export interface AutonomyPolicy {
     videosPerDay: number;
     videoReserveLast: boolean;
     agentRunsPerDay: number;
+    engagementSuggestionsPerDay: number;
+    engagementCommentsPerDay: number;
 }
 
 export const DEFAULT_QUIET_START = '22:00';
@@ -29,6 +31,8 @@ export const DEFAULT_LEAD_REPLIES_PER_DAY = 10;
 export const DEFAULT_FACEBOOK_ACTIONS_PER_DAY = 12;
 export const DEFAULT_VIDEOS_PER_DAY = 2;
 export const DEFAULT_AGENT_RUNS_PER_DAY = 12;
+export const DEFAULT_ENGAGEMENT_SUGGESTIONS_PER_DAY = 20;
+export const DEFAULT_ENGAGEMENT_COMMENTS_PER_DAY = 10;
 export const MAX_PAGE_CAMPAIGN_DAYS = 30;
 
 export const DEFAULT_AUTONOMY_POLICY: Readonly<AutonomyPolicy> = Object.freeze({
@@ -47,11 +51,13 @@ export const DEFAULT_AUTONOMY_POLICY: Readonly<AutonomyPolicy> = Object.freeze({
     videosPerDay: DEFAULT_VIDEOS_PER_DAY,
     videoReserveLast: true,
     agentRunsPerDay: DEFAULT_AGENT_RUNS_PER_DAY,
+    engagementSuggestionsPerDay: DEFAULT_ENGAGEMENT_SUGGESTIONS_PER_DAY,
+    engagementCommentsPerDay: DEFAULT_ENGAGEMENT_COMMENTS_PER_DAY,
 });
 
 const BOOLEAN_FIELDS = ['enabled', 'videoReserveLast'] as const;
 const TIME_FIELDS = ['quietStart', 'quietEnd', 'pageWindowStart', 'pageWindowEnd'] as const;
-const COUNT_FIELDS = ['pageCampaignDays', 'pagePostsPerDay', 'pagePostsTotal', 'groupPostsPerDay', 'groupRepeatDays', 'leadRepliesPerDay', 'facebookActionsPerDay', 'videosPerDay', 'agentRunsPerDay'] as const;
+const COUNT_FIELDS = ['pageCampaignDays', 'pagePostsPerDay', 'pagePostsTotal', 'groupPostsPerDay', 'groupRepeatDays', 'leadRepliesPerDay', 'facebookActionsPerDay', 'videosPerDay', 'agentRunsPerDay', 'engagementSuggestionsPerDay', 'engagementCommentsPerDay'] as const;
 const KNOWN_FIELDS = new Set<string>([...BOOLEAN_FIELDS, ...TIME_FIELDS, ...COUNT_FIELDS]);
 
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;

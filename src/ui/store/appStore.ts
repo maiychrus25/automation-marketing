@@ -7,7 +7,7 @@ import { type AppTheme, type ThemePreference, THEME_STORAGE_KEY, parseThemePrefe
 type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser' | 'facebookPoster';
 export type { AppTheme, ThemePreference };
 /** Màn con của Đăng Facebook, chọn từ sub-nav ở sidebar chính. */
-export type FacebookPosterSection = 'schedule' | 'campaigns' | 'join' | 'comments' | 'leads' | 'research' | 'history' | 'video';
+export type FacebookPosterSection = 'schedule' | 'campaigns' | 'join' | 'comments' | 'leads' | 'research' | 'history' | 'video' | 'engagement';
 
 export interface GroupMember {
   userId: string;
@@ -76,6 +76,9 @@ export interface PinnedIntegrationShortcut {
 interface AppStore {
   view: AppView;
   facebookPosterSection: FacebookPosterSection;
+  /** Số gợi ý bình luận đang chờ duyệt (huy hiệu của mục "Chờ duyệt"). */
+  engagementPendingCount: number;
+  setEngagementPendingCount: (n: number) => void;
   isLoading: boolean;
   notification: { message: string; type: 'success' | 'error' | 'info' | 'warning' } | null;
   erpPermissionDialog: { title: string; message: string; details?: string } | null;
@@ -374,6 +377,8 @@ function persistFlag(zaloId: string, contactId: string, flags: { is_muted?: numb
 export const useAppStore = create<AppStore>((set, get) => ({
   view: 'dashboard',
   facebookPosterSection: 'schedule',
+  engagementPendingCount: 0,
+  setEngagementPendingCount: (engagementPendingCount) => set({ engagementPendingCount }),
   posterFocusScheduleId: null,
   posterComposeMediaPaths: null,
   isLoading: false,
