@@ -99,9 +99,53 @@ function world() {
             protectedWritesEnabled: () => master, payload }, 'draft', 'run');
     };
     const used = (action: string) => db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM autonomy_actions WHERE action = ? AND status = 'used'", [action])!.n;
-    return { db, poster, limiter, ops, events, executions, campaigns, activeRuns, cancelled, draftDeps, startCampaign, guard, page, used, run,
-        advance: (ms: number) => { time += ms; }, setTime: (ms: number) => { time = ms; }, now: () => time };
+    return { db, poster, limiter, ops, events, executions, campaigns, briefs, activeRuns, cancelled, draftDeps, startCampaign, guard, page, used, run,
+        advance: (ms: number) => { time += ms; }, setTime: (ms: number) => { time = ms; }, now: () => time, setMaster: (on: boolean) => { master = on; } };
 }
+
+/** Campaign started and its first post published: quota remains and nothing is reserved, so it is due (see campaignDueClearsOnceNextPostReserved). */
+async function campaignDueAgain() {
+    const w = world();
+    const { campaignId } = await w.startCampaign();
+    const guard = w.guard(campaignId);
+    await guard.beforeEffect(w.page(), 'publish');
+    guard.settle('posted', null);
+    expect(w.ops.status().due.campaignSchedules).toBe(1);
+    return w;
+}
+
+test('campaignDueZeroWhenMasterOff', async () => {
+    const w = await campaignDueAgain();
+    w.setMaster(false);
+    expect(w.ops.status().due.campaignSchedules).toBe(0);
+});
+
+test('campaignDueZeroWhenBriefDisabled', async () => {
+    const w = await campaignDueAgain();
+    w.briefs.saveBrief('profile', { enabled: false }, w.now());
+    expect(w.ops.status().due.campaignSchedules).toBe(0);
+});
+
+test('campaignDueZeroBeforeStart', async () => {
+    const w = world();
+    const due: number[] = [];
+    await w.startCampaign(() => {
+        w.setTime(T0 - MIN); due.push(w.ops.status().due.campaignSchedules); // grant starts at T0
+        w.setTime(T0); due.push(w.ops.status().due.campaignSchedules);
+    });
+    expect(due).toEqual([0, 1]);
+});
+
+test('campaignDueZeroWhileSubmitting', async () => {
+    const w = world();
+    const { campaignId } = await w.startCampaign();
+    const guard = w.guard(campaignId);
+    await guard.beforeEffect(w.page(), 'publish');
+    expect(w.executions.get('draft')!.status).toBe('submitting');
+    expect(w.ops.status().due.campaignSchedules).toBe(0); // the publish is still in flight: a new schedule could double-post
+    guard.settle('posted', null);
+    expect(w.ops.status().due.campaignSchedules).toBe(1);
+});
 
 test('ownerCampaignEndToEnd', async () => {
     const w = world();

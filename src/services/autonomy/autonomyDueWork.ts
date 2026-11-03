@@ -30,19 +30,23 @@ export interface DueWorkGate {
 }
 
 /**
- * Owner-key campaigns (grant `owner:` ref, as `cancelOwnerCampaignSchedules`) still inside their window and quota with no post reserved in
- * the next 24 h: the bot's work is to schedule the next post. Reserved executions are run by the app itself.
+ * Owner-key campaigns (grant `owner:` ref, as `cancelOwnerCampaignSchedules`) inside their window (`startsAt`..`expiresAt`) and quota with no
+ * post reserved in the next 24 h: the bot's work is to schedule the next post. Reserved executions are run by the app itself. Nothing is due
+ * while the master switch is off, the profile's Page brief is disabled, or a post of the campaign is still `submitting|uncertain`.
  */
-function dueOwnerCampaigns(db: SqlDatabase, now: number): number {
-    if (!hasTable(db, 'page_campaign_grants') || !hasTable(db, 'page_campaign_executions')) return 0;
-    const grants = db.query<{ id: string; campaign_id: string; policy_json: string }>(
-        "SELECT id, campaign_id, policy_json FROM page_campaign_grants WHERE status = 'active' AND substr(confirmation_ref, 1, ?) = ?",
+function dueOwnerCampaigns(db: SqlDatabase, now: number, gate: DueWorkGate): number {
+    if (!gate.masterOn || !hasTable(db, 'page_campaign_grants') || !hasTable(db, 'page_campaign_executions') || !hasTable(db, 'daily_briefs')) return 0;
+    const grants = db.query<{ id: string; campaign_id: string; profile_id: string; policy_json: string }>(
+        "SELECT id, campaign_id, profile_id, policy_json FROM page_campaign_grants WHERE status = 'active' AND substr(confirmation_ref, 1, ?) = ?",
         [OWNER_CONFIRMATION_PREFIX.length, OWNER_CONFIRMATION_PREFIX]);
     const due = new Set<string>();
     for (const grant of grants) {
-        let policy: { expiresAt?: unknown; maxPostsTotal?: unknown } = {};
+        let policy: { startsAt?: unknown; expiresAt?: unknown; maxPostsTotal?: unknown } = {};
         try { policy = JSON.parse(grant.policy_json) ?? {}; } catch { continue; }
+        if (typeof policy.startsAt !== 'number' || now < policy.startsAt) continue;
         if (typeof policy.expiresAt !== 'number' || now >= policy.expiresAt || typeof policy.maxPostsTotal !== 'number') continue;
+        if (!db.queryOne('SELECT 1 FROM daily_briefs WHERE profile_id = ? AND enabled = 1', [grant.profile_id])) continue;
+        if (count(db, "SELECT COUNT(*) AS n FROM page_campaign_executions WHERE campaign_id = ? AND status IN ('submitting','uncertain')", [grant.campaign_id])) continue;
         if (count(db, "SELECT COUNT(*) AS n FROM page_campaign_executions WHERE grant_id = ? AND status != 'cancelled'", [grant.id]) >= policy.maxPostsTotal) continue;
         const reserved = count(db, `SELECT COUNT(*) AS n FROM page_campaign_executions e JOIN fb_poster_schedules s ON s.id = e.schedule_id
             WHERE e.grant_id = ? AND e.status = 'reserved' AND s.enabled = 1 AND s.next_run_at IS NOT NULL AND s.next_run_at <= ?`, [grant.id, now + DAY_MS]);
@@ -106,7 +110,7 @@ function engagementSlots(db: SqlDatabase, now: number, gate: DueWorkGate): Pick<
 export function computeDueWork(db: SqlDatabase, now: number, clock: LocalClock, gate: DueWorkGate): AutonomyDueWork {
     return {
         briefs: hasTable(db, 'daily_briefs') ? new DailyBriefStore(db, clock).countDue(now) : 0,
-        campaignSchedules: dueOwnerCampaigns(db, now),
+        campaignSchedules: dueOwnerCampaigns(db, now, gate),
         commentPosts: hasTable(db, 'fb_poster_post_tracking') ? new FacebookPosterStore(db).listDueCommentPosts(now, COMMENT_POST_SCAN_LIMIT).length : 0,
         unrepliedLeads: dueLeads(db, gate),
         ...engagementSlots(db, now, gate),

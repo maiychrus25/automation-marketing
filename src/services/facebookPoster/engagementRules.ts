@@ -7,6 +7,8 @@ export const ENGAGEMENT_MAX_PENDING = 10;
 export const ENGAGEMENT_RESEARCH_INTERVAL_MS = 4 * 3_600_000;
 /** `app_settings`: JSON `{ [profileId]: lần thử nghiên cứu gần nhất (epoch ms) }`. */
 export const ENGAGEMENT_RESEARCH_SETTING_KEY = 'engagement_research_last';
+/** `app_settings`: thời điểm (epoch ms) lần dừng khẩn gần nhất; dòng duyệt trước hoặc đúng mốc này không được đăng nữa. */
+export const ENGAGEMENT_STOP_EPOCH_SETTING_KEY = 'engagement_stop_epoch';
 export const ENGAGEMENT_MAX_TEXT = 600;
 
 /** Đọc khoan dung: giá trị hỏng hoặc sai kiểu coi như chưa nghiên cứu lần nào. */

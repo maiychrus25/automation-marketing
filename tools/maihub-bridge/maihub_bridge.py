@@ -2460,7 +2460,8 @@ def build_auto_prompt(status):
         places = "; ".join("%s (%s): %d" % (p.get("profileId"), _one_line(p.get("profileName")), p.get("slots", 0))
                            for p in (due.get("engagementProfiles") or []) if isinstance(p, dict))
         work.append("- Còn %d chỗ gợi ý bình luận%s: tìm bài hoặc bình luận đáng góp ý hoặc giải đáp theo chủ đề của Page bằng maihub_research_* và maihub_engagement_readComments, "
-                    "soạn câu hữu ích, không chèn link, rồi gửi từng gợi ý bằng maihub_engagement_suggest (kind: comment; trả lời một bình luận cụ thể chưa hỗ trợ). "
+                    "soạn câu hữu ích, không chèn link, rồi gửi từng gợi ý bằng maihub_engagement_suggest (kind: comment cho bình luận mới dưới bài; "
+                    "kind: reply để giải đáp một người đang hỏi trong bình luận, kèm targetAuthor và targetExcerpt chép đúng authorName và đầu text của bình luận đó từ maihub_engagement_readComments). "
                     "Mỗi lần gợi ý một câu; gặp CONFLICT hoặc LIMIT_REACHED thì bỏ qua bài đó. Anh sẽ duyệt trong app, bot không đăng được bình luận vào bài của người khác."
                     % (due["engagementSlots"], " (profileId (tên Page): số chỗ) " + places if places else ""))
     caps = ["lượt AI %s" % remaining.get("agentRuns", 0), "video %s" % remaining.get("videos", 0),

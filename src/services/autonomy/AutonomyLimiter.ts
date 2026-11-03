@@ -166,13 +166,23 @@ export class AutonomyLimiter {
         });
     }
 
-    /** Re-checks the gates (not the caps) right before the real effect. */
+    /** Re-checks the gates (not the caps) right before the real effect; an approved comment also re-checks the posting-day cap. */
     assertEffect(id: number): void {
         const row = this.db.queryOne<ActionRow>('SELECT id, action, profile_id, origin, status, ref FROM autonomy_actions WHERE id = ?', [id]);
         if (!row || (row.origin !== 'api' && !isEngagement(row.action))) return;
         const req: LimitRequest = { action: row.action, origin: row.origin, profileId: row.profile_id || undefined, ref: row.ref || undefined };
-        const denial = this.evaluate(req, false);
+        const denial = this.evaluate(req, false) ?? (row.action === 'engagement_comment' ? this.postingDayDenial(row.profile_id) : null);
         if (denial) this.deny(req, denial);
+    }
+
+    /** Approval books the slot on the approval day; comments the profile sent today (by send time) must stay under the cap. */
+    private postingDayDenial(profileId: string): Denial | null {
+        const effective = this.effectiveNow();
+        const today = this.deps.clock.date(effective);
+        const sent = this.db.query<{ settled_at: number }>(
+            "SELECT settled_at FROM autonomy_actions WHERE action = 'engagement_comment' AND status = 'used' AND profile_id = ? AND settled_at > ?",
+            [profileId, effective - 2 * DAY_MS]).filter((r) => this.deps.clock.date(r.settled_at) === today).length;
+        return sent >= this.policy().engagementCommentsPerDay ? { reason: 'quota', retryAt: this.midnightAfter(effective) } : null;
     }
 
     pauseProfile(profileId: string, reason: 'checkpoint' | 'logged_out'): boolean {

@@ -1,5 +1,5 @@
 import { ControlError } from '../control/ControlMethods';
-import type { ProfileTaskContext } from '../browser/ProfileJobQueue';
+import { JOB_WORKSPACE_REVOKED_ERROR, type ProfileTaskContext } from '../browser/ProfileJobQueue';
 import type { LaunchedPage } from './types';
 import type { CollectedComment, collectComments } from './collectComments';
 import { FACEBOOK_URL } from './engagementOperations';
@@ -51,7 +51,7 @@ export async function readEngagementComments(deps: EngagementReaderDeps, p: { pr
                         jobId: deps.newId?.() ?? `engagement-read-${Date.now()}`, signal: abort.signal, priority: 'background',
                         // Short wait: the Control API call times out long before the queue's own limit, and a late job must not outlive the caller.
                         deadlineAt: (deps.now?.() ?? Date.now()) + READ_WAIT_MS,
-                        assertCurrent: () => { deps.assertCurrent?.(); },
+                        assertCurrent: current, // a switch during the queue wait is BUSY, not INTERNAL
                     });
                     deps.gate(profileId); // the wait may have crossed quiet hours or a pause; the session is closed in finally
                     return { ctx: opened.ctx, page: opened.page };
@@ -70,6 +70,8 @@ export async function readEngagementComments(deps: EngagementReaderDeps, p: { pr
         const code = codeOf(err);
         if (code === 'logged_out' || code === 'checkpoint') throw loginProblem(code);
         if (code === 'profile_wait_timeout') throw new ControlError('BUSY', 'Profile đang bận, thử lại sau');
+        // A workspace switch pauses/retires the queue before the caller's own assertCurrent runs.
+        if (code === 'profile_wait_cancelled' || (err instanceof Error && err.message === JOB_WORKSPACE_REVOKED_ERROR)) throw new ControlError('BUSY', 'Workspace đang chuyển, thử lại sau');
         throw new ControlError('INTERNAL', 'Không đọc được bình luận của bài này, thử lại sau');
     } finally {
         await (opened as { close(): Promise<void> } | null)?.close().catch(() => undefined);

@@ -3,11 +3,13 @@ import type { ProfileTaskContext } from '../browser/ProfileJobQueue';
 import type { EngagementStatus, FbPosterEngagementItem } from '../../models/facebookPoster';
 import type { AutonomyLimiter } from '../autonomy/AutonomyLimiter';
 import type { CommentOutcome } from './firstComment';
+import type { ReplyOutcome, ReplyTarget } from './commentReply';
 import type { FacebookPosterStore } from './FacebookPosterStore';
 import { ENGAGEMENT_TTL_MS } from './engagementRules';
+import { STOPPED_BY_OPERATOR } from './engagementOperations';
 
-// Đăng đúng câu anh đã duyệt thành bình luận mới dưới bài (spec 2026-11-02 §3 bước 5–6). Không thử lại sau khi đã bấm gửi.
-// shortcut: chỉ kind 'comment'; 'reply' bị bỏ qua cho tới khi có mẫu DOM (R1).
+// Đăng đúng câu anh đã duyệt: bình luận mới dưới bài (`comment`) hoặc trả lời một bình luận (`reply`) (spec 2026-11-02 §3 bước 5–6, §8).
+// Không thử lại sau khi đã bấm gửi.
 
 export const EXPIRED_AFTER_APPROVAL = 'expired_after_approval';
 export const NOT_SENT = 'not_sent';
@@ -17,8 +19,11 @@ export interface EngagementPosterDeps {
     limiter: Pick<AutonomyLimiter, 'assertEffect' | 'commit' | 'release'>;
     openSession(profileId: string, context: ProfileTaskContext): Promise<{ page: Page; close(): Promise<void> }>;
     postComment(page: Page, input: { postUrl: string; comment: string; text: string }, deps: { getIsStopping(): boolean }): Promise<CommentOutcome>;
+    postReply(page: Page, input: { postUrl: string; target: ReplyTarget; text: string }, deps: { getIsStopping(): boolean }): Promise<ReplyOutcome>;
     emit(type: 'engagement.finished', payload: { id: number; status: string; reason: string }): void;
     assertCurrent?: () => void;
+    /** Mốc dừng khẩn gần nhất (epoch ms, 0 nếu chưa dừng): dòng duyệt trước/đúng mốc thì không đăng. */
+    stopEpoch?(): number;
     observeLogin?(profileId: string, state: 'logged_out' | 'checkpoint'): void;
     now?: () => number;
     /** Chẩn đoán (không kèm nội dung bình luận). */
@@ -126,13 +131,16 @@ export class EngagementPoster {
         const expire = () => { release(); this.settle(item, 'skipped', EXPIRED_AFTER_APPROVAL, EXPIRED_AFTER_APPROVAL); };
         /** Hết hạn hoặc bị gate chặn: đã hoãn / hết hạn / bỏ qua, trả true. `posting` là dòng đã chuyển sang posting. */
         const refused = (posting: boolean): boolean => {
+            // Same-ms tie counts as approved before the stop (fail-safe).
+            if (item.decidedAt !== null && item.decidedAt <= (this.deps.stopEpoch?.() ?? 0)) { release(); this.settle(item, 'skipped', STOPPED_BY_OPERATOR, STOPPED_BY_OPERATOR); return true; }
             if (this.now() >= deadline) { expire(); return true; }
             try {
                 if (reservation !== null) limiter.assertEffect(reservation);
                 return false;
             } catch (err) {
                 const details = (err as { details?: { reason?: string; retryAt?: number | null } })?.details;
-                if (details?.reason === 'quiet_hours') {
+                // Quiet hours or the posting-day comment cap: wait while still inside the 24h window.
+                if (details?.reason === 'quiet_hours' || details?.reason === 'quota') {
                     if (typeof details.retryAt === 'number' && details.retryAt < deadline) {
                         if (posting) store.settleEngagement(item.id, 'approved', '', null);
                         this.defer(item.id, details.retryAt);
@@ -146,7 +154,6 @@ export class EngagementPoster {
             }
         };
         if (this.now() >= deadline) return expire();
-        if (item.kind !== 'comment') { release(); return this.settle(item, 'skipped', 'reply_unsupported', 'reply_unsupported'); }
         if (refused(false)) return;
         if (!store.startEngagementPosting(item.id)) return;
         let opened: Awaited<ReturnType<EngagementPosterDeps['openSession']>>;
@@ -165,9 +172,12 @@ export class EngagementPoster {
         let blocked = true;
         try { blocked = refused(true); } finally { if (blocked) await opened.close().catch(() => undefined); }
         if (blocked) return;
-        let outcome: CommentOutcome | null = null;
+        let outcome: CommentOutcome | ReplyOutcome | null = null;
+        const stopping = { getIsStopping: () => this.cancelled };
         try {
-            outcome = await this.deps.postComment(opened.page, { postUrl: item.postUrl, comment: item.approvedText, text: item.postExcerpt }, { getIsStopping: () => this.cancelled });
+            outcome = item.kind === 'reply'
+                ? await this.deps.postReply(opened.page, { postUrl: item.postUrl, target: { commentId: item.targetCommentId || undefined, author: item.targetAuthor || undefined, excerpt: item.targetExcerpt || undefined }, text: item.approvedText }, stopping)
+                : await this.deps.postComment(opened.page, { postUrl: item.postUrl, comment: item.approvedText, text: item.postExcerpt }, stopping);
         } catch {
             outcome = null;
         } finally {
@@ -178,6 +188,8 @@ export class EngagementPoster {
             if (reservation !== null) limiter.commit(reservation);
             return this.settle(item, 'posted', '', '', this.now());
         }
+        // Cancelled (app quit / workspace switch) before the send click: still owed, retried by recover()/the next kick.
+        if (!outcome.sent && this.cancelled) { store.settleEngagement(item.id, 'approved', '', null); return; }
         if (outcome.status === 'failed' && !outcome.sent) { release(); return this.settle(item, 'skipped', outcome.reason, NOT_SENT); } // nothing reached Facebook
         if (outcome.status === 'failed') {
             if (reservation !== null) limiter.commit(reservation);

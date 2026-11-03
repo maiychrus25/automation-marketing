@@ -5341,10 +5341,15 @@ class AutoTickTests(unittest.TestCase):
         self.assertIn("Anh sẽ duyệt trong app", prompt)
         self.assertIn("không đăng được bình luận vào bài của người khác", prompt)
         self.assertIn("kind: comment", prompt)
-        self.assertIn("chưa hỗ trợ", prompt)  # trả lời bình luận
+        # Task 5: trả lời một người đang hỏi trong bình luận, nhắm bằng tác giả + trích đoạn lấy từ readComments.
+        self.assertIn("kind: reply", prompt)
+        self.assertIn("targetAuthor", prompt)
+        self.assertIn("targetExcerpt", prompt)
+        self.assertNotIn("chưa hỗ trợ", prompt)
         lowered = prompt.lower()
-        for word in ("approve", "post", "duyệt hộ", "nhóm", "group", "reply"):
+        for word in ("approve", "post", "duyệt hộ", "nhóm", "group", "comments_reply"):
             self.assertNotIn(word, lowered.replace("không đăng được", ""), word)
+        self.assertEqual(lowered.count("reply"), 1, "chỉ giá trị kind, không có tool trả lời nào")
         self.assertNotIn("maihub_engagement", bridge.build_auto_prompt(auto_status(due={"briefs": 1})))
 
     def test_auto_prompt_lists_slots_per_profile(self):

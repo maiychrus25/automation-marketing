@@ -3,6 +3,7 @@ import { FacebookPosterStore } from '../../services/facebookPoster/FacebookPoste
 import { AutonomyLimiter } from '../../services/autonomy/AutonomyLimiter';
 import { readEngagementComments, type EngagementReaderDeps } from '../../services/facebookPoster/EngagementReader';
 import type { CollectedComment } from '../../services/facebookPoster/collectComments';
+import { JOB_WORKSPACE_REVOKED_ERROR } from '../../services/browser/ProfileJobQueue';
 import type { LocalClock } from '../../services/dailyBrief/DailyBriefStore';
 
 const HCM = 'Asia/Ho_Chi_Minh';
@@ -118,6 +119,24 @@ describe('readEngagementComments', () => {
         let stale = false;
         s.deps.assertCurrent = () => { if (stale) throw new Error('switching'); };
         s.deps.launchFor = async () => { stale = true; return { ctx: {} as any, page: {} as any, close: async () => undefined }; };
+        await expect(readEngagementComments(s.deps, { profileId: 'p1', postUrl: URL_OK })).rejects.toMatchObject({ code: 'BUSY' });
+    });
+
+    it('queuePausedDuringSwitchIsBusy', async () => {
+        // A normal switch pauses/retires the profile queue before the caller's assertCurrent runs (ProfileJobQueue assertRequest/assertLive).
+        const paused = setup({ launchError: Object.assign(new Error('cancelled'), { code: 'profile_wait_cancelled' }) });
+        await expect(readEngagementComments(paused.deps, { profileId: 'p1', postUrl: URL_OK })).rejects.toMatchObject({ code: 'BUSY' });
+        const retired = setup({ launchError: new Error(JOB_WORKSPACE_REVOKED_ERROR) });
+        await expect(readEngagementComments(retired.deps, { profileId: 'p1', postUrl: URL_OK })).rejects.toMatchObject({ code: 'BUSY' });
+        expect(retired.calls.observed).toEqual([]);
+    });
+
+    it('workspaceSwitchDuringQueueWaitIsBusy', async () => {
+        const s = setup({ rows: [row(1)] });
+        let stale = false;
+        s.deps.assertCurrent = () => { if (stale) throw new Error('switching'); };
+        // The queue re-checks the caller's authority at admission; the switch happened while the job waited for the profile slot.
+        s.deps.launchFor = async (_profileId, ctx) => { stale = true; ctx.assertCurrent(); return { ctx: {} as any, page: {} as any, close: async () => undefined }; };
         await expect(readEngagementComments(s.deps, { profileId: 'p1', postUrl: URL_OK })).rejects.toMatchObject({ code: 'BUSY' });
     });
 });

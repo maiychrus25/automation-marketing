@@ -39,6 +39,8 @@ export interface EngagementOperationsDeps {
     onCancelled?(id: number): void;
     /** Chẩn đoán (không kèm nội dung bình luận). */
     log?(message: string): void;
+    /** Dừng khẩn: ghi mốc thời gian (`engagement_stop_epoch`) để EngagementPoster chặn cả dòng đã sang `posting`. */
+    markStopped?(at: number): void;
     /** R1: bật khi đã có mẫu DOM trả lời bình luận (Task 5). */
     replySupported?: boolean;
 }
@@ -188,6 +190,8 @@ export function createEngagementOperations(deps: EngagementOperationsDeps) {
 
         /** Dừng khẩn: huỷ mọi gợi ý `approved` chưa đăng; từng dòng lỗi được ghi log rồi bỏ qua. Trả số dòng đã huỷ. */
         cancelAllApproved(reason: string): number {
+            // Recorded first: a row already `posting` (waiting for the profile slot) is refused by the poster's re-gate.
+            try { deps.markStopped?.(deps.now()); } catch (err) { deps.log?.(`engagement stop epoch write failed: ${errText(err)}`); }
             let cancelled = 0;
             for (const item of store.listApprovedEngagement()) {
                 try {

@@ -30,6 +30,7 @@ function world(outcome: CommentOutcome = { status: 'posted', reason: '' }) {
         store, limiter, now: () => h.now,
         openSession: async () => ({ page: {} as any, close: async () => undefined }),
         postComment: async (_page, input) => { posted.push(input); return outcome; },
+        postReply: async () => { throw new Error('no reply in this test'); },
         emit: (type, payload) => events.push({ type, payload }),
         schedule: () => () => undefined,
     });

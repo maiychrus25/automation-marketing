@@ -35,6 +35,9 @@ interface HeldLease {
     released: boolean;
 }
 
+/** Thrown when a job's captured workspace generation no longer matches the queue scope (workspace switched). */
+export const JOB_WORKSPACE_REVOKED_ERROR = 'Quyền workspace của công việc không còn hiệu lực';
+
 function waitError(code: 'profile_wait_timeout' | 'profile_wait_cancelled'): Error & { code: string } {
     return Object.assign(new Error(code === 'profile_wait_timeout' ? 'Hết thời gian chờ profile' : 'Đã hủy chờ profile'), { code });
 }
@@ -207,7 +210,7 @@ export class ProfileJobQueue {
     private assertLive(request: ProfileJobRequest): void {
         if (this.retired || request.signal.aborted) throw waitError('profile_wait_cancelled');
         if (this.scope && (request.owner.workspaceId !== this.scope.workspaceId || request.owner.generation !== this.scope.generation)) {
-            throw new Error('Quyền workspace của công việc không còn hiệu lực');
+            throw new Error(JOB_WORKSPACE_REVOKED_ERROR);
         }
     }
 

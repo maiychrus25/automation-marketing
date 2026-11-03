@@ -33,9 +33,10 @@ import { CommentCollector } from '../../src/services/facebookPoster/CommentColle
 import { LeadReplier } from '../../src/services/facebookPoster/LeadReplier';
 import { readEngagementComments } from '../../src/services/facebookPoster/EngagementReader';
 import { EngagementPoster } from '../../src/services/facebookPoster/EngagementPoster';
-import { ENGAGEMENT_RESEARCH_SETTING_KEY } from '../../src/services/facebookPoster/engagementRules';
+import { ENGAGEMENT_RESEARCH_SETTING_KEY, ENGAGEMENT_STOP_EPOCH_SETTING_KEY } from '../../src/services/facebookPoster/engagementRules';
 import { createEngagementOperations, STOPPED_BY_OPERATOR, type EngagementOperations } from '../../src/services/facebookPoster/engagementOperations';
 import { postFirstComment } from '../../src/services/facebookPoster/firstComment';
+import { postCommentReply } from '../../src/services/facebookPoster/commentReply';
 import { CommentCollectScheduler } from '../../src/services/facebookPoster/CommentCollectScheduler';
 import { NotificationScheduler, buildMetricsReport, isDeferringLeads } from '../../src/services/facebookPoster/NotificationScheduler';
 import { LEAD_DIGEST_CURSOR_SETTING_KEY, NOTIFICATION_SETTING_KEY, mergeNotificationConfig, parseNotificationConfig, type NotificationConfig } from '../../src/services/facebookPoster/notificationRules';
@@ -471,7 +472,9 @@ function getEngagementOperations(): EngagementOperations {
         researchLog: { read: () => boundDb.getSetting(ENGAGEMENT_RESEARCH_SETTING_KEY), write: (value) => boundDb.setSetting(ENGAGEMENT_RESEARCH_SETTING_KEY, value) },
         enqueuePost: (id) => getEngagementPoster().enqueue(id),
         onCancelled: (id) => engagementPoster?.forget(id),
+        markStopped: (at) => boundDb.setSetting(ENGAGEMENT_STOP_EPOCH_SETTING_KEY, String(at)),
         log: (message) => Logger.warn(`[facebookPosterIpc] ${message}`),
+        replySupported: true,
     });
     engagementBinding = { db: boundDb, path, ops };
     return ops;
@@ -758,6 +761,8 @@ function getEngagementPoster(): EngagementPoster {
                 return { page: opened.page, close: opened.close };
             },
             postComment: (page, input, deps) => postFirstComment(page, input, deps),
+            postReply: (page, input, deps) => postCommentReply(page, input, deps),
+            stopEpoch: () => Number(boundDb.getSetting(ENGAGEMENT_STOP_EPOCH_SETTING_KEY)) || 0,
             log: (message) => Logger.warn(`[facebookPosterIpc] ${message}`),
             observeLogin: (profileId, state) => safely('engagementObserveLogin', () => observer(profileId, state)),
             emit: (type, payload) => {

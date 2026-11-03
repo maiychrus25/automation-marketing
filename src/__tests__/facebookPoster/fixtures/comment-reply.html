@@ -1,0 +1,74 @@
+<!doctype html>
+<!--
+  Fixture TỔNG HỢP cho commentReply (tên, id, chữ đều giả). Chỉ giữ cấu trúc đo được trên trang bài thật 2026-11-02
+  (ô trả lời đã mở, đã gõ nhưng chưa gửi):
+  - khối bình luận là div[role="article"] có aria-label "Bình luận dưới tên <tác giả> <thời gian>", không lồng nhau;
+  - mỗi khối có link avatar + link tên mang ?comment_id=<base64 "comment:<bài>_<bình luận>"> và link thời gian ?comment_id=<số>;
+  - nút "Trả lời" (div[role="button"]) nằm TRONG khối; nút "Xem N câu trả lời" nằm ngoài;
+  - ô trả lời (contenteditable, role="textbox", data-lexical-editor, aria-placeholder "Bình luận dưới tên <Trang>") hiện
+    NGOÀI khối, sau chuỗi của bình luận được trả lời và trước bình luận kế tiếp; nút gửi aria-label "Đăng bình luận" cạnh ô.
+  CHƯA ĐO: khối câu trả lời đã đăng (nhãn và vị trí) — phần data-fixture="posted-reply" là giả định; routine không dựa vào nhãn của nó.
+  Test cắt bỏ phần data-fixture để dựng ba trạng thái: chưa mở ô / ô đã mở / đã gửi.
+-->
+<html lang="vi">
+<body>
+<div role="main">
+  <div role="article" aria-label="">
+    <div dir="auto">Bài mẫu: giày chạy bộ mới về</div>
+  </div>
+  <div>
+    <div role="article" aria-label="Bình luận dưới tên Khách Thử Một 2 ngày trước">
+      <a href="/khach.thu.mot?comment_id=Y29tbWVudDo5MDAwMF85MTAx&amp;__cft__[0]=fake&amp;__tn__=R"><svg></svg></a>
+      <a href="/khach.thu.mot?comment_id=Y29tbWVudDo5MDAwMF85MTAx&amp;__cft__[0]=fake&amp;__tn__=R"><span>Khách Thử Một</span></a>
+      <div dir="auto">Shop ơi giày này giá bao nhiêu?</div>
+      <a href="/trang.mau/posts/90000/?comment_id=9101&amp;__cft__[0]=fake&amp;__tn__=R" aria-label="2 ngày">2 ngày</a>
+      <div role="button" tabindex="0">Thích</div>
+      <div role="button" tabindex="0">Trả lời</div>
+    </div>
+    <div role="button" tabindex="0">Xem 2 câu trả lời</div>
+  </div>
+  <div>
+    <div role="article" aria-label="Bình luận dưới tên Khách Thử Hai 2 ngày trước">
+      <a href="/khach.thu.hai?comment_id=Y29tbWVudDo5MDAwMF85MTAy&amp;__cft__[0]=fake&amp;__tn__=R"><svg></svg></a>
+      <a href="/khach.thu.hai?comment_id=Y29tbWVudDo5MDAwMF85MTAy&amp;__cft__[0]=fake&amp;__tn__=R"><span>Khách Thử Hai</span></a>
+      <div dir="auto">Còn size 42 không shop?</div>
+      <a href="/trang.mau/posts/90000/?comment_id=9102&amp;__cft__[0]=fake&amp;__tn__=R" aria-label="2 ngày">2 ngày</a>
+      <div role="button" tabindex="0">Thích</div>
+      <div role="button" tabindex="0">Trả lời</div>
+    </div>
+    <div role="button" tabindex="0">Xem 1 câu trả lời</div>
+    <div data-fixture="posted-reply">
+      <div role="article" aria-label="Bình luận dưới tên Trang Mẫu Vừa xong">
+        <a href="/trang.mau?comment_id=Y29tbWVudDo5MDAwMF85MjAx&amp;__cft__[0]=fake"><span>Trang Mẫu</span></a>
+        <div dir="auto">Dạ còn size 42 ạ, anh ghé shop nhé</div>
+        <a href="/trang.mau/posts/90000/?comment_id=9102&amp;reply_comment_id=9201&amp;__cft__[0]=fake" aria-label="Vừa xong">Vừa xong</a>
+        <div role="button" tabindex="0">Thích</div>
+        <div role="button" tabindex="0">Trả lời</div>
+      </div>
+    </div><!-- /posted-reply -->
+    <div data-fixture="composer">
+      <div contenteditable="true" role="textbox" spellcheck="true" tabindex="0" data-lexical-editor="true" aria-label="Bình luận dưới tên Trang Mẫu" aria-placeholder="Bình luận dưới tên Trang Mẫu"><p><br></p></div>
+      <div aria-label="Đăng bình luận" role="button" tabindex="0"><svg></svg></div>
+    </div><!-- /composer -->
+  </div>
+  <div>
+    <div role="article" aria-label="Bình luận dưới tên Khách Thử Ba 1 ngày trước">
+      <a href="/khach.thu.ba?comment_id=Y29tbWVudDo5MDAwMF85MTAz&amp;__cft__[0]=fake&amp;__tn__=R"><span>Khách Thử Ba</span></a>
+      <div dir="auto">Còn hàng không shop?</div>
+      <a href="/trang.mau/posts/90000/?comment_id=9103&amp;__cft__[0]=fake&amp;__tn__=R" aria-label="1 ngày">1 ngày</a>
+      <div role="button" tabindex="0">Thích</div>
+      <div role="button" tabindex="0">Trả lời</div>
+    </div>
+  </div>
+  <div>
+    <div role="article" aria-label="Bình luận dưới tên Khách Thử Ba 1 ngày trước">
+      <a href="/khach.thu.ba?comment_id=Y29tbWVudDo5MDAwMF85MTA0&amp;__cft__[0]=fake&amp;__tn__=R"><span>Khách Thử Ba</span></a>
+      <div dir="auto">Còn hàng không shop? Mình lấy size 40</div>
+      <a href="/trang.mau/posts/90000/?comment_id=9104&amp;__cft__[0]=fake&amp;__tn__=R" aria-label="1 ngày">1 ngày</a>
+      <div role="button" tabindex="0">Thích</div>
+      <div role="button" tabindex="0">Trả lời</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
