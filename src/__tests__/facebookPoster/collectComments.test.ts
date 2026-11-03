@@ -74,11 +74,13 @@ function fakeButton(text: string, { role = 'button', tag = 'div' } = {}) {
  * querySelectorAll('a') của cha cũng trả về thẻ <a> của mọi khối con. */
 function commentBlock({
   label, authorHref, authorName, parts = [], timeHref = null, timeText = '',
-  nestedBlocks = [], timeFirst = false,
+  nestedBlocks = [], timeFirst = false, ownLinks,
 }: {
   label: string; authorHref: string | null; authorName: string;
   parts?: { text: string; inLink?: boolean; inButton?: boolean; otherBlock?: boolean }[];
   timeHref?: string | null; timeText?: string; nestedBlocks?: any[]; timeFirst?: boolean;
+  /** Thay hẳn danh sách link của khối, theo đúng thứ tự trong DOM (bố cục bài Page). */
+  ownLinks?: { text: string; href: string }[];
 }) {
   const el: any = {
     tagName: 'DIV',
@@ -99,7 +101,7 @@ function commentBlock({
   // giả trong thứ tự các thẻ <a> — để chứng minh chốt "bỏ qua link
   // comment_id" có tác dụng thật, không chỉ đúng vì link tác giả luôn được
   // querySelectorAll trả về trước.
-  const order = timeFirst ? [timeLink, authorLink] : [authorLink, timeLink];
+  const order = ownLinks ? ownLinks.map(l => makeLink(l.text, l.href)) : timeFirst ? [timeLink, authorLink] : [authorLink, timeLink];
   for (const l of order) if (l) links.push(l);
   for (const child of nestedBlocks) links.push(...child.querySelectorAll('a'));
   const divs = parts.map(d => ({
@@ -214,6 +216,73 @@ test('chốt comment_id: bỏ qua link thời gian dù nó đứng TRƯỚC link
   assert.strictEqual(out.length, 1);
   assert.strictEqual(out[0].authorId, '789');
   assert.strictEqual(out[0].authorName, 'Nguyễn Văn A');
+});
+
+// Bố cục bài Page (đo trên trang thật 03/11/2026): ảnh đại diện và tên đều là link
+// /<slug>?comment_id=…; link thời gian là /<trang>/posts/<id>?comment_id=…; link ra
+// ngoài đi qua l.facebook.com/l.php.
+const pageLayoutBlock = (extra: { text: string; href: string }[] = []) => commentBlock({
+  label: 'Bình luận dưới tên Khách Thử', authorHref: null, authorName: '',
+  parts: [{ text: 'shop còn hàng không ạ' }],
+  ownLinks: [
+    { text: '', href: 'https://www.facebook.com/khach.thu.1?comment_id=Y29tbWVudDoxXzI%3D&__cft__[0]=abc' },
+    { text: 'Khách Thử', href: 'https://www.facebook.com/khach.thu.1?comment_id=Y29tbWVudDoxXzI%3D&__cft__[0]=abc' },
+    { text: '3 giờ', href: 'https://www.facebook.com/trangmau/posts/9000?comment_id=Y29tbWVudDoxXzI%3D' },
+    ...extra,
+  ],
+});
+
+test('bố cục bài Page: link tác giả mang comment_id vẫn được nhận, tên lấy từ link có chữ', () => {
+  const out = inPage([pageLayoutBlock()], '', readAs(null));
+  assert.strictEqual(out.length, 1, 'bình luận không được bị bỏ');
+  assert.strictEqual(out[0].authorId, 'khach.thu.1');
+  assert.strictEqual(out[0].authorUrl, 'https://www.facebook.com/khach.thu.1');
+  assert.strictEqual(out[0].authorName, 'Khách Thử');
+  assert.strictEqual(out[0].text, 'shop còn hàng không ạ');
+  assert.strictEqual(out[0].commentedAt, '3 giờ');
+});
+
+test('link ra ngoài qua l.facebook.com không bao giờ là tác giả', () => {
+  const k = commentBlock({
+    label: 'Bình luận dưới tên Khách Thử', authorHref: null, authorName: '',
+    parts: [{ text: 'xem ở đây' }],
+    ownLinks: [{ text: 'vi-du.vn', href: 'https://l.facebook.com/l.php?u=https%3A%2F%2Fvi-du.vn&h=AT0' }],
+  });
+  assert.deepStrictEqual(inPage([k], '', readAs(null)), []);
+  // Link ngoài đứng sau link tác giả thật thì không đổi kết quả.
+  const out = inPage([pageLayoutBlock([{ text: 'vi-du.vn', href: 'https://l.facebook.com/l.php?u=x' }])], '', readAs(null));
+  assert.strictEqual(out[0].authorId, 'khach.thu.1');
+});
+
+test('link thời gian dạng .php mang comment_id không thành tác giả', () => {
+  for (const href of ['/photo.php?fbid=1&comment_id=2', '/photo.php/?fbid=1&comment_id=2', '/video.php?v=1&comment_id=2', '/l.php?u=x&comment_id=2', '//l.facebook.com/l.php?u=x', '/l.php?u=x', '/photo.php?fbid=1', 'https://www.facebook.com/video.php?v=1']) {
+    const lone = commentBlock({ label: 'Bình luận của X', authorHref: null, authorName: '', parts: [{ text: 'a' }], ownLinks: [{ text: '3 giờ', href }] });
+    assert.deepStrictEqual(inPage([lone], '', readAs(null)), [], href);
+  }
+  const k = commentBlock({
+    label: 'Bình luận của X', authorHref: null, authorName: '', parts: [{ text: 'a' }],
+    ownLinks: [{ text: 'Khách Thử', href: '/khach.thu.1?comment_id=2' }, { text: '5 phút', href: '/photo.php?fbid=1&comment_id=2' }],
+  });
+  const out = inPage([k], '', readAs(null));
+  assert.strictEqual(out[0].authorId, 'khach.thu.1');
+  assert.strictEqual(out[0].commentedAt, '5 phút');
+});
+
+test('bỏ bình luận của chính Page chủ bài (tác giả trùng slug trong link thời gian)', () => {
+  const pageReply = commentBlock({
+    label: 'Bình luận dưới tên Trang Mẫu', authorHref: null, authorName: '', parts: [{ text: 'inbox shop nhé' }],
+    ownLinks: [
+      { text: 'Trang Mẫu', href: 'https://www.facebook.com/trangmau?comment_id=Y29t' },
+      { text: '1 giờ', href: 'https://www.facebook.com/trangmau/posts/9000?comment_id=Y29t' },
+    ],
+  });
+  assert.deepStrictEqual(inPage([pageReply], '', readAs(null)), []);
+  assert.strictEqual(inPage([pageLayoutBlock()], '', readAs(null)).length, 1, 'khách vẫn được đọc');
+});
+
+test('host Facebook theo ngôn ngữ vẫn nhận tác giả', () => {
+  const k = commentBlock({ label: 'Bình luận của X', authorHref: 'https://vi-vn.facebook.com/khach.thu.2', authorName: 'X', parts: [{ text: 'a' }] });
+  assert.strictEqual(inPage([k], '', readAs(null))[0].authorId, 'khach.thu.2');
 });
 
 test('profile.php: nhận id ngay cả khi id= không đứng ngay sau dấu ?', () => {

@@ -80,6 +80,9 @@ export function readCommentsInPage({ selfId }: { selfId: string | null }): Omit<
     function normalizeAuthorLink(href: string | null): { id: string; url: string } | null {
         const raw = String(href || '');
         if (!raw) return null;
+        // Link tuyệt đối/không giao thức sang host khác, hoặc l./lm.facebook.com (link ra ngoài), không phải người.
+        const host = (raw.match(/^(?:https?:)?\/\/([^/?#]+)/i) || [])[1];
+        if (host && (!/(^|\.)facebook\.com$/i.test(host) || /^lm?\./i.test(host))) return null;
         // Link bọc phạm vi nhóm và link profile.php đều mang id số — ưu tiên.
         let m = raw.match(/\/groups\/\d+\/user\/(\d+)/);
         // id= có thể không đứng ngay sau "?" (vd "profile.php?ref=x&id=123") —
@@ -91,12 +94,12 @@ export function readCommentsInPage({ selfId }: { selfId: string | null }): Omit<
         if (m) return { id: m[1], url: FB + m[1] };
         // Còn lại: tên tuỳ chỉnh nằm ở đoạn đường dẫn đầu tiên. Cắt sạch query
         // và neo — Facebook nhét chuỗi theo dõi rất dài vào đó.
-        const path = raw.replace(/^https?:\/\/[^/]+/i, '').split(/[?#]/)[0];
+        const path = raw.replace(/^(?:https?:)?\/\/[^/]+/i, '').split(/[?#]/)[0];
         // Link bài, ảnh, video KHÔNG phải link người. Thiếu chốt này thì
         // "/cuahangabc/posts/222/" bị đọc thành tác giả tên "cuahangabc".
         if (/\/(posts|photo|photos|video|videos|watch|reel|permalink\.php|groups|events|story\.php)(\/|$)/i.test(path)) return null;
         const segment = path.split('/').filter(Boolean)[0];
-        if (!segment || segment === 'profile.php') return null;
+        if (!segment || /\.php$/i.test(segment)) return null; // profile.php có id đã khớp ở trên
         return { id: segment, url: FB + segment };
     }
 
@@ -104,24 +107,32 @@ export function readCommentsInPage({ selfId }: { selfId: string | null }): Omit<
     for (const el of Array.from(document.querySelectorAll('div[role="article"]'))) {
         if (!BLOCK_LABEL.test(el.getAttribute('aria-label') || '')) continue;
 
+        // Link tác giả của chính khối. Bài Page gắn comment_id vào cả link ảnh đại diện và
+        // link tên (/<slug>?comment_id=…), còn link thời gian có đường dẫn nhiều đoạn
+        // (/<trang>/posts/<id>, /groups/…/posts/…, /permalink/…) hoặc là .php: link mang
+        // comment_id chỉ được coi là người khi đường dẫn đúng một đoạn hoặc là dạng id người.
+        const authorOf = (a: Element): { id: string; url: string } | null => {
+            const href = a.getAttribute('href') || '';
+            if (/comment_id=/.test(href)) {
+                const path = href.replace(/^(?:https?:)?\/\/[^/]+/i, '').split(/[?#]/)[0];
+                const personLike = /\/groups\/\d+\/user\/\d+/.test(href) || /profile\.php\?/.test(href)
+                    || path.split('/').filter(Boolean).length === 1;
+                if (!personLike) return null;
+            }
+            return normalizeAuthorLink(href);
+        };
+        // Phản hồi lồng bên trong khối cha nên querySelectorAll('a') của cha có cả link của
+        // con: chỉ xét link thuộc chính khối này, không thì cha mượn nhầm danh tính của con.
+        const own = Array.from(el.querySelectorAll('a')).filter(a => a.closest('div[role="article"]') === el);
         let author: { id: string; url: string } | null = null;
         let name = '';
-        for (const a of Array.from(el.querySelectorAll('a'))) {
-            // Phản hồi lồng bên trong khối bình luận cha, nên querySelectorAll('a')
-            // của cha cũng trả về thẻ <a> tác giả của mọi phản hồi con. Thiếu chốt
-            // này thì khi tác giả của chính khối này không phân giải được (href
-            // rỗng, tài khoản bị vô hiệu hoá...), vòng lặp rơi xuống link của con
-            // và gán nhầm danh tính con cho bản ghi cha.
-            if (a.closest('div[role="article"]') !== el) continue;
-            const href = a.getAttribute('href') || '';
-            // Link có comment_id là link thời gian, không phải link người.
-            if (/comment_id=/.test(href)) continue;
-            const info = normalizeAuthorLink(href);
-            if (info) {
-                author = info;
-                name = (a.textContent || '').trim();
-                break;
-            }
+        for (const a of own) {
+            const info = authorOf(a);
+            if (!info) continue;
+            if (!author) author = info;
+            // Ảnh đại diện đứng trước và không có chữ: lấy tên từ link cùng người có chữ.
+            if (info.id === author.id) name = (a.textContent || '').trim();
+            if (name) break;
         }
         if (!author) continue;
         if (selfId && author.id === String(selfId)) continue;
@@ -141,7 +152,10 @@ export function readCommentsInPage({ selfId }: { selfId: string | null }): Omit<
         // có thể nhặt nhầm link thời gian của phản hồi con. Duyệt hết rồi lọc
         // đúng link thuộc khối này.
         const timeLink = Array.from(el.querySelectorAll('a[href*="comment_id"]'))
-            .find(a => a.closest('div[role="article"]') === el) || null;
+            .find(a => a.closest('div[role="article"]') === el && !authorOf(a)) || null;
+        // Bài Page: link thời gian là /<trang>/posts/…; tác giả trùng <trang> là Page tự trả lời, không phải khách.
+        const owner = timeLink ? (timeLink.getAttribute('href') || '').replace(/^(?:https?:)?\/\/[^/]+/i, '').split(/[?#]/)[0].split('/').filter(Boolean) : [];
+        if (owner.length > 1 && owner[1] === 'posts' && owner[0] === author.id) continue;
 
         out.push({
             authorId: author.id,
