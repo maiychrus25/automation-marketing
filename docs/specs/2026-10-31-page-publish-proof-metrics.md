@@ -1,7 +1,7 @@
 # Bằng chứng bài đã đăng, số liệu Page và chính sách thông báo
 
 **Ngày:** 2026-10-31  
-**Trạng thái:** Spec đã được anh duyệt ngày 31/10/2026; [implementation plan](../plans/2026-10-31-page-publish-proof-metrics.md) anh duyệt cùng ngày. Đã triển khai (2026-10-31), phát hành trong 26.33.0 (01/11/2026); chưa kiểm trên app Electron/Facebook thật, số người theo dõi chưa đọc được (chờ mẫu phản hồi thật). Chỗ code khác spec: mục 11.  
+**Trạng thái:** Spec đã được anh duyệt ngày 31/10/2026; [implementation plan](../plans/2026-10-31-page-publish-proof-metrics.md) anh duyệt cùng ngày. Đã triển khai (2026-10-31), phát hành trong 26.34.0 (03/11/2026; bản 26.33.0 bị huỷ ở CI trước khi phát hành); chưa kiểm trên app Electron/Facebook thật, số người theo dõi chưa đọc được (chờ mẫu phản hồi thật). Chỗ code khác spec: mục 11.  
 **Phạm vi:** Sub-project A của lộ trình sau 26.32.0. Là nền cho bật chạy thật có kiểm soát (B), vòng AI tự vận hành (C) và bình luận đầu cho bài bot đăng.  
 **Nguồn thiết kế UI:** `DESIGN.md`, bộ token `poster` và màn "Hiệu quả" hiện có.
 

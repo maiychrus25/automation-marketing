@@ -15,6 +15,45 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.34.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🤖 Tự vận hành có giới hạn: bot tự lo Page, thu bình luận, trả lời khách và video trong các trần anh đặt, có nút Dừng khẩn',
+      '💬 Bình luận góp ý có anh duyệt: bot tìm bài và soạn câu, chỉ câu anh bấm Duyệt mới được đăng',
+      '👥 Đọc được số người theo dõi Page và bình luận của khách trên bài Page',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Tab "Tự vận hành" trong Cài đặt: công tắc, Dừng khẩn, trần mỗi ngày, giờ im lặng, số đã dùng hôm nay theo profile, lịch sử đổi chính sách. Mặc định tắt',
+          'Profile tự dừng khi Facebook yêu cầu xác minh hoặc đăng xuất, chỉ chạy lại khi anh bấm "Bật lại"',
+          'Khoá chủ chạy được chiến dịch trên Page của anh (pageCampaigns.start, pageCampaigns.stop), kèm bình luận đầu khi đã xác minh đúng bài vừa đăng',
+          'Trả lời khách dưới bài của anh (comments.reply): mỗi khách 1 lần, mặc định tối đa 10 câu/ngày/profile',
+          'Mục "Chờ duyệt" trong Đăng Facebook: xem, sửa câu, Duyệt, Bỏ hoặc Huỷ từng gợi ý bình luận. Bot không có lệnh nào để tự duyệt hay tự đăng các câu này',
+          'Bình luận được duyệt: bình luận mới dưới bài hoặc trả lời một bình luận cụ thể; mặc định 20 gợi ý và 10 bình luận/ngày/profile; gợi ý hết hạn sau 24 giờ',
+          'Video quảng cáo AI: mặc định tối đa 2 video/ngày, tính chung cả video anh tự tạo; bot không dùng lượt cuối của ngày',
+          'Bot: lệnh auto-tick và install-auto chỉ gọi AI khi có việc, mặc định tối đa 12 lượt AI/ngày; báo cáo 📊 có thêm "Bot đã tự làm" và "Bình luận góp ý"; có tin ⚙️, 🛑 và 🗂',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Thay đổi cần biết: sau khi cập nhật, bot bị từ chối khi duyệt nháp và tạo video cho tới khi anh bật Tự vận hành (duyệt nháp cần bật thêm "Ghi được bảo vệ"). Việc anh tự bấm trong app không bị ảnh hưởng, trừ trần video',
+          'Khi bot đăng bằng tính năng có sẵn (duyệt nháp, sửa lịch), lượt đó chịu trần mỗi ngày và giờ im lặng; mỗi nhóm cách nhau tối thiểu 3 ngày',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Thu bình luận trên bài Page gần như không đọc được gì và có thể ghi nhầm tác giả là "l.php"; nay đọc đúng người bình luận và bỏ qua bình luận của chính Page. Các dòng cũ mang tác giả "l.php" không được dọn',
+          'Số người theo dõi Page đọc từ link /followers/ của đúng Page, số làm tròn hiện dấu "≈"',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.33.0',
     date: '11/2026',
     type: 'minor',

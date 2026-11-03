@@ -1,7 +1,7 @@
 # Bình luận góp ý có anh duyệt trong MaiHub
 
 **Ngày:** 2026-11-02  
-**Trạng thái:** Đã triển khai trên nhánh feat/approved-engagement (02/11/2026), chưa phát hành; chưa kiểm trên app Electron/Facebook thật. Trả lời bình luận (kind reply) làm ở nhánh feat/engagement-reply (03/11/2026), chưa kiểm gửi thật. Implementation plan: `docs/plans/2026-11-02-approved-engagement-comments.md`.  
+**Trạng thái:** Đã triển khai (02/11/2026), phát hành trong 26.34.0 (03/11/2026); chưa kiểm trên app Electron/Facebook thật. Trả lời bình luận (kind reply) làm ở nhánh feat/engagement-reply (03/11/2026), chưa kiểm gửi thật. Implementation plan: `docs/plans/2026-11-02-approved-engagement-comments.md`.  
 **Phạm vi:** Bot tìm bài và bình luận đáng góp ý hoặc giải đáp theo chủ đề Page, soạn sẵn câu, đưa vào hàng chờ trong MaiHub. Anh duyệt từng gợi ý bằng nút trong app; app chỉ đăng câu anh đã duyệt. Bổ sung cho spec `docs/specs/2026-11-01-bounded-autonomous-operation.md` (dùng lại bộ giới hạn, vòng `auto-tick`, báo cáo 📊).  
 **Nguồn thiết kế UI:** `DESIGN.md`, màn Facebook Poster và tab Tự vận hành hiện có.
 

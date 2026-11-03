@@ -1,7 +1,7 @@
 # Tự vận hành có giới hạn: tự đăng Page, vòng AI, trả lời khách, video và người theo dõi
 
 **Ngày:** 2026-11-01 (sửa phạm vi 2026-11-02)  
-**Trạng thái:** Đã triển khai trên nhánh feat/bounded-autonomy (02/11/2026), chưa phát hành; chưa kiểm trên app Electron/Facebook thật. Lịch sử duyệt: bản đầu được anh duyệt ngày 01/11/2026; ngày 02/11/2026 phạm vi được thu hẹp (anh đồng ý): bỏ bình luận vào bài của người lạ, bỏ tự tham gia nhóm, bỏ cơ chế làm hành vi tự động trông giống người; bản sửa được anh duyệt ngày 02/11/2026; cùng ngày đăng nhóm ra khỏi vòng tự chạy: bot chỉ dùng tính năng đăng nhóm có sẵn khi được nhắn, bộ giới hạn chặn bớt (mục 4, 6.2). Implementation plan: `docs/plans/2026-11-01-bounded-autonomous-operation.md`.
+**Trạng thái:** Đã triển khai (02/11/2026), phát hành trong 26.34.0 (03/11/2026); chưa kiểm trên app Electron/Facebook thật. Lịch sử duyệt: bản đầu được anh duyệt ngày 01/11/2026; ngày 02/11/2026 phạm vi được thu hẹp (anh đồng ý): bỏ bình luận vào bài của người lạ, bỏ tự tham gia nhóm, bỏ cơ chế làm hành vi tự động trông giống người; bản sửa được anh duyệt ngày 02/11/2026; cùng ngày đăng nhóm ra khỏi vòng tự chạy: bot chỉ dùng tính năng đăng nhóm có sẵn khi được nhắn, bộ giới hạn chặn bớt (mục 4, 6.2). Implementation plan: `docs/plans/2026-11-01-bounded-autonomous-operation.md`.
 **Phạm vi:** Các sub-project B (chạy thật có kiểm soát), C (vòng AI tự vận hành), D (trả lời khách dưới bài của mình), E (video quảng cáo AI) và phần đọc số người theo dõi còn thiếu của A. Bản 26.33.0 đã được huỷ ở CI trước khi phát hành; bản phát hành tiếp theo gồm A và toàn bộ spec này.  
 **Nguồn thiết kế UI:** `DESIGN.md`, màn Cài đặt và màn "Hiệu quả" hiện có.
 

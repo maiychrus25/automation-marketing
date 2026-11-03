@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-11-01-bounded-autonomous-operation.md` (anh duyệt bản sửa ngày 02/11/2026) — nguồn thẩm quyền khi plan và spec lệch nhau.
 
-**Trạng thái:** Chờ anh duyệt plan.
+**Trạng thái:** Anh duyệt plan ngày 02/11/2026. Đã triển khai, gộp vào `main` và phát hành trong 26.34.0 (03/11/2026); chưa kiểm trên app Electron/Facebook thật.
 
 **Phương thức thực thi:** subagent-driven (anh đã chọn). Mỗi task một implementer mới + một reviewer mới, review toàn nhánh ở cuối. Nhánh `feat/bounded-autonomy`.
 

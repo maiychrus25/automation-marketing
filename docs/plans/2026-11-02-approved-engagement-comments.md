@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-11-02-approved-engagement-comments.md` (anh duyệt 02/11/2026); nền: `docs/specs/2026-11-01-bounded-autonomous-operation.md`.
 
-**Trạng thái:** Chờ anh duyệt plan.
+**Trạng thái:** Anh duyệt plan ngày 02/11/2026. Đã triển khai, gộp vào `main` và phát hành trong 26.34.0 (03/11/2026); chưa kiểm trên app Electron/Facebook thật.
 
 **Phương thức thực thi:** subagent-driven (như đợt trước). Nhánh `feat/approved-engagement`, không commit khi anh chưa cho phép.
 
