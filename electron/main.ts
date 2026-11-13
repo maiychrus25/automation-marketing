@@ -18,7 +18,7 @@ import { registerEmployeeIpc } from './ipc/employeeIpc';
 import { registerRelayIpc } from './ipc/relayIpc';
 import { registerWorkspaceIpc, isWorkspaceSwitchInProgress } from './ipc/workspaceIpc';
 import { registerControlApiIpc, startControlApi, shutdownControlApi, syncControlEventSink, stopPagePreparationForWorkspaceSwitch, restartControlApi } from './ipc/controlApiIpc';
-import { registerFacebookIpc, reconnectAllFBAccounts } from './ipc/facebookIpc';
+import { registerFacebookIpc, reconnectAllFBAccounts, cancelFBStartupRetries } from './ipc/facebookIpc';
 import { registerTelegramIpc } from './ipc/telegramIpc';
 import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
 import { registerProxyIpc } from './ipc/proxyIpc';
@@ -1460,6 +1460,8 @@ function stopServicesAndCloseDatabase(): void {
   try {
     stopVideoPolling(); // trước DatabaseService.close(): không hỏi máy chủ render nữa; việc dở được theo dõi tiếp ở lần mở sau
   } catch {}
+
+  try { cancelFBStartupRetries(); } catch {}
 
   // Listener + sink closed synchronously. After the poster scheduler/jobs stop (so schedule.missed raised during quit is recorded), before DatabaseService.close() below.
   void shutdownControlApi().catch(() => {});

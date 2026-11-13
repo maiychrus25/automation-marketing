@@ -124,19 +124,38 @@ export async function initSession(cookie: string, httpsAgent?: any): Promise<FBS
   return result as FBSessionData;
 }
 
+const TRANSIENT_NETWORK_RE =
+  /\b(?:ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|EPROTO|ERR_SOCKET_CLOSED)\b|ERR_SOCKET_CLOSED|socket hang up|Proxy connection ended|\b(?:network|socket|timeout|timed out)\b|fetch failed/i;
+const TRANSIENT_STATUS_RE = /(?:status code|HTTP)\s*(?:407|429|5\d\d)\b/i;
+
+/** Lỗi mạng/timeout/429/5xx — tạm thời, KHÔNG có nghĩa cookie hết hạn. Lỗi lạ khác → false (giữ nghĩa "hết hạn"). */
+export function isTransientFacebookError(err: unknown): boolean {
+  const msg = typeof err === 'string' ? err : String((err as any)?.message ?? '');
+  return TRANSIENT_NETWORK_RE.test(msg) || TRANSIENT_STATUS_RE.test(msg);
+}
+
 /**
- * Kiểm tra cookie có còn sống không
- * Cookie alive = có parse được FacebookID từ homepage
+ * Trạng thái cookie: alive = parse được session; unknown = lỗi mạng tạm thời (chưa biết);
+ * expired = Facebook từ chối (redirect login/checkpoint, thiếu field bắt buộc...).
+ * `init` chỉ để test tiêm giả.
  */
-export async function checkCookieAlive(cookie: string, httpsAgent?: any): Promise<boolean> {
+export async function checkCookieState(
+  cookie: string,
+  httpsAgent?: any,
+  init: typeof initSession = initSession,
+): Promise<'alive' | 'expired' | 'unknown'> {
   try {
-    await initSession(cookie, httpsAgent);
-    // initSession() đã validate required fields + FacebookID - nếu không throw là OK
-    return true;
+    await init(cookie, httpsAgent);
+    return 'alive';
   } catch (err: any) {
-    Logger.warn(`[FacebookSession] checkCookieAlive error: ${err.message}`);
-    return false;
+    Logger.warn(`[FacebookSession] checkCookieState error: ${err?.message}`);
+    return isTransientFacebookError(err) ? 'unknown' : 'expired';
   }
+}
+
+/** Còn dùng được? Chỉ `expired` mới là false — mất mạng không bị coi là hết hạn. */
+export async function checkCookieAlive(cookie: string, httpsAgent?: any): Promise<boolean> {
+  return (await checkCookieState(cookie, httpsAgent)) !== 'expired';
 }
 
 /**

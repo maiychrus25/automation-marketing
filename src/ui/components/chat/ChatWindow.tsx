@@ -1,4 +1,5 @@
 import { Spinner } from '@/components/common/PageLoading';
+import { toZaloJpgUrl, isJxlLocalPath } from '../../../utils/zaloImageUrl';
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MESSAGE_LOAD_LIMIT, MESSAGE_AROUND_LIMIT, GROUP_MEMBER_LIMIT, LOAD_MORE_TIMEOUT_MS, PAGE_SIZE, MAX_PAGES, GROUP_INFO_CACHE_TTL_MS } from '@/lib/chat/constants';
 import { getMessageCacheKey, useChatStore } from '@/store/chatStore';
@@ -34,6 +35,7 @@ import ForwardMessageModal from './ForwardMessageModal';
 import PollBubble from './PollBubble';
 import FriendRequestBar from './FriendRequestBar';
 import { ReactionContextMenu, ReactionPopup, parseReactions, parseReactionsFull, displayReactionEmoji } from './ReactionComponents';
+import { lastOutgoingReceipt, receiptDisplay, receiptLabel } from '../../lib/chat/messageReceipt';
 import {
   EmployeeAvatar, FileBubble, MediaBubble, VoiceBubble,
   QuotedStickerPreview, StickerGroupBubble, getGroupLayoutId, MediaGroupBubble,
@@ -958,7 +960,7 @@ export default function ChatWindow() {
         try {
           const parsed = JSON.parse(msg.content || '{}');
           const params = typeof parsed.params === 'string' ? JSON.parse(parsed.params) : (parsed.params || {});
-          remoteUrl = params.hd || params.rawUrl || parsed.href || parsed.thumb || '';
+          remoteUrl = toZaloJpgUrl(params.hd || params.rawUrl || parsed.href || parsed.thumb || '');
         } catch {}
 
         items.push({
@@ -2237,7 +2239,7 @@ export default function ChatWindow() {
       const lp: Record<string, string> = typeof msg.local_paths === 'string'
         ? JSON.parse(msg.local_paths || '{}')
         : (msg.local_paths || {});
-      const lf = lp.main || lp.hd || lp.thumb || (Object.values(lp)[0] as string) || '';
+      const lf = [lp.main, lp.hd, lp.thumb, Object.values(lp)[0] as string].find((p) => p && !isJxlLocalPath(p)) || '';
       if (lf) {
         localPath = lf;
         localUrl = toLocalMediaUrl(lf);
@@ -2246,7 +2248,7 @@ export default function ChatWindow() {
     try {
       const p = JSON.parse(msg.content || '{}');
       const params = typeof p.params === 'string' ? JSON.parse(p.params || '{}') : (p.params || {});
-      remoteUrl = params.hd || params.rawUrl || p.href || p.thumb || '';
+      remoteUrl = toZaloJpgUrl(params.hd || params.rawUrl || p.href || p.thumb || '');
     } catch {}
     if (!remoteUrl && !localUrl) return null;
     const defaultName = localPath
@@ -3603,7 +3605,17 @@ export default function ChatWindow() {
       {threadReady && activeAccountId && activeThreadId && (() => {
         const key = `${activeAccountId}_${activeThreadId}`;
         const seen = seenInfo[key];
-        if (!seen || !seen.seenUids?.length) return null;
+        const status = lastOutgoingReceipt(msgs, { deliveredTs: activeContact?.peer_delivered_ts, readTs: activeContact?.peer_read_ts }, activeContact?.channel);
+        const mode = receiptDisplay(status, !!seen?.seenUids?.length);
+        if (mode === 'none' || !status) return null;
+        if (mode === 'label') {
+          return (
+            <div className="px-4 pb-2 flex justify-end items-center gap-1.5">
+              <span className="text-[11px] text-gray-400 mr-0.5">{receiptLabel(status)}</span>
+            </div>
+          );
+        }
+        if (!seen) return null;
 
         // Lấy thông tin người đã seen
         const groupCache = useAppStore.getState().groupInfoCache?.[activeAccountId]?.[activeThreadId];

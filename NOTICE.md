@@ -57,6 +57,50 @@ Zalo ra máy chủ thượng nguồn, cùng loại với thay đổi số 2 ở 
 phân `.exe` đã commit, `go.mod`/submodule của bridge Go, Facebook cá nhân/E2EE,
 Telegram User/Bot, Trung tâm tính năng và các tính năng lớn khác của bản gốc.
 
+## Port từ Deplao 26.9.0–26.11.0 (MaiHub, 11/2026)
+
+Đợt sửa độ tin cậy đồng bộ chat Zalo/Facebook, **port bằng tay, từng đoạn** từ
+https://github.com/babyvibe/deplao-builder (MIT) tại commit `2162f07` (26.11.0).
+Không gộp nhánh, không chép nguyên tệp (riêng `zaloReadElsewhere.ts` theo sát
+bản gốc, xem bảng). Thiết kế ở `docs/specs/2026-11-13-chat-sync-reliability.md`.
+Đường dẫn nguồn dưới đây tính từ thư mục gốc của kho thượng nguồn.
+
+| Nhóm | Tệp nguồn (`2162f07`) | File đích | MaiHub khác bản gốc ở điểm nào |
+|---|---|---|---|
+| Z1 Đã nhận / đã xem Zalo | `src/utils/zalo/ZaloLoginHelper.ts`, `src/services/receipts/peerReceipts.ts` | `src/utils/ZaloLoginHelper.ts`, `src/services/receipts/peerReceipts.ts`, `src/ui/lib/chat/messageReceipt.ts` | Nhãn "Đã nhận"/"Đã xem" chỉ hiện **dưới tin mình gửi cuối cùng** (R1), không vẽ dấu ✓ trên từng bong bóng. Mốc là cột `contacts.peer_delivered_ts` / `peer_read_ts`, chỉ tiến lên; không tạo hội thoại mới chỉ vì một biên nhận |
+| Z2 Lọc tin giao trùng | `src/services/database/DatabaseService.ts`, `src/services/event/EventBroadcaster.ts` | `src/services/database/DatabaseService.ts` (`isDuplicateZaloDelivery`, `idx_messages_cli`), `src/services/event/EventBroadcaster.ts` | Chỉ trùng khi cùng tài khoản + `cliMsgId` + hội thoại + người gửi + **nội dung** và cả hai là id thật (không `mb_`/`cli_`); chỉ xét dòng kênh Zalo; lỗi kiểm tra thì coi là tin mới. Không dọn cặp trùng đã lưu |
+| Z3 Websocket tự nối lại | `src/utils/zalo/zaloListenerRetry.ts`, `src/utils/zalo/ZaloLoginHelper.ts` | `src/utils/zaloListenerRetry.ts`, `src/utils/ZaloLoginHelper.ts` | Trong lúc zca-js tự nối lại **không** phát `event:disconnected` và không đổi trạng thái kết nối (R6); watchdog 90 s rồi mới về đường đăng nhập lại cũ (tối đa 5 lần). Giữ cờ `manuallyDisconnectedAccounts` (ngắt tay không tự nối lại); listener cũ bị thay thì bị chặn nối lại |
+| Z4 Ảnh JPEG XL | `src/utils/zalo/zaloImageUrl.ts` | `src/utils/zaloImageUrl.ts` và các nơi hiển thị ảnh ở renderer | **Chặt hơn bản gốc** (R4): chỉ đổi URL thuộc host media Zalo (`zdn.vn`, `zadn.vn`, `zalo.me`, `zaloapp.com`, kể cả subdomain, không khớp tên miền giả dạng); URL `?e2esession` giữ nguyên; không migration, tin cũ được sửa lúc hiển thị, file `.jxl` đã tải về bị bỏ qua để dùng URL CDN |
+| Z5 Đọc ở máy khác | `src/services/zalo/zaloReadElsewhere.ts` | `src/services/zalo/zaloReadElsewhere.ts`, `src/utils/ZaloLoginHelper.ts`, `src/ui/lib/chat/readElsewhere.ts` | **Port theo sát bản gốc** (logic áp số chưa đọc, phạm vi 200 tin); phần giải mã frame (`decodeWsEventData`, Node `crypto` + `zlib`) viết lại cho MaiHub. Không gửi "đã xem" ngược lên Zalo; renderer chỉ giảm số chưa đọc |
+| F1 Chưa đọc Facebook đúng một lần | `src/services/database/DatabaseService.ts`, `src/services/facebook/FacebookService.ts` | `src/services/database/DatabaseService.ts` (`FbSaveOutcome`), `src/services/facebook/FacebookService.ts` | Tin mới được xác định bằng bảng `messages` hợp nhất theo từng tài khoản (hai tài khoản MaiHub cùng thấy một id vẫn đếm riêng); luồng tin Page cũng chỉ phát khi `'new'` |
+| F2 Sức khoẻ cookie / thử lại khi khởi động | `src/services/facebook/FacebookSession.ts`, `src/services/facebook/FacebookService.ts` | `src/services/facebook/FacebookSession.ts`, `src/services/facebook/facebookStartupRetry.ts`, `electron/ipc/facebookIpc.ts` | Thử lại sau 15 s, 60 s, 180 s; lúc timer nổ đọc lại DB, bỏ qua nếu tài khoản đã xoá/tắt/ngắt tay/đã kết nối; mỗi tài khoản một thế hệ timer để huỷ chắc chắn. Cookie bị Facebook từ chối thật vẫn báo hết hạn |
+| F3 Tên hội thoại / chưa đọc | `src/services/facebook/FacebookThreadManager.ts` | `src/services/facebook/FacebookThreadManager.ts`, `src/services/database/DatabaseService.ts` | `unread_count` của Facebook **chỉ dùng khi tạo hội thoại lần đầu** (R7); làm mới danh sách hội thoại không còn ghi đè số trong máy |
+| F4 Kết quả GraphQL | `src/services/facebook/FacebookGraphQLResult.ts` | `src/services/facebook/FacebookGraphQLResult.ts`, `FacebookThreadManager.ts`, `FacebookMessageSender.ts` | Phản hồi **không phải JSON** coi là "không rõ", giữ hành vi cũ (R5); thành công một phần (có `data` dùng được kèm `errors`) tính là thành công, chỉ cảnh báo; chỉ phản hồi phân tích được và không có dữ liệu dùng được mới thành thất bại. `sendMessage` không đổi |
+| F5 Giám sát bridge / hàng đợi sự kiện | `src/services/facebook/FacebookEventPipeline.ts`, `src/services/facebook/FacebookEventRepeats.ts`, `src/services/facebook/FacebookService.ts` | `src/services/facebook/FacebookEventPipeline.ts`, `facebookBridgeBackoff.ts`, `FacebookService.ts` | Hàng đợi 500 (sự kiện quan trọng tới 2000), chống trùng 5 s theo loại + id; **chỉ bảo đảm thứ tự phát**, không chờ phần xử lý bất đồng bộ (tải media) nên không bảo đảm thứ tự hoàn tất. Backoff 10 s nhân đôi, trần 5 phút; giữ cờ ngắt tay. Thêm listener `error` log-only ngay khi tạo bridge |
+| F6 Tin mẫu (template) | `src/services/facebook/FacebookMQTTListener.ts` | `src/services/facebook/facebookTemplateText.ts`, `FacebookMQTTListener.ts` | Lưu như **tin `text`** có nội dung đọc được (tiêu đề, mô tả, tối đa 6 nút kèm link; link chứa khoảng trắng/ký tự điều khiển bị bỏ) (R2); **không** làm thẻ `FacebookTemplateCard` / kiểu `fb.template` |
+| §6 Mốc đã nhận / đã xem Facebook | `src/services/receipts/peerReceipts.ts`, `src/services/facebook/FacebookMQTTListener.ts` | `src/services/receipts/peerReceipts.ts`, `FacebookMQTTListener.ts`, `FacebookService.ts` | Ghi mốc từ MQTT và từ sự kiện `seen` của bridge E2EE (R3); chỉ cho hội thoại cá nhân, không cho hộp thư Page. `markRead` gửi thật để chặng D |
+
+**Cố ý không lấy:** đồng bộ lịch sử từ điện thoại (`mobileSync`, cần nâng
+`zca-js` và dựa vào giao thức không công bố), `FacebookMetrics`, thẻ template
+(`FacebookTemplateCard`), lưu trạng thái thiết bị E2EE (F8) và `markRead`
+gửi thật (F7, nửa gửi), cả hai thuộc chặng D (Go), chưa làm; cùng các mục đã loại
+ở đợt trước (gửi cookie/token/IMEI ra máy chủ ngoài, tệp nhị phân, bridge đăng
+nhập, Cloudflare sync, Telegram).
+
+### Bridge E2EE: nguồn gốc và giấy phép (ghi nhận sự việc)
+
+Đây là ghi nhận sự việc đã có từ trước, **không phải kết luận pháp lý**.
+
+- `scripts/build-bridge-e2ee.js` clone https://github.com/mautrix/meta khi build
+  và ghim commit `e012f9f83ee0abd332b6160f57ecd07014c2d445` (`e012f9f`);
+  `src/bridge-e2ee/go.mod` trỏ `go.mau.fi/mautrix-meta` tới bản clone đó. Kho
+  `mautrix/meta` không nằm trong kho này nên giấy phép của nó (được hiểu là
+  AGPL-3.0) **chưa được kiểm chứng tại đây**.
+- `src/bridge-e2ee/README.md` (mục License) ghi thư mục `src/bridge-e2ee/bridge/`
+  chứa mã sao chép từ https://github.com/yumi-team/meta-messenger.js, © 2026
+  Yumi Team, **AGPL-3.0**; `main.go` và lớp bọc Python là mã gốc. Các tệp `.go`
+  trong `bridge/` không mang tiêu đề giấy phép riêng.
+
 ## Thư mục dữ liệu và chuyển dữ liệu
 
 ### MaiHub (từ 26.9.0): tự chuyển từ AHV Connect

@@ -2,12 +2,15 @@ import { API, CloseReason, Credentials, LoginQRCallbackEventType, ThreadType, Za
 import ConnectionManager from "./ConnectionManager";
 import Logger from "./Logger";
 import EventBroadcaster, { registerGroupCacheInvalidator } from "../services/event/EventBroadcaster";
+import { handleZaloReceiptEvents } from "../services/receipts/peerReceipts";
 import DatabaseService from "../services/database/DatabaseService";
 import * as fs from "fs";
 import { imageSize } from "image-size";
 import { extractUserProfile } from "./profileUtils";
 import { createProxyAgent } from "./ProxyHelper";
 import { enqueuePerKey } from "./enqueuePerKey";
+import { wireZaloListenerLifecycle, isCurrentZaloListener } from "./zaloListenerRetry";
+import { applyZaloReadElsewhere, attachZaloReadElsewhere } from "../services/zalo/zaloReadElsewhere";
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_BASE_MS = 5000; // 5s base, exponential backoff
@@ -964,12 +967,9 @@ class ZaloLoginHelper {
             } catch {}
         });
 
-        listener.on("seen", (data: any) => {
-            Logger.log(`[ZaloLoginHelper] 📩 RAW seen event: ${JSON.stringify(data)}`);
-            try {
-                EventBroadcaster.broadcastSeen(zaloId, data);
-            } catch {}
-        });
+        // zca-js 2.x phát seen_messages / delivered_messages (mảng); ghi mốc đã nhận/đã xem + báo renderer
+        listener.on("seen_messages", (items: any) => handleZaloReceiptEvents(zaloId, items, 'read'));
+        listener.on("delivered_messages", (items: any) => handleZaloReceiptEvents(zaloId, items, 'delivered'));
 
         listener.on("old_messages", async (messages: any[]) => {
             Logger.log(`[ZaloLoginHelper] 📩 RAW old_messages event: ${messages.length} messages`);
@@ -1124,7 +1124,7 @@ class ZaloLoginHelper {
             }
         });
 
-        listener.on("connected", () => {
+        const onConnected = () => {
             Logger.log(`[ZaloLoginHelper] ${zaloId} ✅ Connected`);
             ConnectionManager.setConnected(zaloId, true);
             DatabaseService.getInstance().setListenerActive(zaloId, true);
@@ -1132,23 +1132,24 @@ class ZaloLoginHelper {
             // A real reconnect happened - clear the manual-disconnect guard so a
             // future unexpected drop auto-reconnects normally again.
             ZaloLoginHelper.manuallyDisconnectedAccounts.delete(zaloId);
-        });
+        };
 
         const handleDisconnection = (eventType: string, code: CloseReason, reason: string) => {
             Logger.warn(`[ZaloLoginHelper] ${zaloId} ${eventType} - Code: ${code}, Reason: ${reason}`);
+            const currentConnection = ConnectionManager.getConnection(zaloId);
+            if (currentConnection && currentConnection !== connection) {
+                // Connection bị thay thế bởi fresh login (QR/cookies) trong khi listener cũ vẫn chạy
+                // → listener cũ đang đóng, không reconnect và KHÔNG đụng tới trạng thái của phiên mới
+                Logger.log(`[ZaloLoginHelper] ${zaloId} stale connection closed (replaced by newer) - skipping reconnect`);
+                return;
+            }
             ConnectionManager.setConnected(zaloId, false);
             ConnectionManager.setListenerStarted(zaloId, false);
 
             EventBroadcaster.broadcastDisconnected(zaloId, `${eventType} - ${CloseReason[code] || code}`);
 
-            const currentConnection = ConnectionManager.getConnection(zaloId);
-            if (currentConnection && currentConnection === connection) {
+            if (currentConnection === connection) {
                 ConnectionManager.removeConnection(zaloId);
-            } else if (currentConnection && currentConnection !== connection) {
-                // Connection bị thay thế bởi fresh login (QR/cookies) trong khi listener cũ vẫn chạy
-                // → listener cũ đang đóng, không reconnect - connection mới đang hoạt động
-                Logger.log(`[ZaloLoginHelper] ${zaloId} stale connection closed (replaced by newer) - skipping reconnect`);
-                return;
             }
 
             // ── Auto-reconnect ────────────────────────────────────────────────
@@ -1182,19 +1183,26 @@ class ZaloLoginHelper {
             ZaloLoginHelper.scheduleReconnect(zaloId, connection.auth, 0);
         };
 
-        listener.on("disconnected", (code: CloseReason, reason: string) => {
-            handleDisconnection('disconnected', code, reason);
-        });
-
-        listener.on("closed", (code: CloseReason, reason: string) => {
-            handleDisconnection('closed', code, reason);
+        // zca-js tự nối lại websocket cùng phiên; chỉ khi hết lượt / quá 90s mới đăng nhập lại đầy đủ.
+        wireZaloListenerLifecycle(listener, {
+            isCurrent: () => isCurrentZaloListener({
+                removed: ZaloLoginHelper.removedAccounts.has(zaloId),
+                currentConnection: ConnectionManager.getConnection(zaloId),
+                connection,
+            }),
+            onConnected,
+            onGiveUp: (eventType, code, reason) => handleDisconnection(eventType, code as CloseReason, reason),
+            log: (message) => Logger.log(`[ZaloLoginHelper] ${zaloId} ${message}`),
         });
 
         listener.on("error", (error: any) => {
             Logger.error(`[ZaloLoginHelper] ${zaloId} error: ${error?.message || error}`);
         });
 
-        listener.start();
+        // Đọc ở máy khác (cmd 504/524): bỏ số chưa đọc rồi báo UI
+        attachZaloReadElsewhere(zaloId, connection.api, (items) => applyZaloReadElsewhere(zaloId, items));
+
+        listener.start({ retryOnClose: true });
         ConnectionManager.setListenerStarted(zaloId, true);
         Logger.log(`[ZaloLoginHelper] ${zaloId} 🎧 Listener started`);
     }

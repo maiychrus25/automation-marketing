@@ -10,13 +10,16 @@ import { messageQueue } from '@/lib/MessageQueue';
 import { fetchAllAliases } from '../lib/zaloAliasUtils';
 import { channelSupports, type Channel } from '@/../configs/channelConfig';
 import { sendSeenForThread } from '@/lib/sendSeenHelper';
+import { mergeReceiptMarks } from '../lib/chat/messageReceipt';
 import * as channelIpc from '@/lib/channelIpc';
 import { CHANNEL, isZalo, isFacebook, isTelegram, isTelegramForumGeneral } from '@/lib/channelHelper';
 import { playNotificationSound, showDesktopNotification, requestNotificationPermission } from '../utils/NotificationService';
 import { getFilteredUnreadCount } from '@/lib/badgeUtils';
+import { unreadAfterReadElsewhere } from '@/lib/chat/readElsewhere';
 import Logger from "../../utils/Logger";
 import { extractUserProfile } from "../../utils/profileUtils";
 import { BellIcon, ChartIcon, EditIcon, ImageIcon, LinkIcon, SendIcon, UserCheckIcon, WaveIcon, WifiIcon } from '@/components/common/icons';
+import { toZaloJpgUrl } from '../../utils/zaloImageUrl';
 
 // ─── Contact fetch cache (7 ngày) ────────────────────────────────────────────
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -337,7 +340,7 @@ function extractQuoteImageFromContent(content: string, msgType: string): string 
           return '';
         }
         // Có params ảnh hoặc thumb → là ảnh
-        return params?.hd || params?.rawUrl || parsed.href || parsed.thumb || '';
+        return toZaloJpgUrl(params?.hd || params?.rawUrl || parsed.href || parsed.thumb || '');
       }
     } catch {}
     return '';
@@ -350,7 +353,7 @@ function extractQuoteImageFromContent(content: string, msgType: string): string 
       if (typeof params === 'string') {
         try { params = JSON.parse(params); } catch { params = null; }
       }
-      return params?.hd || params?.rawUrl || parsed.href || parsed.thumb || '';
+      return toZaloJpgUrl(params?.hd || params?.rawUrl || parsed.href || parsed.thumb || '');
     }
   } catch {}
   return '';
@@ -1587,6 +1590,15 @@ export function useZaloEvents() {
     // ─── Local path update (after image download) ─────────────────────────
     const unsubUnreadChanged = ipc.on('db:unreadChanged', (data: any) => {
       const zaloId = data?.zaloId;
+      if (data?.source === 'zalo_read_elsewhere' && zaloId && data.contactId) {
+        const contactId = String(data.contactId);
+        const contact = (useChatStore.getState().contacts[zaloId] || []).find((c) => c.contact_id === contactId);
+        const next = unreadAfterReadElsewhere(contact?.unread_count, data.unread);
+        if (next === 0) useChatStore.getState().clearUnread(zaloId, contactId);
+        else if (next !== null) useChatStore.getState().updateContact(zaloId, { contact_id: contactId, unread_count: next });
+        if (next !== null) ipc.app?.setBadge(Math.max(0, getFilteredUnreadCount()));
+        return;
+      }
       const account = useAccountStore.getState().accounts.find((item) => item.zalo_id === zaloId);
       const telegramRefreshSources = new Set([
         'telegram_sync', 'telegram_dialog_state', 'telegram_folder_update', 'telegram_notify_update',
@@ -1648,6 +1660,15 @@ export function useZaloEvents() {
       if (zaloId && threadId) {
         setSeen(zaloId, threadId, seenUids || [], msgId || '', !!isGroup);
       }
+    });
+
+    const unsubReceipt = ipc.on('event:receipt', (data: any) => {
+      const { zaloId, threadId, deliveredTs, readTs } = data || {};
+      if (!zaloId || !threadId) return;
+      const current = useChatStore.getState().contacts[zaloId]?.find(c => c.contact_id === threadId);
+      if (!current) return;
+      const next = mergeReceiptMarks(current, { deliveredTs, readTs });
+      if (next) updateContact(zaloId, { contact_id: threadId, ...next });
     });
 
     // ─── Group info update (background fetch result) ──────────────────────
@@ -1962,6 +1983,7 @@ export function useZaloEvents() {
       unsubListenerDead();
       unsubTyping();
       unsubSeen();
+      unsubReceipt();
       unsubGroupInfoUpdate();
       unsubForumTopicsChanged();
       unsubGroupMemberAvatar();

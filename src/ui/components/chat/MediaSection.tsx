@@ -10,6 +10,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAccountStore } from '@/store/accountStore';
+import { toZaloJpgUrl, isJxlLocalPath } from '../../../utils/zaloImageUrl';
 import { useEmployeeStore } from '@/store/employeeStore';
 import DataAccessor from '@/lib/data/DataAccessor';
 import ipc from '@/lib/ipc';
@@ -50,12 +51,12 @@ function extractImgUrl(msg: any): string {
       if (t && t !== 'undefined') return toLocalMediaUrl(t);
       try { return JSON.parse(msg.content || '{}').thumb || ''; } catch { return ''; }
     }
-    const p = lp.main || lp.hd || lp.thumb || '';
+    const p = [lp.main, lp.hd, lp.thumb].find((x) => x && !isJxlLocalPath(x)) || '';
     if (p && p !== 'undefined') return toLocalMediaUrl(p);
   } catch {}
   try {
     const c = JSON.parse(msg.content || '{}');
-    return c.params?.hd || c.params?.rawUrl || c.href || c.thumb || '';
+    return toZaloJpgUrl(c.params?.hd || c.params?.rawUrl || c.href || c.thumb || '');
   } catch { return ''; }
 }
 
@@ -63,7 +64,7 @@ function extractLocalFilePath(msg: any): string {
   try {
     const lp: Record<string, string> = typeof msg.local_paths === 'string'
       ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
-    return lp.main || lp.hd || (Object.values(lp)[0] as string) || '';
+    return [lp.main, lp.hd, Object.values(lp)[0] as string].find((x) => x && !isJxlLocalPath(x)) || '';
   } catch { return ''; }
 }
 
@@ -95,7 +96,7 @@ function buildViewerImages(msgs: any[]): MediaViewerImage[] {
       try {
         const c = JSON.parse(msg.content || '{}');
         const params = typeof c.params === 'string' ? JSON.parse(c.params || '{}') : (c.params || {});
-        remoteSrc = params.hd || params.rawUrl || c.href || '';
+        remoteSrc = toZaloJpgUrl(params.hd || params.rawUrl || c.href || '');
       } catch {}
       const src = remoteSrc || displaySrc;
       const ds = displaySrc || remoteSrc;

@@ -447,6 +447,7 @@ export function useChatEvents(): void {
       newText: string;
       editCount: number;
       timestampMs: number;
+      repair?: boolean;
     }) => {
       if (!data?.fbAccountId || !data?.messageId) return;
       useChatStore.getState().updateMessageEdit(
@@ -455,7 +456,8 @@ export function useChatEvents(): void {
         data.messageId,
         data.newText,
         data.editCount,
-        data.timestampMs
+        data.timestampMs,
+        data.repair !== true
       );
     });
     if (unsubEdit) unsubscribers.push(unsubEdit);

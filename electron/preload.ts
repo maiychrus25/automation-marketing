@@ -760,6 +760,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'event:pinsUpdated',
       'event:typing',
       'event:seen',
+      'event:receipt',
       'qr:update',
       'update:state',
       'app:openThread',

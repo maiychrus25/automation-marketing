@@ -10,6 +10,7 @@ import {
 } from './FacebookTypes';
 import { buildFormData, buildPostConfig, parseFBResponse, rateLimitDelay } from './FacebookUtils';
 import Logger from '../../utils/Logger';
+import { assertFacebookMutationSuccess } from './FacebookGraphQLResult';
 
 const GRAPHQL_BATCH_URL = 'https://www.facebook.com/api/graphqlbatch/';
 const GRAPHQL_URL = 'https://www.facebook.com/webgraphql/mutation/';
@@ -119,34 +120,35 @@ export function parseThreadNodes(dataGet: string, accountId: string, fbUserId?: 
         if (!threadName) {
           const otherNames = participants
             .map((e: any) => e?.node?.messaging_actor)
-            .filter((a: any) => a?.id && a.id !== selfId)
+            .filter((a: any) => a?.id && String(a.id) !== String(selfId))
             .map((a: any) => a?.name || '')
             .filter(Boolean)
             .slice(0, 4);
-          threadName = otherNames.length > 0 ? otherNames.join(', ') : 'Nhm khng tn';
+          threadName = otherNames.length > 0 ? otherNames.join(', ') : 'Nhóm không tên';
         }
         // Group avatar: use thread image_src if available, else first participant avatar
         avatarUrl = node?.image?.uri || '';
         if (!avatarUrl && participants.length > 0) {
-          const firstOther = participants.find((e: any) => e?.node?.messaging_actor?.id !== selfId);
+          const firstOther = participants.find((e: any) => String(e?.node?.messaging_actor?.id) !== String(selfId));
           avatarUrl = firstOther?.node?.messaging_actor?.big_image_src?.uri
             || firstOther?.node?.messaging_actor?.profile_picture?.uri || '';
         }
       } else {
-        // 1:1: extract name + avatar from the other participant
+        // 1:1: name + avatar of the other participant; never fall back to a participant who may be self
         const otherUser = node?.thread_key?.other_user_id;
-        const other = participants.find((e: any) => {
+        const others = participants.filter((e: any) => {
           const id = e?.node?.messaging_actor?.id;
-          return id && id === otherUser && id !== selfId;
-        }) || participants.find((e: any) => {
-          const id = e?.node?.messaging_actor?.id;
-          return id && id !== selfId;
-        }) || participants[0];
+          return id != null && String(id) !== String(selfId);
+        });
+        const other = others.find((e: any) => String(e?.node?.messaging_actor?.id) === String(otherUser)) || others[0];
         const actor = other?.node?.messaging_actor;
-        threadName = actor?.name || '';
-        avatarUrl = actor?.big_image_src?.uri || actor?.profile_picture?.uri || '';
+        threadName = actor?.name || threadName;
+        avatarUrl = actor?.big_image_src?.uri || actor?.profile_picture?.uri || node?.image?.uri || '';
       }
-      if (!threadName) threadName = 'Khng c tn';
+      if (!threadName) threadName = 'Không có tên';
+
+      const rawUnread = Number(node?.unread_count ?? node?.unreadCount ?? 0);
+      const unreadCount = Number.isFinite(rawUnread) && rawUnread > 0 ? Math.floor(rawUnread) : 0;
 
       return {
         id: String(threadId || ''),
@@ -159,7 +161,7 @@ export function parseThreadNodes(dataGet: string, accountId: string, fbUserId?: 
         last_message_at: node?.updated_time_precise
           ? Math.floor(parseInt(node.updated_time_precise) / 1000)
           : undefined,
-        unread_count: 0,
+        unread_count: unreadCount,
         is_muted: false,
         metadata: avatarUrl ? { avatar_url: avatarUrl } : undefined,
       } as FBThread;
@@ -235,7 +237,7 @@ export async function changeThreadName(
 
   try {
     const formBody = new URLSearchParams(form).toString();
-    await axios.post(GRAPHQL_URL, formBody, {
+    const response = await axios.post(GRAPHQL_URL, formBody, {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Cookie': dataFB.cookieFacebook,
@@ -245,6 +247,7 @@ export async function changeThreadName(
       },
       timeout: 15000,
     });
+    assertFacebookMutationSuccess('changeThreadName', response.data);
     return true;
   } catch (err: any) {
     Logger.error(`[FacebookThreadManager] changeThreadName error: ${err.message}`);
@@ -270,7 +273,7 @@ export async function changeThreadEmoji(
 
   try {
     const formBody = new URLSearchParams(form).toString();
-    await axios.post(GRAPHQL_URL, formBody, {
+    const response = await axios.post(GRAPHQL_URL, formBody, {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Cookie': dataFB.cookieFacebook,
@@ -280,6 +283,7 @@ export async function changeThreadEmoji(
       },
       timeout: 15000,
     });
+    assertFacebookMutationSuccess('changeThreadEmoji', response.data);
     return true;
   } catch (err: any) {
     Logger.error(`[FacebookThreadManager] changeThreadEmoji error: ${err.message}`);
@@ -308,7 +312,7 @@ export async function changeNickname(
 
   try {
     const formBody = new URLSearchParams(form).toString();
-    await axios.post(GRAPHQL_URL, formBody, {
+    const response = await axios.post(GRAPHQL_URL, formBody, {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Cookie': dataFB.cookieFacebook,
@@ -318,6 +322,7 @@ export async function changeNickname(
       },
       timeout: 15000,
     });
+    assertFacebookMutationSuccess('changeNickname', response.data);
     return true;
   } catch (err: any) {
     Logger.error(`[FacebookThreadManager] changeNickname error: ${err.message}`);
@@ -489,7 +494,7 @@ async function changeGroupAdminStatus(
 
   try {
     const formBody = new URLSearchParams(form).toString();
-    await axios.post(GRAPHQL_URL, formBody, {
+    const response = await axios.post(GRAPHQL_URL, formBody, {
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -500,6 +505,7 @@ async function changeGroupAdminStatus(
       },
       timeout: 30000,
     });
+    assertFacebookMutationSuccess('changeGroupAdmin', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookThreadManager] changeGroupAdmin error: ${err.message}`);
@@ -536,7 +542,7 @@ export async function changeApprovalMode(
 
   try {
     const formBody = new URLSearchParams(form).toString();
-    await axios.post(GRAPHQL_URL, formBody, {
+    const response = await axios.post(GRAPHQL_URL, formBody, {
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -547,6 +553,7 @@ export async function changeApprovalMode(
       },
       timeout: 30000,
     });
+    assertFacebookMutationSuccess('changeApprovalMode', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookThreadManager] changeApprovalMode error: ${err.message}`);
@@ -583,7 +590,7 @@ export async function approvePendingMember(
 
   try {
     const formBody = new URLSearchParams(form).toString();
-    await axios.post(GRAPHQL_URL, formBody, {
+    const response = await axios.post(GRAPHQL_URL, formBody, {
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -594,6 +601,7 @@ export async function approvePendingMember(
       },
       timeout: 30000,
     });
+    assertFacebookMutationSuccess('approvePendingMember', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookThreadManager] approvePendingMember error: ${err.message}`);
@@ -638,6 +646,7 @@ export async function getGroupLink(
       timeout: 30000,
     });
 
+    assertFacebookMutationSuccess('getGroupLink', response.data);
     const parsed = parseFBResponse(response.data as string);
     const link = parsed?.data?.node?.group?.group_invite_link?.url
       || parsed?.data?.group?.invite_link;
@@ -676,7 +685,7 @@ export async function setGroupLink(
 
   try {
     const formBody = new URLSearchParams(form).toString();
-    await axios.post(GRAPHQL_URL, formBody, {
+    const response = await axios.post(GRAPHQL_URL, formBody, {
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -687,6 +696,7 @@ export async function setGroupLink(
       },
       timeout: 30000,
     });
+    assertFacebookMutationSuccess('setGroupLink', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookThreadManager] setGroupLink error: ${err.message}`);

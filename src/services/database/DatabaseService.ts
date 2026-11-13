@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { app, safeStorage } from 'electron';
 import Logger from '../../utils/Logger';
+import { toZaloJpgUrl } from '../../utils/zaloImageUrl';
 import BetterSqlite3 from 'better-sqlite3';
 import type { Account, Message, Contact, CRMNote, CRMCampaign, CRMCampaignContact, CRMSendLog, CRMCampaignStatus, CRMContactStatus } from '../../models';
 import type { TelegramPeer } from '../../models/telegram';
@@ -10,6 +11,9 @@ import { getTelegramMessagePreview } from '../telegram/TelegramMessagePreview';
 import type { BrowserFingerprint, BrowserProfile, BrowserProfileGroup } from '../../models/browserProfile';
 import { FB_POSTER_SCHEMA_SQL, FB_POSTER_MIGRATIONS } from '../facebookPoster/schema';
 import { CONTROL_MIGRATIONS, CONTROL_SCHEMA_SQL } from '../control/ControlStore';
+
+/** Kết quả saveFBMessage: 'new' = tin mới, 'repaired' = tin trùng nhưng được sửa lại dữ liệu, 'duplicate' = trùng, không đổi gì */
+export type FbSaveOutcome = 'new' | 'repaired' | 'duplicate';
 
 // better-sqlite3: native SQLite - no WASM heap, memory-mapped I/O
 let db: BetterSqlite3.Database | null = null;
@@ -25,6 +29,7 @@ function getCachedSecondaryDb(targetDbPath: string): BetterSqlite3.Database {
         // Reset idle timer
         if (_cachedSecondaryTimer) clearTimeout(_cachedSecondaryTimer);
         _cachedSecondaryTimer = setTimeout(closeCachedSecondaryDb, SECONDARY_DB_TTL_MS);
+        _cachedSecondaryTimer.unref?.(); // không giữ tiến trình sống chỉ vì bộ hẹn đóng DB phụ
         return _cachedSecondaryDb;
     }
     // Close previous if different path
@@ -33,6 +38,7 @@ function getCachedSecondaryDb(targetDbPath: string): BetterSqlite3.Database {
     _cachedSecondaryDb.pragma('journal_mode = WAL');
     _cachedSecondaryPath = targetDbPath;
     _cachedSecondaryTimer = setTimeout(closeCachedSecondaryDb, SECONDARY_DB_TTL_MS);
+    _cachedSecondaryTimer.unref?.();
     return _cachedSecondaryDb;
 }
 
@@ -545,6 +551,7 @@ class DatabaseService {
             CREATE INDEX IF NOT EXISTS idx_messages_owner_timestamp ON messages(owner_zalo_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_messages_owner_type_timestamp ON messages(owner_zalo_id, thread_type, timestamp);
             CREATE INDEX IF NOT EXISTS idx_messages_thread_cursor ON messages(owner_zalo_id, thread_id, timestamp DESC, msg_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_cli ON messages(owner_zalo_id, cli_msg_id) WHERE cli_msg_id IS NOT NULL;
         `);
 
         this.exec(`
@@ -1703,6 +1710,7 @@ class DatabaseService {
             db!.exec(`CREATE INDEX IF NOT EXISTS idx_messages_owner_timestamp ON messages(owner_zalo_id, timestamp)`);
             db!.exec(`CREATE INDEX IF NOT EXISTS idx_messages_owner_type_timestamp ON messages(owner_zalo_id, thread_type, timestamp)`);
             db!.exec(`CREATE INDEX IF NOT EXISTS idx_messages_thread_cursor ON messages(owner_zalo_id, thread_id, timestamp DESC, msg_id DESC)`);
+            db!.exec(`CREATE INDEX IF NOT EXISTS idx_messages_cli ON messages(owner_zalo_id, cli_msg_id) WHERE cli_msg_id IS NOT NULL`);
             db!.exec(`CREATE INDEX IF NOT EXISTS idx_contacts_others ON contacts(owner_zalo_id, is_in_others)`);
         } catch (err: any) {
             Logger.warn(`[DatabaseService] Migration channel indexes: ${err.message}`);
@@ -2110,6 +2118,9 @@ class DatabaseService {
                 ['is_cov_bot', 'INTEGER DEFAULT NULL'],
                 ['menu_button', "TEXT DEFAULT NULL"],
                 ['has_main_app', 'INTEGER DEFAULT 0'],
+                // Mốc người kia đã nhận / đã xem tin mình gửi (epoch ms, Zalo + Facebook)
+                ['peer_delivered_ts', 'INTEGER DEFAULT 0'],
+                ['peer_read_ts', 'INTEGER DEFAULT 0'],
             ];
             for (const [column, definition] of telegramColumns) {
                 if (!names.includes(column)) {
@@ -2664,6 +2675,7 @@ class DatabaseService {
                     DROP TABLE messages_legacy_unique;
                     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(owner_zalo_id, thread_id, timestamp);
                     CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel, owner_zalo_id, thread_id);
+                    CREATE INDEX IF NOT EXISTS idx_messages_cli ON messages(owner_zalo_id, cli_msg_id) WHERE cli_msg_id IS NOT NULL;
                     COMMIT;
                 `);
                 this.save();
@@ -3246,6 +3258,41 @@ class DatabaseService {
         }
     }
 
+    /** Nội dung text của tin Zalo — dùng chung cho saveMessage và isDuplicateZaloDelivery */
+    private static deriveZaloContent(rawMessage: any): string {
+        const contentRaw = rawMessage.data?.content;
+        // typeof null === 'object' trong JS - check null/undefined trước khi check typeof object
+        return contentRaw == null
+            ? String(rawMessage.data?.message || '')
+            : typeof contentRaw === 'object'
+                ? JSON.stringify(contentRaw)
+                : String(contentRaw || rawMessage.data?.message || '');
+    }
+
+    /**
+     * Zalo đôi khi giao một tin hai lần với hai msgId khác nhau nhưng cùng cliMsgId.
+     * Trùng khi: cùng tài khoản + cliMsgId, khác msgId (cả hai là id thật), cùng hội thoại, người gửi, nội dung.
+     */
+    public isDuplicateZaloDelivery(ownerZaloId: string, rawMessage: any): boolean {
+        if (!this.initialized) return false;
+        const isReal = (id: unknown) => !!id && !/^(mb_|cli_)/.test(String(id));
+        const msgId = rawMessage?.data?.msgId;
+        const cliMsgId = rawMessage?.data?.cliMsgId;
+        if (!isReal(msgId) || !cliMsgId) return false;
+        const threadId = rawMessage.threadId || '';
+        const uidFrom = String(rawMessage.data?.uidFrom || ownerZaloId);
+        const content = DatabaseService.deriveZaloContent(rawMessage);
+        const rows = this.query<any>(
+            'SELECT msg_id, thread_id, sender_id, content, channel FROM messages WHERE owner_zalo_id = ? AND cli_msg_id = ? AND cli_msg_id IS NOT NULL',
+            [ownerZaloId, String(cliMsgId)]
+        );
+        return rows.some(r =>
+            String(r.msg_id) !== String(msgId) && isReal(r.msg_id) &&
+            (r.channel || 'zalo') === 'zalo' &&
+            r.thread_id === threadId && String(r.sender_id) === uidFrom && r.content === content
+        );
+    }
+
     public async saveMessage(ownerZaloId: string, rawMessage: any): Promise<void> {
         if (!this.initialized) return;
         try {
@@ -3266,13 +3313,7 @@ class DatabaseService {
                 return;
             }
 
-            const contentRaw = rawMessage.data?.content;
-            // typeof null === 'object' trong JS - check null/undefined trước khi check typeof object
-            const content = contentRaw == null
-                ? String(rawMessage.data?.message || '')
-                : typeof contentRaw === 'object'
-                    ? JSON.stringify(contentRaw)
-                    : String(contentRaw || rawMessage.data?.message || '');
+            const content = DatabaseService.deriveZaloContent(rawMessage);
 
             // Tất cả metadata nằm trong rawMessage.data (không có ở top-level)
             const msgId = rawMessage.data?.msgId || String(Date.now());
@@ -4690,7 +4731,7 @@ class DatabaseService {
         if (!contentRaw || typeof contentRaw !== 'object') return '';
         let p: any = contentRaw.params;
         if (typeof p === 'string') { try { p = JSON.parse(p); } catch { p = null; } }
-        return (p?.hd || p?.rawUrl) || contentRaw.normalUrl || contentRaw.hdUrl || contentRaw.hd || contentRaw.href || contentRaw.thumb || contentRaw.url || '';
+        return toZaloJpgUrl((p?.hd || p?.rawUrl) || contentRaw.normalUrl || contentRaw.hdUrl || contentRaw.hd || contentRaw.href || contentRaw.thumb || contentRaw.url || '');
     }
 
     /**
@@ -4747,15 +4788,15 @@ class DatabaseService {
             // Parse params để lấy hd/rawUrl
             let p: any = msgObj.params;
             if (typeof p === 'string') { try { p = JSON.parse(p); } catch { p = null; } }
-            if (p?.hd || p?.rawUrl) return p.hd || p.rawUrl;
+            if (p?.hd || p?.rawUrl) return toZaloJpgUrl(p.hd || p.rawUrl);
             // Link preview: chỉ dùng thumb (thumbnail), KHÔNG dùng href (URL trang web)
             if (action === 'recommened.link' || action === 'recommended.link') {
-                return String(msgObj.thumb || '');
+                return toZaloJpgUrl(String(msgObj.thumb || ''));
             }
             // Các loại khác: chỉ trả href nếu trông như ảnh CDN
             const hrefUrl = String(msgObj.href || '');
-            if (hrefUrl && isImageUrl(hrefUrl)) return hrefUrl;
-            return String(msgObj.thumb || '');
+            if (hrefUrl && isImageUrl(hrefUrl)) return toZaloJpgUrl(hrefUrl);
+            return toZaloJpgUrl(String(msgObj.thumb || ''));
         }
         return '';
     }
@@ -8044,7 +8085,6 @@ class DatabaseService {
                   contact_type = excluded.contact_type,
                   last_message = CASE WHEN excluded.last_message_time > COALESCE(contacts.last_message_time, 0) THEN excluded.last_message ELSE contacts.last_message END,
                   last_message_time = MAX(COALESCE(contacts.last_message_time, 0), excluded.last_message_time),
-                  unread_count = excluded.unread_count,
                   channel = 'facebook'
             `, [ownerZaloId, t.id, t.name || '', avatarUrl, t.type === 'group' ? 'group' : 'user',
                 t.unread_count || 0, t.last_message_preview || '', t.last_message_at || 0]);
@@ -8074,8 +8114,8 @@ class DatabaseService {
         id: string; account_id: string; thread_id: string; sender_id: string;
         sender_name?: string; body?: string; timestamp: number; type: string;
         attachments?: string; reply_to_id?: string; is_self: number; is_unsent: number;
-        reactions?: string;
-    }): void {
+        reactions?: string; is_history?: boolean;
+    }): FbSaveOutcome {
         const now = Date.now();
         Logger.log(`[DB:saveFBMessage] id=${msg.id} account_id=${msg.account_id} thread_id=${msg.thread_id} sender=${msg.sender_id} is_self=${msg.is_self} type=${msg.type} body="${(msg.body || '').slice(0,50)}" reply_to_id=${msg.reply_to_id || '(none)'}`);
         if (msg.type === 'sticker') {
@@ -8147,18 +8187,23 @@ class DatabaseService {
             }
             return '';
         })();
-        this.run(`
+        // fb_messages.id là khóa chính toàn cục, còn messages duy nhất theo chủ sở hữu → "tin mới" = dòng messages thật sự được chèn
+        const isNew = db!.prepare(`
             INSERT OR IGNORE INTO messages
               (msg_id, owner_zalo_id, thread_id, thread_type, sender_id, content, msg_type, timestamp, is_sent, attachments, status, channel, reply_to_id, quote_data)
             VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 'facebook', ?, ?)
-        `, [msg.id, ownerZaloId, msg.thread_id, msg.sender_id,
+        `).run(msg.id, ownerZaloId, msg.thread_id, msg.sender_id,
             displayContent, msg.type || 'text', msg.timestamp,
             msg.is_self, msg.attachments || '[]', msg.is_self ? 'sent' : 'received',
-            msg.reply_to_id || null, quoteData || null]);
+            msg.reply_to_id || null, quoteData || null).changes > 0;
+
+        // Lần giao trước lưu dòng rỗng (tin mẫu/đính kèm chưa đọc được), lần sau cùng id đã có nội dung → điền vào dòng cũ
+        const repaired = !isNew && !msg.is_unsent && this.repairEmptyFBMessage(msg, ownerZaloId, displayContent);
 
         // Update thread preview + contacts (unified conversation list)
-        if (!msg.is_unsent) {
-            const lastMsgPreview = msg.body?.slice(0, 200) || (msg.type === 'image' ? '🖼️ Hình ảnh' : msg.type === 'video' ? '🎬 Video' : msg.type === 'audio' ? '🎵 Audio' : msg.type === 'sticker' ? '🎨 Sticker' : '[Tệp đính kèm]');
+        // Tin lịch sử (kéo về từ API) không phải tin mới → không động vào chưa đọc / tin cuối
+        if (!msg.is_unsent && !msg.is_history && isNew) {
+            const lastMsgPreview = msg.body?.slice(0, 200) || (msg.type === 'gif' ? '🖼️ GIF' : displayContent);
             this.run(`
                 UPDATE fb_threads SET last_message_preview = ?, last_message_at = ?,
                   unread_count = unread_count + ?
@@ -8220,6 +8265,46 @@ class DatabaseService {
                 }
             } catch {}
         }
+        return isNew ? 'new' : repaired ? 'repaired' : 'duplicate';
+    }
+
+    /**
+     * Điền nội dung vào dòng Facebook đã lưu rỗng (không chữ, không đính kèm, chưa thu hồi).
+     * Không đụng bộ đếm chưa đọc hay timestamp; chỉ thay "tin cuối" nếu nó vẫn là preview rỗng của chính tin này.
+     */
+    private repairEmptyFBMessage(
+        msg: { id: string; account_id: string; thread_id: string; body?: string; timestamp: number; type: string; attachments?: string },
+        ownerZaloId: string, displayContent: string
+    ): boolean {
+        const noAtt = (a?: string | null) => ['', '[]', 'null'].includes((a ?? '[]').trim());
+        if (!(msg.body || '').trim() && noAtt(msg.attachments)) return false;
+        const row = this.queryOne<any>(
+            `SELECT content, attachments, is_recalled FROM messages
+             WHERE msg_id = ? AND owner_zalo_id = ? AND thread_id = ? AND channel = 'facebook'`,
+            [msg.id, ownerZaloId, msg.thread_id]);
+        if (!row || row.is_recalled || !noAtt(row.attachments)) return false;
+        if (!['', '📎 Tệp đính kèm'].includes(row.content ?? '')) return false;
+
+        const attachments = msg.attachments || '[]';
+        this.run(`UPDATE messages SET content = ?, msg_type = ?, attachments = ?
+                  WHERE msg_id = ? AND owner_zalo_id = ? AND thread_id = ? AND channel = 'facebook'`,
+            [displayContent, msg.type || 'text', attachments, msg.id, ownerZaloId, msg.thread_id]);
+        this.run(`UPDATE fb_messages SET body = ?, type = ?, attachments = ?
+                  WHERE id = ? AND account_id = ? AND is_unsent = 0 AND COALESCE(body, '') = ''
+                    AND COALESCE(attachments, '[]') IN ('', '[]', 'null')`,
+            [msg.body || null, msg.type, attachments, msg.id, msg.account_id]);
+
+        const preview = msg.body?.slice(0, 200) || (msg.type === 'gif' ? '🖼️ GIF' : displayContent);
+        const emptyPreview = `('', '[Tệp đính kèm]', '📎 Tệp đính kèm')`;
+        this.run(`UPDATE contacts SET last_message = ?
+                  WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'
+                    AND last_message_time <= ? AND COALESCE(last_message, '') IN ${emptyPreview}`,
+            [preview, ownerZaloId, msg.thread_id, msg.timestamp]);
+        this.run(`UPDATE fb_threads SET last_message_preview = ?
+                  WHERE id = ? AND account_id = ? AND COALESCE(last_message_at, 0) <= ?
+                    AND COALESCE(last_message_preview, '') IN ${emptyPreview}`,
+            [preview, msg.thread_id, msg.account_id, msg.timestamp]);
+        return true;
     }
 
     public getFBMessages(accountId: string, threadId: string, limit: number = 50, offset: number = 0): any[] {

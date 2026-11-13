@@ -4,6 +4,7 @@ import { toLocalMediaUrl } from '@/lib/localMedia';
 import { useAppStore } from '@/store/appStore';
 import { ChartIcon, EditIcon, PinIcon } from '@/components/common/icons';
 import { isZalo } from '@/lib/channelHelper';
+import { toZaloJpgUrl, isJxlLocalPath } from '../../../utils/zaloImageUrl';
 
 
 export interface PinnedMsg {
@@ -720,14 +721,14 @@ export function buildPinFromMsg(msg: any, senderName: string): {
   const getLocalImg = (): string => {
     try {
       const lp = typeof msg.local_paths === 'string' ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
-      return lp.main || lp.hd || (Object.values(lp)[0] as string) || '';
+      return [lp.main, lp.hd, Object.values(lp)[0] as string].find((x) => x && !isJxlLocalPath(x)) || '';
     } catch { return ''; }
   };
 
   const getRemoteImg = (): string => {
     try {
       const p = JSON.parse(rawContent);
-      return p?.params?.hd || p?.params?.rawUrl || p?.href || p?.thumb || '';
+      return toZaloJpgUrl(p?.params?.hd || p?.params?.rawUrl || p?.href || p?.thumb || '');
     } catch { return ''; }
   };
 

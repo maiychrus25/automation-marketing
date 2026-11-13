@@ -4,6 +4,7 @@
  */
 import React from 'react';
 import { convertZaloEmojis } from './emojiUtils';
+import { toZaloJpgUrl } from '../../../utils/zaloImageUrl';
 
 /**
  * Parse msg.content thành text thuần để hiển thị preview.
@@ -368,7 +369,7 @@ export function extractMediaUrl(msg: any): string {
       if (typeof paramsObj === 'string') {
         try { paramsObj = JSON.parse(paramsObj); } catch { paramsObj = null; }
       }
-      return paramsObj?.hd || paramsObj?.rawUrl || parsed.href || parsed.thumb || '';
+      return toZaloJpgUrl(paramsObj?.hd || paramsObj?.rawUrl || parsed.href || parsed.thumb || '');
     }
   } catch {}
   try {

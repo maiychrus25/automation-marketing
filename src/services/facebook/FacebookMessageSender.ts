@@ -10,6 +10,7 @@ import {
 } from './FacebookTypes';
 import { buildFormData, buildPostConfig, parseFBResponse, genThreadingId, rateLimitDelay } from './FacebookUtils';
 import Logger from '../../utils/Logger';
+import { assertFacebookMutationSuccess } from './FacebookGraphQLResult';
 
 const SEND_URL = 'https://www.facebook.com/messaging/send/';
 const UNSEND_URL = 'https://www.facebook.com/messaging/unsend_message/';
@@ -165,6 +166,7 @@ export async function unsendMessage(
       headers: config.headers,
       timeout: config.timeout,
     });
+    assertFacebookMutationSuccess('unsendMessage', response.data);
     const result = parseFBResponse(response.data as string);
 
     if (result?.error) {
@@ -224,6 +226,7 @@ export async function addReaction(
     });
 
     // Reaction call thường không trả lỗi rõ ràng
+    assertFacebookMutationSuccess('addReaction', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookMessageSender] addReaction error: ${err.message}`);
@@ -276,6 +279,7 @@ export async function editMessage(
     });
 
     // Edit mutation typically returns success without explicit error
+    assertFacebookMutationSuccess('editMessage', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookMessageSender] editMessage error: ${err.message}`);
@@ -329,6 +333,7 @@ export async function forwardMessage(
       ...(httpsAgent ? { httpsAgent } : {}),
     });
 
+    assertFacebookMutationSuccess('forwardMessage', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookMessageSender] forwardMessage error: ${err.message}`);
@@ -380,6 +385,7 @@ export async function pinMessage(
       ...(httpsAgent ? { httpsAgent } : {}),
     });
 
+    assertFacebookMutationSuccess('pinMessage', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookMessageSender] pinMessage error: ${err.message}`);
@@ -430,6 +436,7 @@ export async function unpinMessage(
       ...(httpsAgent ? { httpsAgent } : {}),
     });
 
+    assertFacebookMutationSuccess('unpinMessage', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookMessageSender] unpinMessage error: ${err.message}`);
@@ -482,6 +489,7 @@ export async function createPoll(
       ...(httpsAgent ? { httpsAgent } : {}),
     });
 
+    assertFacebookMutationSuccess('createPoll', response.data);
     const result = parseFBResponse(response.data as string);
     const pollId = result?.data?.poll_create?.poll?.id || result?.data?.poll?.id;
     return { success: true, pollId: pollId ? String(pollId) : undefined };
@@ -534,6 +542,7 @@ export async function votePoll(
       ...(httpsAgent ? { httpsAgent } : {}),
     });
 
+    assertFacebookMutationSuccess('votePoll', response.data);
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookMessageSender] votePoll error: ${err.message}`);

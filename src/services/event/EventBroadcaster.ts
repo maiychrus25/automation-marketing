@@ -4,6 +4,7 @@ import Logger from '../../utils/Logger';
 import { getUndoControlPayload } from './undoControlPayload';
 import DatabaseService from '../database/DatabaseService';
 import FileStorageService from '../file/FileStorageService';
+import { normalizeZaloMessageImages } from '../../utils/zaloImageUrl';
 
 /** Callback để invalidate group cache trong ZaloLoginHelper (tránh circular import) */
 let _invalidateGroupCacheFn: ((zaloId: string, groupId: string) => void) | null = null;
@@ -74,6 +75,11 @@ class EventBroadcaster {
         } else {
             fn(db);
         }
+    }
+
+    /** Cho dữ liệu của DB boss: workspace mặc định đang mở → gửi renderer; workspace khác → chỉ chạy hook. */
+    public static emitAware(channel: string, data: any): void {
+        this.sendAware(channel, data);
     }
 
     private static sendAware(channel: string, data: any): void {
@@ -270,14 +276,30 @@ class EventBroadcaster {
                 } catch {}
             }
 
+            // Tin được lưu ở DB boss khi đang mở workspace khác → các phép kiểm tra trùng cũng phải đọc đúng DB đó
+            const onMessageDb = <R>(fn: () => R): R => (bossDbPath ? DatabaseService.getInstance().withDbPath(bossDbPath, fn) : fn());
+
+            // Ảnh JPEG XL (Electron không render được) → bản JPG, trước mọi bước so sánh/lưu
+            normalizeZaloMessageImages(message);
+
             // ─── Silent mode: skip if message already exists in DB ─────────────
             if (options?.silent) {
                 const msgId = message.data?.msgId;
-                if (msgId && DatabaseService.getInstance().hasMessage(zaloId, String(msgId))) {
+                if (msgId && onMessageDb(() => DatabaseService.getInstance().hasMessage(zaloId, String(msgId)))) {
                     return; // Already in DB → skip entirely (no save, no event, no download)
                 }
                 // New message but from old_messages/getGroupChatHistory → mark silent
                 message._silent = true;
+            }
+
+            // ─── Zalo giao trùng một tin dưới hai msgId (cùng cliMsgId + nội dung) → bỏ ───
+            try {
+                if (onMessageDb(() => DatabaseService.getInstance().isDuplicateZaloDelivery(zaloId, message))) {
+                    Logger.log(`[EventBroadcaster] duplicate Zalo delivery dropped: msgId=${message.data?.msgId} cliMsgId=${message.data?.cliMsgId} threadId=${message.threadId}`);
+                    return;
+                }
+            } catch (err: any) {
+                Logger.warn(`[EventBroadcaster] duplicate Zalo delivery check failed: ${err?.message}`);
             }
 
             // ─── Early-detect webchat/msginfo.actionlist notifications ───────────────

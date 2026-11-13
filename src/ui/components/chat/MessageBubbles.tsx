@@ -24,6 +24,7 @@ import {
   isBankCardType, isMediaType, isVideoType, isVoiceType, isLocationType,
 } from '@/lib/chat/messageTypeUtils';
 import { isFacebook, isNonZalo, isTelegram, isTelegramUser } from '@/lib/channelHelper';
+import { toZaloJpgUrl, isJxlLocalPath } from '../../../utils/zaloImageUrl';
 
 // ── RTF style constants ───────────────────────────────────────────────────────
 const RTF_COLOR_MAP: Record<string, string> = {
@@ -421,7 +422,7 @@ function MediaBubble({ msg, isSelf, onView }: { msg: any; isSelf: boolean; onVie
   try {
     const lp: Record<string, string> = typeof msg.local_paths === 'string'
       ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
-    const localFilePath = lp.main || lp.hd || (Object.values(lp)[0] as string) || '';
+    const localFilePath = [lp.main, lp.hd, Object.values(lp)[0] as string].find((p) => p && !isJxlLocalPath(p)) || '';
     if (localFilePath) localUrl = toLocalMediaUrl(localFilePath);
   } catch {}
 
@@ -440,7 +441,7 @@ function MediaBubble({ msg, isSelf, onView }: { msg: any; isSelf: boolean; onVie
     if (parsed && typeof parsed === 'object') {
       let paramsObj: any = parsed.params;
       if (typeof paramsObj === 'string') { try { paramsObj = JSON.parse(paramsObj); } catch { paramsObj = null; } }
-      remoteUrl = paramsObj?.hd || paramsObj?.rawUrl || parsed.href || parsed.thumb || '';
+      remoteUrl = toZaloJpgUrl(paramsObj?.hd || paramsObj?.rawUrl || parsed.href || parsed.thumb || '');
       if (parsed.title && typeof parsed.title === 'string') {
         const t = parsed.title.trim();
         if (t && !t.startsWith('http')) caption = t;
@@ -525,7 +526,7 @@ function MediaBubble({ msg, isSelf, onView }: { msg: any; isSelf: boolean; onVie
                 zaloId: msg.owner_zalo_id || '',
                 msgId: String(msg.msg_id),
                 threadId: msg.thread_id,
-                localPath: lp.main || lp.hd || '',
+                localPath: [lp.main, lp.hd].find((x) => x && !isJxlLocalPath(x)) || '',
                 remoteUrl,
               }).catch(() => {});
             }

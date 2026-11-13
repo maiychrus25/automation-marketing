@@ -18,6 +18,7 @@ import {convertZaloEmojis} from '@/lib/chat/emojiUtils';
 import {getTelegramMentionRanges, linkifyText, type TelegramMentionRange} from '@/lib/chat/messageParser';
 import {isMediaType} from '@/lib/chat/messageTypeUtils';
 import {TgsBubble} from './MessageBubbles';
+import { toZaloJpgUrl, isJxlLocalPath } from '../../../utils/zaloImageUrl';
 
 type TelegramMediaRepairResult = {
     success: boolean;
@@ -406,7 +407,7 @@ export function MediaBubble({msg, onView, isSent, allContacts, groupMembersList,
         // Chỉ dùng local khi local_paths thực sự có path (file đã tải về máy)
         try {
             const lp: Record<string, string> = JSON.parse(localPathsStr || '{}');
-            const hasPath = !!(lp.main || lp.hd || (Object.values(lp)[0] as string));
+            const hasPath = !!([lp.main, lp.hd, Object.values(lp)[0] as string].find((p) => p && !isJxlLocalPath(p)) || '');
             setUseLocal(hasPath);
         } catch {
             setUseLocal(false);
@@ -420,7 +421,7 @@ export function MediaBubble({msg, onView, isSent, allContacts, groupMembersList,
         const lp: Record<string, string> = typeof msg.local_paths === 'string'
             ? JSON.parse(msg.local_paths || '{}')
             : (msg.local_paths || {});
-        localFilePath = lp.main || lp.hd || (Object.values(lp)[0] as string) || '';
+        localFilePath = [lp.main, lp.hd, Object.values(lp)[0] as string].find((p) => p && !isJxlLocalPath(p)) || '';
         if (localFilePath) {
             localUrl = toLocalMediaUrl(localFilePath);
         }
@@ -449,7 +450,7 @@ export function MediaBubble({msg, onView, isSent, allContacts, groupMembersList,
                     paramsObj = null;
                 }
             }
-            remoteUrl = paramsObj?.hd || paramsObj?.rawUrl || parsed.href || parsed.thumb || '';
+            remoteUrl = toZaloJpgUrl(paramsObj?.hd || paramsObj?.rawUrl || parsed.href || parsed.thumb || '');
             if (parsed.title && typeof parsed.title === 'string') {
                 const t = parsed.title.trim();
                 if (t && !t.startsWith('http')) caption = t;
@@ -1249,7 +1250,7 @@ export function SingleImageInGroup({msg, onView, isSent, isSelecting: isSelectin
         setLoadFailed(false);
         try {
             const lp: Record<string, string> = JSON.parse(localPathsStr || '{}');
-            const hasPath = !!(lp.main || lp.hd || (Object.values(lp)[0] as string));
+            const hasPath = !!([lp.main, lp.hd, Object.values(lp)[0] as string].find((p) => p && !isJxlLocalPath(p)) || '');
             setUseLocal(hasPath);
         } catch {
             setUseLocal(false);
@@ -1261,7 +1262,7 @@ export function SingleImageInGroup({msg, onView, isSent, isSelecting: isSelectin
     try {
         const lp: Record<string, string> = typeof msg.local_paths === 'string'
             ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
-        localFilePath = lp.main || lp.hd || (Object.values(lp)[0] as string) || '';
+        localFilePath = [lp.main, lp.hd, Object.values(lp)[0] as string].find((p) => p && !isJxlLocalPath(p)) || '';
         if (localFilePath) localUrl = toLocalMediaUrl(localFilePath);
     } catch {
     }
@@ -1279,7 +1280,7 @@ export function SingleImageInGroup({msg, onView, isSent, isSelecting: isSelectin
         const parsed = JSON.parse(msg.content || '{}');
         if (parsed && typeof parsed === 'object') {
             const params = typeof parsed.params === 'string' ? JSON.parse(parsed.params) : (parsed.params || {});
-            remoteUrl = params.hd || params.rawUrl || parsed.href || parsed.thumb || '';
+            remoteUrl = toZaloJpgUrl(params.hd || params.rawUrl || parsed.href || parsed.thumb || '');
         }
     } catch {
     }

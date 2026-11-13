@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import ipc from "@/lib/ipc";
 import type { Channel } from '@/../configs/channelConfig';
 import { CHANNEL } from '@/lib/channelHelper';
+import { applyMessageEdit } from '@/lib/chat/applyMessageEdit';
 
 const MESSAGE_TOPIC_KEY_SEPARATOR = '__tg_topic__';
 const FORUM_TOPICS_STORAGE_PREFIX = 'deplao_forum_topics_';
@@ -141,6 +142,9 @@ export interface ContactItem {
   /** 1 = có tin nhắn chưa đọc có @mention (tag tên hoặc @all) */
   has_mention?: number;
   channel?: Channel;
+  /** Mốc (ms) người kia đã nhận / đã xem tin của mình */
+  peer_delivered_ts?: number;
+  peer_read_ts?: number;
   /** Telegram: 0 = not forum, 1 = forum, null = chưa check */
   is_forum?: number | null;
   telegram_folder_id?: number;
@@ -220,7 +224,7 @@ interface ChatStore {
   recallMessage: (zaloId: string, msgId: string, threadId?: string) => void;
   updateMessageReaction: (zaloId: string, threadId: string, msgId: string, userId: string, icon: string) => void;
   replaceMessageReactions: (zaloId: string, threadId: string, msgId: string, reactions: ReactionData) => void;
-  updateMessageEdit: (zaloId: string, threadId: string, msgId: string, newText: string, editCount: number, timestampMs: number) => void;
+  updateMessageEdit: (zaloId: string, threadId: string, msgId: string, newText: string, editCount: number, timestampMs: number, markEdited?: boolean) => void;
   updateLocalPaths: (zaloId: string, threadId: string, msgId: string, localPaths: Record<string, string>) => void;
   updateMessageLocalPath: (zaloId: string, threadId: string, msgId: string, localPaths: Record<string, string>) => void;
   removeContact: (zaloId: string, contactId: string) => void;
@@ -780,7 +784,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     });
   },
 
-  updateMessageEdit: (zaloId, threadId, msgId, newText, editCount, timestampMs) => {
+  updateMessageEdit: (zaloId, threadId, msgId, newText, editCount, timestampMs, markEdited = true) => {
     set((state) => {
       const updatedMessages = { ...state.messages };
       const msgIdStr = String(msgId);
@@ -800,29 +804,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const updated = [...list];
           const current = updated[idx];
 
-          // Skip if content hasn't actually changed (prevents false "edited" marks)
-          if (current.content === newText) return state;
-
-          // Preserve old content in edit_history
-          let historyArr: Array<{ oldBody: string; editedAt: number; editCount: number }> = [];
-          if (current.edit_history) {
-            try { historyArr = JSON.parse(current.edit_history); } catch { historyArr = []; }
-          }
-          // Only push if content actually changed
-          if (current.content) {
-            historyArr.push({
-              oldBody: current.content,
-              editedAt: timestampMs,
-              editCount: editCount,
-            });
-          }
-
-          updated[idx] = {
-            ...updated[idx],
-            content: newText,
-            is_edited: 1,
-            edit_history: JSON.stringify(historyArr),
-          };
+          // Nội dung không đổi → bỏ qua (tránh nhãn "đã chỉnh sửa" giả); markEdited=false cho tin được điền nội dung
+          const next = applyMessageEdit(current, newText, editCount, timestampMs, markEdited);
+          if (!next) return state;
+          updated[idx] = next;
           updatedMessages[key] = updated;
           foundThreadKey = key;
           break;

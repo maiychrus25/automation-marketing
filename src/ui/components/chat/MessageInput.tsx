@@ -30,6 +30,7 @@ import { getAdapter } from '@/lib/adapters/registry';
 import { extractVideoThumbViaCanvas } from '@/lib/chat/videoUtils';
 import { EMOJI_CATEGORIES, QUICK_EMOJIS } from '@/lib/chat/emojiUtils';
 import { AlertIcon, AwardIcon, BellIcon, BookmarkIcon, BotIcon, ChartIcon, ChatIcon, CheckIcon, ClipboardListIcon, ClockIcon, CreditCardIcon, DollarIcon, EditIcon, FileTextIcon, FolderIcon, GiftIcon, GlobeIcon, KeyIcon, LightbulbIcon, LightningIcon, LinkIcon, PackageIcon, PinIcon, PluginIcon, RefreshIcon, SearchIcon, SettingsIcon, ShoppingCartIcon, SmartphoneIcon, SmileIcon, SparklesIcon, StarIcon, StoreIcon, TagIcon, TargetIcon, TrashIcon, TrendingUpIcon, TruckIcon, UserIcon } from '@/components/common/icons';
+import { toZaloJpgUrl } from '../../../utils/zaloImageUrl';
 
 interface LocalLabel {
   id: number;
@@ -4404,7 +4405,7 @@ function extractReplyImages(content: string, attachments?: string): string[] {
   try {
     const parsed = JSON.parse(content);
     if (parsed && typeof parsed === 'object') {
-      const url = parsed.params?.hd || parsed.params?.rawUrl || parsed.href || parsed.thumb || '';
+      const url = toZaloJpgUrl(parsed.params?.hd || parsed.params?.rawUrl || parsed.href || parsed.thumb || '');
       if (url) urls.push(url);
     }
   } catch {}

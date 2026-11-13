@@ -48,6 +48,7 @@ class HttpClientService {
         'event:friendAccepted',
         'event:typing',
         'event:seen',
+        'event:receipt',
         'event:undo',
         'event:delete',
         'event:reminder',

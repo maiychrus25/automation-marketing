@@ -3,6 +3,7 @@ import ipc from '@/lib/ipc';
 import { toLocalMediaUrl } from '@/lib/localMedia';
 import type { ChannelCapability } from '@/../configs/channelConfig';
 import { ClipboardListIcon, ReplyIcon } from '@/components/common/icons';
+import { toZaloJpgUrl, isJxlLocalPath } from '../../../utils/zaloImageUrl';
 
 
 interface MessageContextMenuProps {
@@ -61,7 +62,7 @@ function getLocalPath(msg: any): string {
     const lp = typeof msg.local_paths === 'string' ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
     // For video: prefer file path, then thumb, then main
     if (isVideoMsg(msg)) return lp.file || lp.video || lp.main || '';
-    return lp.file || lp.main || lp.hd || (Object.values(lp)[0] as string) || '';
+    return [lp.file, lp.main, lp.hd, Object.values(lp)[0] as string].find((x) => x && !isJxlLocalPath(x)) || '';
   } catch { return ''; }
 }
 
@@ -69,7 +70,7 @@ function getRemoteUrl(msg: any): string {
   try {
     const p = JSON.parse(msg.content || '{}');
     if (isVideoMsg(msg)) return p?.href || '';
-    return p?.params?.hd || p?.params?.rawUrl || p?.href || p?.thumb || '';
+    return toZaloJpgUrl(p?.params?.hd || p?.params?.rawUrl || p?.href || p?.thumb || '');
   } catch { return ''; }
 }
 

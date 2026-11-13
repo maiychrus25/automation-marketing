@@ -12,6 +12,7 @@ import {
   generateSessionId, generateClientId
 } from './FacebookUtils';
 import Logger from '../../utils/Logger';
+import { templateTextFromStoryAttachment } from './facebookTemplateText';
 
 const FB_MQTT_ENDPOINT = 'wss://edge-chat.facebook.com/chat';
 const FB_TOPICS = ['/t_ms', '/thread_typing', '/orca_typing_notifications', '/orca_presence'];
@@ -43,6 +44,12 @@ export interface FBDeliveryReceipt {
   timestampMs: number;
 }
 
+export interface FBReadReceipt {
+  threadId: string;
+  actorFbId: string;
+  watermarkTimestampMs: number;
+}
+
 export interface FBPresenceEntry {
   userId: string;
   status: 'active' | 'inactive' | 'offline';
@@ -58,6 +65,7 @@ export interface FBListenerEvents {
   threadEvent: (data: FBThreadEvent) => void;
   participantEvent: (data: FBGroupParticipantEvent) => void;
   deliveryReceipt: (data: FBDeliveryReceipt) => void;
+  readReceipt: (data: FBReadReceipt) => void;
   presence: (data: FBPresenceData) => void;
   typing: (data: { threadId: string; userId: string; state: number }) => void;
   reaction: (data: { messageId: string; reaction: string; actorFbId: string; threadId: string }) => void;
@@ -477,6 +485,17 @@ export class FacebookMQTTListener extends EventEmitter {
   }
 
   private processDelta(delta: any): void {
+    // ─── 0. Read receipt (người kia đã xem tới watermark) ────────────────────
+    if (delta.class === 'ReadReceipt') {
+      const threadKey = delta.threadKey || {};
+      const threadId = String(threadKey.otherUserFbId || threadKey.threadFbId || '0');
+      const watermark = Number(delta.watermarkTimestampMs);
+      if (delta.actorFbId && threadId !== '0' && Number.isFinite(watermark) && watermark > 0) {
+        this.emit('readReceipt', { threadId, actorFbId: String(delta.actorFbId), watermarkTimestampMs: watermark });
+      }
+      return;
+    }
+
     // ─── 1. Delivery receipt (no messageMetadata) ────────────────────────────
     if (delta.deliveredReceiptMessageId) {
       const threadKey = delta.threadKey || {};
@@ -486,7 +505,8 @@ export class FacebookMQTTListener extends EventEmitter {
           messageId: delta.deliveredReceiptMessageId,
           threadId: String(threadId),
           actorFbId: delta.actorFbId || '',
-          timestampMs: delta.deliveredWatermarkTimestampMs || Date.now(),
+          // 0 = Facebook không gửi watermark; không bịa 'bây giờ' (mốc đã nhận tra theo messageId)
+          timestampMs: Number(delta.deliveredWatermarkTimestampMs) || 0,
         });
       }
       return;
@@ -689,9 +709,22 @@ export class FacebookMQTTListener extends EventEmitter {
     };
 
     // Parse ALL attachments (batch image sends have multiple)
-    const allAttachments = delta.attachments?.length > 0
+    let allAttachments = delta.attachments?.length > 0
       ? (delta.attachments as any[]).map(parseAttachment)
       : [];
+
+    // Tin mẫu của Page/bot (chỉ có extensible_attachment, không blob/sticker) và tin không có chữ
+    // → chữ của thẻ thành nội dung tin text; bỏ phần đính kèm trống để không hiện thành "tệp lạ". Không log nội dung thẻ.
+    let templateBody = '';
+    if (!delta.body) {
+      for (const att of (delta.attachments as any[]) || []) {
+        const m = att?.mercury;
+        if (!m?.extensible_attachment || m.blob_attachment || m.sticker_attachment) continue;
+        templateBody = templateTextFromStoryAttachment(m.extensible_attachment);
+        if (templateBody) break;
+      }
+      if (templateBody) allAttachments = allAttachments.filter((a: any) => a.attachmentType || a.url);
+    }
 
     // Extract replied-to message info from MQTT delta (Facebook sends
     // replied_to_message.messageMetadata for reply messages)
@@ -704,7 +737,7 @@ export class FacebookMQTTListener extends EventEmitter {
     const primaryAtt = allAttachments[0] || { id: 0, url: null };
 
     const msg: FBMQTTMessage = {
-      body: delta.body || null,
+      body: delta.body || templateBody || null,
       timestamp: meta.timestamp || String(Date.now()),
       userID: meta.actorFbId,
       messageID: meta.messageId,

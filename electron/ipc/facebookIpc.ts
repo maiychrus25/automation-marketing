@@ -8,7 +8,8 @@ import { ipcMain } from 'electron';
 import { v4 as uuid } from 'uuid';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import FacebookConnectionManager from '../../src/utils/FacebookConnectionManager';
-import { initSession, fetchBasicProfileFromHome, fetchFBHomepage, getUserInfoFacebookHtml } from '../../src/services/facebook/FacebookSession';
+import { initSession, fetchBasicProfileFromHome, fetchFBHomepage, getUserInfoFacebookHtml, checkCookieState, isTransientFacebookError } from '../../src/services/facebook/FacebookSession';
+import { createStartupRetry } from '../../src/services/facebook/facebookStartupRetry';
 import { loginWithCredentials } from '../../src/services/facebook/FacebookLoginHelper';
 import { secureGet, secureSet, secureDelete } from '../../src/services/secure/SecureSettingsService';
 import FileStorageService from '../../src/services/file/FileStorageService';
@@ -288,6 +289,7 @@ export function registerFacebookIpc(): void {
       const internalId = resolveInternalId(accountId);
       const fbAcc = DatabaseService.getInstance().getFBAccount(internalId);
       if (fbAcc && !fbAcc.parent_facebook_id) await removePageChildren(fbAcc.facebook_id, 'delete');
+      fbStartupRetry.clear(internalId);
       await FacebookConnectionManager.disconnect(internalId);
       secureDelete(fbCookieKey(internalId));
       DatabaseService.getInstance().deleteFBAccount(internalId);
@@ -519,6 +521,7 @@ export function registerFacebookIpc(): void {
 
       if (!enabled) {
         if (existing) {
+          fbStartupRetry.clear(existing.id);
           await FacebookConnectionManager.disconnect(existing.id).catch(() => {});
           FacebookService.removeInstance(existing.id);
           db.setFBPageEnabled(existing.id, false);
@@ -604,6 +607,7 @@ export function registerFacebookIpc(): void {
   ipcMain.handle('fb:disconnect', async (_event, { accountId }: { accountId: string }) => {
     try {
       const internalId = resolveInternalId(accountId);
+      fbStartupRetry.clear(internalId);
       await FacebookConnectionManager.disconnect(internalId);
       DatabaseService.getInstance().updateFBAccountStatus(internalId, 'disconnected');
       return { success: true };
@@ -1673,6 +1677,7 @@ export function registerFacebookIpc(): void {
             is_self: String(msg.senderId) === internalId ? 1 : 0,
             is_unsent: msg.isUnsent ? 1 : 0,
             reactions: msg.reactions?.length ? JSON.stringify(msg.reactions) : '{}',
+            is_history: true,
           });
         }
         Logger.log(`[fb:fetchThreadMessages] Saved ${result.messages.length} messages to DB`);
@@ -2244,10 +2249,77 @@ ipcMain.handle('fb:setGroupLink', async (_event, params: {
 });
 
 /**
+ * Kết nối một account lúc khởi động. Chỉ ném lỗi TẠM THỜI (mất mạng/timeout/429/5xx) để gọi lại sau;
+ * cookie hết hạn, account tắt/không cookie, lỗi khác → ghi log rồi bỏ qua.
+ */
+async function connectStartupAccount(acc: any): Promise<void> {
+  const existing = FacebookConnectionManager.get(acc.id);
+  if (existing && existing.isConnected()) {
+    Logger.log(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: already connected, skipping`);
+    return;
+  }
+  // Page đã tắt: không kết nối
+  if (acc.enabled === 0) {
+    Logger.log(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: Page disabled, skipping`);
+    return;
+  }
+  const cookie = resolveFBCookie(acc);
+  if (!cookie) {
+    Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: no cookie found, skipping`);
+    return;
+  }
+
+  // Test cookie health trước khi connect
+  let state: 'alive' | 'expired' | 'unknown' = 'alive';
+  try {
+    state = await checkCookieState(cookie);
+  } catch (healthErr: any) {
+    Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: health check failed: ${healthErr.message}, trying anyway`);
+  }
+  if (state === 'expired') {
+    Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: cookie expired, skipping`);
+    return;
+  }
+  if (state === 'unknown') throw new Error('network unavailable while checking cookie');
+
+  try {
+    // Đọc proxy_id từ unified accounts table
+    const service = await FacebookConnectionManager.getOrCreate(acc.id, cookie, resolveFBProxyId(acc));
+    // Reset retry count sau khi connect thành công
+    if (service.isConnected()) {
+      service.resetListenerRetryCount?.();
+    }
+    Logger.log(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: connected successfully`);
+  } catch (err: any) {
+    if (isTransientFacebookError(err)) throw err;
+    Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: ${err.message}`);
+  }
+}
+
+// Thử lại 15 s / 60 s / 180 s; đọc lại DB lúc timer nổ để tôn trọng ngắt tay / tắt / xoá giữa chừng.
+// Ngắt tay không có cờ lưu trữ — handler fb:disconnect gọi fbStartupRetry.clear(id).
+const fbStartupRetry = createStartupRetry({
+  connect: async (id) => {
+    const acc = DatabaseService.getInstance().getFBAccount(id);
+    if (acc) await connectStartupAccount(acc);
+  },
+  shouldRetry: (id) => {
+    const acc = DatabaseService.getInstance().getFBAccount(id);
+    if (!acc || acc.enabled === 0) return false;
+    return !FacebookConnectionManager.get(id)?.isConnected();
+  },
+  log: (m) => Logger.warn(`[facebookIpc] ${m}`),
+});
+
+/** Thoát app: huỷ mọi lần thử lại đang chờ trước khi đóng DB. */
+export function cancelFBStartupRetries(): void { fbStartupRetry.clearAll(); }
+
+/**
  * Auto-reconnect tất cả FB accounts khi app khởi động.
  * - Bỏ qua account đã connected
  * - Test cookie health trước khi connect
  * - Nếu cookie expired → bỏ qua (không thử)
+ * - Mất mạng (unknown / lỗi kết nối tạm thời) → thử lại sau 15 s, 60 s, 180 s
  */
 export async function reconnectAllFBAccounts(): Promise<void> {
   try {
@@ -2255,48 +2327,10 @@ export async function reconnectAllFBAccounts(): Promise<void> {
     Logger.log(`[facebookIpc] reconnectAllFBAccounts: ${accounts.length} FB accounts found`);
     for (const acc of accounts) {
       try {
-        // Bỏ qua account đã connected
-        const existing = FacebookConnectionManager.get(acc.id);
-        if (existing && existing.isConnected()) {
-          Logger.log(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: already connected, skipping`);
-          continue;
-        }
-
-        // Page đã tắt: không kết nối
-        if (acc.enabled === 0) {
-          Logger.log(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: Page disabled, skipping`);
-          continue;
-        }
-
-        const cookie = resolveFBCookie(acc);
-        if (!cookie) {
-          Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: no cookie found, skipping`);
-          continue;
-        }
-
-        // Test cookie health trước khi connect
-        try {
-          const { checkCookieAlive } = require('../../src/services/facebook/FacebookSession');
-          const alive = await checkCookieAlive(cookie);
-          if (!alive) {
-            Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: cookie expired, skipping`);
-            continue;
-          }
-        } catch (healthErr: any) {
-          Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: health check failed: ${healthErr.message}, trying anyway`);
-        }
-
-        // Đọc proxy_id từ unified accounts table
-        const proxyId = resolveFBProxyId(acc);
-
-        const service = await FacebookConnectionManager.getOrCreate(acc.id, cookie, proxyId);
-        // Reset retry count sau khi connect thành công
-        if (service.isConnected()) {
-          service.resetListenerRetryCount?.();
-        }
-        Logger.log(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: connected successfully`);
+        await connectStartupAccount(acc);
       } catch (err: any) {
         Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: ${err.message}`);
+        fbStartupRetry.schedule(acc.id);
       }
     }
   } catch (err: any) {

@@ -24,9 +24,12 @@ import { changeThreadTheme } from './FacebookChangeTheme';
 import { createNote } from './FacebookCreateNotes';
 import { FacebookMQTTListener } from './FacebookMQTTListener';
 import { FacebookE2EEBridge } from './FacebookE2EEBridge';
+import { FacebookEventPipeline, EventPriority, bridgeEventKey } from './FacebookEventPipeline';
+import { e2eeReconnectDelayMs } from './facebookBridgeBackoff';
 import { FacebookE2EESender } from './FacebookE2EESender';
 import { parseE2EECookies, resolveE2EEBinaryPath, normalizeChatJid } from './FacebookUtils';
 import EventBroadcaster from '../event/EventBroadcaster';
+import { recordFacebookReceipt } from '../receipts/peerReceipts';
 import DatabaseService from '../database/DatabaseService';
 import FileStorageService from '../file/FileStorageService';
 import { createProxyAgent } from '../../utils/ProxyHelper';
@@ -86,6 +89,11 @@ export class FacebookService {
   private _e2eeHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   /** Đếm số lần heartbeat fail liên tiếp - sau 2 lần → kill + respawn */
   private _e2eeHeartbeatFailCount: number = 0;
+  /** Hàng đợi tuần tự + chống trùng cho sự kiện của bridge hiện tại (mỗi thế hệ một hàng đợi). */
+  private eventPipeline: FacebookEventPipeline | null = null;
+  /** Đúng một hẹn nối lại bridge E2EE mỗi service; backoff tăng theo số lần hẹn, về 0 khi E2EE 'connected'. */
+  private _e2eeReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private _e2eeReconnectAttempts: number = 0;
   /** Track message IDs sent locally via this service instance.
    *  Dùng để ngăn self-echo duplicate khi bridge/MQTT echo ngược tin nhắn vừa gửi.
    *  Mỗi entry tự xoá sau 60s để tránh memory leak. */
@@ -327,6 +335,11 @@ export class FacebookService {
         this.handleDeliveryReceipt(data);
       });
 
+      this.listener.on('readReceipt', (data: any) => {
+        try { recordFacebookReceipt(this.getFacebookId(), this.getFacebookId(), data, 'read'); }
+        catch (err: any) { Logger.warn(`[FacebookService:${this.accountId}] readReceipt error: ${err.message}`); }
+      });
+
       this.listener.on('presence', (data: any) => {
         this.handlePresenceEvent(data);
       });
@@ -559,10 +572,14 @@ export class FacebookService {
     // saveFBMessage: INSERT OR IGNORE theo messageId (chống trùng khi Facebook phát lại),
     // tự ghi bảng messages/contacts hợp nhất với owner = facebook_id của Page.
     try {
-      db.saveFBMessage({
+      const outcome = db.saveFBMessage({
         id: n.messageId, account_id: page.id, thread_id: n.senderId, sender_id: n.senderId,
         sender_name: senderName, body, timestamp: ts, type: 'text', is_self: 0, is_unsent: 0,
       });
+      if (outcome !== 'new') {
+        Logger.log(`[FacebookService:${this.accountId}] Page message duplicate skipped: ${n.messageId}`);
+        return;
+      }
     } catch (err: any) {
       Logger.warn(`[FacebookService:${this.accountId}] Page message save error: ${err.message}`);
       return;
@@ -611,6 +628,7 @@ export class FacebookService {
     const media: { type: 'image' | 'video' | 'sticker'; url: string }[] = await sender.readIncomingMedia(n.senderId, 3);
     const hit = media.find((m) => m.type === wantType) || media[0];
     if (!hit) return false;
+    if (db.hasMessage(page.facebook_id, n.messageId)) return true; // đã lưu (phát lại) → khỏi tải lại media
 
     // sticker lưu & hiển thị như ảnh (webp/png) → đi chung đường ảnh đã chạy
     const type: 'image' | 'video' = hit.type === 'video' ? 'video' : 'image';
@@ -622,11 +640,15 @@ export class FacebookService {
     if (!localPath) return false;
     const relativePath = FileStorageService.toRelativePath(localPath);
 
-    db.saveFBMessage({
+    const outcome = db.saveFBMessage({
       id: n.messageId, account_id: page.id, thread_id: n.senderId, sender_id: n.senderId,
       sender_name: senderName, body: null, timestamp: ts, type, is_self: 0, is_unsent: 0,
       attachments: JSON.stringify([{ type, name: filename, localPath: relativePath }]),
     } as any);
+    if (outcome !== 'new') {
+      Logger.log(`[FacebookService:${this.accountId}] Page media duplicate skipped: ${n.messageId}`);
+      return true; // đã có tin này → không rơi xuống lưu text thông báo, không emit lại
+    }
     try {
       db.updateLocalPaths(page.facebook_id, n.messageId, { main: relativePath });
     } catch {}
@@ -781,17 +803,6 @@ export class FacebookService {
           }]);
         }
 
-        // Human-readable preview for last_message display
-        // 'gif' comes from E2EE bridge (Go sets att.Type="gif" when GifPlayback=true)
-        // Also handle 'sticker' from E2EE bridge attachment type
-        const attachmentPreview = msgType === 'image' ? '🖼️ Hình ảnh'
-          : msgType === 'gif' ? '🖼️ GIF'
-          : msgType === 'video' ? '🎬 Video'
-          : msgType === 'audio' ? '🎵 Audio'
-          : rawType === 'sticker' ? '🎨 Sticker'
-          : msg.attachments?.name ? `📎 ${msg.attachments.name}`
-          : '📎 Tệp đính kèm';
-
         if (msgType === 'sticker') {
           Logger.log(`[FacebookService:${this.accountId}] [STICKER] handleIncomingMessage: msgId=${msg.messageID} threadId=${threadId} rawType=${rawType} msgType=${msgType} hasAttachment=${hasAttachment} url=${(msg.attachments?.url || '').slice(0,100)}`);
         }
@@ -799,8 +810,7 @@ export class FacebookService {
           Logger.log(`[FacebookService:${this.accountId}] [GIF] handleIncomingMessage: msgId=${msg.messageID} threadId=${threadId} hasAttachment=${hasAttachment} directPath=${!!msg.attachments?.directPath} url=${(msg.attachments?.url || '').slice(0,100)}`);
         }
         Logger.log(`[FacebookService:${this.accountId}] Calling saveFBMessage: account_id=${this.accountId} thread_id=${threadId} type=${msgType} hasAttachment=${hasAttachment} reply_to_id=${msg.replyToMessageId || '(none)'}`);
-        // @ts-ignore
-        db.saveFBMessage({
+        const outcome = db.saveFBMessage({
           id: msg.messageID,
           account_id: this.accountId,
           thread_id: threadId,
@@ -814,39 +824,29 @@ export class FacebookService {
           is_unsent: 0,
         });
 
-        // Note: fb_threads preview is updated inside saveFBMessage
-
-        // Sync to unified contacts table
-        const fbThread = db.queryOne?.(`SELECT name, type FROM fb_threads WHERE id = ? AND account_id = ?`, [threadId, this.accountId]) as any;
-        let threadName = fbThread?.name || '';
-        const contactType = fbThread?.type === 'group' ? 'group' : 'user';
-        const fbIdForContacts = this.getFacebookId();
-
-        // For 1:1 user contacts with no thread name (e.g. newly discovered E2EE thread),
-        // try to resolve from existing contacts table
-        if (!threadName && contactType === 'user') {
-          const existingContact = db.queryOne?.(
-            `SELECT display_name FROM contacts WHERE contact_id = ? AND channel = 'facebook' AND display_name != '' LIMIT 1`,
-            [threadId]
-          ) as { display_name?: string } | undefined;
-          if (existingContact?.display_name) {
-            threadName = existingContact.display_name;
-          }
+        // fb_threads + contacts (preview, chưa đọc) đã được saveFBMessage cập nhật đúng một lần.
+        // Facebook phát lại cùng tin → dừng tại đây: không phát UI/thông báo/workflow, không tải lại media.
+        if (outcome === 'duplicate') {
+          Logger.log(`[FacebookService:${this.accountId}] Duplicate delivery skipped: msgId=${msg.messageID}`);
+          return;
         }
-
-        const lastMsgText = msg.body || (hasAttachment ? attachmentPreview : '');
-        Logger.log(`[FacebookService:${this.accountId}] Syncing contacts: owner=${fbIdForContacts} thread=${threadId} name=${threadName} type=${contactType}`);
-        db.run?.(
-          `INSERT INTO contacts (owner_zalo_id, contact_id, display_name, avatar_url, is_friend, contact_type, unread_count, last_message, last_message_time, channel)
-           VALUES (?, ?, ?, '', 0, ?, ?, ?, ?, 'facebook')
-           ON CONFLICT(owner_zalo_id, contact_id) DO UPDATE SET
-             display_name = CASE WHEN excluded.display_name != '' AND contacts.display_name = '' THEN excluded.display_name ELSE contacts.display_name END,
-             last_message = excluded.last_message,
-             last_message_time = excluded.last_message_time,
-             unread_count = CASE WHEN ? = 0 THEN contacts.unread_count + 1 ELSE contacts.unread_count END,
-             channel = 'facebook'`,
-          [this.getFacebookId(), threadId, threadName, contactType, isSelf ? 0 : 1, lastMsgText.slice(0, 200), ts, isSelf]
-        );
+        // Dòng rỗng đã lưu được điền nội dung: báo giao diện qua fb:onEdit (đổi nội dung bong bóng sẵn có, không thêm bong bóng,
+        // không tăng chưa đọc). Không thông báo/workflow/tải media lại như tin mới.
+        if (outcome === 'repaired') {
+          Logger.log(`[FacebookService:${this.accountId}] Empty row filled by later delivery: msgId=${msg.messageID}`);
+          if (msg.body) {
+            EventBroadcaster.emit('fb:onEdit', {
+              fbAccountId: this.getFacebookId(),
+              messageId: msg.messageID,
+              threadId,
+              newText: msg.body,
+              editCount: 0,
+              timestampMs: ts,
+              repair: true, // renderer: đổi nội dung nhưng không gắn nhãn "đã chỉnh sửa"
+            });
+          }
+          return;
+        }
       } catch (err: any) {
         Logger.warn(`[FacebookService:${this.accountId}] DB persist error: ${err.message}`);
       }
@@ -1044,6 +1044,9 @@ export class FacebookService {
     // Skip self-receipts (when our own messages are delivered)
     if (data.actorFbId === this.getFacebookId()) return;
 
+    try { recordFacebookReceipt(this.getFacebookId(), this.getFacebookId(), data, 'delivered'); }
+    catch (err: any) { Logger.warn(`[FacebookService:${this.accountId}] deliveredTs error: ${err.message}`); }
+
     EventBroadcaster.emit('fb:onSeen', {
       fbAccountId: this.getFacebookId(),
       threadId: data.threadId,
@@ -1099,12 +1102,48 @@ export class FacebookService {
 
     this.setE2EEStatus('connecting');
 
+    // Thế hệ của lần khởi động này, lấy TRƯỚC spawn để catch dùng được: lần start cũ thất bại muộn không được đụng bridge mới.
+    const bridgeGen = ++this.e2eeBridgeGen; // BUG #6 fix: track instance for stale timer detection
+    let ownBridge: FacebookE2EEBridge | null = null;
     try {
       // 1. Spawn Go bridge
-      this.e2eeBridge = FacebookE2EEBridge.create(binaryPath);
+      this.e2eeBridge = ownBridge = FacebookE2EEBridge.create(binaryPath);
+      // Gắn TRƯỚC spawn/connect: 'error' không có listener sẽ là lỗi chưa bắt ở main process (kể cả từ bridge cũ / hỏng sớm).
+      ownBridge.on('error', (err: Error) => {
+        Logger.error(`[FacebookService:${this.accountId}] E2EE bridge error: ${err.message}`);
+      });
       this.e2eeBridge.spawn();
-      const bridgeInstance = this.e2eeBridge;
-      const bridgeGen = ++this.e2eeBridgeGen; // BUG #6 fix: track instance for stale timer detection
+      const bridgeInstance = ownBridge;
+
+      // Gắn listener TRƯỚC connect: bridge có thể phát lại sự kiện ngay sau khi nối, gắn sau sẽ mất chúng.
+      void this.eventPipeline?.stop(true);
+      const pipeline = new FacebookEventPipeline(this.accountId);
+      pipeline.setGeneration(bridgeGen);
+      this.eventPipeline = pipeline;
+      // Bridge mất (đóng bất thường / quá tải hàng đợi): dọn trạng thái rồi hẹn nối lại. Bỏ qua nếu đã sang thế hệ khác.
+      const bridgeLost = (reason: string) => {
+        if (this.e2eeBridgeGen !== bridgeGen) return;
+        this._clearE2EEHeartbeat();
+        if (this.e2eeBridge === bridgeInstance) this.e2eeBridge = null;
+        void pipeline.stop(true);
+        this.setE2EEStatus('disconnected');
+        this._scheduleE2EEReconnect(fbId, reason);
+      };
+      bridgeInstance.on('event', (evt: any) => {
+        if (this.e2eeBridge !== bridgeInstance || this.e2eeBridgeGen !== bridgeGen) return;
+        const key = bridgeEventKey(evt);
+        const priority = this.getEventPriority(evt?.type);
+        // Pipeline bảo đảm thứ tự PHÁT, hàng đợi có giới hạn và chống trùng; phần xử lý bất đồng bộ của tin (tải media…)
+        // không được chờ nên không bảo đảm thứ tự hoàn tất.
+        // Bản trùng bị bỏ là bình thường; chỉ sự kiện quan trọng bị bỏ vì hàng đợi đầy mới cần khôi phục bằng nối lại.
+        const duplicate = pipeline.isDuplicate(key);
+        const accepted = pipeline.enqueue(key, priority, bridgeGen, async () => this.handleBridgeEvent(evt));
+        if (!accepted && !duplicate && priority === EventPriority.HIGH) {
+          Logger.error(`[FacebookService:${this.accountId}] Critical bridge event was rejected; closing bridge to recover`);
+          void bridgeInstance.close().catch(() => {});
+          bridgeLost('event queue overflow'); // close() thật không phát 'closed'
+        }
+      });
 
       // 2. Parse E2EE cookies
       let cookies: Record<string, string>;
@@ -1132,41 +1171,21 @@ export class FacebookService {
 
       await this.e2eeBridge.connectE2EE(20000);
       Logger.log(`[FacebookService:${this.accountId}] E2EE pairing complete`);
+      if (this.e2eeBridgeGen !== bridgeGen) { // bị dừng / thay thế trong lúc nối: bỏ bridge này
+        bridgeInstance.close().catch(() => {});
+        return;
+      }
 
       this.setE2EEStatus('connected');
 
       // 4. Create sender (reuses bridge)
       this.e2eeSender = new FacebookE2EESender({ mode: 'reuse', bridge: this.e2eeBridge });
 
-      // 5. Listen for events from bridge
-      this.e2eeBridge.on('event', (evt: any) => {
-        this.handleBridgeEvent(evt);
-      });
-
       // BUG #6 fix: dùng bridgeGen để detect stale timer
       this.e2eeBridge.on('closed', (code: number | null) => {
         Logger.warn(`[FacebookService:${this.accountId}] E2EE bridge closed (code=${code}, gen=${bridgeGen})`);
-        this._clearE2EEHeartbeat();
-        // Chỉ clear nếu bridge hiện tại vẫn là instance này
-        if (this.e2eeBridge === bridgeInstance) {
-          this.e2eeBridge = null;
-        }
-        this.setE2EEStatus('disconnected');
-        // Auto-reconnect nếu service vẫn connected và bridge chưa được thay thế
-        if (this.isConnected()) {
-          Logger.log(`[FacebookService:${this.accountId}] E2EE bridge closed - attempting reconnect in 10s...`);
-          setTimeout(() => {
-            // BUG #6 fix: chỉ reconnect nếu bridge instance không thay đổi
-            // và e2eeBridgeGen không tăng (không có bridge mới được tạo)
-            if (this.isConnected() && this.e2eeBridgeGen === bridgeGen && !this.e2eeBridge?.isAlive()) {
-              this.startE2EEBridge(fbId).catch(() => {});
-            }
-          }, 10000);
-        }
-      });
-
-      this.e2eeBridge.on('error', (err: Error) => {
-        Logger.error(`[FacebookService:${this.accountId}] E2EE bridge error: ${err.message}`);
+        // Bridge cũ (đã bị thay / dừng chủ động) đóng muộn: không đụng vào trạng thái của bridge mới.
+        bridgeLost('bridge closed');
       });
 
       // 6. Start heartbeat to detect hung bridge process (BUG #8 fix)
@@ -1174,33 +1193,37 @@ export class FacebookService {
 
     } catch (err: any) {
       Logger.error(`[FacebookService:${this.accountId}] E2EE bridge start failed: ${err.message}`);
+      if (this.e2eeBridgeGen !== bridgeGen) {
+        // Lần start cũ: chỉ dọn bridge của chính nó, không đụng bridge / pipeline / trạng thái hiện tại.
+        ownBridge?.close().catch(() => {});
+        return;
+      }
       this._clearE2EEHeartbeat();
       if (this.e2eeBridge) {
         this.e2eeBridge.close().catch(() => {});
         this.e2eeBridge = null;
       }
+      void this.eventPipeline?.stop(true);
+      this.eventPipeline = null;
       this.e2eeSender = null;
       this.setE2EEStatus('error');
-      // NON-FATAL: groups still work via MQTT
-      // Auto-retry sau 30s nếu service vẫn connected (BUG #10 fix)
-      if (this.isConnected() || this.status === 'connecting') {
-        Logger.log(`[FacebookService:${this.accountId}] E2EE bridge init failed - will retry in 30s`);
-        const currentGen = this.e2eeBridgeGen;
-        setTimeout(() => {
-          if ((this.isConnected() || this.status === 'connecting') && this.e2eeBridgeGen === currentGen) {
-            this.startE2EEBridge(fbId).catch(() => {});
-          }
-        }, 30000);
-      }
+      // NON-FATAL: groups still work via MQTT; thử lại theo backoff chung (BUG #10 fix)
+      this._scheduleE2EEReconnect(fbId, 'bridge init failed');
     }
   }
 
   private async stopE2EEBridge(): Promise<void> {
+    // Dừng chủ động (tắt, ngắt, thử lại tay): huỷ hẹn nối lại và vô hiệu hoá listener/'closed' của bridge cũ.
+    this._clearE2EEReconnect();
+    this.e2eeBridgeGen++;
     this._clearE2EEHeartbeat();
+    void this.eventPipeline?.stop(true);
+    this.eventPipeline = null;
     if (this.e2eeBridge) {
       await this.e2eeBridge.close().catch(() => {});
       this.e2eeBridge = null;
     }
+    this._clearE2EEReconnect();
     this.e2eeSender = null;
     this.setE2EEStatus('disconnected');
   }
@@ -1233,17 +1256,50 @@ export class FacebookService {
             bridgeInstance.close().catch(() => {});
             this.e2eeBridge = null;
           }
-          // Trigger reconnect (same as 'closed' handler)
-          if (this.isConnected()) {
-            setTimeout(() => {
-              if (this.isConnected() && this.e2eeBridgeGen === bridgeGen && !this.e2eeBridge?.isAlive()) {
-                this.startE2EEBridge(fbId).catch(() => {});
-              }
-            }, 5000);
-          }
+          this._scheduleE2EEReconnect(fbId, 'heartbeat failed');
         }
       }
     }, 30000); // Check mỗi 30s
+  }
+
+  /** Hẹn nối lại bridge E2EE: một timer duy nhất, backoff `e2eeReconnectDelayMs(attempt++)`. */
+  private _scheduleE2EEReconnect(fbId: string, reason: string): void {
+    if (this._e2eeReconnectTimer || !this.e2eeEnabled) return;
+    if (!this.isConnected() && this.status !== 'connecting') return;
+    const scheduledGen = this.e2eeBridgeGen;
+    const delayMs = e2eeReconnectDelayMs(this._e2eeReconnectAttempts++);
+    Logger.warn(`[FacebookService:${this.accountId}] E2EE ${reason} - reconnecting in ${Math.round(delayMs / 1000)}s`);
+    this._e2eeReconnectTimer = setTimeout(() => {
+      this._e2eeReconnectTimer = null;
+      // Chỉ nối lại nếu service còn kết nối, E2EE còn bật, chưa có bridge mới (thế hệ đổi) và không có bridge sống.
+      if ((!this.isConnected() && this.status !== 'connecting') || !this.e2eeEnabled
+        || this.e2eeBridgeGen !== scheduledGen || this.e2eeBridge?.isAlive()) return;
+      this.startE2EEBridge(fbId).catch(() => {});
+    }, delayMs);
+  }
+
+  private _clearE2EEReconnect(): void {
+    if (this._e2eeReconnectTimer) {
+      clearTimeout(this._e2eeReconnectTimer);
+      this._e2eeReconnectTimer = null;
+    }
+  }
+
+  /** Độ ưu tiên trong hàng đợi: tin / thu hồi là HIGH, cảm xúc / sửa là NORMAL, còn lại (gõ, đã xem, trạng thái…) là LOW. */
+  private getEventPriority(type: string): EventPriority {
+    switch (type) {
+      case 'e2eeMessage':
+      case 'message':
+      case 'messageUnsend':
+      case 'unsend':
+        return EventPriority.HIGH;
+      case 'reaction':
+      case 'e2eeReaction':
+      case 'messageEdit':
+        return EventPriority.NORMAL;
+      default:
+        return EventPriority.LOW;
+    }
   }
 
   private _clearE2EEHeartbeat(): void {
@@ -1338,6 +1394,14 @@ export class FacebookService {
             userId: data.userId || '',
             timestamp: data.timestampMs || Date.now(),
           });
+          // E2EE 1:1: ghi mốc đã xem để nhãn "Đã xem" dưới tin cuối của mình còn hiện (khóa hội thoại = id số, bỏ hậu tố JID)
+          try {
+            recordFacebookReceipt(this.getFacebookId(), this.getFacebookId(), {
+              threadId: String(data.threadId).replace(/@.*$/, ''),
+              actorFbId: String(data.userId || '').replace(/@.*$/, ''),
+              watermarkTimestampMs: Number(data.timestampMs) || Date.now(),
+            }, 'read');
+          } catch {}
         }
         break;
       }
@@ -1850,6 +1914,7 @@ export class FacebookService {
 
   private setE2EEStatus(status: FBE2EEStatus): void {
     this.e2eeStatus = status;
+    if (status === 'connected') this._e2eeReconnectAttempts = 0;
     EventBroadcaster.emit('fb:onE2EEStatus', {
       fbAccountId: this.getFacebookId(),
       status,
@@ -1863,6 +1928,7 @@ export class FacebookService {
    */
   public async retryE2EE(): Promise<void> {
     if (this._isPage) return; // Page không có E2EE bridge; caller kiểm isE2EEConnected(); Page gửi qua Business Suite
+    this._e2eeReconnectAttempts = 0; // thử lại tay bắt đầu từ backoff sạch (bộ hẹn tự động gọi startE2EEBridge, không qua đây)
     // Clean up stale bridge
     await this.stopE2EEBridge();
     // Reset flags so startE2EEBridge will attempt again
