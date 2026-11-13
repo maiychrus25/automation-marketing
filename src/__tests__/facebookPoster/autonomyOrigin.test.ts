@@ -111,6 +111,8 @@ describe('origin plumbing', () => {
     const budgets: boolean[] = [];
     const service = new FacebookPosterService({
       store, getProfile: (id) => ({ id, name: id }), emit: () => {}, newId: () => 'run-from-schedule',
+      // Cùng đồng hồ giả với scheduler: hạn chờ của lượt hẹn tính từ NOW, đồng hồ thật sẽ luôn quá hạn.
+      now: () => NOW + 3 * 60_000,
       acquireProfile: async (profileId) => ({ profileId, open: async () => { throw new Error('unused'); }, release: () => {} }),
       createAutonomyBudget: () => ({ check: () => {}, reserve: () => 1, commit: () => {}, release: () => {} }),
       tasks: { postToTargets: (async (_input: unknown, d: { autonomyBudget?: unknown }) => { budgets.push(!!d.autonomyBudget); return { posted: 0, failed: 0, results: [] }; }) as never },
