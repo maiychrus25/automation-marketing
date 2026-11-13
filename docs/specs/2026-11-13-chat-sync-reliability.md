@@ -1,7 +1,7 @@
 # Đồng bộ tin nhắn Zalo và Facebook: lấy các bản sửa độ ổn định của Deplao 26.9.0–26.11.0
 
 **Ngày:** 2026-11-13  
-**Trạng thái:** Anh duyệt spec ngày 13/11/2026. Chặng A–C đã triển khai và gộp vào `main` (13/11/2026), chưa phát hành (plan: `docs/plans/2026-11-13-chat-sync-reliability.md`); chặng D (Go) chưa làm, có plan riêng sau.  
+**Trạng thái:** Anh duyệt spec ngày 13/11/2026. Chặng A–C đã triển khai, gộp vào `main` và phát hành trong 26.35.0 (13/11/2026); chưa kiểm trên tài khoản Zalo/Facebook thật (plan: `docs/plans/2026-11-13-chat-sync-reliability.md`); chặng D (Go) chưa làm, có plan riêng sau.  
 **Phạm vi:** Nhận tin, nối lại, số chưa đọc, trạng thái đã nhận/đã xem của Zalo và Facebook cá nhân (kể cả tin Page đi qua tài khoản cha). Fanpage (hộp thư Page riêng) để sau theo quyết định của anh.  
 **Nguồn:** Deplao `d47ef56` (26.8.5, điểm tách) → `2162f07` (26.11.0, 06/11/2026) của https://github.com/babyvibe/deplao-builder (MIT). Port bằng tay, từng đoạn; không gộp nhánh, không chép nguyên tệp.
 

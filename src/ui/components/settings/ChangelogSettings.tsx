@@ -15,6 +15,48 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.35.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🔁 Zalo tự nối lại khi rớt mạng hoặc khi mở Zalo PC, không còn tin bị nhân đôi',
+      '🔢 Số tin chưa đọc Facebook tăng đúng 1 cho mỗi tin; đọc tin Zalo trên điện thoại thì số chưa đọc trong app cũng giảm',
+      '✅ Nhãn "Đã nhận" / "Đã xem" dưới tin mình gửi cuối cùng, cho Zalo và Facebook cá nhân',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Nhãn "Đã nhận" / "Đã xem" dưới tin mình gửi cuối cùng trong hội thoại Zalo và Facebook cá nhân; mở lại app vẫn còn. Hộp thư Page chưa có nhãn này',
+          'Zalo: đọc hội thoại trên điện thoại hoặc Zalo PC thì số chưa đọc trong MaiHub giảm theo',
+          'Facebook: tin mẫu từ Page/bot (thẻ có tiêu đề, mô tả, nút) hiện thành chữ đọc được kèm link của nút',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Zalo: khi kết nối bị đóng (rớt mạng ngắn, đăng nhập Zalo PC), app tự nối lại trên cùng phiên; quá 90 giây chưa nối lại mới đăng nhập lại. Trong lúc tự nối lại, tài khoản vẫn hiện là đang kết nối',
+          'Facebook: lúc mở app mà mất mạng, app thử kết nối lại sau 15 giây, 60 giây và 180 giây',
+          'Facebook: bridge chat mã hoá (E2EE) nối lại với thời gian chờ tăng dần tới 5 phút thay cho cố định 10 giây',
+          'Thay đổi cần biết: số chưa đọc của hội thoại Facebook không còn bị đưa về 0 mỗi lần tải lại danh sách hội thoại. Hội thoại đã đọc trên điện thoại vẫn hiện số cho tới khi anh mở nó trong MaiHub',
+          'Lần mở app đầu tiên sau khi cập nhật có thể chậm hơn bình thường vì dựng thêm một chỉ mục cho bảng tin nhắn',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Zalo: một tin bị giao hai lần (thường ở nhóm đông) không còn hiện thành hai tin. Các tin trùng đã lưu từ trước không được dọn',
+          'Zalo: ảnh gửi từ Zalo điện thoại bản mới (định dạng JPEG XL) không hiện được; nay hiện bình thường, kể cả ảnh đã nhận trước đó',
+          'Facebook: mỗi tin đến làm số chưa đọc tăng 2; tin Facebook phát lại bị thông báo lần nữa',
+          'Facebook: mất mạng hoặc lỗi proxy bị báo nhầm là cookie hết hạn và tài khoản ngừng kết nối',
+          'Facebook: tên hội thoại dự phòng bị lỗi chữ ("Nhm khng tn"); ảnh đại diện chat riêng đôi khi lấy nhầm ảnh của chính mình',
+          'Facebook: đổi tên nhóm, ghim, thả cảm xúc, sửa/thu hồi tin… báo thành công dù Facebook trả về lỗi',
+          'Facebook: khối "Đã xem" hiện cả khi tin mới chỉ được nhận, chưa được xem',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.34.0',
     date: '11/2026',
     type: 'minor',

@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-11-13-chat-sync-reliability.md` (anh duyệt 13/11/2026). Chặng D (Go: `markRead`, lưu thiết bị E2EE, không phát lại tin cũ) có plan riêng.
 
-**Trạng thái:** Anh duyệt plan ngày 13/11/2026. Task 1–12 đã triển khai và gộp vào `main` (13/11/2026), chưa phát hành; chưa kiểm trên tài khoản Zalo/Facebook thật.
+**Trạng thái:** Anh duyệt plan ngày 13/11/2026. Task 1–12 đã triển khai, gộp vào `main` và phát hành trong 26.35.0 (13/11/2026); chưa kiểm trên tài khoản Zalo/Facebook thật.
 
 **Phương thức thực thi:** subagent-driven, subagent dùng Sonnet. Nhánh `feat/chat-sync-reliability` (từ `main` `f5a1bd4`), không commit/push khi anh chưa cho phép.
 
