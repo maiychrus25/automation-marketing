@@ -1,6 +1,7 @@
 // Typed wrappers quanh window.electronAPI
 // Dùng trong React components thay vì gọi trực tiếp
 
+import type { MobileSyncStatus, SyncRange } from '../../services/zalo/mobileSync/types';
 import type { ScopedKeyPolicy } from '../../services/control/controlAuthorization';
 import type { PageIdentity } from '../../models/dailyBrief';
 import { useAppStore } from '../store/appStore';
@@ -366,6 +367,11 @@ declare global {
         getRecoveryKey: (params: { password: string }) => Promise<{ success: boolean; recoveryKey?: string; error?: string }>;
         setBiometric: (params: { enabled: boolean }) => Promise<{ success: boolean; error?: string }>;
         biometricUnlock: () => Promise<{ success: boolean; error?: string }>;
+      };
+      mobileSync: {
+        start: (zaloId: string, range: SyncRange) => Promise<{ success: boolean; status?: MobileSyncStatus; error?: string }>;
+        cancel: (zaloId: string) => Promise<{ success: boolean; status?: MobileSyncStatus; error?: string }>;
+        getStatus: (zaloId: string) => Promise<{ success: boolean; status?: MobileSyncStatus | null; error?: string }>;
       };
       library: {
         getItems:    (params: any) => Promise<any>;
@@ -962,6 +968,7 @@ export const ipc = {
 
   erp,
   lockScreen: window.electronAPI?.lockScreen,
+  mobileSync: window.electronAPI?.mobileSync,
   library: window.electronAPI?.library,
   logs: window.electronAPI?.logs,
   on: window.electronAPI?.on,

@@ -723,6 +723,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     biometricUnlock:  () => ipcRenderer.invoke('lockScreen:biometricUnlock'),
   },
 
+  mobileSync: {
+    start:     (zaloId: string, range: { fromTs: number | null; toTs: number | null }) => ipcRenderer.invoke('zalo:mobileSync:start', { zaloId, ...range }),
+    cancel:    (zaloId: string) => ipcRenderer.invoke('zalo:mobileSync:cancel', { zaloId }),
+    getStatus: (zaloId: string) => ipcRenderer.invoke('zalo:mobileSync:status', { zaloId }),
+  },
+
   // ─── Media Library ───────────────────────────────────────────────
   library: {
     getItems:    (params: any) => ipcRenderer.invoke('library:getItems', params),
@@ -760,6 +766,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'event:pinsUpdated',
       'event:typing',
       'event:seen',
+      'event:mobileSync',
       'event:receipt',
       'qr:update',
       'update:state',

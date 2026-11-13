@@ -18,6 +18,7 @@ import NotificationCenter from '@/features/erp/notifications/NotificationCenter'
 import { Spinner } from '@/components/common/PageLoading';
 import { AlertIcon, KeyIcon, MonitorIcon, PluginIcon, RefreshIcon, StarIcon } from '@/components/common/icons';
 import { isFacebook, isTelegram } from '@/lib/channelHelper';
+import MobileSyncButton from './MobileSyncButton';
 
 
 const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?';
@@ -580,6 +581,7 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
             )}
           </button>
         )}
+        {activeAccountId && empMode !== 'employee' && <MobileSyncButton />}
 
         {/* Update: now handled by badge next to version + UpdateNotification popup */}
 

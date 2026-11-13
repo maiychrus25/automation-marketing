@@ -571,6 +571,9 @@ class DatabaseService {
             );
         `);
 
+        // Bảng đổi ID rõ -> ID mã hoá cho lịch sử điện thoại (xem ensurePlainIdMapTable cho DB phụ)
+        this.ensurePlainIdMapTable();
+
         // Telegram MTProto requires an access hash for most peer operations.
         // Keep this separate from contacts: group members and resolved peers
         // must not become conversation rows merely to retain their identity.
@@ -3275,7 +3278,7 @@ class DatabaseService {
      */
     public isDuplicateZaloDelivery(ownerZaloId: string, rawMessage: any): boolean {
         if (!this.initialized) return false;
-        const isReal = (id: unknown) => !!id && !/^(mb_|cli_)/.test(String(id));
+        const isReal = (id: unknown) => !!id && !DatabaseService.isSyntheticZaloMsgId(id);
         const msgId = rawMessage?.data?.msgId;
         const cliMsgId = rawMessage?.data?.cliMsgId;
         if (!isReal(msgId) || !cliMsgId) return false;
@@ -3293,88 +3296,235 @@ class DatabaseService {
         );
     }
 
+    /** msgId tạm do điện thoại/CLI sinh khi chưa có id thật từ server */
+    public static isSyntheticZaloMsgId(msgId: unknown): boolean {
+        return msgId != null && /^(mb|cli)_/.test(String(msgId));
+    }
+
+    private static readonly RECALLED_CONTENT = JSON.stringify({ msg: 'Tin nhắn đã bị thu hồi' });
+
+    /** Dựng dòng `messages` từ tin Zalo — dùng chung cho tin trực tiếp và lịch sử từ điện thoại. null nếu threadId không hợp lệ. */
+    private buildZaloMessageRow(ownerZaloId: string, rawMessage: any) {
+        const isGroup = rawMessage.type === 1;
+        // zca-js đã tính sẵn isSelf và threadId đúng:
+        // - isSelf = true khi uidFrom == "0" (mình gửi, selfListen)
+        // - threadId = data.idTo (nếu mình gửi) hoặc data.uidFrom (nhận từ người khác)
+        const isSent: boolean = rawMessage.isSelf === true;
+        const threadId: string = rawMessage.threadId || '';
+        if (!threadId || threadId === 'undefined') return null;
+
+        const content = DatabaseService.deriveZaloContent(rawMessage);
+        // Tất cả metadata nằm trong rawMessage.data (không có ở top-level)
+        const msgId = rawMessage.data?.msgId || String(Date.now());
+        const cliMsgId = rawMessage.data?.cliMsgId || null;
+        const uidFrom = String(rawMessage.data?.uidFrom || ownerZaloId);
+        const msgType = rawMessage.data?.msgType || 'text';
+        // data.ts là string timestamp ms từ server
+        const timestamp = parseInt(rawMessage.data?.ts) || Date.now();
+
+        // Trích dẫn (quote) - lưu nếu có
+        let quoteData: string | null = null;
+        const rawQuote = rawMessage.data?.quote;
+        if (rawQuote && rawQuote.globalMsgId) {
+            const quoteImageUrl = this.extractImageUrlFromQuote(rawQuote);
+            // TQuote không có msgType - chỉ có cliMsgType (number), cần convert sang string
+            const quoteMsgType = DatabaseService.clientMsgTypeToMsgType(rawQuote.cliMsgType ?? 0);
+            quoteData = JSON.stringify({
+                msg: rawQuote.msg ?? '',
+                fromD: rawQuote.fromD || '',
+                attach: rawQuote.attach ?? '',
+                msgType: quoteMsgType,
+                msgId: String(rawQuote.globalMsgId),
+                cliMsgId: String(rawQuote.cliMsgId ?? ''),
+                ownerId: String(rawQuote.ownerId ?? ''),
+                imageUrl: quoteImageUrl,
+            });
+        }
+
+        return {
+            msgId, cliMsgId, threadId, isGroup, isSent, uidFrom, content, msgType, timestamp,
+            attachments: JSON.stringify(rawMessage.data?.attachments || []),
+            quoteData,
+            isRecalled: 0, recalledContent: null as string | null,
+        };
+    }
+
+    private static readonly INSERT_ZALO_ROW_SQL =
+        `INSERT OR IGNORE INTO messages
+         (msg_id, cli_msg_id, owner_zalo_id, thread_id, thread_type, sender_id, content, msg_type, timestamp, is_sent, attachments, local_paths, status, quote_data, is_recalled, recalled_content)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+
+    private static zaloRowParams(ownerZaloId: string, r: NonNullable<ReturnType<DatabaseService['buildZaloMessageRow']>>): any[] {
+        return [
+            r.msgId, r.cliMsgId, ownerZaloId, r.threadId, r.isGroup ? 1 : 0, r.uidFrom, r.content, r.msgType,
+            r.timestamp, r.isSent ? 1 : 0, r.attachments, '{}', 'received', r.quoteData, r.isRecalled, r.recalledContent,
+        ];
+    }
+
+    /** Dòng Zalo cùng cliMsgId + hội thoại + người gửi (tra theo idx_messages_cli, lọc kênh/hội thoại trong code). */
+    private static filterZaloCliRows(rows: any[], threadId: string, senderId: string): any[] {
+        return rows.filter(x => (x.channel || 'zalo') === 'zalo' && x.thread_id === threadId && String(x.sender_id) === senderId);
+    }
+
+    /**
+     * Nếu đã có dòng id tạm (mb_/cli_) cùng cliMsgId + hội thoại + người gửi, và tin đến mang id thật →
+     * nâng dòng đó lên id thật + timestamp server (giữ nguyên local_paths, status, reactions...).
+     * Trả true nếu đã nâng; false nếu không có gì để nâng hoặc id thật đã tồn tại (vi phạm khoá duy nhất).
+     */
+    private upgradeSyntheticZaloRow(ownerZaloId: string, r: { msgId: string; cliMsgId: string | null; threadId: string; uidFrom: string; timestamp: number }): boolean {
+        if (!r.cliMsgId || DatabaseService.isSyntheticZaloMsgId(r.msgId)) return false;
+        const rows = DatabaseService.filterZaloCliRows(
+            this.query<any>('SELECT id, msg_id, thread_id, sender_id, channel FROM messages WHERE owner_zalo_id = ? AND cli_msg_id = ? AND cli_msg_id IS NOT NULL', [ownerZaloId, String(r.cliMsgId)]),
+            r.threadId, r.uidFrom);
+        const synthetic = rows.find(x => DatabaseService.isSyntheticZaloMsgId(x.msg_id));
+        if (!synthetic) return false;
+        return this.upgradeZaloRowById(synthetic.id, r.msgId, r.timestamp);
+    }
+
+    private upgradeZaloRowById(rowId: number, msgId: string, timestamp: number): boolean {
+        const res = db!.prepare('UPDATE OR IGNORE messages SET msg_id = ?, timestamp = ? WHERE id = ?').run(msgId, timestamp, rowId);
+        return res.changes > 0;
+    }
+
     public async saveMessage(ownerZaloId: string, rawMessage: any): Promise<void> {
         if (!this.initialized) return;
         try {
-            const isGroup = rawMessage.type === 1;
-
-            // zca-js đã tính sẵn isSelf và threadId đúng:
-            // - isSelf = true khi uidFrom == "0" (mình gửi, selfListen)
-            // - threadId = data.idTo (nếu mình gửi) hoặc data.uidFrom (nhận từ người khác)
-            const isSent: boolean = rawMessage.isSelf === true;
-            const threadId: string = rawMessage.threadId || '';
-
             // DEBUG: log toàn bộ raw fields để phát hiện lỗi
-            Logger.log(`[DB.saveMessage] 📩 raw: isSelf=${rawMessage.isSelf} | type=${rawMessage.type} | threadId="${rawMessage.threadId}" | computed isSent=${isSent} | computed threadId="${threadId}" | data.uidFrom="${rawMessage.data?.uidFrom}" | data.idTo="${rawMessage.data?.idTo}" | data.msgId="${rawMessage.data?.msgId}" | top_keys=[${Object.keys(rawMessage).join(',')}]`);
+            Logger.log(`[DB.saveMessage] 📩 raw: isSelf=${rawMessage.isSelf} | type=${rawMessage.type} | threadId="${rawMessage.threadId}" | data.uidFrom="${rawMessage.data?.uidFrom}" | data.idTo="${rawMessage.data?.idTo}" | data.msgId="${rawMessage.data?.msgId}" | top_keys=[${Object.keys(rawMessage).join(',')}]`);
 
+            const row = this.buildZaloMessageRow(ownerZaloId, rawMessage);
             // Guard: bỏ qua nếu threadId không hợp lệ
-            if (!threadId || threadId === 'undefined') {
-                Logger.warn(`[DB.saveMessage] ⚠️ SKIPPED - invalid threadId="${threadId}". rawMessage.isSelf=${rawMessage.isSelf}, rawMessage.threadId=${rawMessage.threadId}. Có thể main process chưa được rebuild với code mới!`);
+            if (!row) {
+                Logger.warn(`[DB.saveMessage] ⚠️ SKIPPED - invalid threadId="${rawMessage.threadId}". rawMessage.isSelf=${rawMessage.isSelf}. Có thể main process chưa được rebuild với code mới!`);
                 return;
             }
 
-            const content = DatabaseService.deriveZaloContent(rawMessage);
-
-            // Tất cả metadata nằm trong rawMessage.data (không có ở top-level)
-            const msgId = rawMessage.data?.msgId || String(Date.now());
-            const cliMsgId = rawMessage.data?.cliMsgId || null;
-            const uidFrom = rawMessage.data?.uidFrom || ownerZaloId;
-            const msgType = rawMessage.data?.msgType || 'text';
-            // data.ts là string timestamp ms từ server
-            const timestamp = parseInt(rawMessage.data?.ts) || Date.now();
-
-            // Trích dẫn (quote) - lưu nếu có
-            let quoteData: string | null = null;
-            const rawQuote = rawMessage.data?.quote;
-            if (rawQuote && rawQuote.globalMsgId) {
-                const quoteImageUrl = this.extractImageUrlFromQuote(rawQuote);
-                // TQuote không có msgType - chỉ có cliMsgType (number), cần convert sang string
-                const quoteMsgType = DatabaseService.clientMsgTypeToMsgType(rawQuote.cliMsgType ?? 0);
-                quoteData = JSON.stringify({
-                    msg: rawQuote.msg ?? '',
-                    fromD: rawQuote.fromD || '',
-                    attach: rawQuote.attach ?? '',
-                    msgType: quoteMsgType,
-                    msgId: String(rawQuote.globalMsgId),
-                    cliMsgId: String(rawQuote.cliMsgId ?? ''),
-                    ownerId: String(rawQuote.ownerId ?? ''),
-                    imageUrl: quoteImageUrl,
-                });
-            }
-
-            this.run(
-                `INSERT OR IGNORE INTO messages
-                 (msg_id, cli_msg_id, owner_zalo_id, thread_id, thread_type, sender_id, content, msg_type, timestamp, is_sent, attachments, local_paths, status, quote_data)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-                [
-                    msgId,
-                    cliMsgId,
-                    ownerZaloId,
-                    threadId,
-                    isGroup ? 1 : 0,
-                    String(uidFrom),
-                    content,
-                    msgType,
-                    timestamp,
-                    isSent ? 1 : 0,
-                    JSON.stringify(rawMessage.data?.attachments || []),
-                    '{}',
-                    'received',
-                    quoteData,
-                ]
-            );
+            // Lịch sử từ điện thoại có thể đã nhập tin này dưới id tạm → nâng lên id thật, không chèn dòng thứ hai
+            // và không tăng chưa đọc lần nữa (tin đã được đếm/nhập trước đó).
+            const upgraded = this.upgradeSyntheticZaloRow(ownerZaloId, row);
+            if (!upgraded) this.run(DatabaseService.INSERT_ZALO_ROW_SQL, DatabaseService.zaloRowParams(ownerZaloId, row));
 
             this.updateContactLastMessage(
-                ownerZaloId, threadId,
-                isGroup ? 1 : 0,
-                content,
-                msgType,
-                timestamp,
-                !isSent
+                ownerZaloId, row.threadId,
+                row.isGroup ? 1 : 0,
+                row.content,
+                row.msgType,
+                row.timestamp,
+                !row.isSent && !upgraded
             );
         } catch (err: any) {
             Logger.error(`[DatabaseService] saveMessage error: ${err.message}`);
         }
+    }
+
+    /**
+     * Nhập lịch sử từ điện thoại (≤ ~1000 tin/lần): một transaction, idempotent.
+     * Không tăng chưa đọc; xem trước hội thoại chỉ tiến lên (updateContactLastMessage không ghi đè tin mới hơn).
+     */
+    public saveHistoryMessagesBulk(ownerZaloId: string, messages: any[]): { inserted: number; upgraded: number; skipped: number; threads: string[] } {
+        const result = { inserted: 0, upgraded: 0, skipped: 0, threads: [] as string[] };
+        if (!this.initialized || !Array.isArray(messages) || messages.length === 0) return result;
+
+        const findByCli = db!.prepare('SELECT id, msg_id, thread_id, sender_id, channel FROM messages WHERE owner_zalo_id = ? AND cli_msg_id = ? AND cli_msg_id IS NOT NULL');
+        const insert = db!.prepare(DatabaseService.INSERT_ZALO_ROW_SQL);
+        const touched = new Map<string, { isGroup: boolean; preview: { content: string; msgType: string; timestamp: number } | null }>();
+
+        db!.transaction(() => {
+            for (const raw of messages) {
+                const row = raw?.data?.msgId && parseInt(raw.data.ts) > 0 ? this.buildZaloMessageRow(ownerZaloId, raw) : null;
+                if (!row) { result.skipped++; continue; }
+                if (raw.isRecalled === true) {
+                    row.recalledContent = row.content;
+                    row.content = DatabaseService.RECALLED_CONTENT;
+                    row.msgType = 'recalled';
+                    row.isRecalled = 1;
+                }
+
+                let outcome: 'inserted' | 'upgraded' | 'skipped' = 'skipped';
+                const existing = row.cliMsgId
+                    ? DatabaseService.filterZaloCliRows(findByCli.all(ownerZaloId, String(row.cliMsgId)) as any[], row.threadId, row.uidFrom)
+                    : [];
+                if (existing.length === 0) {
+                    if (insert.run(...DatabaseService.zaloRowParams(ownerZaloId, row)).changes > 0) outcome = 'inserted';
+                } else if (!existing.some(x => x.msg_id === row.msgId || !DatabaseService.isSyntheticZaloMsgId(x.msg_id))) {
+                    // chỉ còn dòng id tạm: nâng lên id thật nếu tin lịch sử có id thật
+                    const synthetic = existing[0];
+                    if (!DatabaseService.isSyntheticZaloMsgId(row.msgId) && this.upgradeZaloRowById(synthetic.id, row.msgId, row.timestamp)) outcome = 'upgraded';
+                }
+                result[outcome]++;
+                if (outcome === 'skipped') continue;
+
+                const t = touched.get(row.threadId) ?? { isGroup: row.isGroup, preview: null };
+                if (!row.isRecalled && (!t.preview || row.timestamp >= t.preview.timestamp)) {
+                    t.preview = { content: row.content, msgType: row.msgType, timestamp: row.timestamp };
+                }
+                touched.set(row.threadId, t);
+            }
+
+            for (const [threadId, t] of touched) {
+                if (t.preview) {
+                    this.updateContactLastMessage(ownerZaloId, threadId, t.isGroup ? 1 : 0, t.preview.content, t.preview.msgType, t.preview.timestamp, false);
+                } else {
+                    // chỉ có tin thu hồi: vẫn bảo đảm hội thoại có dòng contacts
+                    db!.prepare(`INSERT OR IGNORE INTO contacts (owner_zalo_id, contact_id, display_name, avatar_url, is_friend, contact_type, unread_count, last_message, last_message_time)
+                                 VALUES (?,?,?,?,0,?,0,'',0)`).run(ownerZaloId, threadId, threadId, '', t.isGroup ? 'group' : 'user');
+                }
+            }
+        })();
+
+        result.threads = [...touched.keys()];
+        return result;
+    }
+
+    /** DB phụ (withDbPath) chưa chạy migration nên bảng được tạo khi dùng lần đầu. */
+    private ensurePlainIdMapTable(): void {
+        db!.exec(`CREATE TABLE IF NOT EXISTS zalo_plain_id_map (
+            owner_zalo_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            plain_id TEXT NOT NULL,
+            noise_id TEXT NOT NULL,
+            updated_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (owner_zalo_id, kind, plain_id)
+        )`);
+    }
+
+    public getPlainIdMap(ownerZaloId: string, kind: 'user' | 'group'): Map<string, string> {
+        this.ensurePlainIdMapTable();
+        const rows = db!.prepare('SELECT plain_id, noise_id FROM zalo_plain_id_map WHERE owner_zalo_id = ? AND kind = ? ORDER BY rowid').all(ownerZaloId, kind) as Array<{ plain_id: string; noise_id: string }>;
+        return new Map(rows.map(r => [r.plain_id, r.noise_id]));
+    }
+
+    public savePlainIdMap(ownerZaloId: string, kind: 'user' | 'group', entries: Array<[plainId: string, noiseId: string]>): void {
+        this.ensurePlainIdMapTable();
+        const upsert = db!.prepare(`INSERT INTO zalo_plain_id_map (owner_zalo_id, kind, plain_id, noise_id, updated_at) VALUES (?,?,?,?,?)
+            ON CONFLICT(owner_zalo_id, kind, plain_id) DO UPDATE SET noise_id = excluded.noise_id, updated_at = excluded.updated_at`);
+        const now = Date.now();
+        db!.transaction(() => { for (const [plainId, noiseId] of entries) upsert.run(ownerZaloId, kind, plainId, noiseId, now); })();
+    }
+
+    /** Hội thoại Zalo chưa có hồ sơ (tên rỗng hoặc bằng id), mới hoạt động nhất trước.
+     *  `onlyIds`: chỉ xét các id này (chỉ nhận id toàn chữ số, truy vấn theo lô có tham số ràng buộc). */
+    public getContactIdsWithoutProfile(ownerZaloId: string, limitPerKind: number, onlyIds?: string[]): { users: string[]; groups: string[] } {
+        const limit = Math.max(0, limitPerKind);
+        const base = `SELECT contact_id, last_message_time FROM contacts
+             WHERE owner_zalo_id = ? AND (channel IS NULL OR channel = 'zalo')
+               AND (display_name = '' OR display_name = contact_id)
+               AND (contact_type = 'group') = ?`;
+        const pick = (groupsOnly: boolean): string[] => {
+            if (!onlyIds) {
+                return (db!.prepare(`${base} ORDER BY last_message_time DESC LIMIT ?`)
+                    .all(ownerZaloId, groupsOnly ? 1 : 0, limit) as Array<{ contact_id: string }>).map(r => r.contact_id);
+            }
+            const ids = Array.from(new Set(onlyIds.filter(id => /^\d+$/.test(id))));
+            const found: Array<{ contact_id: string; last_message_time: number | null }> = [];
+            for (let i = 0; i < ids.length; i += 500) {
+                const chunk = ids.slice(i, i + 500);
+                found.push(...db!.prepare(`${base} AND contact_id IN (${chunk.map(() => '?').join(',')})`)
+                    .all(ownerZaloId, groupsOnly ? 1 : 0, ...chunk) as any[]);
+            }
+            return found.sort((a, b) => (b.last_message_time ?? 0) - (a.last_message_time ?? 0)).slice(0, limit).map(r => r.contact_id);
+        };
+        return { users: pick(false), groups: pick(true) };
     }
 
     /** Mark a message as handled by a specific employee */
@@ -4629,7 +4779,7 @@ class DatabaseService {
     /** Đánh dấu tin nhắn là đã thu hồi (is_recalled = 1, giữ nguyên row, lưu nội dung gốc vào recalled_content) */
     public markMessageRecalled(ownerZaloId: string, msgId: string): void {
         if (!this.initialized || !msgId) return;
-        const recalledContent = JSON.stringify({ msg: 'Tin nhắn đã bị thu hồi' });
+        const recalledContent = DatabaseService.RECALLED_CONTENT;
 
         // Lưu nội dung gốc vào recalled_content trước khi ghi đè
         const existing = this.queryOne<any>(

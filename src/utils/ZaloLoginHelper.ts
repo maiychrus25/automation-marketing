@@ -11,6 +11,7 @@ import { createProxyAgent } from "./ProxyHelper";
 import { enqueuePerKey } from "./enqueuePerKey";
 import { wireZaloListenerLifecycle, isCurrentZaloListener } from "./zaloListenerRetry";
 import { applyZaloReadElsewhere, attachZaloReadElsewhere } from "../services/zalo/zaloReadElsewhere";
+import MobileSyncService from "../services/zalo/mobileSync/MobileSyncService";
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_BASE_MS = 5000; // 5s base, exponential backoff
@@ -263,6 +264,8 @@ class ZaloLoginHelper {
     public static markRemoved(zaloId: string): void {
         ZaloLoginHelper.removedAccounts.add(zaloId);
         ZaloLoginHelper.cancelReconnect(zaloId);
+        // Dừng phiên đồng bộ lịch sử từ điện thoại (nếu có) để không ghi tiếp cho chủ đã xoá; không chờ, không ném lỗi.
+        try { void Promise.resolve(MobileSyncService.getInstance().cancel(zaloId)).catch(() => undefined); } catch { /* best-effort */ }
     }
 
     /** Bỏ đánh dấu (dùng khi account được thêm lại) */
@@ -1201,6 +1204,11 @@ class ZaloLoginHelper {
 
         // Đọc ở máy khác (cmd 504/524): bỏ số chưa đọc rồi báo UI
         attachZaloReadElsewhere(zaloId, connection.api, (items) => applyZaloReadElsewhere(zaloId, items));
+        try {
+            MobileSyncService.getInstance().attachToApi(zaloId, connection.api);
+        } catch (err: any) {
+            Logger.warn(`[ZaloLoginHelper] ${zaloId} mobile sync attach failed: ${err?.message}`);
+        }
 
         listener.start({ retryOnClose: true });
         ConnectionManager.setListenerStarted(zaloId, true);

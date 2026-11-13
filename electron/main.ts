@@ -7,6 +7,8 @@ import * as cron from 'node-cron';
 import DatabaseService from '../src/services/database/DatabaseService';
 import { registerLoginIpc } from './ipc/loginIpc';
 import { registerZaloIpc } from './ipc/zaloIpc';
+import { registerMobileSyncIpc } from './ipc/mobileSyncIpc';
+import MobileSyncService from '../src/services/zalo/mobileSync/MobileSyncService';
 import { registerDatabaseIpc } from './ipc/databaseIpc';
 import { registerFileIpc } from './ipc/fileIpc';
 import { registerCRMIpc } from './ipc/crmIpc';
@@ -1274,6 +1276,9 @@ app.whenReady().then(async () => {
   // Register all IPC handlers
   registerLoginIpc(mainWindow);
   registerZaloIpc();
+  registerMobileSyncIpc();
+  // Dọn thư mục làm việc còn sót của phiên đồng bộ từ điện thoại; lỗi không được chặn khởi động
+  try { MobileSyncService.getInstance().sweepLeftovers(); } catch (e: any) { console.warn('[MobileSync] sweepLeftovers failed:', e?.message); }
   registerDatabaseIpc();
   registerFileIpc();
   registerCRMIpc();

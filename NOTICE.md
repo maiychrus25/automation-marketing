@@ -80,12 +80,39 @@ bản gốc, xem bảng). Thiết kế ở `docs/specs/2026-11-13-chat-sync-reli
 | F6 Tin mẫu (template) | `src/services/facebook/FacebookMQTTListener.ts` | `src/services/facebook/facebookTemplateText.ts`, `FacebookMQTTListener.ts` | Lưu như **tin `text`** có nội dung đọc được (tiêu đề, mô tả, tối đa 6 nút kèm link; link chứa khoảng trắng/ký tự điều khiển bị bỏ) (R2); **không** làm thẻ `FacebookTemplateCard` / kiểu `fb.template` |
 | §6 Mốc đã nhận / đã xem Facebook | `src/services/receipts/peerReceipts.ts`, `src/services/facebook/FacebookMQTTListener.ts` | `src/services/receipts/peerReceipts.ts`, `FacebookMQTTListener.ts`, `FacebookService.ts` | Ghi mốc từ MQTT và từ sự kiện `seen` của bridge E2EE (R3); chỉ cho hội thoại cá nhân, không cho hộp thư Page. `markRead` gửi thật để chặng D |
 
-**Cố ý không lấy:** đồng bộ lịch sử từ điện thoại (`mobileSync`, cần nâng
-`zca-js` và dựa vào giao thức không công bố), `FacebookMetrics`, thẻ template
+**Cố ý không lấy:** `FacebookMetrics`, thẻ template
 (`FacebookTemplateCard`), lưu trạng thái thiết bị E2EE (F8) và `markRead`
 gửi thật (F7, nửa gửi), cả hai thuộc chặng D (Go), chưa làm; cùng các mục đã loại
 ở đợt trước (gửi cookie/token/IMEI ra máy chủ ngoài, tệp nhị phân, bridge đăng
 nhập, Cloudflare sync, Telegram).
+
+## Port từ Deplao 26.11.0 — đồng bộ tin nhắn từ điện thoại (MaiHub, 11/2026)
+
+Tính năng kéo lịch sử chat Zalo từ điện thoại, theo https://github.com/babyvibe/deplao-builder
+(MIT) tại commit `2162f07`, thư mục `src/services/zalo/mobileSync/` và các chỗ nối của nó.
+Thiết kế ở `docs/specs/2026-11-13-zalo-phone-history-sync.md`. **Bốn tệp là port sát**
+phần giao thức/định dạng (giữ nguyên bố cục byte, bảng ánh xạ và hằng số; chỉ đổi import, log
+và tên cho MaiHub) và mỗi tệp có một dòng ghi nguồn ở đầu: `zdbBackup.ts`, `binNet.ts`,
+`mobileMessageConverter.ts`, `zcaMobileSync.ts`. **Các tệp còn lại viết riêng cho MaiHub**
+sau khi đọc hành vi của bản gốc. Chưa thử với điện thoại thật; không rõ Zalo có đòi phiên bản
+giao thức 685 cho `pull_mobile_msg` hay không (quyết định D2 trong spec). Không nâng `zca-js`
+(vẫn 2.1.2). Đường dẫn nguồn tính từ thư mục gốc kho thượng nguồn.
+
+| Tệp nguồn (`2162f07`) | File đích | MaiHub khác bản gốc ở điểm nào |
+|---|---|---|
+| `src/services/zalo/mobileSync/zdbBackup.ts` (port sát) | `src/services/zalo/mobileSync/zdbBackup.ts` | Giữ định dạng ZDB4.0 (AES-CBC theo khối 65536 byte, bảng mục, XZ). Thêm chặn giải nén: dừng ngay sau mục cuối, kiểm tra dung lượng trống, tên trùng (không phân biệt hoa thường) giữ mục đầu, tạo file độc quyền (`wx`), bỏ tên thiết bị Windows, kiểm tra nằm trong thư mục làm việc, trần 200 000 mục, tên ≤ 1024 byte khớp `^[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}$`. Tìm footer XZ lùi từng khối nên đuôi dư dài vẫn cắt đúng. Cùng thư viện `xz-decompress`, nhưng MaiHub ghim đúng `0.2.3` (bản gốc `^0.2.3`) |
+| `src/services/zalo/mobileSync/binNet.ts` (port sát) | `src/services/zalo/mobileSync/binNet.ts` | Giữ nguyên bảng tag; thêm test ghim từng tag |
+| `src/services/zalo/mobileSync/mobileMessageConverter.ts` (port sát) | `src/services/zalo/mobileSync/mobileMessageConverter.ts` | Bảng kiểu tin và quy tắc nội dung giữ nguyên; đầu ra khớp hàng mà `buildZaloMessageRow` của MaiHub ghi; người gửi là chính mình phải được ánh xạ sang id nhiễu của tài khoản (hợp đồng với service) |
+| `src/services/zalo/mobileSync/zcaMobileSync.ts` (port sát) | `src/services/zalo/mobileSync/zcaMobileSync.ts` | Endpoint, tham số, AES, znoise chính/dự phòng, hằng số khung giữ nguyên trên `zca-js` 2.1.2 (không nâng). Chỉ cài một lần mỗi tên hàm bổ sung, kiểm tra `null` khi mã hoá, lỗi giải khung chỉ log tên lỗi (không log nội dung) |
+| `src/services/zalo/mobileSync/backupDownload.ts` | `src/services/zalo/mobileSync/backupDownload.ts` | Viết riêng: chỉ `https` kể cả mọi lần chuyển hướng (tối đa 5), từ chối URL có userinfo, cookie quyết định theo từng request và đã bỏ thì không gắn lại, chỉ gửi cho `zalo.me`/`zaloapp.com`/`zdn.vn`/`zadn.vn` và subdomain, huỷ response đã hút bỏ, ngắt sau 60 s không có dữ liệu, URL không bao giờ nằm trong thông báo lỗi |
+| `src/services/zalo/mobileSync/MobileSyncService.ts` | `src/services/zalo/mobileSync/MobileSyncService.ts` | Viết riêng: gọi máy chủ có hạn (`pullMobile` 30 s, `cancelPullMobile` 10 s); cờ `closing` bỏ sự kiện sau khi đóng phiên; một file hội thoại hỏng được bỏ qua và đếm vào `conversationsFailed` (bản gốc cũng bỏ qua), lỗi DB làm hỏng cả phiên; `progress` là một tiến độ tổng không giảm; `sweepLeftovers()` dọn lúc khởi động; người dùng huỷ thắng việc đóng do hết hạn; huỷ phía Zalo theo khả năng khi `pullMobile` thành công muộn; ghi DB qua `runOnBossDb` (DB chính kể cả khi mở workspace khác); đổi ID theo lô 500, thử 3 lần |
+| `src/services/zalo/mobileSync/types.ts` | `src/services/zalo/mobileSync/types.ts` | Viết riêng, nhỏ hơn: chỉ kiểu trạng thái/thống kê/khoảng thời gian dùng chung main và renderer |
+| `electron/ipc/zalo/mobileSyncIpc.ts`, `electron/preload.ts`, `electron/main.ts`, `src/utils/zalo/ZaloLoginHelper.ts` | `electron/ipc/mobileSyncIpc.ts`, `electron/preload.ts`, `electron/main.ts`, `src/utils/ZaloLoginHelper.ts`, `src/ui/lib/ipc.ts` | Viết riêng: ba kênh `zalo:mobileSync:start/cancel/status`, từ chối workspace nhân viên, kiểm tra tham số (`zaloId` chỉ số), không bao giờ ném lỗi sang renderer; `attachToApi` mỗi lần dựng listener |
+| `src/ui/components/layout/topbar/MobileSyncButton.tsx` (và bộ chọn khoảng thời gian) | `src/ui/components/layout/MobileSyncButton.tsx`, `src/ui/lib/chat/mobileSyncView.ts`, `src/ui/components/layout/TopBar.tsx` | Một component, logic thuần tách ra có test; làm mới hội thoại đang mở bằng **gộp theo `msg_id`** (`mergeThreadMessages`) thay vì thay thế; giữ Tab trong hộp thoại và đưa focus về hộp khi đổi màn hình |
+| phần nhập lịch sử trong `src/services/database/DatabaseService.ts` | `src/services/database/DatabaseService.ts` (`saveHistoryMessagesBulk`, `buildZaloMessageRow`, `isSyntheticZaloMsgId`, `getPlainIdMap`/`savePlainIdMap`) | Viết riêng: `saveMessage` và nhập lịch sử dùng chung một bộ dựng hàng; tin trực tiếp mang id thật đến sau nâng dòng `mb_…` lên id thật; không tăng chưa đọc; bảng `zalo_plain_id_map` tạo ở migration và tự tạo khi truy cập DB phụ chưa migrate |
+
+**Cố ý không lấy:** trang trợ giúp, gợi ý sau đăng nhập, chấm đỏ "tính năng mới", đăng ký bảng
+cho Cloudflare sync, biến môi trường giữ file tạm, cờ `media_expired` và giao diện "Ảnh đã hết hạn".
 
 ### Bridge E2EE: nguồn gốc và giấy phép (ghi nhận sự việc)
 
@@ -168,6 +195,14 @@ Không phải sót — đổi sẽ phá tương thích hoặc gây rủi ro khô
 | `@noble/hashes` | 1.8.0 (lồng trong `pkijs`) | MIT |
 
 Bản quyền và văn bản giấy phép của từng gói nằm trong thư mục của gói đó trong `node_modules` và được giữ nguyên khi đóng gói.
+
+## Dependency runtime thêm cho đồng bộ tin nhắn từ điện thoại (MaiHub, 11/2026)
+
+`xz-decompress` **0.2.3** (giấy phép **MIT**, ghim đúng phiên bản trong `dependencies`) giải nén XZ bằng WebAssembly, không mã native, dùng ở `src/services/zalo/mobileSync/zdbBackup.ts`. Gói không có script cài đặt (`install`/`postinstall`) và không có dependency con (đối chiếu `node_modules/xz-decompress/package.json`).
+
+| Gói | Phiên bản | Giấy phép |
+|---|---|---|
+| `xz-decompress` | 0.2.3 | MIT |
 
 ## Lưu ý khi dùng
 

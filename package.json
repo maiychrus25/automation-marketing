@@ -60,6 +60,7 @@
     "tough-cookie": "^5.0.0",
     "uuid": "^13.0.0",
     "xlsx": "^0.18.5",
+    "xz-decompress": "0.2.3",
     "zca-js": "^2.1.2"
   },
   "devDependencies": {
