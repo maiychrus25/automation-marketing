@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-11-14-facebook-history-sync.md`
 
-**Trạng thái:** Cả 9 task đã triển khai và gộp vào `main` trên máy (14/11/2026), chưa phát hành, chưa thử với tài khoản Facebook thật.
+**Trạng thái:** Cả 9 task đã triển khai, gộp vào `main` và phát hành trong 26.36.0 (14/11/2026); chưa thử với tài khoản Facebook thật.
 
 ## Global Constraints
 

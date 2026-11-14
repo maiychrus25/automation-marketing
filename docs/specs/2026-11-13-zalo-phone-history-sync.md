@@ -1,7 +1,7 @@
 # Đồng bộ lịch sử tin nhắn Zalo từ điện thoại
 
 **Ngày:** 13/11/2026
-**Trạng thái:** Đã triển khai và gộp vào `main` trên máy (13/11/2026), chưa phát hành, chưa thử với điện thoại thật. Xem "Ghi chú sau triển khai" ở cuối. Plan: `docs/plans/2026-11-13-zalo-phone-history-sync.md`.
+**Trạng thái:** Đã triển khai, gộp vào `main` và phát hành trong 26.36.0 (14/11/2026); chưa thử với điện thoại thật. Xem "Ghi chú sau triển khai" ở cuối. Plan: `docs/plans/2026-11-13-zalo-phone-history-sync.md`.
 **Nguồn tham chiếu:** `babyvibe/deplao-builder` (MIT) tại `2162f07`, thư mục `src/services/zalo/mobileSync/` và các chỗ nối của nó.
 
 ## 1. Mục tiêu

@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-11-13-zalo-phone-history-sync.md`.
 
-**Trạng thái:** Đã triển khai xong 9/9 task và gộp vào `main` trên máy (13/11/2026), chưa phát hành, chưa thử với điện thoại thật.
+**Trạng thái:** Đã triển khai xong 9/9 task, gộp vào `main` và phát hành trong 26.36.0 (14/11/2026); chưa thử với điện thoại thật.
 
 **Phương thức thực thi:** subagent-driven, subagent dùng Sonnet. Không commit/push khi anh chưa cho phép.
 

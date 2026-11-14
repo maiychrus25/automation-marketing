@@ -15,6 +15,37 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.36.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '📱 Zalo: đồng bộ tin nhắn cũ từ điện thoại theo khoảng ngày',
+      '💬 Facebook cá nhân: xem được tin cũ khi mở hội thoại và khi kéo lên',
+      '🗂️ Facebook cá nhân: đồng bộ tin nhắn theo khoảng ngày cho mọi hội thoại',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Zalo: nút "Đồng bộ tin nhắn từ điện thoại" trên thanh công cụ. Chọn "1 tuần gần nhất", "Chọn ngày" hoặc "Toàn bộ", bấm "Đồng ý" trên điện thoại và giữ Zalo mở; tin cũ được ghép vào đúng hội thoại. Chạy lại không sinh tin trùng',
+          'Facebook cá nhân: mở hội thoại chưa có tin nào trong máy thì app tải các tin mới nhất; kéo lên hết tin trong máy thì app tải tiếp từng trang cũ hơn',
+          'Facebook cá nhân: nút "Đồng bộ tin nhắn Facebook" trên thanh công cụ. Đồng bộ theo khoảng ngày cho mọi hội thoại, có tiến độ, ẩn để chạy nền hoặc dừng giữa chừng',
+          'Tin cũ tải về (Zalo và Facebook) không làm tăng số chưa đọc, không thông báo và không chạy workflow',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Facebook: tin tải từ lịch sử đọc được sticker, video, ghi âm, ảnh động, tin hệ thống và thẻ chia sẻ',
+          'Cần biết: hội thoại Facebook mã hoá đầu cuối không tải được tin cũ vì Facebook không cho; app hiện một dòng ghi chú ở đầu hội thoại. Phần lớn chat riêng 1-1 thuộc loại này',
+          'Cần biết: tải lịch sử Facebook bị giới hạn tốc độ (tối đa 120 trang mỗi giờ) và tự tạm dừng 30 phút khi Facebook có dấu hiệu hạn chế. "Toàn bộ" trên tài khoản nhiều hội thoại có thể chạy nhiều giờ; lượt đồng bộ không chạy tiếp sau khi tắt app',
+          'Cần biết: Zalo không tải lại ảnh/video cũ đã hết hạn trên máy chủ; cảm xúc, bình chọn và thông báo nhóm không được nhập',
+          'Cần biết: hai tính năng đồng bộ chỉ dùng được trên máy đang đăng nhập tài khoản (không dùng được ở chế độ nhân viên); tài khoản Facebook Page chưa hỗ trợ',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.35.0',
     date: '11/2026',
     type: 'minor',

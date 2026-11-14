@@ -1,7 +1,7 @@
 # Tải lịch sử tin nhắn Facebook cá nhân
 
 **Ngày:** 14/11/2026
-**Trạng thái:** Đã triển khai và gộp vào `main` trên máy (14/11/2026), chưa phát hành, chưa thử với tài khoản Facebook thật. Anh duyệt 14/11/2026, gộp cả đồng bộ theo khoảng ngày vào cùng đợt. Plan: `docs/plans/2026-11-14-facebook-history-sync.md`.
+**Trạng thái:** Đã triển khai, gộp vào `main` và phát hành trong 26.36.0 (14/11/2026); chưa thử với tài khoản Facebook thật. Anh duyệt 14/11/2026, gộp cả đồng bộ theo khoảng ngày vào cùng đợt. Plan: `docs/plans/2026-11-14-facebook-history-sync.md`.
 **Nguồn tham chiếu:** `babyvibe/deplao-builder` (MIT) tại `2162f07`: `src/bridge-e2ee/bridge/history.go`, `FacebookService.fetchHistoryPage`, `src/shared/facebook/facebookHistorySync.ts`, `chat/window/channels/facebook/chatWindow.ts`, `FacebookHistorySyncService.ts`, `FacebookSyncButton.tsx`.
 
 ## 1. Mục tiêu
