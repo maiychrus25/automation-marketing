@@ -2,7 +2,11 @@ package bridge
 
 import (
 	"context"
+	"crypto/hmac"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"time"
 	"encoding/json"
 	"errors"
@@ -10,6 +14,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -52,6 +57,11 @@ type Client struct {
 	// historyTombstones: thread -> expiry; late answers of a released request stay claimed.
 	historyTombstones map[int64]time.Time
 	now               func() time.Time // nil means time.Now (tests inject a clock)
+
+	// deviceRestored: the E2EE device came from stored state instead of being registered in this run.
+	deviceRestored       bool
+	undecryptableStreak  atomic.Int32 // failed decrypts since the last message that decrypted
+	deviceResetRequested atomic.Bool  // the parent was already told to drop the stored device
 }
 
 // ClientConfig for creating a new client
@@ -112,6 +122,7 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	// Create device store. Priority: memory-only, stored deviceData, in-memory (no path), file.
 	var deviceStore *DeviceStore
 	var err error
+	deviceRestored := false
 	switch {
 	case cfg.E2EEMemoryOnly:
 		deviceStore, err = NewDeviceStoreMemoryOnly()
@@ -121,6 +132,8 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 			// Never log err or the data: they belong to a private-key blob.
 			logger.Warn().Msg("Stored E2EE device is unusable, creating a new one")
 			deviceStore, err = NewDeviceStoreMemoryOnly()
+		} else {
+			deviceRestored = true
 		}
 	case cfg.DevicePath == "":
 		deviceStore, err = NewDeviceStoreMemoryOnly()
@@ -146,6 +159,7 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		cancel:            cancel,
 		threadCache:       make(map[int64]*Thread),
 		recentUnreactions: make(map[string]int64),
+		deviceRestored:    deviceRestored,
 	}
 
 	// Snapshots go to the parent app (which stores them) unless the device is memory-only or file-backed.
@@ -268,6 +282,10 @@ type DeviceStore struct {
 	preKeys       map[uint32]*keys.PreKey
 	senderKeys    map[string][]byte
 	nextPreKeyID  uint32
+	// preKeySeed: one-time prekeys are derived from it by id (derivePreKey), so they can be recomputed
+	// after a restart even when the snapshot taken after an upload never reached storage.
+	preKeySeed    []byte
+	usedPreKeys   map[uint32]struct{} // derived one-time prekeys that were consumed
 	onDataChanged func(string) // callback when data changes (for deviceData mode)
 	saveMu        sync.Mutex   // serialises snapshots so they are published in order
 	deleted       bool         // set by DeleteDevice (server logged the device out); Save is then a no-op
@@ -317,6 +335,45 @@ type DeviceJSON struct {
 	PreKeys          map[string]string `json:"pre_keys,omitempty"`
 	SenderKeys       map[string]string `json:"sender_keys,omitempty"`
 	NextPreKeyID     uint32            `json:"next_pre_key_id"`
+	PreKeySeed       string            `json:"pre_key_seed,omitempty"`
+	UsedPreKeys      []uint32          `json:"used_pre_keys,omitempty"`
+}
+
+// maxPreKeyID is the largest one-time prekey id the Signal protocol uses (medium id).
+const maxPreKeyID = 0xFFFFFF
+
+func newPreKeySeed() []byte {
+	seed := make([]byte, 32)
+	if _, err := cryptorand.Read(seed); err != nil {
+		panic(err) // no entropy: nothing safe can be generated
+	}
+	return seed
+}
+
+// loadPreKeyState reads the prekey seed and the consumed ids from stored state. A state without a
+// valid seed leaves preKeySeed nil (file-backed legacy state keeps its stored prekeys).
+func (ds *DeviceStore) loadPreKeyState(deviceJSON *DeviceJSON) {
+	if seed, err := base64.StdEncoding.DecodeString(deviceJSON.PreKeySeed); err == nil && len(seed) == 32 {
+		ds.preKeySeed = seed
+	}
+	for _, id := range deviceJSON.UsedPreKeys {
+		ds.usedPreKeys[id] = struct{}{}
+	}
+}
+
+// derivePreKey returns the one-time prekey for id: the same key for the same seed and id, in every run.
+func (ds *DeviceStore) derivePreKey(id uint32) *keys.PreKey {
+	mac := hmac.New(sha256.New, ds.preKeySeed)
+	mac.Write([]byte("maihub-one-time-prekey"))
+	var idBytes [4]byte
+	binary.BigEndian.PutUint32(idBytes[:], id)
+	mac.Write(idBytes[:])
+	var priv [32]byte
+	copy(priv[:], mac.Sum(nil))
+	priv[0] &= 248 // Curve25519 clamping, as keys.NewKeyPair does
+	priv[31] &= 127
+	priv[31] |= 64
+	return &keys.PreKey{KeyPair: *keys.NewKeyPairFromPrivateKey(priv), KeyID: id}
 }
 
 // NewDeviceStore creates or loads a device store
@@ -328,6 +385,7 @@ func NewDeviceStore(path string) (*DeviceStore, error) {
 		preKeys:      make(map[uint32]*keys.PreKey),
 		senderKeys:   make(map[string][]byte),
 		nextPreKeyID: 1,
+		usedPreKeys:  make(map[uint32]struct{}),
 	}
 
 	if data, err := os.ReadFile(path); err == nil {
@@ -366,6 +424,7 @@ func NewDeviceStore(path string) (*DeviceStore, error) {
 		}
 
 		ds.nextPreKeyID = deviceJSON.NextPreKeyID
+		ds.loadPreKeyState(&deviceJSON)
 
 		// Load identities
 		for k, v := range deviceJSON.Identities {
@@ -409,6 +468,7 @@ func NewDeviceStore(path string) (*DeviceStore, error) {
 		}
 		rand.Read(ds.Device.AdvSecretKey)
 		ds.Device.SignedPreKey = ds.Device.IdentityKey.CreateSignedPreKey(1)
+		ds.preKeySeed = newPreKeySeed()
 		ds.Device.FacebookUUID = uuid.New()
 		if dir := filepath.Dir(path); dir != "." && dir != "" {
 			if err := os.MkdirAll(dir, 0700); err != nil {
@@ -461,6 +521,7 @@ func (ds *DeviceStore) GetDeviceData() (string, error) {
 		AdvSecretKey:     base64.StdEncoding.EncodeToString(ds.Device.AdvSecretKey),
 		FacebookUUID:     ds.Device.FacebookUUID.String(),
 		NextPreKeyID:     ds.nextPreKeyID,
+		PreKeySeed:       base64.StdEncoding.EncodeToString(ds.preKeySeed),
 		Identities:       make(map[string]string),
 		Sessions:         make(map[string]string),
 		PreKeys:          make(map[string]string),
@@ -491,6 +552,11 @@ func (ds *DeviceStore) GetDeviceData() (string, error) {
 	for k, v := range ds.senderKeys {
 		deviceJSON.SenderKeys[k] = base64.StdEncoding.EncodeToString(v)
 	}
+
+	for id := range ds.usedPreKeys {
+		deviceJSON.UsedPreKeys = append(deviceJSON.UsedPreKeys, id)
+	}
+	slices.Sort(deviceJSON.UsedPreKeys)
 
 	data, err := json.MarshalIndent(deviceJSON, "", "  ")
 	if err != nil {
@@ -531,6 +597,7 @@ func NewDeviceStoreFromData(dataStr string) (*DeviceStore, error) {
 		preKeys:      make(map[uint32]*keys.PreKey),
 		senderKeys:   make(map[string][]byte),
 		nextPreKeyID: 1,
+		usedPreKeys:  make(map[uint32]struct{}),
 	}
 
 	var deviceJSON DeviceJSON
@@ -568,6 +635,12 @@ func NewDeviceStoreFromData(dataStr string) (*DeviceStore, error) {
 	}
 
 	ds.nextPreKeyID = deviceJSON.NextPreKeyID
+	ds.loadPreKeyState(&deviceJSON)
+	if ds.preKeySeed == nil {
+		// Stored by 26.37.0: its one-time prekeys were random and may be missing here while Facebook
+		// still hands them out, so the device cannot be trusted to decrypt. Register a new one.
+		return nil, errors.New("stored device has no prekey seed")
+	}
 
 	// Load identities
 	for k, v := range deviceJSON.Identities {
@@ -638,6 +711,7 @@ func NewDeviceStoreMemoryOnly() (*DeviceStore, error) {
 		preKeys:      make(map[uint32]*keys.PreKey),
 		senderKeys:   make(map[string][]byte),
 		nextPreKeyID: 1,
+		usedPreKeys:  make(map[uint32]struct{}),
 		// onDataChanged is nil - no callback
 	}
 
@@ -650,6 +724,7 @@ func NewDeviceStoreMemoryOnly() (*DeviceStore, error) {
 	}
 	rand.Read(ds.Device.AdvSecretKey)
 	ds.Device.SignedPreKey = ds.Device.IdentityKey.CreateSignedPreKey(1)
+	ds.preKeySeed = newPreKeySeed()
 	ds.Device.FacebookUUID = uuid.New()
 
 	// Set store interfaces

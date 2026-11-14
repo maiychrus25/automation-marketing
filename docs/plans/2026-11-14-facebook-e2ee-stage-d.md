@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-11-13-chat-sync-reliability.md` (mục F7, F8, F9, mục 9, mục 11)
 
-**Trạng thái:** Cả 4 task đã triển khai, gộp vào `main` và phát hành trong 26.37.0 (14/11/2026); chưa thử với Facebook thật.
+**Trạng thái:** Cả 4 task đã triển khai, gộp vào `main` và phát hành trong 26.37.0 (14/11/2026); lỗi nhận tin mã hoá lộ ra ở lần chạy thật được sửa trong 26.37.1 (xem cuối tài liệu).
 
 ## Global Constraints
 
@@ -255,3 +255,10 @@ public async markReadOnServer(threadId: string): Promise<void>;
 - **Không có keychain thì không lưu:** `app_settings` được đồng bộ sang máy nhân viên; `FacebookE2EEDeviceStore` không ghi khi `safeStorage` không dùng được.
 - **Tin cũ không rõ hội thoại:** bỏ, không lưu vào hội thoại `0`.
 - **Để nguyên, đã ghi nhận:** mã hội thoại trên 2^53 trong sự kiện `message` của bridge mất chính xác khi `JSON.parse` (có từ trước, cả luồng tin mới); cửa sổ rất hẹp gửi vào kênh đã đóng lúc ngắt bridge (có từ trước); `app_settings` gồm cookie đã mã hoá được đồng bộ nguyên bảng sang nhân viên (có từ trước, cần task riêng).
+
+## Ghi chú sau phát hành: lỗi nhận tin mã hoá của 26.37.0 (sửa trong 26.37.1)
+
+- **Triệu chứng:** gửi tin mã hoá từ MaiHub được, tin gửi tới không hiện; kho khoá thay đổi đúng kiểu "xin gửi lại" mà không có phiên mới.
+- **Nguyên nhân:** khoá dùng một lần sinh ngẫu nhiên trong bridge và chỉ tới DB qua bản chụp gửi sau (gom 100 ms ở bridge, 1 giây ở app). Bridge bị đóng trong khoảng đó thì Facebook giữ các khoá mà thiết bị khôi phục không còn. Review và test của plan này không có ca "mất bản chụp sau khi tải khoá lên".
+- **Sửa:** khoá dùng một lần tính từ hạt giống theo id (`derivePreKey`), id đã dùng được ghi lại; bản lưu không có hạt giống bị từ chối; bản chụp đầu tiên ghi ngay; thiết bị khôi phục giải mã hỏng bốn lần liên tiếp thì bị thay (`reason: "undecryptable"`).
+- **Test:** `src/bridge-e2ee/bridge/device_crypto_test.go` chạy kho khoá qua libsignal như thư viện làm (không mạng), gồm ca dựng lại đúng lỗi này.

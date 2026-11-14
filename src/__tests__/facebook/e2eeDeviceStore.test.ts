@@ -35,34 +35,47 @@ describe('FacebookE2EEDeviceStore', () => {
     expect(store.load()).toBeNull();
   });
 
-  test('saveDebouncesToLatestValue', () => {
-    store.save('a'); store.save('b');
-    expect(set).not.toHaveBeenCalled();
-    jest.advanceTimersByTime(DEVICE_SAVE_DEBOUNCE_MS);
+  test('firstSnapshotIsWrittenAtOnceThenLaterOnesDebounceToLatest', () => {
+    // Bản đầu mang hạt giống khoá: phải nằm trong DB trước khi bridge tải khoá lên Facebook.
+    store.save('a');
     expect(set).toHaveBeenCalledTimes(1);
-    expect(set).toHaveBeenCalledWith(fbE2EEDeviceKey('acc1'), 'b', db);
+    expect(set).toHaveBeenCalledWith(fbE2EEDeviceKey('acc1'), 'a', db);
     expect(runOnBossDb).toHaveBeenCalled();
+    store.save('b'); store.save('c');
+    expect(set).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(DEVICE_SAVE_DEBOUNCE_MS);
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenLastCalledWith(fbE2EEDeviceKey('acc1'), 'c', db);
   });
 
-  test('flushWritesNowAndTimerDoesNotWriteAgain', () => {
-    store.save('a'); store.flush();
-    expect(set).toHaveBeenCalledTimes(1);
+  test('snapshotAfterAQuietPeriodIsWrittenAtOnce', () => {
+    store.save('a');
+    jest.advanceTimersByTime(DEVICE_SAVE_DEBOUNCE_MS);
+    store.save('b');
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenLastCalledWith(fbE2EEDeviceKey('acc1'), 'b', db);
+  });
+
+  test('flushWritesPendingNowAndTimerDoesNotWriteAgain', () => {
+    store.save('a'); store.save('b'); store.flush();
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenLastCalledWith(fbE2EEDeviceKey('acc1'), 'b', db);
     jest.advanceTimersByTime(DEVICE_SAVE_DEBOUNCE_MS * 5);
-    expect(set).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenCalledTimes(2);
     store.flush();
-    expect(set).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenCalledTimes(2);
   });
 
   test('clearDropsPendingAndRemovesStored', () => {
-    store.save('a'); store.clear();
+    store.save('a'); store.save('b'); store.clear();
     expect(remove).toHaveBeenCalledWith('fb_e2ee_device_acc1', db);
     jest.advanceTimersByTime(DEVICE_SAVE_DEBOUNCE_MS * 5);
-    expect(set).not.toHaveBeenCalled();
+    expect(set).toHaveBeenCalledTimes(1); // chỉ bản 'a' ghi ngay lúc đầu; 'b' đang chờ bị bỏ
   });
 
   test('setFailureDoesNotThrowAndNeverLogsDeviceData', () => {
     set.mockImplementation(() => { throw new Error('disk full'); });
-    store.save(DEVICE);
+    expect(() => store.save(DEVICE)).not.toThrow();
     expect(() => jest.advanceTimersByTime(DEVICE_SAVE_DEBOUNCE_MS)).not.toThrow();
     expect(Logger.warn).toHaveBeenCalled();
     const logged = JSON.stringify([(Logger.warn as jest.Mock).mock.calls, (Logger.error as jest.Mock).mock.calls, (Logger.log as jest.Mock).mock.calls]);

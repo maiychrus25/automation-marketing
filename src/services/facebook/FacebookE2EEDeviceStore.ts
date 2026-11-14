@@ -21,6 +21,7 @@ export interface E2EEDeviceStoreDeps {
 
 export class FacebookE2EEDeviceStore {
   private pending: string | null = null;
+  private lastWriteAt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly key: string;
   private readonly runOnBossDb: (fn: (db: SettingsDb) => void) => void;
@@ -55,7 +56,11 @@ export class FacebookE2EEDeviceStore {
     if (typeof deviceData !== 'string' || !deviceData) return;
     this.pending = deviceData;
     if (this.timer) return;
-    this.timer = setTimeout(() => { this.timer = null; this.flush(); }, DEVICE_SAVE_DEBOUNCE_MS);
+    // Bản đầu tiên (và bản đến sau một quãng im lặng) ghi ngay: nó mang hạt giống khoá, phải nằm trong DB trước khi
+    // bridge tải khoá lên Facebook. Các bản dồn dập sau đó mới gom lại.
+    const wait = this.lastWriteAt + DEVICE_SAVE_DEBOUNCE_MS - Date.now();
+    if (wait <= 0) { this.flush(); return; }
+    this.timer = setTimeout(() => { this.timer = null; this.flush(); }, wait);
   }
 
   flush(): void {
@@ -63,6 +68,7 @@ export class FacebookE2EEDeviceStore {
     const value = this.pending;
     this.pending = null;
     if (value === null) return;
+    this.lastWriteAt = Date.now();
     // Bảng settings được đồng bộ sang máy nhân viên: không có keychain thì không lưu (secureSet sẽ ghi chữ thường);
     // khi đó app đăng ký thiết bị mới mỗi lần mở như trước.
     if (!this.canEncrypt()) {

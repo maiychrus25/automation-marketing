@@ -74,6 +74,10 @@ unusable one is replaced by a new device. Without `deviceData` and `devicePath` 
 memory and changes emit `deviceDataChanged` (at most one per 100 ms; registration emits at once) with `{"deviceData": "<json>"}` (private keys: never
 log it). `e2eeMemoryOnly` emits nothing. When Facebook logs the device out the bridge emits
 `disconnected` with `{"isE2EE": true, "loggedOut": true}` and stops emitting `deviceDataChanged`.
+One-time prekeys are derived from a per-device seed stored in that state (`pre_key_seed`), so they can
+be recomputed after a restart; stored state without a seed is treated as unusable. A restored device
+that fails to decrypt four messages in a row emits the same `disconnected` event with
+`"reason": "undecryptable"` so the parent drops it and a new device is registered.
 
 `message` events produced by Messenger's upsert (sync/backfill) batch carry `"isHistory": true`.
 

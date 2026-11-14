@@ -106,10 +106,7 @@ func (ds *DeviceStore) GetOrGenPreKeys(ctx context.Context, count uint32) ([]*ke
 	defer ds.mu.Unlock()
 	result := make([]*keys.PreKey, 0, count)
 	for i := uint32(0); i < count; i++ {
-		pk := keys.NewPreKey(ds.nextPreKeyID)
-		ds.preKeys[ds.nextPreKeyID] = pk
-		result = append(result, pk)
-		ds.nextPreKeyID++
+		result = append(result, ds.nextPreKeyLocked())
 	}
 	ds.saveSoon()
 	return result, nil
@@ -118,23 +115,52 @@ func (ds *DeviceStore) GetOrGenPreKeys(ctx context.Context, count uint32) ([]*ke
 func (ds *DeviceStore) GenOnePreKey(ctx context.Context) (*keys.PreKey, error) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
-	pk := keys.NewPreKey(ds.nextPreKeyID)
-	ds.preKeys[ds.nextPreKeyID] = pk
-	ds.nextPreKeyID++
+	pk := ds.nextPreKeyLocked()
 	ds.saveSoon()
 	return pk, nil
+}
+
+// nextPreKeyLocked hands out the next one-time prekey. With a seed the key is derived from its id
+// and not stored: losing a snapshot (or nextPreKeyID itself) can then never leave Facebook holding a
+// key this device no longer has, and a repeated upload publishes the same keys for the same ids.
+func (ds *DeviceStore) nextPreKeyLocked() *keys.PreKey {
+	id := ds.nextPreKeyID
+	for _, used := ds.usedPreKeys[id]; used; _, used = ds.usedPreKeys[id] {
+		id++ // never publish a consumed id again
+	}
+	ds.nextPreKeyID = id + 1
+	if ds.preKeySeed != nil {
+		return ds.derivePreKey(id)
+	}
+	pk := keys.NewPreKey(id)
+	ds.preKeys[id] = pk
+	return pk
 }
 
 func (ds *DeviceStore) GetPreKey(ctx context.Context, id uint32) (*keys.PreKey, error) {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
-	return ds.preKeys[id], nil
+	if pk, ok := ds.preKeys[id]; ok {
+		return pk, nil
+	}
+	if ds.preKeySeed == nil || id == 0 || id > maxPreKeyID {
+		return nil, nil
+	}
+	if _, used := ds.usedPreKeys[id]; used {
+		return nil, nil
+	}
+	return ds.derivePreKey(id), nil
 }
 
 func (ds *DeviceStore) RemovePreKey(ctx context.Context, id uint32) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	delete(ds.preKeys, id)
+	if ds.preKeySeed != nil {
+		// shortcut: the consumed set only grows (one id per new sender session); prune below a
+		// low-water mark if a device ever accumulates enough to matter.
+		ds.usedPreKeys[id] = struct{}{}
+	}
 	ds.saveSoon()
 	return nil
 }
@@ -143,10 +169,19 @@ func (ds *DeviceStore) MarkPreKeysAsUploaded(ctx context.Context, upToID uint32)
 	return nil
 }
 
+// UploadedPreKeyCount tells whatsmeow whether the local store still has uploaded prekeys. Derived
+// keys are always available, so after the first upload report a full batch; the server-side count
+// then decides alone when more are needed.
 func (ds *DeviceStore) UploadedPreKeyCount(ctx context.Context) (int, error) {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
-	return len(ds.preKeys), nil
+	if ds.preKeySeed == nil {
+		return len(ds.preKeys), nil
+	}
+	if ds.nextPreKeyID > 1 {
+		return 50, nil
+	}
+	return 0, nil
 }
 
 func (ds *DeviceStore) PutSenderKey(ctx context.Context, group, user string, session []byte) error {

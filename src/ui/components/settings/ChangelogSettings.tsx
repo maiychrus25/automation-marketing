@@ -15,6 +15,23 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.1',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🛠️ Sửa lỗi bản 26.37.0: chat Facebook mã hoá đầu cuối gửi được nhưng không nhận được tin',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Facebook cá nhân: sau khi cập nhật 26.37.0, tin mã hoá gửi tới không hiện trong app dù gửi đi vẫn được. Nguyên nhân là thiết bị mã hoá được khôi phục thiếu các khoá mà Facebook đang phát cho người gửi. Bản này tạo lại thiết bị một lần sau khi cập nhật và từ đó không còn mất khoá kiểu này',
+          'Facebook cá nhân: nếu thiết bị mã hoá đã lưu vẫn không giải mã được tin đến nhiều lần liên tiếp, app tự bỏ nó và đăng ký thiết bị mới thay vì im lặng không nhận tin',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.0',
     date: '11/2026',
     type: 'minor',
