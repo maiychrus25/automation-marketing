@@ -17,8 +17,11 @@ import {
   getThreadList, parseThreadNodes, fetchThreadMessages,
   changeThreadName, changeThreadEmoji, changeNickname,
   addGroupAdmin, removeGroupAdmin, changeApprovalMode,
-  approvePendingMember, getGroupLink, setGroupLink,
+  approvePendingMember, getGroupLink, setGroupLink, getThreadListPage,
 } from './FacebookThreadManager';
+import { FacebookHistoryFetcher, FetchPageOptions } from './FacebookHistoryFetcher';
+import { FacebookHistoryLimiter } from './FacebookHistoryLimiter';
+import type { FbHistoryAnchor, FbHistoryPageResult, FbHistoryRange } from './facebookHistory';
 import { blockUser, unblockUser } from './FacebookBlock';
 import { changeThreadTheme } from './FacebookChangeTheme';
 import { createNote } from './FacebookCreateNotes';
@@ -60,6 +63,9 @@ export class FacebookService {
   private _facebookId: string | null = null;
   /** Dòng này là Page con (có parent_facebook_id): không E2EE bridge, gửi qua trình duyệt Business Suite */
   private _isPage = false;
+  /** Một bộ giới hạn tốc độ + một bộ tải lịch sử cho mỗi service (mỗi tài khoản). */
+  private historyLimiter: FacebookHistoryLimiter;
+  private historyFetcher: FacebookHistoryFetcher;
   /** id Page cổ điển: tin của Page có thể mang id này thay vì id profile */
   private _delegatePageId: string | null = null;
   /** Chống xử lý trùng thông báo tin Page (Facebook hay phát trùng 2 lần). */
@@ -104,6 +110,14 @@ export class FacebookService {
     this.cookie = cookie;
     this.proxyId = proxyId ?? null;
     this.httpsAgent = this.resolveProxyAgent();
+    this.historyLimiter = new FacebookHistoryLimiter();
+    this.historyFetcher = new FacebookHistoryFetcher({
+      accountId,
+      facebookId: () => this.getFacebookId(),
+      bridge: () => this.e2eeBridge,
+      fetchGraphQLPage: (id, limit) => this.fetchThreadMessages(id, limit),
+      limiter: this.historyLimiter,
+    });
     try {
       const acc = DatabaseService.getInstance().getFBAccount(accountId);
       this._isPage = !!acc?.parent_facebook_id;
@@ -2610,6 +2624,27 @@ export class FacebookService {
     error?: string;
   }> {
     return fetchThreadMessages(this.requireSession(), threadId, limit, beforeCursor, this.httpsAgent);
+  }
+
+  // ─── Lịch sử tin nhắn (uỷ quyền cho FacebookHistoryFetcher) ────────────────
+
+  public isE2EEThread(threadId: string): boolean { return this.historyFetcher.isE2EEThread(threadId); }
+  public historyLimiterFor(): FacebookHistoryLimiter { return this.historyLimiter; }
+
+  public fetchHistoryPage(threadId: string, anchor: FbHistoryAnchor, range?: FbHistoryRange, opts?: FetchPageOptions): Promise<FbHistoryPageResult> {
+    return this.historyFetcher.fetchPage(threadId, anchor, range, opts);
+  }
+
+  public syncThreadHistory(threadId: string, range: FbHistoryRange, opts?: Parameters<FacebookHistoryFetcher['syncThread']>[2]): ReturnType<FacebookHistoryFetcher['syncThread']> {
+    return this.historyFetcher.syncThread(threadId, range, opts);
+  }
+
+  public getThreadListPage(before: number | null): ReturnType<typeof getThreadListPage> {
+    return getThreadListPage(this.requireSession(), this.accountId, before, 50, this.httpsAgent);
+  }
+
+  public persistGraphQLHistory(threadId: string, messages: any[]): { stored: number; fresh: number; received: number } {
+    return this.historyFetcher.persistGraphQLMessages(threadId, messages);
   }
 
   // ─── Phase 3 Operations ─────────────────────────────────────────────────────

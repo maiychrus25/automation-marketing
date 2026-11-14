@@ -492,6 +492,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     changeThreadEmoji:   (params: any) => ipcRenderer.invoke('fb:changeThreadEmoji', params),
     changeNickname:      (params: any) => ipcRenderer.invoke('fb:changeNickname', params),
     loginWithCredentials:(params: any) => ipcRenderer.invoke('fb:loginWithCredentials', params),    fetchThreadMessages:   (params: any) => ipcRenderer.invoke('fb:fetchThreadMessages', params),
+    fetchOlderMessages:    (params: any) => ipcRenderer.invoke('fb:fetchOlderMessages', params),
     refreshContactAvatar:  (params: any) => ipcRenderer.invoke('fb:refreshContactAvatar', params),
     sendTyping:            (params: any) => ipcRenderer.invoke('fb:sendTyping', params),
     blockUser:             (params: any) => ipcRenderer.invoke('fb:blockUser', params),
@@ -729,6 +730,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getStatus: (zaloId: string) => ipcRenderer.invoke('zalo:mobileSync:status', { zaloId }),
   },
 
+  fbHistorySync: {
+    start:     (accountId: string, range: { fromTs: number | null; toTs: number | null }) => ipcRenderer.invoke('fb:historySync:start', { accountId, ...range }),
+    cancel:    (accountId: string) => ipcRenderer.invoke('fb:historySync:cancel', { accountId }),
+    getStatus: (accountId: string) => ipcRenderer.invoke('fb:historySync:status', { accountId }),
+  },
+
   // ─── Media Library ───────────────────────────────────────────────
   library: {
     getItems:    (params: any) => ipcRenderer.invoke('library:getItems', params),
@@ -767,6 +774,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'event:typing',
       'event:seen',
       'event:mobileSync',
+      'event:fbHistorySync',
       'event:receipt',
       'qr:update',
       'update:state',

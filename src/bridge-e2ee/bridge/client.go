@@ -44,6 +44,13 @@ type Client struct {
 	threadCache         map[int64]*Thread
 	recentUnreactions   map[string]int64 // key: messageId+actorId, value: timestamp
 	recentUnreactionsMu sync.RWMutex
+
+	// historyCollectors: one waiting history request per thread (history.go).
+	historyMu         sync.Mutex
+	historyCollectors map[int64]*historyCollector
+	// historyTombstones: thread -> expiry; late answers of a released request stay claimed.
+	historyTombstones map[int64]time.Time
+	now               func() time.Time // nil means time.Now (tests inject a clock)
 }
 
 // ClientConfig for creating a new client

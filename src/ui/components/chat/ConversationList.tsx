@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useChatStore } from '@/store/chatStore';
+import { useChatStore, getMessageCacheKey } from '@/store/chatStore';
 import { useAccountStore } from '@/store/accountStore';
 import { useAppStore } from '@/store/appStore';
 import ipc, { buildZaloAuth } from '@/lib/ipc';
@@ -25,6 +25,7 @@ import { extractUserProfile } from '../../../utils/profileUtils';
 import { refreshContactAlias } from '../../hooks/useZaloEvents';
 import PageLoading from '@/components/common/PageLoading';
 import { CHANNEL, isZalo, isNonZalo, isTelegramUser } from '@/lib/channelHelper';
+import { shouldFetchFbHistoryOnOpen, interpretFbOlderResult, fbHistoryTriedKey, rowsFromGetMessages } from '@/lib/chat/fbOlderMessages';
 import ForumTopicsPanel from './ForumTopicsPanel';
 
 interface LabelData { id: number; text: string; color: string; emoji: string; conversations: string[]; textKey?: string; offset?: number; createTime?: number; }
@@ -44,6 +45,9 @@ function isPhoneNumber(s: string): boolean {
 }
 
 type FilterType = 'all' | 'unread' | 'unreplied' | 'others' | 'label';
+
+// Hội thoại Facebook đã thử tải lịch sử khi mở (trong lần chạy app này)
+const fbHistoryTried = new Set<string>();
 
 const MUTE_OPTIONS = [
   { label: 'Trong 1 giờ',              until: () => Date.now() + 60 * 60 * 1000 },
@@ -1406,6 +1410,25 @@ export default function ConversationList() {
               } catch (tgErr) {
                 console.warn(`[ConversationList] Telegram getMessages fallback error:`, tgErr);
               }
+            }
+            // Facebook: DB trống → tải trang mới nhất (một lần mỗi hội thoại trong lần chạy app)
+            const fbTriedKey = fbHistoryTriedKey(zaloId!, contactId);
+            const fbIsPage = !!useAccountStore.getState().accounts.find(a => a.zalo_id === zaloId)?.parent_zalo_id;
+            if (shouldFetchFbHistoryOnOpen({ channel: accChannel, isEmployee: false, isPage: fbIsPage, localCount: 0, alreadyTried: fbHistoryTried.has(fbTriedKey) })) {
+              fbHistoryTried.add(fbTriedKey);
+              // Fire-and-forget: không giữ trạng thái đang tải của hội thoại tới ~30s
+              (async () => {
+                try {
+                  const fbRes = await ipc.fb?.fetchOlderMessages({ accountId: zaloId!, threadId: contactId });
+                  if (interpretFbOlderResult(fbRes).kind !== 'loaded') return;
+                  const againRows = rowsFromGetMessages(await DataAccessor.getMessages({ zaloId: zaloId!, threadId: contactId, limit: MESSAGE_LOAD_LIMIT }));
+                  // Chỉ ghi khi danh sách của thread vẫn trống (tin đến/gửi trong lúc chờ không bị ghi đè)
+                  const current = useChatStore.getState().messages[getMessageCacheKey(zaloId!, contactId)] || [];
+                  if (againRows.length && current.length === 0) setMessages(zaloId!, contactId, [...againRows].reverse());
+                } catch {
+                  console.warn('[ConversationList] Facebook history fetch error');
+                }
+              })();
             }
           }
         } catch (err) {

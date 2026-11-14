@@ -261,13 +261,18 @@ func (c *Client) handleTable(tbl *table.LSTable) {
 	// upsert = sync/backfill messages (historical, returned during thread fetch or initial sync)
 	// insert = new real-time messages
 	upsert, insert := tbl.WrapMessages()
+	// Pages that a waiting history request asked for are not live messages.
+	claimed := c.deliverHistory(tbl, upsert)
 
 	// Track handled message IDs to avoid duplicates
 	handledMsgIds := make(map[string]bool)
 
 	// Handle upserted messages (historical backfill) so the client can
 	// populate conversation history, not just messages received from now on.
-	for _, chatUpsert := range upsert {
+	for threadKey, chatUpsert := range upsert {
+		if claimed[threadKey] {
+			continue
+		}
 		for _, msg := range chatUpsert.Messages {
 			if msg.MessageId != "" {
 				if handledMsgIds[msg.MessageId] {

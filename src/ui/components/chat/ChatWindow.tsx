@@ -35,6 +35,7 @@ import ForwardMessageModal from './ForwardMessageModal';
 import PollBubble from './PollBubble';
 import FriendRequestBar from './FriendRequestBar';
 import { ReactionContextMenu, ReactionPopup, parseReactions, parseReactionsFull, displayReactionEmoji } from './ReactionComponents';
+import { shouldFetchFbOlder, fbOlderAnchor, interpretFbOlderResult } from '../../lib/chat/fbOlderMessages';
 import { lastOutgoingReceipt, receiptDisplay, receiptLabel } from '../../lib/chat/messageReceipt';
 import {
   EmployeeAvatar, FileBubble, MediaBubble, VoiceBubble,
@@ -84,10 +85,8 @@ export default function ChatWindow() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  // Facebook API cursor pagination (tạm thời vô hiệu hóa do API lỗi 500)
-  const fbCursorRef = useRef<string | null>(null);
-  const fbHasMoreRef = useRef(false);
-  const fbProbeDoneRef = useRef(true);
+  // Dòng ghi chú đầu danh sách tin (Facebook: hội thoại mã hoá đầu cuối không tải được tin cũ)
+  const [fbNote, setFbNote] = useState<string | null>(null);
   const [viewerState, setViewerState] = useState<{ images: MediaViewerImage[]; index: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; msg: any; isSent: boolean; isGroupAdmin?: boolean } | null>(null);
   const [forwardMsgs, setForwardMsgs] = useState<any[] | null>(null);
@@ -682,10 +681,11 @@ export default function ChatWindow() {
     // Reset selection mode when switching threads
     setIsSelecting(false);
     setSelectedMsgIds(new Set());
-    // Reset Facebook API cursor khi đổi thread (tạm thời vô hiệu hóa)
-    fbCursorRef.current = null;
-    fbHasMoreRef.current = false;
-    fbProbeDoneRef.current = true;
+    setFbNote(null);
+    // Yêu cầu tải đang chạy của thread cũ không được giữ (hay về sau tự mở) khoá tải thêm của thread mới
+    loadMoreGenRef.current += 1;
+    setLoadingMore(false);
+    loadingMoreRef.current = false;
 	    setLoadingSpinner(true);
   }, [activeAccountId, activeThreadId]);
 
@@ -1458,6 +1458,7 @@ export default function ChatWindow() {
   const loadMoreFnRef = useRef<() => void>(() => {});
   const hasMoreRef = useRef(true);
   const loadingMoreRef = useRef(false);
+  const loadMoreGenRef = useRef(0); // tăng khi đổi thread: yêu cầu cũ không được đụng vào khoá của thread mới
   const hasMoreRetryRef = useRef(false); // tránh retry vô hạn
   useEffect(() => { loadMoreFnRef.current = handleLoadMore; });
   useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
@@ -1526,7 +1527,9 @@ export default function ChatWindow() {
           // Let user scroll up → handleLoadMore will probe DB and set hasMore=false
           // if there truly are no more messages. This keeps the auto-load + manual
           // button active on the first page.
-          if (realCount === MESSAGE_LOAD_LIMIT && activeAccountId && activeThreadId) {
+          // Facebook (không phải nhân viên): tin cũ còn nằm trên Facebook → không kết luận hết từ DB cục bộ.
+          if (realCount === MESSAGE_LOAD_LIMIT && activeAccountId && activeThreadId
+            && !shouldFetchFbOlder({ channel: getActiveAccount()?.channel, isPage: !!getActiveAccount()?.parent_zalo_id, isEmployee: useEmployeeStore.getState().mode === 'employee' })) {
             // Exactly 20 items → probe if there are actually more
             const minTs = realMsgs.reduce((min, m) => {
               const ts = m.timestamp || 0;
@@ -1598,15 +1601,7 @@ export default function ChatWindow() {
     setLoadingMore(true);
     loadingMoreRef.current = true;
     setLoadError(false);
-
-    // Safety: reset loadingMore if it's been stuck for > 10 seconds
-    const safetyTimer = setTimeout(() => {
-      if (loadingMoreRef.current) {
-        console.warn('[LOADMORE] Safety reset: loadingMore stuck for >10s');
-        setLoadingMore(false);
-        loadingMoreRef.current = false;
-      }
-    }, LOAD_MORE_TIMEOUT_MS);
+    const loadGen = loadMoreGenRef.current;
 
     // Re-read msgs from store to get the freshest oldest message
     // IMPORTANT: Use reduce to find MIN timestamp, not array order (array might not be sorted)
@@ -1633,6 +1628,15 @@ export default function ChatWindow() {
       return;
     }
 
+    // Safety: reset loadingMore if it's been stuck for > 10 seconds
+    const safetyTimer = setTimeout(() => {
+      if (loadingMoreRef.current && loadMoreGenRef.current === loadGen) {
+        console.warn('[LOADMORE] Safety reset: loadingMore stuck for >10s');
+        setLoadingMore(false);
+        loadingMoreRef.current = false;
+      }
+    }, shouldFetchFbOlder({ channel: getActiveAccount()?.channel, isPage: !!getActiveAccount()?.parent_zalo_id, isEmployee: useEmployeeStore.getState().mode === 'employee' }) ? 40_000 : LOAD_MORE_TIMEOUT_MS); // Facebook: chờ giới hạn tới 5s + bridge tới 30s
+
     // Lưu scrollHeight trước khi prepend để khôi phục vị trí
     savedScrollHeightRef.current = messagesContainerRef.current?.scrollHeight || 0;
     shouldRestoreScrollRef.current = true;
@@ -1640,6 +1644,8 @@ export default function ChatWindow() {
     try {
       // Step 1: Try REST (employee) hoặc local DB (boss/standalone)
       const isEmployee = useEmployeeStore.getState().mode === 'employee';
+      // Facebook: DB cục bộ hết không có nghĩa là hết tin (trang cũ nằm trên Facebook)
+      const fbOlder = shouldFetchFbOlder({ channel: getActiveAccount()?.channel, isPage: !!getActiveAccount()?.parent_zalo_id, isEmployee });
       let res: any;
       if (isEmployee) {
         const DataAccessor = (await import('../../lib/data/DataAccessor')).default;
@@ -1720,7 +1726,7 @@ export default function ChatWindow() {
           })();
         }
         // Edge case: exactly 20 items returned → probe if there are actually more
-        if (res.messages.length === MESSAGE_LOAD_LIMIT) {
+        if (res.messages.length === MESSAGE_LOAD_LIMIT && !fbOlder) {
           const probeRes = await DataAccessor.getMessages({
             zaloId: activeAccountId,
             threadId: activeThreadId,
@@ -1729,7 +1735,7 @@ export default function ChatWindow() {
             topicId: activeTopicId || undefined,
           });
           if (!probeRes?.messages?.length) setHasMore(false);
-        } else if (res.messages.length < MESSAGE_LOAD_LIMIT) {
+        } else if (res.messages.length < MESSAGE_LOAD_LIMIT && !fbOlder) {
           setHasMore(false);
         }
         return;
@@ -1788,25 +1794,60 @@ export default function ChatWindow() {
         return;
       }
 
+      // Step 2b: Facebook — tải trang cũ hơn qua bridge/GraphQL khi DB hết
+      if (shouldFetchFbOlder({ channel: activeAcc?.channel, isPage: !!activeAcc?.parent_zalo_id, isEmployee })) {
+        const anchor = fbOlderAnchor(useChatStore.getState().messages[getMessageCacheKey(activeAccountId, activeThreadId, activeTopicId)] || []);
+        if (anchor) {
+          const outcome = interpretFbOlderResult(await ipc.fb?.fetchOlderMessages({ accountId: activeAccountId, threadId: activeThreadId, ...anchor }));
+          // Yêu cầu có thể mất ~30s: người dùng có thể đã đổi hội thoại/tài khoản
+          const stillActive = () => useChatStore.getState().activeThreadId === activeThreadId && useAccountStore.getState().activeAccountId === activeAccountId;
+          if (!stillActive()) return;
+          if (outcome.kind === 'loaded') {
+            const dbRes = await DataAccessor.getMessages({
+              zaloId: activeAccountId,
+              threadId: activeThreadId,
+              limit: MESSAGE_LOAD_LIMIT,
+              before: anchor.beforeTimestampMs,
+              topicId: activeTopicId || undefined,
+            });
+            const prepended = dbRes?.messages?.length > 0;
+            if (prepended) {
+              useChatStore.getState().prependMessages(activeAccountId!, activeThreadId, dbRes.messages, activeTopicId);
+            }
+            if (!stillActive()) return;
+            if (!outcome.hasMore || !prepended) setHasMore(false);
+            if (!prepended) shouldRestoreScrollRef.current = false;
+            return; // có tin được chèn: giữ shouldRestoreScrollRef để khôi phục vị trí cuộn
+          } else if (outcome.kind === 'later') {
+            // Tạm thời (bridge chưa sẵn sàng/bận/đang nghỉ): giữ hasMore, thử lại ở lần kéo lên sau
+          } else if (outcome.kind === 'stop') {
+            setHasMore(false);
+            if (outcome.note) setFbNote(outcome.note);
+            if (outcome.warn) showNotification(outcome.warn, 'warning');
+          } else {
+            setLoadError(true);
+          }
+          shouldRestoreScrollRef.current = false;
+          return;
+        }
+      }
+
       // Step 3: Không có thêm tin nhắn
       setHasMore(false);
       shouldRestoreScrollRef.current = false;
     } catch {
-      shouldRestoreScrollRef.current = false;
-      setLoadError(true);
+      if (loadMoreGenRef.current === loadGen) {
+        shouldRestoreScrollRef.current = false;
+        setLoadError(true);
+      }
     } finally {
       clearTimeout(safetyTimer);
-      setLoadingMore(false);
-      loadingMoreRef.current = false;
+      if (loadMoreGenRef.current === loadGen) {
+        setLoadingMore(false);
+        loadingMoreRef.current = false;
+      }
     }
   };
-
-  /** Probe Facebook API sau initial load để xác định có tin cũ hơn không (TẠM THỜI VÔ HIỆU HÓA do API lỗi 500) */
-  const probeFbOlderMessages = React.useCallback(async (_accountId: string, _threadId: string) => {
-    // API đang lỗi 500 → bỏ qua, không còn tin cũ hơn
-    setHasMore(false);
-    fbHasMoreRef.current = false;
-  }, []);
 
   const handleUndo = async (msg: any) => {
     const auth = getAuth();
@@ -2598,6 +2639,7 @@ export default function ChatWindow() {
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto [overflow-anchor:auto] relative" style={{ willChange: 'scroll-position' }}>
                 {loadingSpinner && <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900 pointer-events-none"><div className="flex flex-col items-center gap-3"><div className="w-8 h-8 border-4 border-blue-400 border-t-transparent rounded-full animate-spin"></div><p className="text-sm text-gray-400">Đang tải...</p></div></div>}
         <div className="p-4 space-y-1.5">
+        {fbNote && <p className="text-center text-xs text-gray-400 py-1">{fbNote}</p>}
         {/* Load More Button - Hiển thị trên tin nhắn đầu tiên (cũ nhất) */}
         {msgs.length > 0 && (hasMore || loadError) && (
           <div className="flex justify-center py-3 mb-2">

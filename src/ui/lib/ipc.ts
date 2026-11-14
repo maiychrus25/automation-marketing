@@ -2,6 +2,7 @@
 // Dùng trong React components thay vì gọi trực tiếp
 
 import type { MobileSyncStatus, SyncRange } from '../../services/zalo/mobileSync/types';
+import type { FbHistoryPageResult, FbHistoryRange, FbHistorySyncStatus } from '../../services/facebook/facebookHistory';
 import type { ScopedKeyPolicy } from '../../services/control/controlAuthorization';
 import type { PageIdentity } from '../../models/dailyBrief';
 import { useAppStore } from '../store/appStore';
@@ -373,6 +374,11 @@ declare global {
         cancel: (zaloId: string) => Promise<{ success: boolean; status?: MobileSyncStatus; error?: string }>;
         getStatus: (zaloId: string) => Promise<{ success: boolean; status?: MobileSyncStatus | null; error?: string }>;
       };
+      fbHistorySync: {
+        start: (accountId: string, range: FbHistoryRange) => Promise<{ success: boolean; status?: FbHistorySyncStatus; error?: string }>;
+        cancel: (accountId: string) => Promise<{ success: boolean; status?: FbHistorySyncStatus | null; error?: string }>;
+        getStatus: (accountId: string) => Promise<{ success: boolean; status?: FbHistorySyncStatus | null; error?: string }>;
+      };
       library: {
         getItems:    (params: any) => Promise<any>;
         upload:      (params: any) => Promise<any>;
@@ -543,6 +549,7 @@ declare global {
         changeNickname:       (params: { accountId: string; threadId: string; userId: string; nickname: string }) => Promise<{ success: boolean; error?: string }>;
         loginWithCredentials: (params: { username: string; password: string; twoFASecret?: string }) => Promise<{ success: boolean; result?: any; error?: string }>;
         fetchThreadMessages: (params: { accountId: string; threadId: string; limit?: number; beforeCursor?: string | null }) => Promise<{ success: boolean; messages?: any[]; cursor?: { before: string | null; hasMore: boolean } | null; error?: string }>;
+        fetchOlderMessages: (params: { accountId: string; threadId: string; beforeTimestampMs?: number; beforeMessageId?: string }) => Promise<FbHistoryPageResult>;
         refreshContactAvatar: (params: { accountId: string; userId: string }) => Promise<{ success: boolean; avatarUrl?: string; error?: string }>;
         sendTyping:           (params: { accountId: string; threadId: string; isTyping: boolean; isGroup?: boolean }) => Promise<{ success: boolean; error?: string }>;
         blockUser:            (params: { accountId: string; userId: string }) => Promise<{ success: boolean; error?: string }>;
@@ -969,6 +976,7 @@ export const ipc = {
   erp,
   lockScreen: window.electronAPI?.lockScreen,
   mobileSync: window.electronAPI?.mobileSync,
+  fbHistorySync: window.electronAPI?.fbHistorySync,
   library: window.electronAPI?.library,
   logs: window.electronAPI?.logs,
   on: window.electronAPI?.on,

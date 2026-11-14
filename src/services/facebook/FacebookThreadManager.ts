@@ -11,6 +11,7 @@ import {
 import { buildFormData, buildPostConfig, parseFBResponse, rateLimitDelay } from './FacebookUtils';
 import Logger from '../../utils/Logger';
 import { assertFacebookMutationSuccess } from './FacebookGraphQLResult';
+import { templateTextFromStoryAttachment } from './facebookTemplateText';
 
 const GRAPHQL_BATCH_URL = 'https://www.facebook.com/api/graphqlbatch/';
 const GRAPHQL_URL = 'https://www.facebook.com/webgraphql/mutation/';
@@ -97,6 +98,74 @@ export async function getLastSeqId(dataFB: FBSessionData, httpsAgent?: any): Pro
     Logger.warn(`[FacebookThreadManager] getLastSeqId error: ${err.message}`);
     return '0';
   }
+}
+
+// Ported from babyvibe/deplao-builder @2162f07 (MIT): getThreadListPage / parseThreadListPage
+/** Pure: một trang danh sách hội thoại đã parse JSON; `nextBefore` = mốc hoạt động của hội thoại cuối trừ 1 (null = hết). */
+export function parseThreadListPage(
+  dataGet: string,
+  accountId: string,
+  fbUserId: string | undefined,
+  limit: number,
+): { threads: Array<FBThread & { lastActivityMs: number }>; nextBefore: number | null; error?: string } {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(dataGet);
+  } catch (err: any) {
+    return { threads: [], nextBefore: null, error: `Không đọc được danh sách hội thoại: ${err.message}` };
+  }
+  if (parsed?.o0?.error) {
+    const err = parsed.o0.error;
+    return { threads: [], nextBefore: null, error: String(err.summary || err.description || err.message || 'GraphQL error') };
+  }
+  const nodes: any[] = parsed?.o0?.data?.viewer?.message_threads?.nodes || [];
+  const activityById = new Map<string, number>();
+  for (const node of nodes) {
+    const id = String(node?.thread_key?.thread_fbid || node?.thread_key?.other_user_id || '');
+    if (id) activityById.set(id, Number(node?.updated_time_precise) || 0);
+  }
+  const threads = parseThreadNodes(dataGet, accountId, fbUserId)
+    .map(thread => ({ ...thread, lastActivityMs: activityById.get(String(thread.id)) || 0 }));
+  // Mốc cũ nhất = giá trị dương nhỏ nhất của trang (node cuối có thể thiếu trường)
+  const stamps = nodes.map(n => Number(n?.updated_time_precise) || 0).filter(v => v > 0);
+  const oldest = stamps.length ? Math.min(...stamps) : 0;
+  return { threads, nextBefore: nodes.length >= limit && oldest > 0 ? oldest - 1 : null };
+}
+
+/**
+ * Một trang danh sách hội thoại (cùng truy vấn với getThreadList, `before` = mốc của hội thoại cuối trang trước).
+ * getThreadList chỉ lấy 50 hội thoại mới nhất; đồng bộ theo khoảng thời gian cần đi tiếp tới hết khoảng.
+ */
+export async function getThreadListPage(
+  dataFB: FBSessionData,
+  accountId: string,
+  before: number | null,
+  limit: number = 50,
+  httpsAgent?: any,
+  tags: string[] = ['INBOX'],
+): Promise<{ threads: Array<FBThread & { lastActivityMs: number }>; nextBefore: number | null; error?: string }> {
+  const form = buildFormData(dataFB, { requireGraphql: false });
+  form['queries'] = JSON.stringify({
+    o0: {
+      doc_id: THREAD_LIST_DOC_ID,
+      query_params: { limit, before, tags, includeDeliveryReceipts: false, includeSeqID: false },
+    },
+  });
+  let responseText: string;
+  try {
+    const config = buildPostConfig(GRAPHQL_BATCH_URL, form, dataFB.cookieFacebook, undefined, httpsAgent);
+    const response = await axios.post(config.url, config.data, {
+      headers: config.headers,
+      timeout: config.timeout,
+      ...(httpsAgent ? { httpsAgent } : {}),
+    });
+    responseText = response.data as string;
+  } catch (err: any) {
+    return { threads: [], nextBefore: null, error: String(err?.message || 'Network error') };
+  }
+  if (typeof responseText === 'string') responseText = responseText.replace(/^for\s*\(;;\);/, '').trim();
+  const dataGet = String(responseText).split('{"successful_results"')[0];
+  return parseThreadListPage(dataGet, accountId, dataFB.FacebookID, limit);
 }
 
 /**
@@ -330,6 +399,89 @@ export async function changeNickname(
   }
 }
 
+// Ported from babyvibe/deplao-builder @2162f07 (MIT): graphQLBlobType / parse từng node tin của fetchThreadMessages
+/** Loại đính kèm theo __typename của GraphQL (trước đây mọi đính kèm lưu thành `file`). */
+function graphQLBlobType(typename: unknown): string {
+  switch (String(typename || '')) {
+    case 'MessageImage':
+    case 'MessagePhoto':
+      return 'image';
+    case 'MessageAnimatedImage':
+      return 'gif';
+    case 'MessageVideo':
+      return 'video';
+    case 'MessageAudio':
+      return 'audio';
+    default:
+      return 'file';
+  }
+}
+
+/** Non-array → [], bỏ phần tử null/không phải object (một node lỗi không được làm mất cả trang). */
+const asObjects = (v: unknown): any[] =>
+  Array.isArray(v) ? v.filter(x => x && typeof x === 'object') : [];
+
+/** Pure: một node tin GraphQL → dạng tin mà fetchThreadMessages trả về. Không ném lỗi với node thiếu trường. */
+export function parseGraphQLMessageNode(rawNode: any): {
+  id: string; body: string | null; isAdmin: boolean; timestampMs: number; timestamp: number;
+  senderId: string; senderName: string;
+  attachments: Array<{ id?: string; type: string; url: string | null; name?: string; fileSize?: number; mimeType?: string; [k: string]: any }>;
+  reactions: Array<{ userId: string; emoji: string }>; isUnsent: boolean;
+  replyToMessageId?: string; replyToSenderId?: string;
+} {
+  const node = rawNode || {};
+  const repliedNode = node.replied_to_message || node.repliedToMessage;
+  const replyToMessageId: string | undefined =
+    repliedNode?.message_id || repliedNode?.id || repliedNode?.messageMetadata?.messageId || undefined;
+  const replyToSenderId: string | undefined =
+    repliedNode?.message_sender?.id || repliedNode?.sender_id ||
+    repliedNode?.messageMetadata?.actorFbId || undefined;
+
+  // Tin hệ thống (đổi tên nhóm, thêm thành viên…): chữ nằm ở snippet
+  const isAdmin = /AdminText/i.test(String(node.__typename || ''));
+  const bodyText = typeof node.body === 'string' ? node.body : node.body?.text;
+  // Thẻ chia sẻ / tin mẫu (extensible_attachment): lưu thành chữ như mọi tin mẫu khác, chỉ khi tin không có chữ
+  const cardText = node.extensible_attachment ? templateTextFromStoryAttachment(node.extensible_attachment) : '';
+  const sticker = node.sticker;
+  const timestampMs = parseInt(node.timestamp_precise || node.timestamp || '0');
+  return {
+    id: node.message_id || node.id,
+    body: bodyText || (isAdmin ? node.snippet : null) || cardText || null,
+    isAdmin,
+    timestampMs,
+    senderId: node.message_sender?.id || node.sender_id || '',
+    senderName: node.message_sender?.name || node.sender_name || '',
+    attachments: [
+      ...asObjects(node.blob_attachments).map((a: any) => {
+        const type = graphQLBlobType(a.__typename);
+        return {
+          id: a.attachment_fbid || a.id,
+          type,
+          url: (type === 'video' || type === 'audio' ? a.playable_url : null)
+            || (type === 'gif' ? a.animated_image?.uri : null)
+            || a.large_preview?.uri || a.url || a.preview?.uri || null,
+          name: a.filename || a.name,
+          fileSize: a.filesize,
+          mimeType: a.content_type,
+        };
+      }),
+      ...(sticker ? [{
+        id: sticker.id,
+        type: 'sticker',
+        url: sticker.url || sticker.preview_image?.uri || sticker.image?.uri || null,
+      }] : []),
+    ],
+    reactions: asObjects(node.reactions?.nodes).map((r: any) => ({
+      userId: r.user?.id || '',
+      emoji: r.reaction || '',
+    })),
+    isUnsent: node.message_type === 'unsent',
+    timestamp: timestampMs,
+    replyToMessageId,
+    replyToSenderId,
+  };
+}
+
 /**
  * Ly tin nhn lch s t Facebook API (C7)
  * S dng GraphQL batch query (ging getThreadList). H tr cursor-based pagination.
@@ -395,41 +547,7 @@ export async function fetchThreadMessages(
     const messageEdges = thread?.messages?.edges || [];
     const pageInfo = thread?.messages?.pageInfo || {};
 
-    const messages = messageEdges.map((edge: any) => {
-      const node = edge.node || edge;
-
-      // Extract replied_to_message info (Facebook GraphQL field)
-      const repliedNode = node.replied_to_message || node.repliedToMessage;
-      const replyToMessageId: string | undefined =
-        repliedNode?.message_id || repliedNode?.id || repliedNode?.messageMetadata?.messageId || undefined;
-      const replyToSenderId: string | undefined =
-        repliedNode?.message_sender?.id || repliedNode?.sender_id ||
-        repliedNode?.messageMetadata?.actorFbId || undefined;
-
-      return {
-        id: node.message_id || node.id,
-        body: node.body?.text || node.body || null,
-        timestampMs: parseInt(node.timestamp_precise || node.timestamp || '0'),
-        senderId: node.message_sender?.id || node.sender_id || '',
-        senderName: node.message_sender?.name || node.sender_name || '',
-        attachments: (node.blob_attachments || []).map((a: any) => ({
-          id: a.attachment_fbid || a.id,
-          type: a.__typename?.replace('Message', '').toLowerCase() || 'file',
-          url: a.large_preview?.uri || a.url || a.preview?.uri || null,
-          name: a.filename || a.name,
-          fileSize: a.filesize,
-          mimeType: a.content_type,
-        })),
-        reactions: (node.reactions?.nodes || []).map((r: any) => ({
-          userId: r.user?.id || '',
-          emoji: r.reaction || '',
-        })),
-        isUnsent: node.message_type === 'unsent',
-        timestamp: parseInt(node.timestamp_precise || node.timestamp || '0'),
-        replyToMessageId,
-        replyToSenderId,
-      };
-    });
+    const messages = messageEdges.map((edge: any) => parseGraphQLMessageNode(edge?.node || edge));
 
     return {
       success: true,

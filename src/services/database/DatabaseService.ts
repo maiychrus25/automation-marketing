@@ -8267,9 +8267,12 @@ class DatabaseService {
         reactions?: string; is_history?: boolean;
     }): FbSaveOutcome {
         const now = Date.now();
-        Logger.log(`[DB:saveFBMessage] id=${msg.id} account_id=${msg.account_id} thread_id=${msg.thread_id} sender=${msg.sender_id} is_self=${msg.is_self} type=${msg.type} body="${(msg.body || '').slice(0,50)}" reply_to_id=${msg.reply_to_id || '(none)'}`);
-        if (msg.type === 'sticker') {
-          Logger.log(`[DB:saveFBMessage] [STICKER] Saving sticker msg: id=${msg.id} thread_id=${msg.thread_id} attachments=${(msg.attachments || '').slice(0,200)}`);
+        // Tin lịch sử (đồng bộ hàng loạt): không ghi nội dung / URL tin vào log
+        if (!msg.is_history) {
+          Logger.log(`[DB:saveFBMessage] id=${msg.id} account_id=${msg.account_id} thread_id=${msg.thread_id} sender=${msg.sender_id} is_self=${msg.is_self} type=${msg.type} body="${(msg.body || '').slice(0,50)}" reply_to_id=${msg.reply_to_id || '(none)'}`);
+          if (msg.type === 'sticker') {
+            Logger.log(`[DB:saveFBMessage] [STICKER] Saving sticker msg: id=${msg.id} thread_id=${msg.thread_id} attachments=${(msg.attachments || '').slice(0,200)}`);
+          }
         }
 
         // If this message is a reply, look up the original message content for quote_data
@@ -8284,9 +8287,9 @@ class DatabaseService {
                 senderId: '',
                 msgType: orig.type || 'text',
               });
-              Logger.log(`[DB:saveFBMessage] Resolved reply_to_id=${msg.reply_to_id} → content="${(orig.body || '').slice(0,50)}"`);
+              if (!msg.is_history) Logger.log(`[DB:saveFBMessage] Resolved reply_to_id=${msg.reply_to_id} → content="${(orig.body || '').slice(0,50)}"`);
             } else {
-              Logger.log(`[DB:saveFBMessage] reply_to_id=${msg.reply_to_id} not found in fb_messages, will try unified messages table`);
+              if (!msg.is_history) Logger.log(`[DB:saveFBMessage] reply_to_id=${msg.reply_to_id} not found in fb_messages, will try unified messages table`);
               // Fallback: try unified messages table
               const orig2 = this.queryOne<any>(`SELECT content, msg_type FROM messages WHERE msg_id = ?`, [msg.reply_to_id]);
               if (orig2) {
@@ -8316,12 +8319,12 @@ class DatabaseService {
         let ownerZaloId = msg.account_id;
         try {
             const fbAcc = this.queryOne<any>(`SELECT facebook_id FROM fb_accounts WHERE id = ?`, [msg.account_id]);
-            Logger.log(`[DB:saveFBMessage] Resolved fbAcc: ${JSON.stringify(fbAcc)} → ownerZaloId will be: ${fbAcc?.facebook_id || msg.account_id}`);
+            if (!msg.is_history) Logger.log(`[DB:saveFBMessage] Resolved fbAcc: ${JSON.stringify(fbAcc)} → ownerZaloId will be: ${fbAcc?.facebook_id || msg.account_id}`);
             if (fbAcc?.facebook_id) ownerZaloId = fbAcc.facebook_id;
         } catch (e: any) {
             Logger.warn(`[DB:saveFBMessage] Failed to resolve facebook_id: ${e.message}`);
         }
-        Logger.log(`[DB:saveFBMessage] INSERT INTO messages: msg_id=${msg.id} owner_zalo_id=${ownerZaloId} thread_id=${msg.thread_id} is_sent=${msg.is_self} channel=facebook`);
+        if (!msg.is_history) Logger.log(`[DB:saveFBMessage] INSERT INTO messages: msg_id=${msg.id} owner_zalo_id=${ownerZaloId} thread_id=${msg.thread_id} is_sent=${msg.is_self} channel=facebook`);
         // Generate display content for unified messages table when body is empty
         const displayContent = msg.body || (() => {
             if (msg.type === 'image' || msg.type === 'photo') return '🖼️ Hình ảnh';

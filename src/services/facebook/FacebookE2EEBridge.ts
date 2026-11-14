@@ -63,9 +63,13 @@ export const BRIDGE_METHODS = [
   'sendReaction',
   'sendImage',
   'sendFile',
+  'fetchMessages',
 ] as const;
 
 export type BridgeMethod = (typeof BRIDGE_METHODS)[number];
+
+/** Một trang lịch sử từ lệnh `fetchMessages` của bridge (tin ở dạng Message JSON của bridge). */
+export interface BridgeHistoryPage { threadId: string; messages: any[]; hasMoreBefore: boolean; minTimestampMs: number; minMessageId?: string }
 
 // ─── Errors ───────────────────────────────────────────────────────────────────
 
@@ -605,6 +609,26 @@ export class FacebookE2EEBridge extends EventEmitter {
       filePath: params.filePath,
       fileName: params.fileName || '',
     });
+  }
+
+  /**
+   * Tải một trang tin cũ hơn mốc (LightSpeed FetchMessagesTask). Bridge tự hết giờ sau timeoutMs;
+   * thời hạn của call dài hơn 5s để lỗi của bridge tới trước.
+   */
+  public async fetchMessages(params: {
+    threadId: string;
+    beforeTimestampMs: number;
+    beforeMessageId: string;
+    timeoutMs?: number;
+  }): Promise<BridgeHistoryPage> {
+    const timeoutMs = params.timeoutMs ?? 25_000;
+    return this.call('fetchMessages', {
+      // Chuỗi, không phải số: Go khai báo threadId là string, và id > 2^53 không mất chính xác.
+      threadId: String(params.threadId).split('@')[0],
+      beforeTimestampMs: params.beforeTimestampMs,
+      beforeMessageId: params.beforeMessageId,
+      timeoutMs,
+    }, timeoutMs + 5_000);
   }
 
   // ─── Shutdown ─────────────────────────────────────────────────────────────

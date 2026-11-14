@@ -7,6 +7,7 @@
 import { ipcMain } from 'electron';
 import { v4 as uuid } from 'uuid';
 import DatabaseService from '../../src/services/database/DatabaseService';
+import FacebookHistorySyncService from '../../src/services/facebook/FacebookHistorySyncService';
 import FacebookConnectionManager from '../../src/utils/FacebookConnectionManager';
 import { initSession, fetchBasicProfileFromHome, fetchFBHomepage, getUserInfoFacebookHtml, checkCookieState, isTransientFacebookError } from '../../src/services/facebook/FacebookSession';
 import { createStartupRetry } from '../../src/services/facebook/facebookStartupRetry';
@@ -29,7 +30,18 @@ function fbCookieKey(accountId: string): string {
  * Resolve accountId: nếu là Facebook UID (all digits) → tìm UUID từ fb_accounts.
  * Nếu đã là UUID → trả về nguyên. Dùng cho tất cả handlers nhận accountId từ UI.
  */
-function resolveInternalId(accountId: string): string {
+/**
+ * Tài khoản bị xoá / ngắt theo yêu cầu người dùng → dừng lượt đồng bộ lịch sử đang chạy (best-effort, không chờ, không ném lỗi).
+ * Lượt đồng bộ khoá theo facebook_id (id mà renderer truyền), nên huỷ theo facebook_id và cả id nội bộ.
+ */
+function cancelHistorySync(internalId: string, facebookId?: string | null): void {
+  try {
+    const sync = FacebookHistorySyncService.getInstance();
+    for (const key of new Set([facebookId, internalId])) if (key) sync.cancel(String(key));
+  } catch { /* best-effort */ }
+}
+
+export function resolveInternalId(accountId: string): string {
   // Nếu trông giống Facebook UID (all digits) → lookup UUID
   if (/^\d+$/.test(accountId)) {
     const fbAcc = DatabaseService.getInstance().getFBAccountByFacebookId(accountId);
@@ -59,7 +71,7 @@ export function setFBMainWindow(_win: any) {}
  * Tránh lỗi "Account not connected" khi mạng drop rồi online lại nhưng
  * ConnectionManager chưa kịp đồng bộ.
  */
-async function getFBServiceOrReconnect(internalId: string): Promise<FacebookService | null> {
+export async function getFBServiceOrReconnect(internalId: string): Promise<FacebookService | null> {
   let service = FacebookConnectionManager.get(internalId);
   if (service) return service;
 
@@ -290,6 +302,7 @@ export function registerFacebookIpc(): void {
       const fbAcc = DatabaseService.getInstance().getFBAccount(internalId);
       if (fbAcc && !fbAcc.parent_facebook_id) await removePageChildren(fbAcc.facebook_id, 'delete');
       fbStartupRetry.clear(internalId);
+      cancelHistorySync(internalId, fbAcc?.facebook_id);
       await FacebookConnectionManager.disconnect(internalId);
       secureDelete(fbCookieKey(internalId));
       DatabaseService.getInstance().deleteFBAccount(internalId);
@@ -608,6 +621,7 @@ export function registerFacebookIpc(): void {
     try {
       const internalId = resolveInternalId(accountId);
       fbStartupRetry.clear(internalId);
+      cancelHistorySync(internalId, DatabaseService.getInstance().getFBAccount(internalId)?.facebook_id);
       await FacebookConnectionManager.disconnect(internalId);
       DatabaseService.getInstance().updateFBAccountStatus(internalId, 'disconnected');
       return { success: true };
@@ -1661,26 +1675,8 @@ export function registerFacebookIpc(): void {
       const result = await service.fetchThreadMessages(params.threadId, params.limit, params.beforeCursor);
       // Lưu tin nhắn vào DB để dùng offline
       if (result.success && result.messages?.length) {
-        const db = DatabaseService.getInstance();
-        for (const msg of result.messages) {
-          db.saveFBMessage({
-            id: msg.id,
-            account_id: internalId,
-            thread_id: params.threadId,
-            sender_id: msg.senderId,
-            sender_name: msg.senderName || '',
-            body: msg.body || null,
-            timestamp: msg.timestampMs,
-            type: msg.attachments?.length ? 'file' : 'text',
-            attachments: msg.attachments?.length ? JSON.stringify(msg.attachments) : '[]',
-            reply_to_id: msg.replyToMessageId || '',
-            is_self: String(msg.senderId) === internalId ? 1 : 0,
-            is_unsent: msg.isUnsent ? 1 : 0,
-            reactions: msg.reactions?.length ? JSON.stringify(msg.reactions) : '{}',
-            is_history: true,
-          });
-        }
-        Logger.log(`[fb:fetchThreadMessages] Saved ${result.messages.length} messages to DB`);
+        const { stored } = service.persistGraphQLHistory(params.threadId, result.messages);
+        Logger.log(`[fb:fetchThreadMessages] Saved ${stored}/${result.messages.length} messages to DB`);
       }
       return result;
     } catch (err: any) {

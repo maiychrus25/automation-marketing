@@ -114,6 +114,31 @@ giao thức 685 cho `pull_mobile_msg` hay không (quyết định D2 trong spec)
 **Cố ý không lấy:** trang trợ giúp, gợi ý sau đăng nhập, chấm đỏ "tính năng mới", đăng ký bảng
 cho Cloudflare sync, biến môi trường giữ file tạm, cờ `media_expired` và giao diện "Ảnh đã hết hạn".
 
+## Port từ Deplao 26.11.0 — tải lịch sử tin nhắn Facebook (MaiHub, 11/2026)
+
+Tính năng tải tin cũ của Facebook cá nhân (khi mở hội thoại, khi kéo lên, và đồng bộ theo
+khoảng ngày), theo https://github.com/babyvibe/deplao-builder (MIT) tại commit `2162f07`.
+Thiết kế ở `docs/specs/2026-11-14-facebook-history-sync.md`. **Hai tệp là port sát** và có
+dòng ghi nguồn ở đầu: `src/bridge-e2ee/bridge/history.go` (bộ thu trang lịch sử và
+`FetchThreadHistory`, chỉnh cho khớp `Client` của MaiHub) và
+`src/services/facebook/facebookHistory.ts` (kiểu và hàm thuần). Trong
+`src/services/facebook/FacebookThreadManager.ts`, hai đoạn cũng port từ bản gốc
+(có dòng ghi nguồn): `getThreadListPage` / `parseThreadListPage` và `graphQLBlobType` cùng bộ đọc từng node
+tin của `fetchThreadMessages` (`parseGraphQLMessageNode`). **Mọi phần còn
+lại viết riêng cho MaiHub** sau khi đọc hành vi của bản gốc: `FacebookHistoryFetcher.ts`,
+`FacebookHistoryLimiter.ts`, `FacebookHistorySyncService.ts`, `electron/ipc/fbHistoryIpc.ts`,
+phần nối trong `FacebookService.ts`, `FacebookE2EEBridge.ts`, `preload.ts`, `ipc.ts`, giao diện
+(`fbOlderMessages.ts`, `fbHistorySyncView.ts`, `FacebookSyncButton.tsx`, nhánh Facebook trong
+`ChatWindow.tsx`/`ConversationList.tsx`) và các test (kể cả `bridge/history_test.go`).
+
+**Cố ý không port `FacebookHumanPacer`** (nhịp giãn cách ngẫu nhiên, "nghỉ đọc", "nghỉ giải
+lao" cho giống người dùng). MaiHub dùng một bộ giới hạn tốc độ thẳng thắn với hằng số cố định
+(2 giây giữa hai yêu cầu, 120 trang mỗi giờ, tự dừng 30 phút khi Facebook trả dấu hiệu hạn chế),
+không có yếu tố ngẫu nhiên. Cũng không lấy: tự vá "tin rỗng" khi mở hội thoại, gợi ý sau đăng nhập,
+đường proxy cho nhân viên, API ngoài, lệnh `syncHistory` của bridge. Không thêm dependency nào
+(npm lẫn Go); `go.mod`, `go.sum` và bản ghim `mautrix/meta` `e012f9f` không đổi. Chưa thử với tài
+khoản Facebook thật.
+
 ### Bridge E2EE: nguồn gốc và giấy phép (ghi nhận sự việc)
 
 Đây là ghi nhận sự việc đã có từ trước, **không phải kết luận pháp lý**.

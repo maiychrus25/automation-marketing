@@ -58,7 +58,19 @@ Async event (no id):
 ```
 
 Methods: `newClient`, `connect`, `connectE2EE`, `isConnected`, `sendMessage`,
-`sendE2EEMessage`, `disconnect`.
+`sendE2EEMessage`, `fetchMessages`, `disconnect`.
+
+`fetchMessages` loads one page of older messages for a thread:
+`{"method":"fetchMessages","params":{"threadId":"123","beforeTimestampMs":0,"beforeMessageId":"","timeoutMs":25000}}`
+returns `{threadId, messages (newest first), hasMoreBefore, minTimestampMs, minMessageId}`.
+Older messages that arrive for a waiting request, or up to 60 s after it ended (late answer), are not emitted as live message events. `timeoutMs` <= 0 uses 25 s; values above 60000 are capped at 60 s.
+
+## Tests
+
+```bash
+cd src/bridge-e2ee
+go vet . ./bridge/... && go test . ./bridge/...
+```
 
 Python wrappers exposed today:
 

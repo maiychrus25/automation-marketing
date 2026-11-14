@@ -16,7 +16,7 @@
 //     {"event": {"type": "<name>", "data": {...}, "timestamp": <ms>}}
 //
 // Methods: newClient, connect, connectE2EE, isConnected, disconnect,
-// sendMessage, sendReaction, sendE2EEMessage, sendE2EEReaction,
+// sendMessage, fetchMessages, sendReaction, sendE2EEMessage, sendE2EEReaction,
 // sendImage, sendFile, sendE2EESticker, sendE2EEAudio, sendE2EEVideo, sendE2EEDocument.
 //
 // Build:
@@ -26,12 +26,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"fbchat-bridge-e2ee/bridge"
 )
@@ -40,6 +44,37 @@ type request struct {
 	ID     uint64          `json:"id"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
+}
+
+// parseFetchMessagesParams reads the fetchMessages params. threadId must be a JSON string
+// (an optional "@…" suffix is dropped) so 17-digit ids stay exact; timeoutMs <= 0 gives 0
+// (FetchThreadHistory then applies its own default) and is capped at 60 s.
+func parseFetchMessagesParams(raw json.RawMessage) (threadID int64, beforeTs int64, beforeID string, timeout time.Duration, err error) {
+	var params struct {
+		ThreadID          string `json:"threadId"`
+		BeforeTimestampMs int64  `json:"beforeTimestampMs"`
+		BeforeMessageID   string `json:"beforeMessageId"`
+		TimeoutMs         int64  `json:"timeoutMs"`
+	}
+	if err = json.Unmarshal(raw, &params); err != nil {
+		return
+	}
+	if strings.TrimSpace(params.ThreadID) == "" {
+		err = fmt.Errorf("threadId is required")
+		return
+	}
+	threadID, perr := strconv.ParseInt(strings.TrimSpace(strings.SplitN(params.ThreadID, "@", 2)[0]), 10, 64)
+	if perr != nil || threadID == 0 {
+		threadID, err = 0, fmt.Errorf("invalid threadId %q", params.ThreadID)
+		return
+	}
+	if params.TimeoutMs > 60000 {
+		params.TimeoutMs = 60000
+	}
+	if params.TimeoutMs < 0 {
+		params.TimeoutMs = 0
+	}
+	return threadID, params.BeforeTimestampMs, params.BeforeMessageID, time.Duration(params.TimeoutMs) * time.Millisecond, nil
 }
 
 type response struct {
@@ -118,6 +153,35 @@ func handle(req *request) {
 		ok(req.ID, map[string]interface{}{
 			"user": user,
 		})
+
+	case "fetchMessages":
+		// One page of a thread's history (bridge/history.go). The answer arrives
+		// on the LightSpeed socket, so the wait runs in a goroutine: requests are
+		// served one at a time and a blocking wait would hold up sends.
+		if client == nil {
+			fail(req.ID, fmt.Errorf("client not initialised"))
+			return
+		}
+		threadID, beforeTs, beforeID, timeout, err := parseFetchMessagesParams(req.Params)
+		if err != nil {
+			fail(req.ID, err)
+			return
+		}
+		current, reqID := client, req.ID
+		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					fmt.Fprintf(os.Stderr, "panic in fetchMessages: %v\n%s\n", recovered, debug.Stack())
+					fail(reqID, fmt.Errorf("internal bridge error in fetchMessages: %v", recovered))
+				}
+			}()
+			page, err := current.FetchThreadHistory(context.Background(), threadID, beforeTs, beforeID, timeout)
+			if err != nil {
+				fail(reqID, err)
+				return
+			}
+			ok(reqID, page)
+		}()
 
 	case "connectE2EE":
 		if client == nil {
