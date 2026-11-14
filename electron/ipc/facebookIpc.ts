@@ -13,6 +13,7 @@ import { initSession, fetchBasicProfileFromHome, fetchFBHomepage, getUserInfoFac
 import { createStartupRetry } from '../../src/services/facebook/facebookStartupRetry';
 import { loginWithCredentials } from '../../src/services/facebook/FacebookLoginHelper';
 import { secureGet, secureSet, secureDelete } from '../../src/services/secure/SecureSettingsService';
+import { clearFbE2EEDeviceState } from '../../src/services/facebook/FacebookE2EEDeviceStore';
 import FileStorageService from '../../src/services/file/FileStorageService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
@@ -175,6 +176,7 @@ export function registerFacebookIpc(): void {
       Logger.log(`[facebookIpc] _addFBAccountCommon - account ${fbId} đã tồn tại, xoá cũ và thêm lại`);
       await FacebookConnectionManager.disconnect(existing.id).catch(() => {});
       secureDelete(fbCookieKey(existing.id));
+      clearFbE2EEDeviceState(existing.id);
       DatabaseService.getInstance().deleteFBAccount(existing.id);
       DatabaseService.getInstance().deleteAccount(fbId);
     }
@@ -305,6 +307,7 @@ export function registerFacebookIpc(): void {
       cancelHistorySync(internalId, fbAcc?.facebook_id);
       await FacebookConnectionManager.disconnect(internalId);
       secureDelete(fbCookieKey(internalId));
+      clearFbE2EEDeviceState(internalId);
       DatabaseService.getInstance().deleteFBAccount(internalId);
       // Also remove from unified accounts table (zalo_id = fbId)
       DatabaseService.getInstance().deleteAccount(accountId);
@@ -2309,6 +2312,11 @@ const fbStartupRetry = createStartupRetry({
 
 /** Thoát app: huỷ mọi lần thử lại đang chờ trước khi đóng DB. */
 export function cancelFBStartupRetries(): void { fbStartupRetry.clearAll(); }
+
+/** Thoát app: ghi ngay bản thiết bị E2EE đang chờ debounce của mọi tài khoản (trước khi đóng DB). */
+export function flushFBE2EEDevices(): void {
+  for (const service of FacebookService.getAllInstances()) service.flushE2EEDevice();
+}
 
 /**
  * Auto-reconnect tất cả FB accounts khi app khởi động.

@@ -19,7 +19,7 @@ import {
   addGroupAdmin, removeGroupAdmin, changeApprovalMode,
   approvePendingMember, getGroupLink, setGroupLink, getThreadListPage,
 } from './FacebookThreadManager';
-import { FacebookHistoryFetcher, FetchPageOptions } from './FacebookHistoryFetcher';
+import { FacebookHistoryFetcher, FetchPageOptions, HISTORY_LIVE_WINDOW_MS } from './FacebookHistoryFetcher';
 import { FacebookHistoryLimiter } from './FacebookHistoryLimiter';
 import type { FbHistoryAnchor, FbHistoryPageResult, FbHistoryRange } from './facebookHistory';
 import { blockUser, unblockUser } from './FacebookBlock';
@@ -30,6 +30,7 @@ import { FacebookE2EEBridge } from './FacebookE2EEBridge';
 import { FacebookEventPipeline, EventPriority, bridgeEventKey } from './FacebookEventPipeline';
 import { e2eeReconnectDelayMs } from './facebookBridgeBackoff';
 import { FacebookE2EESender } from './FacebookE2EESender';
+import { FacebookE2EEDeviceStore } from './FacebookE2EEDeviceStore';
 import { parseE2EECookies, resolveE2EEBinaryPath, normalizeChatJid } from './FacebookUtils';
 import EventBroadcaster from '../event/EventBroadcaster';
 import { recordFacebookReceipt } from '../receipts/peerReceipts';
@@ -40,6 +41,10 @@ import { secureGet } from '../secure/SecureSettingsService';
 import { resolveFBCookie } from './FacebookAccountCookie';
 import path from 'path';
 import Logger from '../../utils/Logger';
+
+/** Facebook đăng xuất thiết bị E2EE liên tiếp quá số lần này trong cửa sổ thì thôi đăng ký thiết bị mới (chờ thử lại tay). */
+export const E2EE_LOGOUT_MAX_STREAK = 5;
+export const E2EE_LOGOUT_STREAK_WINDOW_MS = 15 * 60_000;
 
 // ─── Cookie key helper ─────────────────────────────────────────────────
 
@@ -91,6 +96,10 @@ export class FacebookService {
   private avatarRefreshDebounce = new Set<string>();
   /** Bridge instance ID - tăng mỗi lần startE2EEBridge, dùng để detect stale reconnect timers (BUG #6 fix) */
   private e2eeBridgeGen: number = 0;
+  private e2eeDeviceStore: FacebookE2EEDeviceStore | null = null; // tạo lười theo accountId; test có thể tiêm
+  /** Số lần liên tiếp Facebook đăng xuất thiết bị E2EE (trong E2EE_LOGOUT_STREAK_WINDOW_MS) và thời điểm lần gần nhất. */
+  private _e2eeLogoutStreak = 0;
+  private _e2eeLastLogoutAt = 0;
   /** Heartbeat timer kiểm tra bridge còn responsive không (BUG #8 fix) */
   private _e2eeHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   /** Đếm số lần heartbeat fail liên tiếp - sau 2 lần → kill + respawn */
@@ -1145,6 +1154,11 @@ export class FacebookService {
       };
       bridgeInstance.on('event', (evt: any) => {
         if (this.e2eeBridge !== bridgeInstance || this.e2eeBridgeGen !== bridgeGen) return;
+        // Trạng thái thiết bị chứa khoá riêng: chặn trước hàng đợi để không đi vào handleBridgeEvent (nơi ghi log nội dung sự kiện).
+        if (evt?.type === 'deviceDataChanged') {
+          this.getE2EEDeviceStore().save(evt?.data?.deviceData);
+          return;
+        }
         const key = bridgeEventKey(evt);
         const priority = this.getEventPriority(evt?.type);
         // Pipeline bảo đảm thứ tự PHÁT, hàng đợi có giới hạn và chống trùng; phần xử lý bất đồng bộ của tin (tải media…)
@@ -1173,10 +1187,13 @@ export class FacebookService {
       }
 
       // 3. newClient + connect + connectE2EE
+      // Giữ thiết bị giữa các lần mở app: có bản đã lưu thì bridge khôi phục thay vì đăng ký thiết bị mới.
+      const deviceData = this.getE2EEDeviceStore().load();
       await this.e2eeBridge.newClient({
         cookies,
         logLevel: 'error',
-        e2eeMemoryOnly: true,
+        e2eeMemoryOnly: false,
+        ...(deviceData ? { deviceData } : {}),
       });
 
       // Timeout ngắn để không block group messaging nếu bridge không respond
@@ -1226,6 +1243,15 @@ export class FacebookService {
     }
   }
 
+  private getE2EEDeviceStore(): FacebookE2EEDeviceStore {
+    return this.e2eeDeviceStore ??= new FacebookE2EEDeviceStore(this.accountId);
+  }
+
+  /** Ghi ngay bản thiết bị đang chờ; gọi lúc thoát app, trước khi đóng DB. */
+  public flushE2EEDevice(): void {
+    this.e2eeDeviceStore?.flush();
+  }
+
   private async stopE2EEBridge(): Promise<void> {
     // Dừng chủ động (tắt, ngắt, thử lại tay): huỷ hẹn nối lại và vô hiệu hoá listener/'closed' của bridge cũ.
     this._clearE2EEReconnect();
@@ -1237,6 +1263,7 @@ export class FacebookService {
       await this.e2eeBridge.close().catch(() => {});
       this.e2eeBridge = null;
     }
+    this.e2eeDeviceStore?.flush(); // ghi bản thiết bị đang chờ debounce
     this._clearE2EEReconnect();
     this.e2eeSender = null;
     this.setE2EEStatus('disconnected');
@@ -1355,6 +1382,31 @@ export class FacebookService {
 
       case 'disconnected':
         Logger.warn(`[FacebookService:${this.accountId}] E2EE bridge: disconnected ${JSON.stringify(data)}`);
+        if (data?.isE2EE && data?.loggedOut) {
+          // Facebook đăng xuất thiết bị: bỏ trạng thái đã lưu, nối lại để đăng ký thiết bị mới (giống nhánh heartbeat hỏng).
+          Logger.warn(`[FacebookService:${this.accountId}] E2EE device was logged out by Facebook - clearing stored device`);
+          this.getE2EEDeviceStore().clear();
+          this._clearE2EEHeartbeat();
+          // 'connected' đặt lại backoff ngay trước khi thiết bị mới bị đăng xuất, nên chuỗi đăng xuất được đếm riêng:
+          // giãn dần rồi dừng hẳn, không đăng ký thiết bị mới dồn dập khi Facebook từ chối mọi thiết bị.
+          const now = Date.now();
+          this._e2eeLogoutStreak = now - this._e2eeLastLogoutAt < E2EE_LOGOUT_STREAK_WINDOW_MS ? this._e2eeLogoutStreak + 1 : 1;
+          this._e2eeLastLogoutAt = now;
+          const giveUp = this._e2eeLogoutStreak > E2EE_LOGOUT_MAX_STREAK;
+          // Đặt trước khi đóng bridge: 'closed' của bridge này có thể hẹn nối lại ngay trong lúc đóng.
+          if (giveUp) this.e2eeBridgeGen++;
+          else this._e2eeReconnectAttempts = Math.max(this._e2eeReconnectAttempts, this._e2eeLogoutStreak - 1);
+          const lostBridge = this.e2eeBridge;
+          this.e2eeBridge = null;
+          lostBridge?.close().catch(() => {});
+          if (giveUp) {
+            Logger.error(`[FacebookService:${this.accountId}] Facebook keeps logging the E2EE device out - stopped registering new devices until a manual retry`);
+            this.setE2EEStatus('error');
+            break;
+          }
+          this.setE2EEStatus('disconnected');
+          this._scheduleE2EEReconnect(this.getFacebookId(), 'device logged out');
+        }
         break;
 
       case 'error':
@@ -1633,6 +1685,17 @@ export class FacebookService {
 
     const stripJid = (id: string) => id.replace(/@.*$/, '');
     const threadId = data.threadId ? stripJid(String(data.threadId)) : '0';
+
+    // Tin cũ bridge phát lại lúc kết nối: lưu im lặng (không chưa-đọc/thông báo/workflow). Tin mới hơn cửa sổ vẫn đi luồng tin mới.
+    const tsMs = Number(data.timestampMs) || 0;
+    if (data.isHistory && tsMs > 0 && tsMs <= Date.now() - HISTORY_LIVE_WINDOW_MS) {
+      try {
+        if (threadId !== '0') this.historyFetcher.persistBridgeMessages([data], undefined, threadId); // không rõ hội thoại: bỏ, như luồng tin mới
+      } catch (err: any) {
+        Logger.warn(`[FacebookService:${this.accountId}] Bridge history replay persist error: ${err.message}`);
+      }
+      return;
+    }
 
     const msg: FBMQTTMessage = {
       body: data.text || null,
@@ -1943,6 +2006,7 @@ export class FacebookService {
   public async retryE2EE(): Promise<void> {
     if (this._isPage) return; // Page không có E2EE bridge; caller kiểm isE2EEConnected(); Page gửi qua Business Suite
     this._e2eeReconnectAttempts = 0; // thử lại tay bắt đầu từ backoff sạch (bộ hẹn tự động gọi startE2EEBridge, không qua đây)
+    this._e2eeLogoutStreak = 0;
     // Clean up stale bridge
     await this.stopE2EEBridge();
     // Reset flags so startE2EEBridge will attempt again
@@ -2077,10 +2141,28 @@ export class FacebookService {
     // Typing indicator sẽ được hỗ trợ khi Go bridge được cập nhật.
   }
 
-  /** Đánh dấu thread đã đọc trên Facebook server (TODO: Go bridge chưa hỗ trợ markRead) */
-  public async markReadOnServer(_threadId: string): Promise<void> {
-    // Go bridge hiện tại không có method markRead.
-    // Read receipt sẽ được hỗ trợ khi Go bridge được cập nhật.
+  /** Mốc "đã đọc" đã gửi thành công theo hội thoại, để không gửi lại khi mốc không đổi. */
+  private readMarkSent = new Map<string, number>();
+
+  /** Gửi "đã đọc" lên Facebook qua bridge (chỉ tài khoản cá nhân; Page không hỗ trợ). */
+  public async markReadOnServer(threadId: string): Promise<void> {
+    const id = String(threadId ?? '').replace(/@.*$/, '');
+    if (this._delegatePageId || !/^\d+$/.test(id) || this.e2eeBridge?.isAlive() !== true) return;
+    try {
+      const owner = this.getFacebookId();
+      let latest = 0;
+      EventBroadcaster.runOnBossDb(db => {
+        latest = Number(db.queryOne<any>(
+          `SELECT MAX(timestamp) AS ts FROM messages WHERE owner_zalo_id = ? AND thread_id = ? AND channel = 'facebook'`,
+          [owner, id])?.ts) || 0;
+      });
+      const watermarkTs = latest || Date.now();
+      if (watermarkTs <= (this.readMarkSent.get(id) ?? 0)) return;
+      await this.e2eeBridge.markRead({ threadId: id, watermarkTs });
+      this.readMarkSent.set(id, watermarkTs);
+    } catch (err: any) {
+      Logger.warn(`[FacebookService:${this.accountId}] markRead ...${id.slice(-4)} lỗi: ${err.message}`);
+    }
   }
 
   /** Gửi tin nhắn vào group qua bridge (non-E2EE) */

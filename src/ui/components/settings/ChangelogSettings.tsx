@@ -15,6 +15,37 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🔐 Chat Facebook mã hoá đầu cuối: tin gửi tới lúc app đóng giờ về khi mở lại',
+      '👁️ Mở hội thoại Facebook là người bên kia thấy "Đã xem"',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Facebook cá nhân: app giữ lại thiết bị mã hoá đầu cuối giữa các lần mở, thay vì đăng ký thiết bị mới mỗi lần. Từ bản này, tin mã hoá gửi tới trong lúc app đóng sẽ về khi bạn mở lại app. Tin gửi trước khi cài bản này vẫn không lấy lại được (giới hạn của Facebook)',
+          'Facebook cá nhân: mở một hội thoại thì Facebook nhận "đã đọc" thật, người bên kia thấy "Đã xem"',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Facebook: tin cũ mà Facebook phát lại lúc kết nối (cũ hơn 5 phút) được lưu im lặng, không còn hiện thông báo, tăng số chưa đọc hay chạy workflow như tin mới',
+          'Facebook: nếu Facebook đăng xuất thiết bị mã hoá, app tự đăng ký lại, giãn dần và dừng sau vài lần để không làm phiền tài khoản',
+        ],
+      },
+      {
+        category: 'security',
+        items: [
+          'Khoá của thiết bị mã hoá Facebook được lưu trong máy ở dạng đã mã hoá bằng kho khoá của hệ điều hành, không ghi vào log, và bị xoá khi bạn xoá tài khoản',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.36.1',
     date: '11/2026',
     type: 'patch',

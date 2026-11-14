@@ -10,27 +10,30 @@ import Logger from '../../utils/Logger';
 
 const ENC_PREFIX = 'enc:';
 
+/** Cho phép ghi/đọc vào DB khác DB mặc định (vd. DB boss). */
+export type SettingsDb = Pick<DatabaseService, 'getSetting' | 'setSetting'>;
+
 /**
  * Lưu value được mã hóa bởi safeStorage vào SQLite settings.
  */
-export function secureSet(key: string, value: string): void {
+export function secureSet(key: string, value: string, db: SettingsDb = DatabaseService.getInstance()): void {
     if (!value && value !== '') {
-        DatabaseService.getInstance().setSetting(key, '');
+        db.setSetting(key, '');
         return;
     }
     if (!safeStorage.isEncryptionAvailable()) {
         // Fallback: lưu plaintext với warning (hiếm gặp - OS không hỗ trợ keychain)
         Logger.warn(`[SecureSettings] safeStorage unavailable - storing "${key}" as plaintext`);
-        DatabaseService.getInstance().setSetting(key, value);
+        db.setSetting(key, value);
         return;
     }
     try {
         const encrypted = safeStorage.encryptString(value).toString('base64');
-        DatabaseService.getInstance().setSetting(key, `${ENC_PREFIX}${encrypted}`);
+        db.setSetting(key, `${ENC_PREFIX}${encrypted}`);
     } catch (err: any) {
         Logger.error(`[SecureSettings] Encrypt failed for "${key}": ${err.message}`);
         // Fallback to plaintext rather than losing data
-        DatabaseService.getInstance().setSetting(key, value);
+        db.setSetting(key, value);
     }
 }
 
@@ -38,8 +41,8 @@ export function secureSet(key: string, value: string): void {
  * Đọc và giải mã value từ SQLite settings.
  * Trả về null nếu không tồn tại hoặc không giải mã được.
  */
-export function secureGet(key: string): string | null {
-    const raw = DatabaseService.getInstance().getSetting(key);
+export function secureGet(key: string, db: SettingsDb = DatabaseService.getInstance()): string | null {
+    const raw = db.getSetting(key);
     if (!raw) return null;
 
     if (raw.startsWith(ENC_PREFIX)) {
@@ -59,8 +62,8 @@ export function secureGet(key: string): string | null {
 /**
  * Xóa secure setting.
  */
-export function secureDelete(key: string): void {
-    DatabaseService.getInstance().setSetting(key, '');
+export function secureDelete(key: string, db: SettingsDb = DatabaseService.getInstance()): void {
+    db.setSetting(key, '');
 }
 
 

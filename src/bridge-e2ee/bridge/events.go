@@ -129,6 +129,7 @@ type Message struct {
 	SenderID    int64         `json:"senderId"`
 	Text        string        `json:"text"`
 	TimestampMs int64         `json:"timestampMs"`
+	IsHistory   bool          `json:"isHistory,omitempty"` // replayed by the upsert batch, not a live message
 	Attachments []*Attachment `json:"attachments,omitempty"`
 	ReplyTo     *ReplyTo      `json:"replyTo,omitempty"`
 	Mentions    []*Mention    `json:"mentions,omitempty"`
@@ -280,7 +281,9 @@ func (c *Client) handleTable(tbl *table.LSTable) {
 				}
 				handledMsgIds[msg.MessageId] = true
 			}
-			c.emitEvent(EventTypeMessage, c.convertWrappedMessage(msg))
+			converted := c.convertWrappedMessage(msg)
+			converted.IsHistory = true
+			c.emitEvent(EventTypeMessage, converted)
 		}
 	}
 
@@ -711,6 +714,13 @@ func (c *Client) handleE2EEEvent(evt interface{}) {
 	case *events.Disconnected:
 		c.emitEvent(EventTypeDisconnected, map[string]any{
 			"isE2EE": true,
+		})
+
+	case *events.LoggedOut:
+		// Facebook dropped this device; the parent app must forget it and register a new one.
+		c.emitEvent(EventTypeDisconnected, map[string]any{
+			"isE2EE":    true,
+			"loggedOut": true,
 		})
 
 	case *events.FBMessage:

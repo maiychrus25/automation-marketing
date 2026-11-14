@@ -77,6 +77,26 @@ func parseFetchMessagesParams(raw json.RawMessage) (threadID int64, beforeTs int
 	return threadID, params.BeforeTimestampMs, params.BeforeMessageID, time.Duration(params.TimeoutMs) * time.Millisecond, nil
 }
 
+// parseMarkReadParams reads the markRead params. threadId must be a JSON string holding a positive
+// decimal id (no "@…" suffix) so 17-digit ids stay exact; a missing watermarkTs gives 0.
+func parseMarkReadParams(raw json.RawMessage) (threadID int64, watermarkTs int64, err error) {
+	var params struct {
+		ThreadID    string `json:"threadId"`
+		WatermarkTs int64  `json:"watermarkTs"`
+	}
+	if err = json.Unmarshal(raw, &params); err != nil {
+		return
+	}
+	threadID, perr := strconv.ParseInt(strings.TrimSpace(params.ThreadID), 10, 64)
+	if perr != nil || threadID <= 0 {
+		return 0, 0, fmt.Errorf("invalid threadId %q", params.ThreadID)
+	}
+	if params.WatermarkTs < 0 {
+		return 0, 0, fmt.Errorf("invalid watermarkTs %d", params.WatermarkTs)
+	}
+	return threadID, params.WatermarkTs, nil
+}
+
 type response struct {
 	ID    uint64      `json:"id"`
 	OK    bool        `json:"ok"`
@@ -182,6 +202,22 @@ func handle(req *request) {
 			}
 			ok(reqID, page)
 		}()
+
+	case "markRead":
+		if client == nil {
+			fail(req.ID, fmt.Errorf("client not initialised"))
+			return
+		}
+		threadID, watermarkTs, err := parseMarkReadParams(req.Params)
+		if err != nil {
+			fail(req.ID, err)
+			return
+		}
+		if err := client.MarkRead(threadID, watermarkTs); err != nil {
+			fail(req.ID, err)
+			return
+		}
+		ok(req.ID, map[string]interface{}{})
 
 	case "connectE2EE":
 		if client == nil {

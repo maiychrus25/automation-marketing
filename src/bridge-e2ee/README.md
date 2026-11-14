@@ -58,12 +58,24 @@ Async event (no id):
 ```
 
 Methods: `newClient`, `connect`, `connectE2EE`, `isConnected`, `sendMessage`,
-`sendE2EEMessage`, `fetchMessages`, `disconnect`.
+`sendE2EEMessage`, `fetchMessages`, `markRead`, `disconnect`.
 
 `fetchMessages` loads one page of older messages for a thread:
 `{"method":"fetchMessages","params":{"threadId":"123","beforeTimestampMs":0,"beforeMessageId":"","timeoutMs":25000}}`
 returns `{threadId, messages (newest first), hasMoreBefore, minTimestampMs, minMessageId}`.
 Older messages that arrive for a waiting request, or up to 60 s after it ended (late answer), are not emitted as live message events. `timeoutMs` <= 0 uses 25 s; values above 60000 are capped at 60 s.
+
+`markRead` sends a read receipt: `{"method":"markRead","params":{"threadId":"123","watermarkTs":1715508423000}}`
+returns `{}`. `threadId` is a JSON string holding a positive decimal id (no `@...` suffix); `watermarkTs` (ms, >= 0) is optional.
+
+E2EE device persistence: `newClient` takes an optional `deviceData` (the JSON string last published
+in a `deviceDataChanged` event). A usable one is restored and `connectE2EE` skips registration; an
+unusable one is replaced by a new device. Without `deviceData` and `devicePath` the device lives in
+memory and changes emit `deviceDataChanged` (at most one per 100 ms; registration emits at once) with `{"deviceData": "<json>"}` (private keys: never
+log it). `e2eeMemoryOnly` emits nothing. When Facebook logs the device out the bridge emits
+`disconnected` with `{"isE2EE": true, "loggedOut": true}` and stops emitting `deviceDataChanged`.
+
+`message` events produced by Messenger's upsert (sync/backfill) batch carry `"isHistory": true`.
 
 ## Tests
 
@@ -81,7 +93,7 @@ Python wrappers exposed today:
 
 Methods present in `bridge/` but **not yet wired** through `main.go` /
 Python: `sendReaction`, `editMessage`, `unsendMessage`, `sendTyping`,
-`markRead`, `MxDownloadE2EEMedia`, `SendE2EEImage`, `SendE2EEVideo`,
+`MxDownloadE2EEMedia`, `SendE2EEImage`, `SendE2EEVideo`,
 `SendE2EEAudio`. To expose, add a `case "..."` in `handle(req)` of `main.go`
 and rebuild.
 

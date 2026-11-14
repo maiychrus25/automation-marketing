@@ -288,6 +288,33 @@ func TestHandleTableWithoutCollectorEmitsUpserts(t *testing.T) {
 	if ids := drainMessageIDs(c); len(ids) != 2 {
 		t.Fatalf("want 2 emitted, got %v", ids)
 	}
+	c = newHistoryTestClient()
+	c.handleTable(upsertTable(testThread, "mid.$a"))
+	if msgs := drainMessages(c); len(msgs) != 1 || !msgs[0].IsHistory {
+		t.Fatalf("upsert messages must carry IsHistory, got %+v", msgs)
+	}
+}
+
+func TestHandleTableInsertIsNotHistory(t *testing.T) {
+	c := newHistoryTestClient()
+	c.handleTable(&table.LSTable{LSInsertMessage: []*table.LSInsertMessage{{ThreadKey: testThread, MessageId: "mid.$n", TimestampMs: 1000}}})
+	if msgs := drainMessages(c); len(msgs) != 1 || msgs[0].IsHistory {
+		t.Fatalf("insert messages must not be history, got %+v", msgs)
+	}
+}
+
+func drainMessages(c *Client) []*Message {
+	var out []*Message
+	for {
+		select {
+		case e := <-c.eventChan:
+			if m, ok := e.Data.(*Message); ok && e.Type == EventTypeMessage {
+				out = append(out, m)
+			}
+		default:
+			return out
+		}
+	}
 }
 
 func TestClassifyHistoryTaskError(t *testing.T) {

@@ -20,6 +20,7 @@ jest.mock('../../services/facebook/FacebookUtils', () => ({
 import FacebookService from '../../services/facebook/FacebookService';
 import { FacebookE2EEBridge } from '../../services/facebook/FacebookE2EEBridge';
 import EventBroadcaster from '../../services/event/EventBroadcaster';
+import Logger from '../../utils/Logger';
 
 /** Fake Go bridge: records whether the 'event' listener existed when connect() ran; replays an event inside connect(). */
 class FakeBridge extends EventEmitter {
@@ -246,5 +247,97 @@ describe('FacebookService E2EE bridge supervision', () => {
     await jest.advanceTimersByTimeAsync(30_000);
     expect(b.close).toHaveBeenCalled();
     expect(svc._e2eeReconnectTimer).not.toBeNull();
+  });
+
+  describe('device store wiring', () => {
+    const DEVICE = '{"k":"synthetic"}';
+    let store: { load: jest.Mock; save: jest.Mock; flush: jest.Mock; clear: jest.Mock };
+    beforeEach(() => {
+      store = { load: jest.fn().mockReturnValue(null), save: jest.fn(), flush: jest.fn(), clear: jest.fn() };
+      svc.e2eeDeviceStore = store;
+    });
+
+    test('newClientIsPersistentAndCarriesStoredDeviceOnlyWhenPresent', async () => {
+      await svc.startE2EEBridge('fb1');
+      const first = bridges[0].newClient.mock.calls[0][0];
+      expect(first.e2eeMemoryOnly).toBe(false);
+      expect('deviceData' in first).toBe(false);
+      await svc.stopE2EEBridge();
+      store.load.mockReturnValue(DEVICE);
+      await svc.startE2EEBridge('fb1');
+      expect(bridges[1].newClient.mock.calls[0][0]).toMatchObject({ e2eeMemoryOnly: false, deviceData: DEVICE });
+    });
+
+    test('deviceDataChangedIsSavedAndNeverReachesHandlerOrLogs', async () => {
+      await svc.startE2EEBridge('fb1');
+      svc.handleBridgeEvent.mockClear();
+      bridges[0].emit('event', { type: 'deviceDataChanged', data: { deviceData: DEVICE } });
+      await Promise.resolve(); await Promise.resolve();
+      expect(store.save).toHaveBeenCalledWith(DEVICE);
+      expect(svc.handleBridgeEvent).not.toHaveBeenCalled();
+      const logged = JSON.stringify(['log', 'warn', 'error', 'info'].map(k => ((Logger as any)[k] as jest.Mock).mock.calls));
+      expect(logged).not.toContain('synthetic');
+    });
+
+    test('loggedOutDisconnectClearsDeviceClosesBridgeAndSchedulesReconnect', async () => {
+      await svc.startE2EEBridge('fb1');
+      const b = bridges[0];
+      FacebookService.prototype['handleBridgeEvent'].call(svc, { type: 'disconnected', data: { isE2EE: true, loggedOut: true } });
+      expect(store.clear).toHaveBeenCalledTimes(1);
+      expect(b.close).toHaveBeenCalled();
+      expect(svc.e2eeBridge).toBeNull();
+      expect(svc._e2eeReconnectTimer).not.toBeNull();
+    });
+
+    test('repeatedLogoutsBackOffThenStopRegisteringNewDevices', async () => {
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+      const logout = () => FacebookService.prototype['handleBridgeEvent'].call(svc, { type: 'disconnected', data: { isE2EE: true, loggedOut: true } });
+      const delays: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        await svc.startE2EEBridge('fb1'); // 'connected' đặt lại backoff chung về 0 mỗi lần
+        setTimeoutSpy.mockClear();
+        logout();
+        delays.push(setTimeoutSpy.mock.calls[setTimeoutSpy.mock.calls.length - 1][1] as number);
+        clearTimeout(svc._e2eeReconnectTimer); svc._e2eeReconnectTimer = null;
+      }
+      expect(delays).toEqual([10_000, 20_000, 40_000, 80_000, 160_000]);
+
+      await svc.startE2EEBridge('fb1');
+      const genBefore = svc.e2eeBridgeGen;
+      logout(); // lần thứ sáu liên tiếp: dừng hẳn
+      expect(svc._e2eeReconnectTimer).toBeNull();
+      expect(svc.e2eeStatus).toBe('error');
+      expect(svc.e2eeBridge).toBeNull();
+      expect(svc.e2eeBridgeGen).toBe(genBefore + 1);
+      expect(store.clear).toHaveBeenCalledTimes(6);
+      setTimeoutSpy.mockRestore();
+    });
+
+    test('logoutStreakResetsAfterQuietWindow', async () => {
+      const logout = () => FacebookService.prototype['handleBridgeEvent'].call(svc, { type: 'disconnected', data: { isE2EE: true, loggedOut: true } });
+      await svc.startE2EEBridge('fb1');
+      logout();
+      expect(svc._e2eeLogoutStreak).toBe(1);
+      clearTimeout(svc._e2eeReconnectTimer); svc._e2eeReconnectTimer = null;
+      jest.setSystemTime(Date.now() + 15 * 60_000 + 1);
+      await svc.startE2EEBridge('fb1');
+      logout();
+      expect(svc._e2eeLogoutStreak).toBe(1);
+    });
+
+    test('plainDisconnectKeepsOldBehaviour', async () => {
+      await svc.startE2EEBridge('fb1');
+      const b = bridges[0];
+      FacebookService.prototype['handleBridgeEvent'].call(svc, { type: 'disconnected', data: { isE2EE: true } });
+      expect(store.clear).not.toHaveBeenCalled();
+      expect(b.close).not.toHaveBeenCalled();
+      expect(svc.e2eeBridge).toBe(b);
+    });
+
+    test('stopFlushesPendingDevice', async () => {
+      await svc.startE2EEBridge('fb1');
+      await svc.stopE2EEBridge();
+      expect(store.flush).toHaveBeenCalled();
+    });
   });
 });

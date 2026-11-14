@@ -64,6 +64,7 @@ export const BRIDGE_METHODS = [
   'sendImage',
   'sendFile',
   'fetchMessages',
+  'markRead',
 ] as const;
 
 export type BridgeMethod = (typeof BRIDGE_METHODS)[number];
@@ -396,6 +397,7 @@ export class FacebookE2EEBridge extends EventEmitter {
     logLevel?: string;
     e2eeMemoryOnly?: boolean;
     devicePath?: string;
+    deviceData?: string; // trạng thái thiết bị đã lưu (chứa khoá riêng): chỉ truyền, không log
   }): Promise<void> {
     await this.call('newClient', {
       cookies: config.cookies,
@@ -403,6 +405,7 @@ export class FacebookE2EEBridge extends EventEmitter {
       logLevel: config.logLevel || 'none',
       e2eeMemoryOnly: config.e2eeMemoryOnly ?? true,
       ...(config.devicePath ? { devicePath: config.devicePath } : {}),
+      ...(config.deviceData ? { deviceData: config.deviceData } : {}),
     });
   }
 
@@ -629,6 +632,11 @@ export class FacebookE2EEBridge extends EventEmitter {
       beforeMessageId: params.beforeMessageId,
       timeoutMs,
     }, timeoutMs + 5_000);
+  }
+
+  /** Gửi "đã đọc" lên Facebook tới mốc watermarkTs. threadId là chuỗi: id > 2^53 không mất chính xác. */
+  public async markRead(params: { threadId: string; watermarkTs: number }): Promise<void> {
+    await this.call('markRead', params, 15_000);
   }
 
   // ─── Shutdown ─────────────────────────────────────────────────────────────

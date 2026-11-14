@@ -21,7 +21,7 @@ import { registerEmployeeIpc } from './ipc/employeeIpc';
 import { registerRelayIpc } from './ipc/relayIpc';
 import { registerWorkspaceIpc, isWorkspaceSwitchInProgress } from './ipc/workspaceIpc';
 import { registerControlApiIpc, startControlApi, shutdownControlApi, syncControlEventSink, stopPagePreparationForWorkspaceSwitch, restartControlApi } from './ipc/controlApiIpc';
-import { registerFacebookIpc, reconnectAllFBAccounts, cancelFBStartupRetries } from './ipc/facebookIpc';
+import { registerFacebookIpc, reconnectAllFBAccounts, cancelFBStartupRetries, flushFBE2EEDevices } from './ipc/facebookIpc';
 import { registerTelegramIpc } from './ipc/telegramIpc';
 import { registerTelegramUserIpc } from './ipc/telegramUserIpc';
 import { registerProxyIpc } from './ipc/proxyIpc';
@@ -1471,6 +1471,7 @@ function stopServicesAndCloseDatabase(): void {
   } catch {}
 
   try { cancelFBStartupRetries(); } catch {}
+  try { flushFBE2EEDevices(); } catch {} // trước DatabaseService.close(): không mất bản thiết bị E2EE của giây cuối
 
   // Listener + sink closed synchronously. After the poster scheduler/jobs stop (so schedule.missed raised during quit is recorded), before DatabaseService.close() below.
   void shutdownControlApi().catch(() => {});

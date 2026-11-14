@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -108,22 +109,23 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		ClientSettings: exhttp.ClientSettings{},
 	})
 
-	// Create device store
+	// Create device store. Priority: memory-only, stored deviceData, in-memory (no path), file.
 	var deviceStore *DeviceStore
 	var err error
-	if cfg.E2EEMemoryOnly {
-		// Memory only mode - no persistence
+	switch {
+	case cfg.E2EEMemoryOnly:
 		deviceStore, err = NewDeviceStoreMemoryOnly()
-	} else if cfg.DeviceData != "" {
-		// Use provided device data (no file I/O)
+	case cfg.DeviceData != "":
 		deviceStore, err = NewDeviceStoreFromData(cfg.DeviceData)
-	} else {
-		// Use file path
-		devicePath := cfg.DevicePath
-		if devicePath == "" {
-			devicePath = "e2ee_device.json"
+		if err != nil {
+			// Never log err or the data: they belong to a private-key blob.
+			logger.Warn().Msg("Stored E2EE device is unusable, creating a new one")
+			deviceStore, err = NewDeviceStoreMemoryOnly()
 		}
-		deviceStore, err = NewDeviceStore(devicePath)
+	case cfg.DevicePath == "":
+		deviceStore, err = NewDeviceStoreMemoryOnly()
+	default:
+		deviceStore, err = NewDeviceStore(cfg.DevicePath)
 	}
 	if err != nil {
 		return nil, err
@@ -146,13 +148,16 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		recentUnreactions: make(map[string]int64),
 	}
 
-	// Set callback for device data changes (only when using deviceData mode)
-	if cfg.DeviceData != "" {
-		deviceStore.onDataChanged = func(data string) {
+	// Snapshots go to the parent app (which stores them) unless the device is memory-only or file-backed.
+	if !cfg.E2EEMemoryOnly && (cfg.DeviceData != "" || cfg.DevicePath == "") {
+		deviceStore.setOnDataChanged(func(data string) {
+			if ctx.Err() != nil {
+				return // disconnected: eventChan is closed
+			}
 			client.emitEvent(EventDeviceDataChanged, map[string]interface{}{
 				"deviceData": data,
 			})
-		}
+		})
 	}
 
 	// Set event handler
@@ -203,21 +208,29 @@ func (c *Client) ConnectE2EE() error {
 	}
 	c.E2EE = e2eeClient
 
-	// Register E2EE
-	if err := c.Messagix.RegisterE2EE(c.ctx, c.FBID); err != nil {
-		return err
+	// A restored device already has its server identity; registering again would replace it.
+	if needsE2EERegistration(c.DeviceStore.Device) {
+		if err := c.Messagix.RegisterE2EE(c.ctx, c.FBID); err != nil {
+			return err
+		}
+		if err := c.DeviceStore.Save(); err != nil {
+			return err
+		}
 	}
-	c.DeviceStore.Save()
 
-	// Connect E2EE
+	// Handler first so messages queued while the app was closed are not missed on connect.
+	c.E2EE.AddEventHandler(c.handleE2EEEvent)
 	if err := c.E2EE.Connect(); err != nil {
 		return err
 	}
 
-	// Add E2EE event handler
-	c.E2EE.AddEventHandler(c.handleE2EEEvent)
-
 	return nil
+}
+
+// needsE2EERegistration is true until RegisterE2EE has assigned the device a server identity
+// (messagix e2ee-register.go sets device.ID after icdc_register).
+func needsE2EERegistration(device *store.Device) bool {
+	return device == nil || device.ID == nil || device.ID.User == "" || device.ID.Device == 0
 }
 
 // Disconnect disconnects from Messenger
@@ -256,6 +269,35 @@ type DeviceStore struct {
 	senderKeys    map[string][]byte
 	nextPreKeyID  uint32
 	onDataChanged func(string) // callback when data changes (for deviceData mode)
+	saveMu        sync.Mutex   // serialises snapshots so they are published in order
+	deleted       bool         // set by DeleteDevice (server logged the device out); Save is then a no-op
+	snapshotQueued atomic.Bool // a coalesced snapshot is already scheduled (saveSoon)
+}
+
+// deviceSnapshotDelay bounds how often a snapshot-mode store publishes after mutations.
+var deviceSnapshotDelay = 100 * time.Millisecond
+
+// saveSoon persists after a store mutation. A file-backed store writes right away as before. A
+// snapshot-mode store publishes one snapshot per deviceSnapshotDelay: decrypting a backlog of
+// queued messages would otherwise emit a full-state event per session write and crowd message
+// events out of the bounded event channel.
+func (ds *DeviceStore) saveSoon() {
+	if ds.path != "" {
+		go ds.Save()
+		return
+	}
+	if ds.snapshotQueued.CompareAndSwap(false, true) {
+		time.AfterFunc(deviceSnapshotDelay, func() {
+			ds.snapshotQueued.Store(false)
+			ds.Save()
+		})
+	}
+}
+
+func (ds *DeviceStore) setOnDataChanged(fn func(string)) {
+	ds.saveMu.Lock()
+	ds.onDataChanged = fn
+	ds.saveMu.Unlock()
 }
 
 // DeviceJSON for JSON serialization
@@ -459,6 +501,11 @@ func (ds *DeviceStore) GetDeviceData() (string, error) {
 
 // Save saves the device store to disk (only if path is set)
 func (ds *DeviceStore) Save() error {
+	ds.saveMu.Lock()
+	defer ds.saveMu.Unlock()
+	if ds.deleted {
+		return nil
+	}
 	data, err := ds.GetDeviceData()
 	if err != nil {
 		return err

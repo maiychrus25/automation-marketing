@@ -57,3 +57,18 @@ func TestParseFetchMessagesParams(t *testing.T) {
 		}
 	})
 }
+
+func TestParseMarkReadParams(t *testing.T) {
+	id, ts, err := parseMarkReadParams(json.RawMessage(`{"threadId":"100000000000000001","watermarkTs":5}`))
+	if err != nil || id != 100000000000000001 || ts != 5 {
+		t.Fatalf("got %d %d %v", id, ts, err)
+	}
+	if _, ts, err = parseMarkReadParams(json.RawMessage(`{"threadId":"7"}`)); err != nil || ts != 0 {
+		t.Fatalf("missing watermarkTs: got %d %v", ts, err)
+	}
+	for _, raw := range []string{`{"threadId":""}`, `{}`, `{"threadId":"12@msgr"}`, `{"threadId":"-1"}`, `{"threadId":"0"}`, `{"threadId":123}`, `{"threadId":"7","watermarkTs":-1}`} {
+		if _, _, err := parseMarkReadParams(json.RawMessage(raw)); err == nil {
+			t.Fatalf("%s: expected an error", raw)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"time"
 
@@ -17,7 +18,7 @@ func (ds *DeviceStore) PutIdentity(ctx context.Context, address string, key [32]
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	ds.identities[address] = key
-	go ds.Save()
+	ds.saveSoon()
 	return nil
 }
 
@@ -29,7 +30,7 @@ func (ds *DeviceStore) DeleteIdentity(ctx context.Context, address string) error
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	delete(ds.identities, address)
-	go ds.Save()
+	ds.saveSoon()
 	return nil
 }
 
@@ -70,7 +71,7 @@ func (ds *DeviceStore) PutSession(ctx context.Context, address string, session [
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	ds.sessions[address] = session
-	go ds.Save()
+	ds.saveSoon()
 	return nil
 }
 
@@ -80,7 +81,7 @@ func (ds *DeviceStore) PutManySessions(ctx context.Context, sessions map[string]
 	for addr, sess := range sessions {
 		ds.sessions[addr] = sess
 	}
-	go ds.Save()
+	ds.saveSoon()
 	return nil
 }
 
@@ -92,7 +93,7 @@ func (ds *DeviceStore) DeleteSession(ctx context.Context, address string) error 
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	delete(ds.sessions, address)
-	go ds.Save()
+	ds.saveSoon()
 	return nil
 }
 
@@ -110,7 +111,7 @@ func (ds *DeviceStore) GetOrGenPreKeys(ctx context.Context, count uint32) ([]*ke
 		result = append(result, pk)
 		ds.nextPreKeyID++
 	}
-	go ds.Save()
+	ds.saveSoon()
 	return result, nil
 }
 
@@ -120,7 +121,7 @@ func (ds *DeviceStore) GenOnePreKey(ctx context.Context) (*keys.PreKey, error) {
 	pk := keys.NewPreKey(ds.nextPreKeyID)
 	ds.preKeys[ds.nextPreKeyID] = pk
 	ds.nextPreKeyID++
-	go ds.Save()
+	ds.saveSoon()
 	return pk, nil
 }
 
@@ -134,7 +135,7 @@ func (ds *DeviceStore) RemovePreKey(ctx context.Context, id uint32) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	delete(ds.preKeys, id)
-	go ds.Save()
+	ds.saveSoon()
 	return nil
 }
 
@@ -152,7 +153,7 @@ func (ds *DeviceStore) PutSenderKey(ctx context.Context, group, user string, ses
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	ds.senderKeys[group+":"+user] = session
-	go ds.Save()
+	ds.saveSoon()
 	return nil
 }
 
@@ -166,7 +167,16 @@ func (ds *DeviceStore) PutDevice(ctx context.Context, device *store.Device) erro
 	return ds.Save()
 }
 
+// DeleteDevice is called by whatsmeow when the server logs the device out.
 func (ds *DeviceStore) DeleteDevice(ctx context.Context, device *store.Device) error {
+	ds.saveMu.Lock()
+	defer ds.saveMu.Unlock()
+	ds.deleted = true
+	if ds.path != "" {
+		if err := os.Remove(ds.path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
 	return nil
 }
 

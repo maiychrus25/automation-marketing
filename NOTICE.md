@@ -81,10 +81,17 @@ bản gốc, xem bảng). Thiết kế ở `docs/specs/2026-11-13-chat-sync-reli
 | §6 Mốc đã nhận / đã xem Facebook | `src/services/receipts/peerReceipts.ts`, `src/services/facebook/FacebookMQTTListener.ts` | `src/services/receipts/peerReceipts.ts`, `FacebookMQTTListener.ts`, `FacebookService.ts` | Ghi mốc từ MQTT và từ sự kiện `seen` của bridge E2EE (R3); chỉ cho hội thoại cá nhân, không cho hộp thư Page. `markRead` gửi thật để chặng D |
 
 **Cố ý không lấy:** `FacebookMetrics`, thẻ template
-(`FacebookTemplateCard`), lưu trạng thái thiết bị E2EE (F8) và `markRead`
-gửi thật (F7, nửa gửi), cả hai thuộc chặng D (Go), chưa làm; cùng các mục đã loại
-ở đợt trước (gửi cookie/token/IMEI ra máy chủ ngoài, tệp nhị phân, bridge đăng
-nhập, Cloudflare sync, Telegram).
+(`FacebookTemplateCard`); cùng các mục đã loại ở đợt trước (gửi cookie/token/IMEI
+ra máy chủ ngoài, tệp nhị phân, bridge đăng nhập, Cloudflare sync, Telegram).
+
+**Chặng D (14/11/2026, plan `docs/plans/2026-11-14-facebook-e2ee-stage-d.md`):**
+lấy ý từ cùng commit `2162f07`, viết lại gọn hơn, không chép nguyên tệp.
+
+| Nhóm | Tệp nguồn (`2162f07`) | File đích | MaiHub khác bản gốc ở điểm nào |
+|---|---|---|---|
+| F7 Gửi "đã đọc" | `src/bridge-e2ee/main.go` (`markRead`), `src/services/facebook/FacebookService.ts` (`markReadOnServer`) | `src/bridge-e2ee/main.go`, `src/services/facebook/FacebookE2EEBridge.ts`, `FacebookService.ts` | Mã hội thoại truyền dạng chuỗi (bản gốc dùng số, mất chính xác với mã trên 2^53); mốc lấy từ bảng `messages` hợp nhất; mốc không đổi thì không gửi lại; bỏ qua tài khoản Page. |
+| F8 Lưu thiết bị E2EE | `src/bridge-e2ee/bridge/client.go` (`NewClient`, `ConnectE2EE`), `src/services/facebook/e2ee/FacebookE2EEStateStore.ts` | `src/bridge-e2ee/bridge/client.go`, `store.go`, `src/services/facebook/FacebookE2EEDeviceStore.ts`, `FacebookService.ts` | Lưu trong settings của DB boss qua `SecureSettingsService` (bản gốc dùng tệp mã hoá riêng); không có bộ điều phối bản chụp và cấu trúc `e2eeConnectOperations`; **thêm** xử lý thiết bị bị Facebook đăng xuất (xoá bản đã lưu, đăng ký lại) mà bản gốc không có. |
+| F9 Không phát lại tin cũ | `src/bridge-e2ee/bridge/events.go` (`handleTable`) | `src/bridge-e2ee/bridge/events.go` (`isHistory`), `FacebookService.ts` (`handleBridgeGroupMessage`) | Bản gốc bỏ hẳn tin upsert và có cửa sổ "upsert đứng riêng"; MaiHub gắn cờ rồi lưu im lặng tin cũ hơn 5 phút qua đường lưu lịch sử sẵn có, tin mới hơn vẫn là tin mới. |
 
 ## Port từ Deplao 26.11.0 — đồng bộ tin nhắn từ điện thoại (MaiHub, 11/2026)
 

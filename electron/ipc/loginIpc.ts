@@ -283,6 +283,7 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
                     await FacebookConnectionManager.disconnect(fbAcc.id).catch(() => {});
                     const { secureDelete } = require('../../src/services/secure/SecureSettingsService');
                     secureDelete(`fb_cookie_${fbAcc.id}`);
+                    require('../../src/services/facebook/FacebookE2EEDeviceStore').clearFbE2EEDeviceState(fbAcc.id);
                     // Page con đi cùng tài khoản cha, cùng lựa chọn xóa dữ liệu
                     if (!fbAcc.parent_facebook_id) {
                         const { removePageChildren } = require('./facebookIpc');

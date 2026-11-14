@@ -1,7 +1,7 @@
 # Đồng bộ tin nhắn Zalo và Facebook: lấy các bản sửa độ ổn định của Deplao 26.9.0–26.11.0
 
 **Ngày:** 2026-11-13  
-**Trạng thái:** Anh duyệt spec ngày 13/11/2026. Chặng A–C đã triển khai, gộp vào `main` và phát hành trong 26.35.0 (13/11/2026); chưa kiểm trên tài khoản Zalo/Facebook thật (plan: `docs/plans/2026-11-13-chat-sync-reliability.md`); chặng D (Go) chưa làm, có plan riêng sau.  
+**Trạng thái:** Anh duyệt spec ngày 13/11/2026. Chặng A–C đã triển khai, gộp vào `main` và phát hành trong 26.35.0 (13/11/2026); chưa kiểm trên tài khoản Zalo/Facebook thật (plan: `docs/plans/2026-11-13-chat-sync-reliability.md`); chặng D (Go, F7–F9) đã triển khai, gộp vào `main` và phát hành trong 26.37.0 (14/11/2026), chưa thử với Facebook thật (plan: `docs/plans/2026-11-14-facebook-e2ee-stage-d.md`).  
 **Phạm vi:** Nhận tin, nối lại, số chưa đọc, trạng thái đã nhận/đã xem của Zalo và Facebook cá nhân (kể cả tin Page đi qua tài khoản cha). Fanpage (hộp thư Page riêng) để sau theo quyết định của anh.  
 **Nguồn:** Deplao `d47ef56` (26.8.5, điểm tách) → `2162f07` (26.11.0, 06/11/2026) của https://github.com/babyvibe/deplao-builder (MIT). Port bằng tay, từng đoạn; không gộp nhánh, không chép nguyên tệp.
 
@@ -139,3 +139,11 @@ Chặng A–C (13/11/2026). Thân spec ở trên giữ nguyên; các điểm cod
   - Làm mới danh sách hội thoại không còn đặt lại chưa đọc Facebook, nên hội thoại đã đọc trên điện thoại giữ huy hiệu đến khi mở trong MaiHub.
   - Nhãn "Đã nhận"/"Đã xem" chưa được xem bằng mắt trong ứng dụng đang chạy (chỉ kiểm bằng test).
 - Review cuối phát hiện và đã sửa việc ba luồng Zalo mới (lọc tin giao trùng, đọc ở máy khác, mốc nhận/xem) chạy sai DB khi đang mở workspace khác: nay chạy trên DB boss như nơi tin được lưu.
+
+Chặng D (14/11/2026). Thân spec ở trên giữ nguyên; các điểm code khác hoặc chi tiết hơn spec:
+
+- **F8 lưu trong DB, không phải tệp riêng:** trạng thái thiết bị nằm ở khoá settings `fb_e2ee_device_<id tài khoản>` của DB boss, mã hoá bằng `safeStorage` như cookie Facebook. DB nằm trong thư mục dữ liệu và ghi SQLite là nguyên tử; khoá riêng không nằm dạng chữ thường trên đĩa. Bản mới nhất được ghi sau tối đa 1 giây, ghi ngay khi dừng bridge và khi thoát app. Máy không có keychain thì không lưu (bảng settings được đồng bộ sang máy nhân viên, không được chứa khoá dạng chữ thường).
+- **F8 thêm đường hồi phục:** Facebook đăng xuất thiết bị (hoặc bản đã lưu hỏng) thì app xoá bản đã lưu và đăng ký thiết bị mới; bản gốc không có bước này. Đăng xuất liên tiếp thì nối lại giãn dần (10 s đến 160 s) và dừng hẳn ở lần thứ sáu trong 15 phút, chờ thử lại tay.
+- **F7 một đường:** mọi hội thoại gửi "đã đọc" qua lệnh `markRead` của bridge (như bản gốc), không tách MQTT/GraphQL cho hội thoại thường. Mốc là tin mới nhất của hội thoại trong máy; mốc không đổi thì không gửi lại; bỏ qua tài khoản Page.
+- **F9 chỉ áp cho lô upsert:** tin từ lô upsert của Messenger và cũ hơn 5 phút được lưu im lặng. Tin mã hoá giao sau khi nối lại (kể cả tin xếp hàng lúc app đóng) là tin mới: tăng chưa đọc, thông báo, chạy workflow.
+- **Giới hạn đã biết:** chưa thử với Facebook thật; tin mã hoá gửi trước lần đầu thiết bị được lưu không lấy lại được; tin thường đến lúc app đóng được lưu nhưng không tăng số chưa đọc; workflow chạy trên tin mã hoá đã cũ khi mở app; phần Go chỉ có test cho khôi phục thiết bị, tham số `markRead` và cờ `isHistory`, không có test cho thứ tự gắn listener trước khi nối.
