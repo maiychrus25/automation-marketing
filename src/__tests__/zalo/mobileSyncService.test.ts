@@ -82,7 +82,8 @@ function makeApi() {
     handlers,
     custom: jest.fn(),
     getOwnId: () => OWN_NOISE,
-    getContext: () => ({ userAgent: 'ua', cookie: { getCookieStringSync: () => 'zcookie=1' } }),
+    // Hũ cookie thật chỉ có cookie cho domain đăng nhập, không có gì cho host tải (zaloapp.com).
+    getContext: () => ({ userAgent: 'ua', cookie: { getCookieStringSync: (url: string) => (url.startsWith('https://chat.zalo.me') ? 'zcookie=1' : '') } }),
     pullMobile: jest.fn(async () => undefined),
     cancelPullMobile: jest.fn(async () => undefined),
     unresolvable: new Set<string>([UNK]),
@@ -263,7 +264,7 @@ describe('MobileSyncService', () => {
       const [, dest, opts] = env.download.mock.calls[0];
       expect(dest.startsWith(workRoot)).toBe(true);
       expect(opts.userAgent).toBe('ua');
-      expect(opts.cookieFor('https://x.zdn.vn/a')).toBe('zcookie=1');
+      expect(opts.cookieFor('https://trans-bin.zaloapp.com/a')).toBe('zcookie=1');
 
       // log không chứa link tải, khoá công khai hay nội dung tin
       const logged = JSON.stringify([

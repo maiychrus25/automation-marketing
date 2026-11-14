@@ -205,7 +205,7 @@ export default function MobileSyncButton() {
         title={running ? `${TITLE} — đang chạy nền` : TITLE}
         aria-label={running ? `${TITLE} — đang chạy nền` : TITLE}
       >
-        <SmartphoneIcon size={14} />
+        <SmartphoneIcon className="w-3.5 h-3.5" />
       </button>
 
       {shown && (

@@ -190,6 +190,22 @@ describe('downloadBackupFile', () => {
 });
 
 describe('downloadBackupFile hardening', () => {
+    it('includes the server error message of the cookie attempt, never the URL', async () => {
+        const t = fakeTransport([
+            { status: 400, chunks: [JSON.stringify({ error_code: -69, error_message: 'Session invalid' })] },
+            { status: 400, chunks: [JSON.stringify({ error_code: -1, error_message: 'Missing session' })] },
+        ]);
+        const err: Error = await downloadBackupFile(ZALO_URL, dest, base(t.request)).then(() => { throw new Error('resolved'); }, e => e);
+        expect(err.message).toBe('Tải bản sao lưu thất bại (HTTP 400, files.zdn.vn: -69 Session invalid)');
+        expect(t.responses.every(r => r.destroyed)).toBe(true);
+
+        // Nội dung không phải JSON, quá dài hoặc có đường dẫn thì không đưa vào lỗi.
+        for (const body of ['<html>Bad Request</html>', JSON.stringify({ error_message: 'see https://x.zdn.vn/?token=SECRET123' })]) {
+            const f = fakeTransport([{ status: 500, chunks: [body] }]);
+            await expect(downloadBackupFile(ZALO_URL, dest, base(f.request))).rejects.toThrow('Tải bản sao lưu thất bại (HTTP 500, files.zdn.vn)');
+        }
+    });
+
     it('destroys redirect and 4xx responses instead of draining them', async () => {
         const t = fakeTransport([
             { status: 302, headers: { location: '/n' }, stall: true },

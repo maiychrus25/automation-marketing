@@ -1,7 +1,7 @@
 # Tải lịch sử tin nhắn Facebook cá nhân
 
 **Ngày:** 14/11/2026
-**Trạng thái:** Đã triển khai, gộp vào `main` và phát hành trong 26.36.0 (14/11/2026); chưa thử với tài khoản Facebook thật. Anh duyệt 14/11/2026, gộp cả đồng bộ theo khoảng ngày vào cùng đợt. Plan: `docs/plans/2026-11-14-facebook-history-sync.md`.
+**Trạng thái:** Đã triển khai, gộp vào `main` và phát hành trong 26.36.0 (14/11/2026), sửa lỗi lần chạy thật đầu tiên trong 26.36.1; chưa thử với tài khoản Facebook thật. Anh duyệt 14/11/2026, gộp cả đồng bộ theo khoảng ngày vào cùng đợt. Plan: `docs/plans/2026-11-14-facebook-history-sync.md`.
 **Nguồn tham chiếu:** `babyvibe/deplao-builder` (MIT) tại `2162f07`: `src/bridge-e2ee/bridge/history.go`, `FacebookService.fetchHistoryPage`, `src/shared/facebook/facebookHistorySync.ts`, `chat/window/channels/facebook/chatWindow.ts`, `FacebookHistorySyncService.ts`, `FacebookSyncButton.tsx`.
 
 ## 1. Mục tiêu
@@ -159,3 +159,4 @@ Chỗ mã khác với thân spec ở trên (thân spec giữ nguyên):
   - Bảng mã lỗi ở mục 4: `NOT_CONNECTED`, `BRIDGE_DOWN`, `BUSY`, `COOLDOWN` không tắt nút tải thêm (lần kéo sau thử lại); chỉ `E2EE`, `RISK`, `BRIDGE_OLD` mới thôi không hỏi nữa. Với Facebook, trong máy hết tin cũ không còn được coi là hội thoại hết tin.
   - Mã hội thoại gửi sang bridge dưới dạng chuỗi (bản đầu gửi dạng số và bị bridge từ chối; lỗi do review toàn nhánh bắt được).
   - Chưa làm, ghi nhận là giới hạn: tin trả lời tải về khi kéo lên có thể thiếu phần trích dẫn cho tới khi mở lại hội thoại; tạo lại kết nối tài khoản thì ngân sách tốc độ được tính lại từ đầu.
+- Lần chạy thật đầu tiên (14/11/2026, bản 26.36.0): tài khoản chỉ có một hội thoại 1:1 mã hoá, không có hàng `fb_threads` nên không có cờ `is_e2ee`; code hỏi GraphQL và Facebook trả HTTP 500, lượt đồng bộ báo "1 hội thoại không tải được". Đã sửa trong 26.36.1: `FacebookHistoryFetcher.isE2EEThread` nhận ra chat mã hoá từ tin đã có trong máy (có tin mà không tin nào mang mã `mid.$…`), giống bản gốc. Hội thoại thường (GraphQL trang đầu, `FetchMessagesTask`) vẫn chưa được kiểm với Facebook thật. Icon nút đồng bộ bị vẽ 56 px, đã đổi sang `w-3.5 h-3.5`.

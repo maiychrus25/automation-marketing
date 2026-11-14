@@ -94,6 +94,21 @@ describe('FacebookHistoryFetcher', () => {
       expect(gql).not.toHaveBeenCalled();
       expect(bridge.fetchMessages).not.toHaveBeenCalled();
     });
+
+    test('threadWithOnlyBridgeMessageIdsIsTreatedAsE2EE', async () => {
+      // Chat 1:1 mã hoá thường không có hàng fb_threads nên không có cờ is_e2ee: nhận ra từ tin đã có trong máy.
+      const { fetcher, gql, bridge } = make();
+      const id = String(200000 + ++seq);
+      expect(fetcher.isE2EEThread(id)).toBe(false); // chưa có tin nào: chưa kết luận được
+      seedLocal(id, '7526000000000000001', T0);
+      expect(fetcher.isE2EEThread(id)).toBe(true);
+      expect(await fetcher.fetchPage(id, NO_ANCHOR)).toMatchObject({ success: false, code: 'E2EE' });
+      expect(gql).not.toHaveBeenCalled();
+      expect(bridge.fetchMessages).not.toHaveBeenCalled();
+      // Hội thoại có cả tin Messenger thường (đã chuyển sang mã hoá) vẫn tải được phần cũ.
+      seedLocal(id, 'mid.$cAAA1', T0 - 1_000);
+      expect(fetcher.isE2EEThread(id)).toBe(false);
+    });
   });
 
   describe('save order', () => {

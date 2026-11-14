@@ -77,8 +77,18 @@ export class FacebookHistoryFetcher {
   }
 
   isE2EEThread(threadId: string): boolean {
-    return this.onBossDb(db => !!db.queryOne<any>(
-      'SELECT 1 AS hit FROM fb_threads WHERE id = ? AND account_id = ? AND is_e2ee = 1', [stripJid(threadId), this.deps.accountId]));
+    const id = stripJid(threadId);
+    return this.onBossDb(db => {
+      if (db.queryOne<any>('SELECT 1 AS hit FROM fb_threads WHERE id = ? AND account_id = ? AND is_e2ee = 1', [id, this.deps.accountId])) return true;
+      // Chat 1:1 mã hoá thường không có hàng fb_threads nên không có cờ. Tin mã hoá mang mã số của bridge, tin Messenger
+      // thường luôn là "mid.$…": có tin mà không tin nào "mid.$" là hội thoại toàn tin mã hoá, hỏi GraphQL chỉ nhận HTTP 500.
+      const owner = this.deps.facebookId();
+      const kinds = db.queryOne<any>(
+        `SELECT EXISTS(SELECT 1 FROM messages WHERE owner_zalo_id = ? AND thread_id = ? AND channel = 'facebook') AS any_msg,
+                EXISTS(SELECT 1 FROM messages WHERE owner_zalo_id = ? AND thread_id = ? AND channel = 'facebook' AND msg_id GLOB 'mid.$*') AS regular`,
+        [owner, id, owner, id]);
+      return Number(kinds?.any_msg) === 1 && Number(kinds?.regular) === 0;
+    });
   }
 
   /** `threadId` (đã biết từ lúc gọi) thay cho threadId trong tin: id 17 chữ số mất chính xác khi bridge trả về dạng số JSON. */

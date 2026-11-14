@@ -209,7 +209,7 @@ export default function FacebookSyncButton() {
         title={title}
         aria-label={title}
       >
-        <DownloadIcon size={14} />
+        <DownloadIcon className="w-3.5 h-3.5" />
       </button>
 
       {shown && (

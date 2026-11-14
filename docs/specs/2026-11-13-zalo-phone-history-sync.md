@@ -1,7 +1,7 @@
 # Đồng bộ lịch sử tin nhắn Zalo từ điện thoại
 
 **Ngày:** 13/11/2026
-**Trạng thái:** Đã triển khai, gộp vào `main` và phát hành trong 26.36.0 (14/11/2026); chưa thử với điện thoại thật. Xem "Ghi chú sau triển khai" ở cuối. Plan: `docs/plans/2026-11-13-zalo-phone-history-sync.md`.
+**Trạng thái:** Đã triển khai, gộp vào `main` và phát hành trong 26.36.0 (14/11/2026), sửa lỗi lần chạy thật đầu tiên trong 26.36.1; chưa thử với điện thoại thật. Xem "Ghi chú sau triển khai" ở cuối. Plan: `docs/plans/2026-11-13-zalo-phone-history-sync.md`.
 **Nguồn tham chiếu:** `babyvibe/deplao-builder` (MIT) tại `2162f07`, thư mục `src/services/zalo/mobileSync/` và các chỗ nối của nó.
 
 ## 1. Mục tiêu
@@ -113,3 +113,4 @@ Thân spec ở trên giữ nguyên như lúc viết. Chỗ code khác hoặc b�
 - **Media cũ:** tin nhập không tải lại media; ảnh/tệp quá hạn trên máy chủ Zalo có thể hiện ảnh lỗi (không làm cờ `media_expired` theo D6).
 - **Chưa kiểm chứng:** mọi thứ mới được kiểm bằng test với bản sao lưu giả và `api` giả; chưa chạy với điện thoại thật hay trong app đang chạy. Chưa biết Zalo có đòi phiên bản giao thức 685 cho `pull_mobile_msg` hay không (quyết định D2); nếu đòi thì cần xử lý riêng (chỉ biết được khi thử với điện thoại thật).
 - **Review cuối:** đã sửa việc `start()` ghi đè trạng thái khi sự kiện từ điện thoại tới trước phản hồi của `pull_mobile_msg` (phiên đã huỷ/đang chờ bản sao lưu/đang nhập không bị đưa lại `waiting_confirm` hay gắn hạn 3 phút; lỗi `pullMobile` đến muộn bị bỏ qua).
+- **Lần chạy thật đầu tiên (14/11/2026, bản 26.36.0):** `pull_mobile_msg`, `user_confirm` và `syncmsg_info` đều chạy đúng với điện thoại thật; bước tải bản sao lưu bị `trans-bin.zaloapp.com` trả HTTP 400. Nguyên nhân: code hỏi cookie theo host của link tải nên không gửi cookie phiên nào, trong khi Zalo PC gửi cookie phiên của `chat.zalo.me`. Đã sửa trong 26.36.1: `MobileSyncService.downloadBackup` lấy cookie của `chat.zalo.me`; lỗi tải kèm `error_code`/`error_message` của máy chủ. Bản sửa chưa được chạy lại với điện thoại thật. Icon nút đồng bộ trên thanh công cụ bị vẽ 56 px (`size={14}` là đơn vị Tailwind), đã đổi sang `w-3.5 h-3.5`.

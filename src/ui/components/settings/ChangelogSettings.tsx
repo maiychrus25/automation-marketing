@@ -15,6 +15,31 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.36.1',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🛠️ Sửa đồng bộ tin nhắn Zalo từ điện thoại bị lỗi ở bước tải bản sao lưu',
+      '🔒 Đóng cổng debug mà các bản trước vô tình mở trên máy',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Zalo: đồng bộ từ điện thoại báo "Tải bản sao lưu thất bại (HTTP 400)" ngay sau khi bấm "Đồng ý" trên điện thoại. Khi tải lỗi, thông báo giờ kèm lý do máy chủ Zalo trả về',
+          'Facebook cá nhân: hội thoại mã hoá đầu cuối bị tính là "không tải được" khi đồng bộ; giờ được nhận ra và ghi là "được bỏ qua"',
+          'Biểu tượng của hai nút đồng bộ trên thanh công cụ bị vẽ quá to, tràn ra ngoài nút',
+        ],
+      },
+      {
+        category: 'security',
+        items: [
+          'Các bản trước mở một cổng debug ngẫu nhiên trên máy (chỉ trong máy, không ra mạng); chương trình khác chạy trên cùng máy có thể nối vào để đọc dữ liệu trong app. Bản này không mở cổng đó nữa',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.36.0',
     date: '11/2026',
     type: 'minor',

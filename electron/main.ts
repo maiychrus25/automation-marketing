@@ -273,7 +273,9 @@ function loadIcons() {
 
 // ─── Vô hiệu hóa remote debugging ngay khi load (trước app.whenReady) ────────
 if (!isDev) {
-  app.commandLine.appendSwitch('remote-debugging-port', '0');
+  // Gỡ cờ (kể cả khi người chạy tự truyền vào). Không đặt giá trị 0: với Chromium, 0 là "chọn một cổng ngẫu nhiên"
+  // trên 127.0.0.1, và mọi chương trình trên máy nối vào đó đọc được tin nhắn, cookie của app (lỗi tới 26.36.0).
+  app.commandLine.removeSwitch('remote-debugging-port');
   app.commandLine.appendSwitch('--inspect',     '0');
   app.commandLine.appendSwitch('--inspect-brk', '0');
 }

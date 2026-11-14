@@ -16,6 +16,8 @@ import { pipeline } from 'stream/promises';
 const ZALO_HOST_RE = /(^|\.)(zdn\.vn|zadn\.vn|zalo\.me|zaloapp\.com)$/i;
 const MAX_REDIRECTS = 5;
 const IDLE_TIMEOUT_MS = 60 * 1000;
+const ERROR_BODY_MAX_BYTES = 1024;
+const ERROR_BODY_WAIT_MS = 1000;
 
 export function isZaloHost(hostname: string): boolean {
     return ZALO_HOST_RE.test(hostname);
@@ -92,6 +94,42 @@ async function fetchFollowing(start: URL, useCookie: boolean, opts: BackupDownlo
     }
 }
 
+/** Thông báo lỗi JSON của máy chủ (error_code, error_message); bỏ qua nếu không phải JSON hoặc có chứa đường dẫn. */
+function serverMessage(body: Buffer, res: any): string {
+    try {
+        const encoding = String(res.headers?.['content-encoding'] || '').toLowerCase();
+        const partial = { finishFlush: zlib.constants.Z_SYNC_FLUSH };
+        if (encoding === 'gzip' || encoding === 'x-gzip') body = zlib.gunzipSync(body, partial);
+        else if (encoding === 'deflate') body = zlib.inflateSync(body, partial);
+        else if (encoding === 'br') body = zlib.brotliDecompressSync(body);
+        const json = JSON.parse(body.toString('utf8'));
+        const text = String(json?.error_message || json?.message || '').replace(/\s+/g, ' ').trim();
+        if (!text || text.includes('://')) return '';
+        return `${json?.error_code ?? ''} ${text}`.trim().slice(0, 120);
+    } catch { return ''; }
+}
+
+/** Đọc tối đa 1 KB nội dung lỗi rồi huỷ phản hồi; máy chủ treo sau header chỉ giữ socket thêm ERROR_BODY_WAIT_MS. */
+function readErrorMessage(res: any): Promise<string> {
+    return new Promise(resolve => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        const done = () => {
+            clearTimeout(timer);
+            res.destroy();
+            resolve(serverMessage(Buffer.concat(chunks), res));
+        };
+        const timer = setTimeout(done, ERROR_BODY_WAIT_MS);
+        res.on('data', (chunk: Buffer) => {
+            chunks.push(chunk);
+            size += chunk.length;
+            if (size >= ERROR_BODY_MAX_BYTES) done();
+        });
+        res.on('end', done);
+        res.on('error', done);
+    });
+}
+
 function decoderFor(res: any): Transform | null {
     switch (String(res.headers?.['content-encoding'] || '').toLowerCase()) {
         case 'gzip': case 'x-gzip': return zlib.createGunzip();
@@ -144,15 +182,17 @@ export async function downloadBackupFile(url: string, destPath: string, opts: Ba
     // Lần 1 có cookie (nếu host Zalo); lần 2 (chỉ khi lần 1 đã gửi cookie và bị 4xx) không cookie.
     let lastStatus = 0;
     let lastHost = start.hostname;
+    let detail = '';
     for (const useCookie of [true, false]) {
         const { res, url: finalUrl, sentCookie } = await fetchFollowing(start, useCookie, opts);
         const status = res.statusCode || 0;
         if (status >= 200 && status < 300) return { bytes: await saveResponse(res, destPath, opts) };
-        res.destroy();
+        const message = await readErrorMessage(res); // luôn huỷ phản hồi
+        detail = detail || message; // lần có cookie nói đúng lý do hơn lần thử lại không cookie
         lastStatus = status;
         lastHost = finalUrl.hostname;
         if (!(sentCookie && status >= 400 && status < 500)) break;
     }
-    // Chỉ hostname + mã HTTP; URL có token nên không đưa vào lỗi.
-    throw new Error(`Tải bản sao lưu thất bại (HTTP ${lastStatus}, ${lastHost})`);
+    // Chỉ hostname, mã HTTP và thông báo lỗi của máy chủ; URL có token nên không đưa vào lỗi.
+    throw new Error(`Tải bản sao lưu thất bại (HTTP ${lastStatus}, ${lastHost}${detail ? `: ${detail}` : ''})`);
 }

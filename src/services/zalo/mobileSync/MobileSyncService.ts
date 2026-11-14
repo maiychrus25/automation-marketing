@@ -395,9 +395,11 @@ class MobileSyncService {
 
     private async downloadBackup(api: any, session: SyncSession, info: any, destPath: string): Promise<void> {
         const ctx = api.getContext();
-        // Cookie phiên Zalo; backupDownload chỉ gửi cho host Zalo và bỏ khi chuyển hướng ra ngoài.
-        const cookieFor = (url: string): string => {
-            try { return ctx.cookie.getCookieStringSync(url) || ''; } catch { return ''; }
+        // Zalo PC gửi cookie phiên của domain đăng nhập (chat.zalo.me) tới máy chủ tải. Hỏi cookie theo host của link
+        // tải (zaloapp.com) thì hũ cookie không có gì và máy chủ trả HTTP 400. backupDownload vẫn chỉ gửi cho host
+        // Zalo qua https và bỏ cookie khi chuyển hướng ra ngoài.
+        const cookieFor = (): string => {
+            try { return ctx.cookie.getCookieStringSync('https://chat.zalo.me/') || ''; } catch { return ''; }
         };
         await this.deps.download(String(info.url || ''), destPath, {
             cookieFor,

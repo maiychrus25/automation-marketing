@@ -89,8 +89,12 @@ async function mainHarness(options: { platform?: string } = {}) {
         isDestroyed = () => false; isVisible = () => windowVisible; isMaximized = () => false; isMinimized = () => windowMinimized; restore = jest.fn();
         constructor(..._args: any[]) { super(); window = this; }
     }
+    const switches: string[] = [];
     Object.assign(app, {
-        commandLine: { appendSwitch: () => {} }, setName: () => {}, setPath: () => {}, getPath: () => '/fake',
+        commandLine: {
+            appendSwitch: (name: string, value?: string) => { switches.push(`append:${name}=${value ?? ''}`); },
+            removeSwitch: (name: string) => { switches.push(`remove:${name}`); },
+        }, setName: () => {}, setPath: () => {}, getPath: () => '/fake',
         getVersion: () => '26.10.0', setAppUserModelId: () => {}, requestSingleInstanceLock: () => true,
         whenReady: () => ({ then: (callback: () => Promise<void>) => { ready = callback; } }),
         quit: () => {
@@ -183,7 +187,7 @@ async function mainHarness(options: { platform?: string } = {}) {
     load(path.resolve(__dirname, '../../../electron/main.ts'));
     await ready(); events.length = 0;
     return {
-        app, events, exit, dbClose, updater, window,
+        app, events, exit, dbClose, updater, window, switches,
         call: (name: string) => handlers.get(name)!({}),
         trayQuit: () => trayMenu.find(item => item.label === 'Thoát hoàn toàn').click(),
         setPrepare: (fn: typeof prepare) => { prepare = fn; }, setDrain: (fn: typeof drain) => { drain = fn; },
@@ -208,6 +212,13 @@ async function mainHarness(options: { platform?: string } = {}) {
 const flushMain = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
 describe('registered main and update lifecycle', () => {
+    it('a release build never opens the Chromium remote debugging port', async () => {
+        // Giá trị 0 không tắt mà mở một cổng ngẫu nhiên trên 127.0.0.1: mọi chương trình trên máy nối vào đọc được app.
+        const h = await mainHarness();
+        expect(h.switches.filter(s => s.startsWith('append:remote-debugging'))).toEqual([]);
+        expect(h.switches).toContain('remove:remote-debugging-port');
+    });
+
     it.each(['renderer', 'tray', 'OS', 'window-all-closed', 'will-quit'])('%s quit cannot close DB or force-exit while jobs/native cleanup are pending', async entry => {
         const h = await mainHarness(); const jobs = deferred<boolean>(); const native = deferred<boolean>();
         h.setDrain(() => jobs.promise); h.setNative(() => native.promise);
