@@ -2,9 +2,14 @@ package bridge
 
 import (
 	"context"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
+
+	"go.mau.fi/libsignal/state/record"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix/httpclient"
 	"go.mau.fi/whatsmeow/store"
@@ -46,18 +51,99 @@ func (ds *DeviceStore) IsTrustedIdentity(ctx context.Context, address string, ke
 	return existing == key, nil
 }
 
+// GetSession returns the session for address, plus the sessions we hold with sibling device ids as
+// previous states. One install can be registered under several device ids that share an identity key
+// and keep a single set of sessions for us (seen with the official Messenger app, 15/11/2026): it
+// answers on whichever of our sessions it read last, so a message stamped with one device id can
+// belong to the session we opened with another. libsignal tries every state and promotes the one
+// that fits, which is then stored under the sender's own address.
 func (ds *DeviceStore) GetSession(ctx context.Context, address string) ([]byte, error) {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
-	ds.trace("session get addr=%s %s", address, blobTag(ds.sessions[address]))
-	return ds.sessions[address], nil
+	siblings := ds.siblingSessionsLocked(address)
+	session := withSiblingStates(ds.sessions[address], siblings)
+	ds.trace("session get addr=%s %s siblings=%d", address, blobTag(ds.sessions[address]), len(siblings))
+	return session, nil
 }
 
 func (ds *DeviceStore) HasSession(ctx context.Context, address string) (bool, error) {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
 	_, ok := ds.sessions[address]
-	return ok, nil
+	return ok || len(ds.siblingSessionsLocked(address)) > 0, nil
+}
+
+// siblingSessionsLocked lists the sessions held with other device ids of the same user that present
+// the same identity key as address. Addresses are "<user>:<device>".
+func (ds *DeviceStore) siblingSessionsLocked(address string) [][]byte {
+	identity, known := ds.identities[address]
+	split := strings.LastIndexByte(address, ':')
+	if !known || split < 0 {
+		return nil
+	}
+	var siblings [][]byte
+	for _, other := range slices.Sorted(maps.Keys(ds.sessions)) {
+		if other != address && strings.HasPrefix(other, address[:split+1]) && ds.identities[other] == identity {
+			siblings = append(siblings, ds.sessions[other])
+		}
+	}
+	return siblings
+}
+
+// maxPreviousSessionStates mirrors libsignal's archivedStatesMaxLength.
+const maxPreviousSessionStates = 40
+
+// withSiblingStates appends the states of the sibling records to own as previous states, once each
+// (states are identified by their base key). A record that cannot be read is left out.
+func withSiblingStates(own []byte, siblings [][]byte) []byte {
+	if len(siblings) == 0 {
+		return own
+	}
+	serializer := store.SignalProtobufSerializer.Session
+	seen := make(map[string]bool)
+	isNew := func(st *record.StateStructure) bool {
+		key := string(st.SenderBaseKey)
+		if key == "" || seen[key] {
+			return false
+		}
+		seen[key] = true
+		return true
+	}
+	var merged *record.SessionStructure
+	if own != nil {
+		rec, err := serializer.Deserialize(own)
+		if err != nil || rec == nil || rec.SessionState == nil {
+			return own
+		}
+		merged = rec
+		isNew(rec.SessionState)
+		for _, st := range rec.PreviousStates {
+			isNew(st)
+		}
+	}
+	for _, raw := range siblings {
+		rec, err := serializer.Deserialize(raw)
+		if err != nil || rec == nil || rec.SessionState == nil {
+			continue
+		}
+		for _, st := range append([]*record.StateStructure{rec.SessionState}, rec.PreviousStates...) {
+			if !isNew(st) {
+				continue
+			}
+			if merged == nil {
+				merged = &record.SessionStructure{SessionState: st}
+			} else {
+				merged.PreviousStates = append(merged.PreviousStates, st)
+			}
+		}
+	}
+	if merged == nil {
+		return own
+	}
+	if len(merged.PreviousStates) > maxPreviousSessionStates {
+		merged.PreviousStates = merged.PreviousStates[:maxPreviousSessionStates]
+	}
+	return serializer.Serialize(merged)
 }
 
 func (ds *DeviceStore) GetManySessions(ctx context.Context, addresses []string) (map[string][]byte, error) {

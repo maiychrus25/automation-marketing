@@ -15,6 +15,29 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.4',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🛠️ Facebook mã hoá đầu cuối: sửa một nguyên nhân khiến tin trả lời từ Messenger không hiện (đang chờ xác nhận thực tế)',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Facebook cá nhân: tin trả lời từ ứng dụng Messenger không giải mã được khi ứng dụng đó đăng ký dưới hai mã thiết bị dùng chung một khoá. MaiHub nay tìm phiên mã hoá theo cả hai mã. Bản sửa dựa trên dữ liệu chẩn đoán và thử nghiệm ngoài mạng, chưa được xác nhận với Facebook thật',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Facebook cá nhân: mỗi lần kết nối, Nhật ký ghi kết quả so khoá mã hoá của thiết bị với bộ khoá Facebook đang phát cho người gửi (chỉ ghi khớp hay lệch)',
+          'Lưu ý: tin đầu tiên do người khác chủ động nhắn tới (chưa có phiên mã hoá) có thể vẫn chưa nhận được',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.3',
     date: '11/2026',
     type: 'patch',

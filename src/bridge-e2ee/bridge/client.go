@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	"go.mau.fi/libsignal/keys/prekey"
 	signallog "go.mau.fi/libsignal/logger"
 	"go.mau.fi/util/exhttp"
 	"go.mau.fi/whatsmeow"
@@ -330,6 +331,47 @@ func (s signalDiag) Error(caller, msg string) {
 	fmt.Fprintf(s.out, "ERR [libsignal] %s %s\n", caller, msg)
 }
 func (s signalDiag) Configure(string) {}
+
+// describeOwnBundle compares the prekey bundle Facebook hands to senders for this device with the keys
+// the device holds. A sender builds its session from that bundle, so any difference makes everything
+// it sends undecryptable. Only match/mismatch and key ids are reported.
+func describeOwnBundle(ds *DeviceStore, b *prekey.Bundle) string {
+	if b == nil {
+		return "E2EE self-check: server returned no bundle for this device"
+	}
+	word := func(same bool) string {
+		if same {
+			return "match"
+		}
+		return "MISMATCH"
+	}
+	d := ds.Device
+	oneTime := "none"
+	if b.PreKey() != nil && !b.PreKeyID().IsEmpty {
+		id := b.PreKeyID().Value
+		pk, _ := ds.GetPreKey(context.Background(), id)
+		oneTime = fmt.Sprintf("%s(id=%d)", word(pk != nil && *pk.Pub == b.PreKey().PublicKey()), id)
+	}
+	return fmt.Sprintf("E2EE self-check: identity=%s signedPreKey=%s(id=%d) oneTime=%s registration=%s",
+		word(*d.IdentityKey.Pub == b.IdentityKey().PublicKey().PublicKey()),
+		word(b.SignedPreKeyID() == d.SignedPreKey.KeyID && *d.SignedPreKey.Pub == b.SignedPreKey().PublicKey()), b.SignedPreKeyID(),
+		oneTime, word(b.RegistrationID() == d.RegistrationID))
+}
+
+// selfCheckOwnBundle runs describeOwnBundle against the live server once the E2EE socket is up.
+// It costs one one-time prekey per connect.
+func (c *Client) selfCheckOwnBundle() {
+	if c.diagOut == nil || c.E2EE == nil || c.DeviceStore.Device.ID == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+	var bundle *prekey.Bundle
+	for _, b := range c.E2EE.DangerousInternals().FetchPreKeysNoError(ctx, []waTypes.JID{*c.DeviceStore.Device.ID}) {
+		bundle = b
+	}
+	fmt.Fprintf(c.diagOut, "INF [bridge] %s\n", describeOwnBundle(c.DeviceStore, bundle))
+}
 
 // trace writes one store diagnostic line: which session, identity or one-time prekey was stored or
 // asked for. Stored bytes are identified by blobTag, never written.

@@ -84,7 +84,12 @@ They carry message and sender ids and error text, never keys or message content.
 never drops the device. libsignal's warnings and errors go to the same place as `<LVL> [libsignal] <file:line> ...`
 (unconfigured, libsignal prints them to stdout, the JSON-RPC channel), and the store writes
 `DBG [bridge] session put|get ...`, `identity ...` and `prekey ...` lines that identify stored bytes by
-length and a 4-byte hash only.
+length and a 4-byte hash only. After each E2EE connect one `INF [bridge] E2EE self-check: ...` line
+compares the bundle the server hands out for this device with the local keys (match/MISMATCH and ids).
+
+Sibling device ids: `GetSession` returns the asked address's session plus, as previous states, the
+sessions held with other device ids of the same user that present the same identity key. One install
+registered under several device ids answers on whichever session it read last.
 
 `message` events produced by Messenger's upsert (sync/backfill) batch carry `"isHistory": true`.
 

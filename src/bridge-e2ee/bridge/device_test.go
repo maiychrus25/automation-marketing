@@ -265,12 +265,34 @@ func TestStoreDiagTracesSessionsAndPrekeysWithoutTheirContent(t *testing.T) {
 		t.Fatalf("want 6 trace lines, got %d: %q", len(lines), got)
 	}
 	putTag := lines[0][strings.Index(lines[0], "len="):]
-	if !strings.Contains(lines[0], "session put addr=100:96") || !strings.HasSuffix(lines[1], putTag) || !strings.Contains(lines[1], "session get addr=100:96") {
+	if !strings.Contains(lines[0], "session put addr=100:96") || !strings.Contains(lines[1], putTag) || !strings.Contains(lines[1], "session get addr=100:96") {
 		t.Fatalf("put and get of the same session must carry the same tag: %q / %q", lines[0], lines[1])
 	}
 	for i, want := range []string{"", "", "session get addr=100:97 none", "prekey issued id=1", "prekey lookup id=1 next=2 used=false", "prekeys issued ids=2..4"} {
 		if want != "" && !strings.Contains(lines[i], want) {
 			t.Fatalf("line %d: want %q in %q", i, want, lines[i])
 		}
+	}
+}
+
+// The self-check compares what Facebook hands senders for this device with the keys the device holds.
+func TestOwnBundleCheckNamesWhatDiffers(t *testing.T) {
+	ctx := context.Background()
+	ds := cryptoDevice(t, "100", 82)
+	pk, _ := ds.GenOnePreKey(ctx)
+	want := "E2EE self-check: identity=match signedPreKey=match(id=1) oneTime=match(id=1) registration=match"
+	if got := describeOwnBundle(ds, bundleFor(ds, pk)); got != want {
+		t.Fatalf("got %q", got)
+	}
+	other := cryptoDevice(t, "100", 82)
+	opk, _ := other.GenOnePreKey(ctx)
+	got := describeOwnBundle(ds, bundleFor(other, opk))
+	for _, part := range []string{"identity=MISMATCH", "signedPreKey=MISMATCH(id=1)", "oneTime=MISMATCH(id=1)"} {
+		if !strings.Contains(got, part) {
+			t.Fatalf("want %q in %q", part, got)
+		}
+	}
+	if got := describeOwnBundle(ds, nil); !strings.Contains(got, "no bundle") {
+		t.Fatalf("got %q", got)
 	}
 }

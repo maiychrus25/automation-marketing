@@ -710,6 +710,7 @@ func (c *Client) handleE2EEEvent(evt interface{}) {
 	switch e := evt.(type) {
 	case *events.Connected:
 		c.emitEvent(EventTypeE2EEConnected, nil)
+		go c.selfCheckOwnBundle()
 
 	case *events.Disconnected:
 		c.emitEvent(EventTypeDisconnected, map[string]any{

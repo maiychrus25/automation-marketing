@@ -307,3 +307,49 @@ func TestConsumedIdIsSkippedWhenUploadingAgain(t *testing.T) {
 		t.Fatalf("consumed id 2 must be skipped, got %v", got)
 	}
 }
+
+// Real run 15/11/2026: the phone's Messenger install is registered under two device ids (95 and 96)
+// that share one identity key. We open a session with each id; the install keeps one set of sessions
+// for us and answers on whichever it read last, so a message stamped "from 96" can belong to the
+// session we opened with 95. Looking only at the sender's own session gave "no valid sessions".
+func TestReplyFromSiblingDeviceIdOfTheSameInstallDecrypts(t *testing.T) {
+	d := cryptoDevice(t, "1001", 82)
+	p := cryptoDevice(t, "2002", 96)
+	pk96, _ := p.GenOnePreKey(context.Background())
+	to96 := cryptoEncrypt(t, d, p, bundleFor(p, pk96), "hello-96")
+	p.Device.ID.Device = 95
+	pk95, _ := p.GenOnePreKey(context.Background())
+	to95 := cryptoEncrypt(t, d, p, bundleFor(p, pk95), "hello-95")
+	mustDecrypt(t, p, d, to96, "hello-96")
+	mustDecrypt(t, p, d, to95, "hello-95") // read last: the install's open session is the "95" one
+
+	reply := cryptoEncrypt(t, p, d, nil, "reply")
+	p.Device.ID.Device = 96 // the stanza says device 96
+	mustDecrypt(t, d, p, reply, "reply")
+
+	// the conversation continues on that session in both directions, and reads do not pile up states
+	mustDecrypt(t, d, p, cryptoEncrypt(t, p, d, nil, "more"), "more")
+	mustDecrypt(t, p, d, cryptoEncrypt(t, d, p, nil, "ours"), "ours")
+	first, _ := d.GetSession(context.Background(), "2002:96")
+	second, _ := d.GetSession(context.Background(), "2002:96")
+	if len(first) != len(second) {
+		t.Fatalf("repeated reads must not grow the session: %d then %d", len(first), len(second))
+	}
+}
+
+func TestSessionsOfDevicesWithTheirOwnIdentityAreNotMixed(t *testing.T) {
+	ctx := context.Background()
+	d := cryptoDevice(t, "1001", 82)
+	for _, device := range []uint16{95, 96} {
+		p := cryptoDevice(t, "2002", device) // separate installs: separate identity keys
+		pk, _ := p.GenOnePreKey(ctx)
+		cryptoEncrypt(t, d, p, bundleFor(p, pk), "hi")
+	}
+	got, _ := d.GetSession(ctx, "2002:96")
+	if string(got) != string(d.sessions["2002:96"]) {
+		t.Fatal("a device with its own identity key must get exactly its own session")
+	}
+	if has, _ := d.HasSession(ctx, "2002:97"); has {
+		t.Fatal("an unknown device has no session")
+	}
+}
