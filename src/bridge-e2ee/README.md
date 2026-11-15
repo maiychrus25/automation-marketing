@@ -81,7 +81,10 @@ Decrypt diagnostics: whatever `logLevel` is (except `none`), whatsmeow's lines a
 retry receipts and prekey counts are written to stderr as `<LVL> [whatsmeow] ...`, plus one
 `INF [bridge] E2EE device ready device=<n> restored=<bool> registered=<bool>` line per `connectE2EE`.
 They carry message and sender ids and error text, never keys or message content. A failed decrypt
-never drops the device.
+never drops the device. libsignal's warnings and errors go to the same place as `<LVL> [libsignal] <file:line> ...`
+(unconfigured, libsignal prints them to stdout, the JSON-RPC channel), and the store writes
+`DBG [bridge] session put|get ...`, `identity ...` and `prekey ...` lines that identify stored bytes by
+length and a 4-byte hash only.
 
 `message` events produced by Messenger's upsert (sync/backfill) batch carry `"isHistory": true`.
 

@@ -18,6 +18,7 @@ func (ds *DeviceStore) PutIdentity(ctx context.Context, address string, key [32]
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	ds.identities[address] = key
+	ds.trace("identity put addr=%s %s", address, blobTag(key[:]))
 	ds.saveSoon()
 	return nil
 }
@@ -38,6 +39,7 @@ func (ds *DeviceStore) IsTrustedIdentity(ctx context.Context, address string, ke
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
 	existing, ok := ds.identities[address]
+	ds.trace("identity check addr=%s known=%t same=%t", address, ok, ok && existing == key)
 	if !ok {
 		return true, nil
 	}
@@ -47,6 +49,7 @@ func (ds *DeviceStore) IsTrustedIdentity(ctx context.Context, address string, ke
 func (ds *DeviceStore) GetSession(ctx context.Context, address string) ([]byte, error) {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
+	ds.trace("session get addr=%s %s", address, blobTag(ds.sessions[address]))
 	return ds.sessions[address], nil
 }
 
@@ -71,6 +74,7 @@ func (ds *DeviceStore) PutSession(ctx context.Context, address string, session [
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	ds.sessions[address] = session
+	ds.trace("session put addr=%s %s", address, blobTag(session))
 	ds.saveSoon()
 	return nil
 }
@@ -80,6 +84,7 @@ func (ds *DeviceStore) PutManySessions(ctx context.Context, sessions map[string]
 	defer ds.mu.Unlock()
 	for addr, sess := range sessions {
 		ds.sessions[addr] = sess
+		ds.trace("session put addr=%s %s", addr, blobTag(sess))
 	}
 	ds.saveSoon()
 	return nil
@@ -108,6 +113,9 @@ func (ds *DeviceStore) GetOrGenPreKeys(ctx context.Context, count uint32) ([]*ke
 	for i := uint32(0); i < count; i++ {
 		result = append(result, ds.nextPreKeyLocked())
 	}
+	if len(result) > 0 {
+		ds.trace("prekeys issued ids=%d..%d", result[0].KeyID, result[len(result)-1].KeyID)
+	}
 	ds.saveSoon()
 	return result, nil
 }
@@ -116,6 +124,7 @@ func (ds *DeviceStore) GenOnePreKey(ctx context.Context) (*keys.PreKey, error) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	pk := ds.nextPreKeyLocked()
+	ds.trace("prekey issued id=%d", pk.KeyID)
 	ds.saveSoon()
 	return pk, nil
 }
@@ -140,6 +149,8 @@ func (ds *DeviceStore) nextPreKeyLocked() *keys.PreKey {
 func (ds *DeviceStore) GetPreKey(ctx context.Context, id uint32) (*keys.PreKey, error) {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
+	_, used := ds.usedPreKeys[id]
+	ds.trace("prekey lookup id=%d next=%d used=%t", id, ds.nextPreKeyID, used)
 	if pk, ok := ds.preKeys[id]; ok {
 		return pk, nil
 	}

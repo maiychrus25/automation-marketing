@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	signallog "go.mau.fi/libsignal/logger"
 	"go.mau.fi/util/exhttp"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waAdv"
@@ -166,7 +167,14 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	}
 	if logLevel != zerolog.Disabled {
 		client.diagOut = os.Stderr
+		deviceStore.diagOut = os.Stderr
 	}
+	// Unconfigured, libsignal prints its warnings and errors to stdout: this process's JSON-RPC channel.
+	var signalLog signallog.Loggable = signalDiag{out: io.Discard}
+	if client.diagOut != nil {
+		signalLog = signalDiag{out: client.diagOut}
+	}
+	signallog.Setup(&signalLog)
 
 	// Snapshots go to the parent app (which stores them) unless the device is memory-only or file-backed.
 	if !cfg.E2EEMemoryOnly && (cfg.DeviceData != "" || cfg.DevicePath == "") {
@@ -304,6 +312,41 @@ func (d diagLog) Sub(module string) waLog.Logger {
 	return diagLog{Logger: d.Logger.Sub(module), out: d.out}
 }
 
+// signalDiag receives libsignal's own log lines. Its warnings and errors name the step of a decrypt
+// that failed (MAC, chain key, message keys, version) and carry nothing else. Its debug lines dump
+// session state and keys, so only the two that describe an incoming prekey message are kept.
+type signalDiag struct{ out io.Writer }
+
+func (s signalDiag) Debug(caller, msg string) {
+	if strings.HasPrefix(msg, "Processing message with PreKeyID") || strings.HasPrefix(msg, "We've already setup a session") {
+		fmt.Fprintf(s.out, "DBG [libsignal] %s %s\n", caller, msg)
+	}
+}
+func (s signalDiag) Info(string, string) {}
+func (s signalDiag) Warning(caller, msg string) {
+	fmt.Fprintf(s.out, "WRN [libsignal] %s %s\n", caller, msg)
+}
+func (s signalDiag) Error(caller, msg string) {
+	fmt.Fprintf(s.out, "ERR [libsignal] %s %s\n", caller, msg)
+}
+func (s signalDiag) Configure(string) {}
+
+// trace writes one store diagnostic line: which session, identity or one-time prekey was stored or
+// asked for. Stored bytes are identified by blobTag, never written.
+func (ds *DeviceStore) trace(format string, args ...any) {
+	if ds.diagOut != nil {
+		fmt.Fprintf(ds.diagOut, "DBG [bridge] "+format+"\n", args...)
+	}
+}
+
+func blobTag(b []byte) string {
+	if b == nil {
+		return "none"
+	}
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("len=%d h=%x", len(b), sum[:4])
+}
+
 // needsE2EERegistration is true until RegisterE2EE has assigned the device a server identity
 // (messagix e2ee-register.go sets device.ID after icdc_register).
 func needsE2EERegistration(device *store.Device) bool {
@@ -352,6 +395,7 @@ type DeviceStore struct {
 	onDataChanged func(string) // callback when data changes (for deviceData mode)
 	saveMu        sync.Mutex   // serialises snapshots so they are published in order
 	deleted       bool         // set by DeleteDevice (server logged the device out); Save is then a no-op
+	diagOut       io.Writer    // decrypt diagnostics (trace); nil writes nothing
 	snapshotQueued atomic.Bool // a coalesced snapshot is already scheduled (saveSoon)
 }
 

@@ -215,3 +215,62 @@ func TestDiagLogWritesDecryptFailuresAndForwardsTheRest(t *testing.T) {
 		t.Fatalf("other lines go to the wrapped logger, got %+v", *inner)
 	}
 }
+
+// libsignal prints its warnings and errors to stdout when no logger is set, which is the bridge's
+// JSON-RPC channel. They name the step of a decrypt that failed; its debug lines dump session state.
+func TestSignalDiagKeepsFailureReasonsAndDropsStateDumps(t *testing.T) {
+	var out bytes.Buffer
+	log := signalDiag{out: &out}
+	log.Error("SessionCipher.go:319", "Unable to verify ciphertext mac: mismatching MAC in signal message")
+	log.Warning("SessionCipher.go:263", "failed to verify ciphertext MAC: mismatching MAC in signal message")
+	log.Debug("Session.go:112", "Processing message with PreKeyID: &{51 false}")
+	log.Debug("Session.go:119", "We've already setup a session for this V3 message, letting bundled message fall through...")
+	for _, want := range []string{"ERR [libsignal] SessionCipher.go:319 Unable to verify ciphertext mac", "WRN [libsignal]", "PreKeyID: &{51 false}", "already setup a session"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("line %q missing from %q", want, out.String())
+		}
+	}
+	out.Reset()
+	log.Debug("SessionCipher.go:291", "Decrypting ciphertext with session state: SECRET")
+	log.Debug("SessionCipher.go:400", "Using cipherKey: SECRET")
+	log.Info("x.go:1", "anything")
+	if out.Len() != 0 {
+		t.Fatalf("state dumps must not be written, got %q", out.String())
+	}
+}
+
+// The store traces which session bytes it was given and which it hands back, so a reply that cannot be
+// decrypted can be matched against the session it should belong to. The trace is a short hash, never the bytes.
+func TestStoreDiagTracesSessionsAndPrekeysWithoutTheirContent(t *testing.T) {
+	ctx := context.Background()
+	ds, _ := NewDeviceStoreMemoryOnly()
+	if err := ds.PutSession(ctx, "100:96", []byte("no-trace-yet")); err != nil { // nil diagOut: no trace, no panic
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	ds.diagOut = &out
+	secret := []byte("SESSION-SECRET-BYTES")
+	ds.PutManySessions(ctx, map[string][]byte{"100:96": secret})
+	ds.GetSession(ctx, "100:96")
+	ds.GetSession(ctx, "100:97")
+	one, _ := ds.GenOnePreKey(ctx)
+	ds.GetPreKey(ctx, one.KeyID)
+	ds.GetOrGenPreKeys(ctx, 3)
+	got := out.String()
+	if strings.Contains(got, string(secret)) {
+		t.Fatal("session bytes leaked into the trace")
+	}
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("want 6 trace lines, got %d: %q", len(lines), got)
+	}
+	putTag := lines[0][strings.Index(lines[0], "len="):]
+	if !strings.Contains(lines[0], "session put addr=100:96") || !strings.HasSuffix(lines[1], putTag) || !strings.Contains(lines[1], "session get addr=100:96") {
+		t.Fatalf("put and get of the same session must carry the same tag: %q / %q", lines[0], lines[1])
+	}
+	for i, want := range []string{"", "", "session get addr=100:97 none", "prekey issued id=1", "prekey lookup id=1 next=2 used=false", "prekeys issued ids=2..4"} {
+		if want != "" && !strings.Contains(lines[i], want) {
+			t.Fatalf("line %d: want %q in %q", i, want, lines[i])
+		}
+	}
+}

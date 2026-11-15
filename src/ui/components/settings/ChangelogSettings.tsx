@@ -15,6 +15,23 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.3',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🔎 Facebook mã hoá đầu cuối: thêm chi tiết chẩn đoán vào Nhật ký (lỗi nhận tin vẫn chưa được sửa)',
+    ],
+    changes: [
+      {
+        category: 'improved',
+        items: [
+          'Facebook cá nhân: Nhật ký ghi thêm bước nào của việc giải mã bị hỏng và phiên mã hoá nào được dùng. Các dòng này không chứa nội dung tin hay khoá',
+          'Lưu ý: lỗi không nhận được tin mã hoá gửi tới tài khoản cá nhân vẫn chưa được sửa. Hai nguyên nhân nghi ngờ trước đó đã được loại bằng số liệu thật',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.2',
     date: '11/2026',
     type: 'patch',
