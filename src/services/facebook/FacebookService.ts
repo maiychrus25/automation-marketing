@@ -1864,8 +1864,7 @@ export class FacebookService {
       ) as { display_name?: string; avatar_url?: string } | undefined;
       if (existing?.display_name && existing?.avatar_url) return;
 
-      const session = this.requireSession();
-      const info = await getUserInfoFacebookHtml(session.cookieFacebook, fbUserId);
+      const info = await this.resolveUserInfo(fbUserId);
       if (!info || (!info.name && !info.avatarUrl)) return;
       Logger.log(`[FacebookService:${this.accountId}] checkAndFetchUserInfo: ${fbUserId} → name="${info.name}"`);
       const fbId = this.getFacebookId();
@@ -2676,10 +2675,34 @@ export class FacebookService {
    */
   public async getUserInfoFacebookHtml(fbUserId: string): Promise<{ name: string; avatarUrl: string } | null> {
     try {
-      const session = this.requireSession();
-      return await getUserInfoFacebookHtml(session.cookieFacebook, fbUserId);
+      return await this.resolveUserInfo(fbUserId);
     } catch (err: any) {
       Logger.warn(`[FacebookService:${this.accountId}] getUserInfoFacebookHtml error: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Tên + ảnh của một người dùng. Hỏi bridge trước (bảng liên hệ của Messenger): trang cá nhân không phải
+   * lúc nào cũng đọc ra tên, khiến liên hệ mới chỉ có ảnh. Trang cá nhân là dự phòng, và là nguồn ảnh
+   * khi bridge chỉ có tên.
+   */
+  private async resolveUserInfo(fbUserId: string): Promise<{ name: string; avatarUrl: string } | null> {
+    const fromBridge = await this.getBridgeUserInfo(fbUserId);
+    if (fromBridge?.avatarUrl) return fromBridge;
+    const fromHtml = await getUserInfoFacebookHtml(this.requireSession().cookieFacebook, fbUserId);
+    return fromBridge ? { name: fromBridge.name, avatarUrl: fromHtml?.avatarUrl || '' } : fromHtml;
+  }
+
+  /** null khi không hỏi được bridge (Page, id không phải số, bridge chưa chạy, lỗi) hoặc bridge không có tên. */
+  private async getBridgeUserInfo(fbUserId: string): Promise<{ name: string; avatarUrl: string } | null> {
+    if (this._delegatePageId || !/^\d+$/.test(fbUserId) || this.e2eeBridge?.isAlive() !== true) return null;
+    try {
+      const info = await this.e2eeBridge.getUserInfo(fbUserId);
+      const name = String(info?.name || '').trim();
+      return name ? { name, avatarUrl: String(info?.profilePictureUrl || '') } : null;
+    } catch (err: any) {
+      Logger.warn(`[FacebookService:${this.accountId}] Bridge getUserInfo failed: ${err.message}`);
       return null;
     }
   }

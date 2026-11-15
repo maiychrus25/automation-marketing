@@ -473,7 +473,11 @@ export function registerFacebookIpc(): void {
       const fbAcc = DatabaseService.getInstance().getFBAccount(internalId);
       const cookie = fbAcc ? resolveFBCookie(fbAcc) : null;
       if (!cookie) return { success: false, error: 'Cookie not found' };
-      const info = await getUserInfoFacebookHtml(cookie, userId);
+      // Tài khoản đang kết nối hỏi qua service: nó ưu tiên bridge (có tên cả khi trang cá nhân không đọc ra tên).
+      const connected = FacebookConnectionManager.get(internalId);
+      const info = connected?.getStatus() === 'connected'
+        ? await connected.getUserInfoFacebookHtml(userId)
+        : await getUserInfoFacebookHtml(cookie, userId);
       if (info) {
         Logger.log(`[facebookIpc] fb:getUserInfoFacebookHtml: resolved ${userId} → name="${info.name}"`);
         // Lưu vào DB nếu có tên

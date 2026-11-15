@@ -15,6 +15,22 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.6',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🛠️ Facebook cá nhân: người gửi mới có tên thay vì chỉ có ảnh đại diện',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Facebook cá nhân: hội thoại với người mới nhắn tới không hiện tên. MaiHub nay hỏi tên qua kênh Messenger trước, đọc trang cá nhân chỉ khi cách đó không có kết quả',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.5',
     date: '11/2026',
     type: 'patch',

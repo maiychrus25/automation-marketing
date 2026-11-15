@@ -72,3 +72,15 @@ func TestParseMarkReadParams(t *testing.T) {
 		}
 	}
 }
+
+func TestParseUserIDParam(t *testing.T) {
+	id, err := parseUserIDParam(json.RawMessage(`{"userId":" 100000000000000031 "}`))
+	if err != nil || id != 100000000000000031 {
+		t.Fatalf("got %d %v", id, err)
+	}
+	for _, raw := range []string{`{"userId":""}`, `{}`, `{"userId":"12@msgr"}`, `{"userId":"-1"}`, `{"userId":"0"}`, `{"userId":12}`, `not json`} {
+		if _, err := parseUserIDParam(json.RawMessage(raw)); err == nil {
+			t.Fatalf("%s: expected an error", raw)
+		}
+	}
+}

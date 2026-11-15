@@ -65,6 +65,7 @@ export const BRIDGE_METHODS = [
   'sendFile',
   'fetchMessages',
   'markRead',
+  'getUserInfo',
 ] as const;
 
 export type BridgeMethod = (typeof BRIDGE_METHODS)[number];
@@ -637,6 +638,11 @@ export class FacebookE2EEBridge extends EventEmitter {
   /** Gửi "đã đọc" lên Facebook tới mốc watermarkTs. threadId là chuỗi: id > 2^53 không mất chính xác. */
   public async markRead(params: { threadId: string; watermarkTs: number }): Promise<void> {
     await this.call('markRead', params, 15_000);
+  }
+
+  /** Tên và ảnh của một người dùng theo bảng liên hệ của Messenger. userId là chuỗi: id > 2^53 không mất chính xác. */
+  public async getUserInfo(userId: string): Promise<{ name?: string; profilePictureUrl?: string } | null> {
+    return this.call('getUserInfo', { userId }, 15_000);
   }
 
   // ─── Shutdown ─────────────────────────────────────────────────────────────

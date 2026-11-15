@@ -97,6 +97,22 @@ func parseMarkReadParams(raw json.RawMessage) (threadID int64, watermarkTs int64
 	return threadID, params.WatermarkTs, nil
 }
 
+// parseUserIDParam reads {"userId": "<digits>"}. Ids cross the Electron boundary as strings so
+// values above 2^53 keep their precision.
+func parseUserIDParam(raw json.RawMessage) (int64, error) {
+	var params struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return 0, err
+	}
+	userID, err := strconv.ParseInt(strings.TrimSpace(params.UserID), 10, 64)
+	if err != nil || userID <= 0 {
+		return 0, fmt.Errorf("invalid userId %q", params.UserID)
+	}
+	return userID, nil
+}
+
 type response struct {
 	ID    uint64      `json:"id"`
 	OK    bool        `json:"ok"`
@@ -218,6 +234,23 @@ func handle(req *request) {
 			return
 		}
 		ok(req.ID, map[string]interface{}{})
+
+	case "getUserInfo":
+		if client == nil {
+			fail(req.ID, fmt.Errorf("client not initialised"))
+			return
+		}
+		userID, err := parseUserIDParam(req.Params)
+		if err != nil {
+			fail(req.ID, err)
+			return
+		}
+		info, err := client.GetUserInfo(&bridge.GetUserInfoOptions{UserID: userID})
+		if err != nil {
+			fail(req.ID, err)
+			return
+		}
+		ok(req.ID, info)
 
 	case "connectE2EE":
 		if client == nil {

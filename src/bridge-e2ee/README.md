@@ -58,7 +58,7 @@ Async event (no id):
 ```
 
 Methods: `newClient`, `connect`, `connectE2EE`, `isConnected`, `sendMessage`,
-`sendE2EEMessage`, `fetchMessages`, `markRead`, `disconnect`.
+`sendE2EEMessage`, `fetchMessages`, `markRead`, `getUserInfo`, `disconnect`.
 
 `fetchMessages` loads one page of older messages for a thread:
 `{"method":"fetchMessages","params":{"threadId":"123","beforeTimestampMs":0,"beforeMessageId":"","timeoutMs":25000}}`
@@ -67,6 +67,9 @@ Older messages that arrive for a waiting request, or up to 60 s after it ended (
 
 `markRead` sends a read receipt: `{"method":"markRead","params":{"threadId":"123","watermarkTs":1715508423000}}`
 returns `{}`. `threadId` is a JSON string holding a positive decimal id (no `@...` suffix); `watermarkTs` (ms, >= 0) is optional.
+
+`getUserInfo` looks a user up in Messenger's contact table: `{"method":"getUserInfo","params":{"userId":"123"}}`
+returns `{id, name, firstName, username, profilePictureUrl, ...}` or fails with `user not found`. `userId` is a JSON string holding a positive decimal id.
 
 E2EE device persistence: `newClient` takes an optional `deviceData` (the JSON string last published
 in a `deviceDataChanged` event). A usable one is restored and `connectE2EE` skips registration; an
