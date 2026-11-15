@@ -15,6 +15,23 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.5',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🛠️ Facebook mã hoá đầu cuối: sửa nguyên nhân gốc khiến tin gửi tới tài khoản cá nhân không hiện',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Facebook cá nhân: tin mã hoá gửi tới không hiện trong app dù gửi đi vẫn được. Ứng dụng Messenger gần đây gửi tin có thêm thông tin mới; thư viện mã hoá bản cũ trong MaiHub kiểm tra tin sai cách nên từ chối mọi tin đến. Bản này cập nhật thư viện đó',
+          'Các bản 26.37.1–26.37.4 tìm nguyên nhân ở chỗ khác và chưa sửa được lỗi này',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.4',
     date: '11/2026',
     type: 'patch',

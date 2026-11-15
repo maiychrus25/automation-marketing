@@ -2,8 +2,12 @@ package bridge
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"testing"
+
+	"google.golang.org/protobuf/encoding/protowire"
 
 	"go.mau.fi/libsignal/ecc"
 	"go.mau.fi/libsignal/keys/identity"
@@ -351,5 +355,50 @@ func TestSessionsOfDevicesWithTheirOwnIdentityAreNotMixed(t *testing.T) {
 	}
 	if has, _ := d.HasSession(ctx, "2002:97"); has {
 		t.Fatal("an unknown device has no session")
+	}
+}
+
+// Root cause of the 14-15/11/2026 receive failure. The official Messenger app started sending Signal
+// messages that carry a field this library does not know. libsignal 0.2.2 checked the MAC against a
+// re-serialized copy of the message, which drops unknown fields, so every incoming message failed
+// with "mismatching MAC" while sending kept working. The MAC must be checked over the bytes received.
+func TestMessageCarryingAnUnknownFieldStillDecrypts(t *testing.T) {
+	ctx := context.Background()
+	d := cryptoDevice(t, "1001", 82)
+	p := cryptoDevice(t, "2002", 31)
+	pk, _ := p.GenOnePreKey(ctx)
+	mustDecrypt(t, p, d, cryptoEncrypt(t, d, p, bundleFor(p, pk), "hello"), "hello")
+	wire := cryptoEncrypt(t, p, d, nil, "reply").Serialize()
+
+	// Learn the MAC key on a copy of our device, so the real one still has to decrypt the message.
+	parsed, err := protocol.NewSignalMessageFromBytes(wire, cryptoSerializer.SignalMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spare := restoreDevice(t, d)
+	spare.Device.ID = d.Device.ID
+	spareCipher := session.NewCipher(session.NewBuilderFromSignal(spare.Device, cryptoAddress(p), cryptoSerializer), cryptoAddress(p))
+	_, messageKeys, err := spareCipher.DecryptAndGetKey(ctx, parsed)
+	if err != nil {
+		t.Fatalf("baseline decrypt: %v", err)
+	}
+
+	// The sender adds a field (number 7) and computes the MAC over what it actually sends.
+	body := wire[:len(wire)-protocol.MacLength]
+	body = protowire.AppendVarint(protowire.AppendTag(body, 7, protowire.VarintType), 1)
+	mac := hmac.New(sha256.New, messageKeys.MacKey())
+	mac.Write(identity.NewKey(ecc.NewDjbECPublicKey(*p.Device.IdentityKey.Pub)).PublicKey().Serialize())
+	mac.Write(identity.NewKey(ecc.NewDjbECPublicKey(*d.Device.IdentityKey.Pub)).PublicKey().Serialize())
+	mac.Write(body)
+	withUnknownField := append(body, mac.Sum(nil)[:protocol.MacLength]...)
+
+	msg, err := protocol.NewSignalMessageFromBytes(withUnknownField, cryptoSerializer.SignalMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipher := session.NewCipher(session.NewBuilderFromSignal(d.Device, cryptoAddress(p), cryptoSerializer), cryptoAddress(p))
+	plain, err := cipher.Decrypt(ctx, msg)
+	if err != nil || string(plain) != "reply" {
+		t.Fatalf("message with an unknown field: %q %v", plain, err)
 	}
 }

@@ -87,6 +87,10 @@ never drops the device. libsignal's warnings and errors go to the same place as 
 length and a 4-byte hash only. After each E2EE connect one `INF [bridge] E2EE self-check: ...` line
 compares the bundle the server hands out for this device with the local keys (match/MISMATCH and ids).
 
+Dependencies: `go.mau.fi/libsignal` must be 0.2.3 or newer. 0.2.2 verifies a message MAC over a
+re-serialized copy of the message, which drops fields it does not know; the official Messenger app
+now sends such fields, so 0.2.2 rejects every incoming message ("mismatching MAC").
+
 Sibling device ids: `GetSession` returns the asked address's session plus, as previous states, the
 sessions held with other device ids of the same user that present the same identity key. One install
 registered under several device ids answers on whichever session it read last.
