@@ -1512,7 +1512,8 @@ export class FacebookService {
       case 'e2eeReaction': {
         // E2EE 1:1 reaction from bridge
         // data: { chatJid, messageId, reaction, senderId, senderJid }
-        if (data?.messageId && data?.reaction) {
+        // reaction rỗng = bên kia gỡ cảm xúc: vẫn phải cập nhật.
+        if (data?.messageId && typeof data.reaction === 'string') {
           const stripJid = (id: string) => id.replace(/@.*$/, '');
           const threadId = data.chatJid ? stripJid(String(data.chatJid)) : '';
           const userId = String(data.senderId || data.senderJid?.replace(/:.*$/, '') || '');
@@ -2811,8 +2812,9 @@ export class FacebookService {
    * Persist a reaction update to fb_messages DB.
    * Reads current reactions, merges the new one (userId → emoji), saves back.
    */
-  private persistReactionToDB(messageId: string, userId: string, emoji: string): void {
-    if (!messageId || !userId || !emoji) return;
+  /** Ghi cảm xúc của một người vào tin, giữ nguyên cảm xúc của người khác. emoji rỗng = gỡ cảm xúc của người đó. */
+  public persistReactionToDB(messageId: string, userId: string, emoji: string): void {
+    if (!messageId || !userId) return;
     try {
       const db = DatabaseService.getInstance();
       const row = db.queryOne<any>(`SELECT reactions FROM fb_messages WHERE id = ?`, [messageId]);

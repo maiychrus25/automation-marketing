@@ -235,25 +235,33 @@ func (c *Client) SendE2EEReaction(chatJIDStr, messageID, senderJIDStr, emoji str
 		return err
 	}
 
-	msgKey := c.E2EE.BuildMessageKey(chatJID, senderJID, messageID)
-	reactionMsg := &waConsumerApplication.ConsumerApplication{
+	reactionMsg := buildE2EEReaction(c.E2EE.BuildMessageKey(chatJID, senderJID, messageID), emoji, time.Now())
+
+	reactionID := strconv.FormatInt(time.Now().UnixNano(), 10)
+	_, err = c.E2EE.SendFBMessage(c.ctx, chatJID, reactionMsg, nil, whatsmeow.SendRequestExtra{ID: reactionID})
+	return err
+}
+
+// buildE2EEReaction wraps a reaction (empty emoji removes it) for the E2EE transport. The sender
+// timestamp is what the official app orders reactions by: without it the reaction is delivered and
+// never shown. mautrix-meta sets it the same way (pkg/connector/handlematrix.go).
+func buildE2EEReaction(key *waCommon.MessageKey, emoji string, at time.Time) *waConsumerApplication.ConsumerApplication {
+	sentAt := at.UnixMilli()
+	return &waConsumerApplication.ConsumerApplication{
 		Payload: &waConsumerApplication.ConsumerApplication_Payload{
 			Payload: &waConsumerApplication.ConsumerApplication_Payload_Content{
 				Content: &waConsumerApplication.ConsumerApplication_Content{
 					Content: &waConsumerApplication.ConsumerApplication_Content_ReactionMessage{
 						ReactionMessage: &waConsumerApplication.ConsumerApplication_ReactionMessage{
-							Key:  msgKey,
-							Text: &emoji,
+							Key:               key,
+							Text:              &emoji,
+							SenderTimestampMS: &sentAt,
 						},
 					},
 				},
 			},
 		},
 	}
-
-	reactionID := strconv.FormatInt(time.Now().UnixNano(), 10)
-	_, err = c.E2EE.SendFBMessage(c.ctx, chatJID, reactionMsg, nil, whatsmeow.SendRequestExtra{ID: reactionID})
-	return err
 }
 
 // EditMessage edits a message

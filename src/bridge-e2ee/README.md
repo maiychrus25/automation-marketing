@@ -68,6 +68,10 @@ Older messages that arrive for a waiting request, or up to 60 s after it ended (
 `markRead` sends a read receipt: `{"method":"markRead","params":{"threadId":"123","watermarkTs":1715508423000}}`
 returns `{}`. `threadId` is a JSON string holding a positive decimal id (no `@...` suffix); `watermarkTs` (ms, >= 0) is optional.
 
+`sendE2EEReaction` (`{chatJid, messageId, senderJid, emoji}`; empty `emoji` removes the reaction) stamps the
+reaction with the send time (`SenderTimestampMS`). The official app orders reactions by it and silently
+ignores a reaction without one.
+
 `getUserInfo` looks a user up in Messenger's contact table: `{"method":"getUserInfo","params":{"userId":"123"}}`
 returns `{id, name, firstName, username, profilePictureUrl, ...}` or fails with `user not found`. `userId` is a JSON string holding a positive decimal id.
 

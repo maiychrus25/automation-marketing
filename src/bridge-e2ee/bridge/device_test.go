@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	waTypes "go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestNeedsE2EERegistration(t *testing.T) {
@@ -294,5 +296,21 @@ func TestOwnBundleCheckNamesWhatDiffers(t *testing.T) {
 	}
 	if got := describeOwnBundle(ds, nil); !strings.Contains(got, "no bundle") {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// Real run 16/11/2026: a reaction sent from the app was delivered to the peer's device and never
+// shown. The reference client (mautrix-meta) stamps every reaction with the sender's time, which the
+// official app uses to order reactions; ours had none.
+func TestE2EEReactionCarriesSenderTimestamp(t *testing.T) {
+	key := &waCommon.MessageKey{ID: proto.String("m1")}
+	at := time.UnixMilli(1_700_000_000_123)
+	r := buildE2EEReaction(key, "\u2764", at).GetPayload().GetContent().GetReactionMessage()
+	if r.GetKey() != key || r.GetText() != "\u2764" || r.GetSenderTimestampMS() != 1_700_000_000_123 {
+		t.Fatalf("got key=%v text=%q ts=%d", r.GetKey(), r.GetText(), r.GetSenderTimestampMS())
+	}
+	removal := buildE2EEReaction(key, "", at).GetPayload().GetContent().GetReactionMessage()
+	if removal.Text == nil || removal.GetText() != "" || removal.GetSenderTimestampMS() == 0 {
+		t.Fatal("removing a reaction sends an empty text, still with a timestamp")
 	}
 }

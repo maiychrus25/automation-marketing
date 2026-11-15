@@ -15,6 +15,24 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.7',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🛠️ Facebook cá nhân: cảm xúc thả trong chat mã hoá nay hiện ở phía người nhận',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Facebook cá nhân: cảm xúc bạn thả vào tin trong chat mã hoá đầu cuối tới được máy người kia nhưng không hiện. Bản này gửi kèm thông tin mà ứng dụng Messenger cần để hiển thị',
+          'Facebook cá nhân: khi người kia gỡ cảm xúc, tin trong app vẫn giữ cảm xúc cũ',
+          'Facebook cá nhân: thả cảm xúc vào một tin làm mất cảm xúc người kia đã thả trên tin đó sau khi tải lại hội thoại',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.6',
     date: '11/2026',
     type: 'patch',

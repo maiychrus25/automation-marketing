@@ -1289,14 +1289,9 @@ export function registerFacebookIpc(): void {
         if (result.success) success = true;
       }
 
-      // Save to local DB for persistence (even if Facebook API fails, keep local state)
-      if (params.emoji) {
-        // Build reactions payload in old format { userId: emoji }
-        const fbId = resolveRealFacebookId(internalId, service);
-        const reactionsPayload: Record<string, string> = {};
-        reactionsPayload[fbId || internalId] = params.emoji;
-        DatabaseService.getInstance().updateFBMessageReaction(params.messageId, JSON.stringify(reactionsPayload));
-      }
+      // Save to local DB for persistence (even if Facebook API fails, keep local state).
+      // Gộp vào cảm xúc sẵn có của tin: ghi đè cả danh sách sẽ xoá cảm xúc của người kia. emoji rỗng = gỡ.
+      service.persistReactionToDB(params.messageId, resolveRealFacebookId(internalId, service) || internalId, params.emoji || '');
 
       return { success };
     } catch (err: any) {
