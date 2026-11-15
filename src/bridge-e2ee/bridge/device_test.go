@@ -3,12 +3,15 @@ package bridge
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	waTypes "go.mau.fi/whatsmeow/types"
+	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
 func TestNeedsE2EERegistration(t *testing.T) {
@@ -170,5 +173,45 @@ func TestSaveSoonCoalescesBurstIntoOneSnapshot(t *testing.T) {
 	case <-got:
 	case <-time.After(2 * time.Second):
 		t.Fatal("a write after the burst was not published")
+	}
+}
+
+type countingLog struct{ warn, info, debug int }
+
+func (l *countingLog) Warnf(string, ...any)    { l.warn++ }
+func (l *countingLog) Errorf(string, ...any)   {}
+func (l *countingLog) Infof(string, ...any)    { l.info++ }
+func (l *countingLog) Debugf(string, ...any)   { l.debug++ }
+func (l *countingLog) Sub(string) waLog.Logger { return l }
+
+// The release build runs the bridge at error level, which hid why an E2EE message could not be
+// decrypted. Those lines must reach stderr at any level; everything else keeps the configured level.
+func TestDiagLogWritesDecryptFailuresAndForwardsTheRest(t *testing.T) {
+	var out bytes.Buffer
+	inner := &countingLog{}
+	log := diagLog{Logger: inner, out: &out}
+
+	log.Warnf("Error decrypting message %s from %s: %v", "m1", "100:96@msgr", errors.New("bad MAC"))
+	log.Debugf("Database has %d prekeys, server says we have %d", 0, 812)
+	log.Infof("Uploading %d new prekeys to server", 812)
+	log.Sub("Recv").Warnf("Not sending any more retry receipts for %s", "m1")
+	for _, want := range []string{"bad MAC", "server says we have 812", "Uploading 812", "retry receipts for m1"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("diagnostic line %q missing from %q", want, out.String())
+		}
+	}
+	if inner.warn+inner.info+inner.debug != 0 {
+		t.Fatal("a diagnostic line must be written once, not forwarded as well")
+	}
+
+	out.Reset()
+	log.Warnf("Unhandled encrypted message (type %s) from %s", "x", "y")
+	log.Debugf("Decrypting message from %s", "y")
+	log.Infof("Updated LID to %s", "z")
+	if out.Len() != 0 {
+		t.Fatalf("only decrypt diagnostics bypass the level, got %q", out.String())
+	}
+	if inner.warn != 1 || inner.debug != 1 || inner.info != 1 {
+		t.Fatalf("other lines go to the wrapped logger, got %+v", *inner)
 	}
 }

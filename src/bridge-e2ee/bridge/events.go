@@ -723,20 +723,7 @@ func (c *Client) handleE2EEEvent(evt interface{}) {
 			"loggedOut": true,
 		})
 
-	case *events.UndecryptableMessage:
-		// IsUnavailable is a placeholder the sender never encrypted for this device, not a failed decrypt.
-		if !e.IsUnavailable && c.noteUndecryptable() {
-			c.Logger.Error().Msg("Restored E2EE device cannot decrypt incoming messages, asking for a new device")
-			c.DeviceStore.DeleteDevice(context.Background(), c.DeviceStore.Device) // stop publishing its state
-			c.emitEvent(EventTypeDisconnected, map[string]any{
-				"isE2EE":    true,
-				"loggedOut": true,
-				"reason":    "undecryptable",
-			})
-		}
-
 	case *events.FBMessage:
-		c.noteDecrypted()
 		var senderID int64
 		if e.Info.Sender.User != "" {
 			senderID, _ = strconv.ParseInt(e.Info.Sender.User, 10, 64)
@@ -799,22 +786,6 @@ func (c *Client) handleE2EEEvent(evt interface{}) {
 			"messageIds": e.MessageIDs,
 		})
 	}
-}
-
-// undecryptableResetThreshold: consecutive failed decrypts after which a restored device is given up.
-// whatsmeow asks the sender to resend after each failure, so a healthy session recovers within one or
-// two; reaching this means the stored state no longer matches what Facebook holds for the device.
-const undecryptableResetThreshold = 4
-
-func (c *Client) noteDecrypted() {
-	c.undecryptableStreak.Store(0)
-}
-
-// noteUndecryptable reports true once, when a restored device should be replaced by a new one.
-// A device registered in this run is never reset: it has no stored state that could be stale.
-func (c *Client) noteUndecryptable() bool {
-	n := c.undecryptableStreak.Add(1)
-	return c.deviceRestored && n >= undecryptableResetThreshold && c.deviceResetRequested.CompareAndSwap(false, true)
 }
 
 // emitEvent emits an event to the channel

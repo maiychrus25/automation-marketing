@@ -1383,10 +1383,9 @@ export class FacebookService {
       case 'disconnected':
         Logger.warn(`[FacebookService:${this.accountId}] E2EE bridge: disconnected ${JSON.stringify(data)}`);
         if (data?.isE2EE && data?.loggedOut) {
-          // Facebook đăng xuất thiết bị, hoặc bridge báo thiết bị khôi phục không giải mã được tin đến (reason=undecryptable):
-          // bỏ trạng thái đã lưu, nối lại để đăng ký thiết bị mới (giống nhánh heartbeat hỏng).
+          // Facebook đăng xuất thiết bị: bỏ trạng thái đã lưu, nối lại để đăng ký thiết bị mới (giống nhánh heartbeat hỏng).
           // Logger.error: dòng này phải ra cả ở bản phát hành (log/warn bị tắt), để còn dấu vết khi thiết bị bị thay.
-          Logger.error(`[FacebookService:${this.accountId}] E2EE device dropped (${data.reason === 'undecryptable' ? 'restored device could not decrypt incoming messages' : 'logged out by Facebook'}) - clearing stored device`);
+          Logger.error(`[FacebookService:${this.accountId}] E2EE device logged out by Facebook - clearing stored device`);
           this.getE2EEDeviceStore().clear();
           this._clearE2EEHeartbeat();
           // 'connected' đặt lại backoff ngay trước khi thiết bị mới bị đăng xuất, nên chuỗi đăng xuất được đếm riêng:

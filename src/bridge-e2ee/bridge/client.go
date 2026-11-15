@@ -11,10 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -26,6 +28,7 @@ import (
 	"go.mau.fi/whatsmeow/store"
 	waTypes "go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/util/keys"
+	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix"
 	"go.mau.fi/mautrix-meta/pkg/messagix/cookies"
@@ -59,9 +62,9 @@ type Client struct {
 	now               func() time.Time // nil means time.Now (tests inject a clock)
 
 	// deviceRestored: the E2EE device came from stored state instead of being registered in this run.
-	deviceRestored       bool
-	undecryptableStreak  atomic.Int32 // failed decrypts since the last message that decrypted
-	deviceResetRequested atomic.Bool  // the parent was already told to drop the stored device
+	deviceRestored bool
+	// diagOut receives the E2EE diagnostic lines (diagLog); nil when logging is disabled.
+	diagOut io.Writer
 }
 
 // ClientConfig for creating a new client
@@ -161,6 +164,9 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		recentUnreactions: make(map[string]int64),
 		deviceRestored:    deviceRestored,
 	}
+	if logLevel != zerolog.Disabled {
+		client.diagOut = os.Stderr
+	}
 
 	// Snapshots go to the parent app (which stores them) unless the device is memory-only or file-backed.
 	if !cfg.E2EEMemoryOnly && (cfg.DeviceData != "" || cfg.DevicePath == "") {
@@ -221,15 +227,24 @@ func (c *Client) ConnectE2EE() error {
 		return err
 	}
 	c.E2EE = e2eeClient
+	if c.diagOut != nil {
+		e2eeClient.Log = diagLog{Logger: e2eeClient.Log, out: c.diagOut}
+	}
 
 	// A restored device already has its server identity; registering again would replace it.
-	if needsE2EERegistration(c.DeviceStore.Device) {
+	registered := needsE2EERegistration(c.DeviceStore.Device)
+	if registered {
 		if err := c.Messagix.RegisterE2EE(c.ctx, c.FBID); err != nil {
 			return err
 		}
 		if err := c.DeviceStore.Save(); err != nil {
 			return err
 		}
+	}
+
+	if c.diagOut != nil {
+		fmt.Fprintf(c.diagOut, "INF [bridge] E2EE device ready device=%d restored=%t registered=%t\n",
+			c.DeviceStore.Device.ID.Device, c.deviceRestored, registered)
 	}
 
 	// Handler first so messages queued while the app was closed are not missed on connect.
@@ -239,6 +254,54 @@ func (c *Client) ConnectE2EE() error {
 	}
 
 	return nil
+}
+
+// diagnosticMarkers pick the whatsmeow log lines that explain why an E2EE message could not be
+// decrypted: the decrypt error itself, the retry receipts, and the prekey counts around an upload.
+var diagnosticMarkers = []string{
+	"Error decrypting", "error while trying to decrypt", "Unavailable message",
+	"retry receipt", "prekey", "Prekey", "passive", "Successfully authenticated",
+}
+
+// diagLog wraps whatsmeow's logger. The release build runs the bridge at error level, which hides
+// the lines above; they are written to out whatever the level, the rest goes to the wrapped logger.
+// They carry message ids, sender ids and error text, never keys or message content.
+type diagLog struct {
+	waLog.Logger
+	out io.Writer
+}
+
+func (d diagLog) diagnostic(level, msg string, args []any) bool {
+	line := fmt.Sprintf(msg, args...)
+	for _, marker := range diagnosticMarkers {
+		if strings.Contains(line, marker) {
+			fmt.Fprintf(d.out, "%s [whatsmeow] %s\n", level, line)
+			return true
+		}
+	}
+	return false
+}
+
+func (d diagLog) Warnf(msg string, args ...any) {
+	if !d.diagnostic("WRN", msg, args) {
+		d.Logger.Warnf(msg, args...)
+	}
+}
+
+func (d diagLog) Infof(msg string, args ...any) {
+	if !d.diagnostic("INF", msg, args) {
+		d.Logger.Infof(msg, args...)
+	}
+}
+
+func (d diagLog) Debugf(msg string, args ...any) {
+	if !d.diagnostic("DBG", msg, args) {
+		d.Logger.Debugf(msg, args...)
+	}
+}
+
+func (d diagLog) Sub(module string) waLog.Logger {
+	return diagLog{Logger: d.Logger.Sub(module), out: d.out}
 }
 
 // needsE2EERegistration is true until RegisterE2EE has assigned the device a server identity

@@ -266,46 +266,27 @@ func drainDeviceResets(c *Client) int {
 	}
 }
 
-func TestRepeatedUndecryptableMessagesResetARestoredDeviceOnce(t *testing.T) {
+// 26.37.1 dropped a restored device after four failed decrypts. On the first real run a device
+// registered in the same run failed the same way, so dropping only lost messages and registered
+// one more device with Facebook each time. Failed decrypts must leave the device alone.
+func TestUndecryptableMessagesNeverDropTheDevice(t *testing.T) {
 	app := cryptoDevice(t, "100", 7)
 	data, _ := app.GetDeviceData()
 	c, err := NewClient(&ClientConfig{Cookies: map[string]string{}, DeviceData: data, LogLevel: "none"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	failed := &events.UndecryptableMessage{}
-	for i := 0; i < undecryptableResetThreshold-1; i++ {
-		c.handleE2EEEvent(failed)
+	for i := 0; i < 12; i++ {
+		c.handleE2EEEvent(&events.UndecryptableMessage{})
 	}
 	if n := drainDeviceResets(c); n != 0 {
-		t.Fatalf("no reset below the threshold, got %d", n)
-	}
-	c.noteDecrypted() // a message that decrypts ends the streak
-	for i := 0; i < undecryptableResetThreshold-1; i++ {
-		c.handleE2EEEvent(failed)
-	}
-	c.handleE2EEEvent(&events.UndecryptableMessage{IsUnavailable: true}) // placeholder, not a failed decrypt
-	if n := drainDeviceResets(c); n != 0 {
-		t.Fatalf("streak must restart after a good message and ignore unavailable placeholders, got %d", n)
-	}
-	c.handleE2EEEvent(failed)
-	c.handleE2EEEvent(failed)
-	if n := drainDeviceResets(c); n != 1 {
-		t.Fatalf("want exactly one reset request, got %d", n)
+		t.Fatalf("failed decrypts must not ask for a new device, got %d", n)
 	}
 	var snapshots int
 	c.DeviceStore.setOnDataChanged(func(string) { snapshots++ })
 	c.DeviceStore.Save()
-	if snapshots != 0 {
-		t.Fatal("a device being reset must stop publishing snapshots")
-	}
-
-	fresh, _ := NewClient(&ClientConfig{Cookies: map[string]string{}, LogLevel: "none"})
-	for i := 0; i < undecryptableResetThreshold*3; i++ {
-		fresh.handleE2EEEvent(failed)
-	}
-	if n := drainDeviceResets(fresh); n != 0 {
-		t.Fatalf("a device registered in this run is never reset for decrypt failures, got %d", n)
+	if snapshots != 1 {
+		t.Fatalf("the device must keep publishing its state, got %d snapshots", snapshots)
 	}
 }
 

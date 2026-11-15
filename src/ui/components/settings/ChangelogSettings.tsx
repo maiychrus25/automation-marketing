@@ -15,6 +15,29 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.2',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🔎 Facebook mã hoá đầu cuối: ghi lý do không nhận được tin vào Nhật ký để tìm nguyên nhân (lỗi nhận tin chưa được sửa)',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Facebook cá nhân: app không còn tự bỏ thiết bị mã hoá và đăng ký thiết bị mới khi không giải mã được tin. Việc này không giúp nhận được tin mà còn làm mất tin đang gửi tới',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Facebook cá nhân: khi một tin mã hoá gửi tới không giải mã được, lý do được ghi vào Cài đặt → Nhật ký (dòng bắt đầu bằng [FBE2EEBridge:stderr]). Các dòng này không chứa nội dung tin hay khoá',
+          'Lưu ý: bản 26.37.1 chưa sửa được lỗi không nhận tin mã hoá từ bản 26.37.0. Bản này chưa sửa lỗi đó, chỉ thêm thông tin để tìm nguyên nhân',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.1',
     date: '11/2026',
     type: 'patch',

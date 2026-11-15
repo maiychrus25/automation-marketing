@@ -75,9 +75,13 @@ memory and changes emit `deviceDataChanged` (at most one per 100 ms; registratio
 log it). `e2eeMemoryOnly` emits nothing. When Facebook logs the device out the bridge emits
 `disconnected` with `{"isE2EE": true, "loggedOut": true}` and stops emitting `deviceDataChanged`.
 One-time prekeys are derived from a per-device seed stored in that state (`pre_key_seed`), so they can
-be recomputed after a restart; stored state without a seed is treated as unusable. A restored device
-that fails to decrypt four messages in a row emits the same `disconnected` event with
-`"reason": "undecryptable"` so the parent drops it and a new device is registered.
+be recomputed after a restart; stored state without a seed is treated as unusable.
+
+Decrypt diagnostics: whatever `logLevel` is (except `none`), whatsmeow's lines about a failed decrypt,
+retry receipts and prekey counts are written to stderr as `<LVL> [whatsmeow] ...`, plus one
+`INF [bridge] E2EE device ready device=<n> restored=<bool> registered=<bool>` line per `connectE2EE`.
+They carry message and sender ids and error text, never keys or message content. A failed decrypt
+never drops the device.
 
 `message` events produced by Messenger's upsert (sync/backfill) batch carry `"isHistory": true`.
 

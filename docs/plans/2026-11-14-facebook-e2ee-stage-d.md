@@ -262,3 +262,9 @@ public async markReadOnServer(threadId: string): Promise<void>;
 - **Nguyên nhân:** khoá dùng một lần sinh ngẫu nhiên trong bridge và chỉ tới DB qua bản chụp gửi sau (gom 100 ms ở bridge, 1 giây ở app). Bridge bị đóng trong khoảng đó thì Facebook giữ các khoá mà thiết bị khôi phục không còn. Review và test của plan này không có ca "mất bản chụp sau khi tải khoá lên".
 - **Sửa:** khoá dùng một lần tính từ hạt giống theo id (`derivePreKey`), id đã dùng được ghi lại; bản lưu không có hạt giống bị từ chối; bản chụp đầu tiên ghi ngay; thiết bị khôi phục giải mã hỏng bốn lần liên tiếp thì bị thay (`reason: "undecryptable"`).
 - **Test:** `src/bridge-e2ee/bridge/device_crypto_test.go` chạy kho khoá qua libsignal như thư viện làm (không mạng), gồm ca dựng lại đúng lỗi này.
+
+## Ghi chú sau phát hành: 26.37.1 không sửa được lỗi (26.37.2 thêm chẩn đoán)
+
+- **Kết quả chạy thật 15/11/2026 (26.37.1):** tin mã hoá gửi tới vẫn không giải mã được. Thiết bị khôi phục hỏng bốn lần rồi bị thay; thiết bị mới đăng ký ngay sau đó (không khôi phục) hỏng mười lần liên tiếp với cùng người gửi. Nguyên nhân "mất khoá dùng một lần" ở ghi chú trên vì vậy sai hoặc chưa đủ: nó được suy ra từ kích thước bản lưu, không phải từ log của bridge.
+- **Chưa biết:** lý do giải mã hỏng. Bản phát hành chạy bridge ở mức `error` nên dòng lỗi của whatsmeow không có trong Nhật ký. Kho khoá lưu/khôi phục chạy đúng qua libsignal ngoài mạng (kể cả ca MaiHub nhắn trước, khởi động lại, bên kia trả lời).
+- **26.37.2:** gỡ việc thay thiết bị khi giải mã hỏng (không giúp gì, lại đăng ký thêm thiết bị), thêm `diagLog` đưa lý do giải mã hỏng, biên nhận xin gửi lại và số khoá dùng một lần vào Nhật ký. Bản này không sửa lỗi nhận tin.
