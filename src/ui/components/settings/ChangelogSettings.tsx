@@ -15,6 +15,22 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.8',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🛠️ Facebook: đổi cảm xúc trên một tin thì cảm xúc mới thay cảm xúc cũ',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Facebook: thả tim rồi đổi sang like trên cùng một tin làm tin hiện cả hai cảm xúc cho tới khi tải lại hội thoại. Nay cảm xúc mới thay cảm xúc cũ ngay, cả khi bạn đổi lẫn khi người kia đổi',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.7',
     date: '11/2026',
     type: 'patch',

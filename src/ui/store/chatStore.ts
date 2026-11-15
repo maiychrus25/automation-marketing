@@ -3,6 +3,7 @@ import ipc from "@/lib/ipc";
 import type { Channel } from '@/../configs/channelConfig';
 import { CHANNEL } from '@/lib/channelHelper';
 import { applyMessageEdit } from '@/lib/chat/applyMessageEdit';
+import { applyMessageReaction } from '@/lib/chat/applyMessageReaction';
 
 const MESSAGE_TOPIC_KEY_SEPARATOR = '__tg_topic__';
 const FORUM_TOPICS_STORAGE_PREFIX = 'deplao_forum_topics_';
@@ -735,28 +736,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             }
           }
 
-          // Apply PHP-like reaction logic
-          if (!icon) {
-            // Remove user's reactions across all emojis
-            for (const emo of Object.keys(current.emoji)) {
-              const userCount = current.emoji[emo].users[userId] || 0;
-              if (userCount > 0) {
-                current.emoji[emo].total -= userCount;
-                current.total -= userCount;
-                delete current.emoji[emo].users[userId];
-                if (current.emoji[emo].total <= 0) delete current.emoji[emo];
-              }
-            }
-          } else {
-            if (!current.emoji[icon]) {
-              current.emoji[icon] = { total: 1, users: { [userId]: 1 } };
-            } else {
-              current.emoji[icon].total++;
-              current.emoji[icon].users[userId] = (current.emoji[icon].users[userId] || 0) + 1;
-            }
-            current.total++;
-            current.lastReact = icon;
-          }
+          // Facebook: mỗi người một cảm xúc trên một tin, cảm xúc mới thay cảm xúc cũ. Kênh khác cộng dồn.
+          applyMessageReaction(current, userId, icon, m.channel === CHANNEL.FACEBOOK);
 
           return { ...m, reactions: { ...current } };
         });
