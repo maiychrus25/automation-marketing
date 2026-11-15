@@ -32,6 +32,7 @@ import { e2eeReconnectDelayMs } from './facebookBridgeBackoff';
 import { FacebookE2EESender } from './FacebookE2EESender';
 import { FacebookE2EEDeviceStore } from './FacebookE2EEDeviceStore';
 import { parseE2EECookies, resolveE2EEBinaryPath, normalizeChatJid } from './FacebookUtils';
+import { isPageBridgeProbeEnabled, runPageBridgeProbe } from './pageBridgeProbe';
 import EventBroadcaster from '../event/EventBroadcaster';
 import { recordFacebookReceipt } from '../receipts/peerReceipts';
 import DatabaseService from '../database/DatabaseService';
@@ -68,6 +69,8 @@ export class FacebookService {
   private _facebookId: string | null = null;
   /** Dòng này là Page con (có parent_facebook_id): không E2EE bridge, gửi qua trình duyệt Business Suite */
   private _isPage = false;
+  /** THỬ NGHIỆM (sẽ gỡ): bridge thử nối dưới danh nghĩa Page, xem pageBridgeProbe.ts. */
+  private pageBridgeProbe: Promise<{ close: () => Promise<void> } | null> | null = null;
   /** Một bộ giới hạn tốc độ + một bộ tải lịch sử cho mỗi service (mỗi tài khoản). */
   private historyLimiter: FacebookHistoryLimiter;
   private historyFetcher: FacebookHistoryFetcher;
@@ -484,6 +487,8 @@ export class FacebookService {
 
       // 4. Start E2EE bridge (cho 1:1 encrypted messages)
       await this.startE2EEBridge(fbId);
+      // THỬ NGHIỆM (sẽ gỡ, xem pageBridgeProbe.ts): chỉ khi mở app với cờ thử; không chặn việc kết nối.
+      if (this._isPage && isPageBridgeProbeEnabled()) this.pageBridgeProbe = runPageBridgeProbe(this.accountId, this.cookie).catch(() => null);
     } catch (err: any) {
       Logger.error(`[FacebookService:${this.accountId}] Connect error: ${err.message}`);
       if (this.status !== 'cookie_expired') {
@@ -1253,6 +1258,11 @@ export class FacebookService {
   }
 
   private async stopE2EEBridge(): Promise<void> {
+    if (this.pageBridgeProbe) {
+      const probe = this.pageBridgeProbe;
+      this.pageBridgeProbe = null;
+      await probe.then(p => p?.close()).catch(() => {});
+    }
     // Dừng chủ động (tắt, ngắt, thử lại tay): huỷ hẹn nối lại và vô hiệu hoá listener/'closed' của bridge cũ.
     this._clearE2EEReconnect();
     this.e2eeBridgeGen++;
