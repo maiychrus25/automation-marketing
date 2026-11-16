@@ -476,6 +476,7 @@ Nguồn: `src/services/facebook/`, `electron/ipc/facebookIpc.ts`, `docs/intent/2
 - Windows (NSIS) và Linux AppImage tải và cài bằng `electron-updater` khi người dùng bấm; macOS (chưa ký) và `.deb` chỉ mở trang Release.
 - Không cho khởi động lại để cài khi đang có việc Đăng Facebook (`isFacebookPosterBusy`, `electron/ipc/facebookPosterIpc.ts:79`).
 - Mỗi Release phải kèm `latest.yml`, `latest-linux.yml`, `latest-mac.yml` và `*.blockmap` (workflow `build.yml` tải lên).
+- **Ghi chú phát hành trên GitHub (từ 16/11/2026)**: bước "Ghi chú phát hành từ Log phiên bản của app" trong `.github/workflows/build.yml` chạy `node scripts/release-notes.js <tag>` và đưa kết quả vào thân Release (`body_path`); GitHub nối thêm dòng "Full Changelog" phía dưới. Nguồn duy nhất là mảng `CHANGELOG` trong `src/ui/components/settings/ChangelogSettings.tsx` (điểm nổi bật, rồi từng nhóm theo nhãn của app: Tính năng mới, Cải thiện, Sửa lỗi, Đã xóa, Bảo mật), nên app và trang Releases luôn khớp nhau. Script chỉ dùng thư viện có sẵn của Node vì bước phát hành không cài `node_modules`. Phiên bản không có mục trong `CHANGELOG` nhận một dòng báo "chưa có ghi chú" chứ không làm hỏng việc phát hành; test `src/__tests__/scripts/releaseNotes.test.ts` chặn trường hợp đó bằng cách bắt mục đầu của `CHANGELOG` phải trùng `version` trong `package.json`. Trước ngày này thân Release chỉ có dòng "Full Changelog" (kho commit thẳng vào `main`, không có pull request để GitHub tự liệt kê); các Release cũ đã được điền lại bằng cùng script.
 
 Nguồn: `src/services/update/`, `electron/ipc/updateIpc.ts`, `src/ui/components/common/UpdateNotice.tsx`, `src/ui/store/updateStore.ts`, `docs/specs/2026-10-03-auto-update.md`.
 
@@ -1581,7 +1582,7 @@ Target: Windows NSIS/dir x64; macOS dmg/zip x64 và arm64; Linux AppImage/deb. N
 | Data dictionary | Duy trì cùng migration/schema, không cần sao chép toàn bộ 70+ bảng vào tài liệu tổng thể |
 | Runbook vận hành | Backup/restore, release, rollback, log, mất mạng, credential rotation |
 | Security checklist | IPC, RBAC, secret, webhook, tunnel, dependency và nền tảng không chính thức |
-| Release notes | Version, artifact, checksum, migration, known issues; hiện ở GitHub Releases và `ChangelogSettings.tsx` |
+| Release notes | Version, artifact, checksum, migration, known issues; viết một lần ở `ChangelogSettings.tsx`, CI chép sang GitHub Releases bằng `scripts/release-notes.js` |
 | Intent / spec / plan theo tính năng | `docs/intent/`, `docs/specs/`, `docs/plans/` (được git theo dõi; tên file `YYYY-MM-DD-<tính-năng>.md`). Mỗi tính năng mới đi theo thứ tự intent → spec → plan; plan là nguồn tham chiếu khi triển khai và review |
 | Báo cáo spike / kiểm chứng | `docs/reports/` (chỉ file được thêm bằng `git add -f`; thư mục này mặc định bị ignore) |
 

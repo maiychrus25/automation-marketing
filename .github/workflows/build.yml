@@ -217,12 +217,21 @@ jobs:
       - name: Liệt kê bản cài
         run: ls -la release-files
 
+      # Ghi chú lấy từ mục của phiên bản này trong "Log phiên bản" của app (ChangelogSettings.tsx), để GitHub và app khớp nhau.
+      # GitHub tự nối thêm dòng "Full Changelog" phía dưới (generate_release_notes).
+      - name: Ghi chú phát hành từ Log phiên bản của app
+        shell: bash
+        run: |
+          node scripts/release-notes.js "${{ steps.version.outputs.tag }}" > release-notes.md
+          cat release-notes.md
+
       - name: Tạo GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: MaiHub ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
+          body_path: release-notes.md
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: release-files/*
