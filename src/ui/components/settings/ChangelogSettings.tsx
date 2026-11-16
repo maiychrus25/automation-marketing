@@ -15,6 +15,23 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.42.1',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🔑 Mở MaiHub lúc máy đang khóa không còn làm Zalo báo "cookie không hợp lệ" và ngừng tự kết nối',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Khi MaiHub được mở lúc máy đang khóa màn hình (chưa đọc được kho mật khẩu của máy), Zalo báo sai là "Cookies không hợp lệ, hãy đăng nhập lại" và từ đó không tự kết nối khi mở app. Nay MaiHub chờ tới khi đọc được kho mật khẩu rồi mới kết nối các tài khoản',
+          'Bấm kết nối lại Zalo trong lúc đó sẽ nhận thông báo đúng nguyên nhân; tài khoản không bị đánh dấu là đã ngắt và bạn không cần đăng nhập lại',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.42.0',
     date: '11/2026',
     type: 'minor',

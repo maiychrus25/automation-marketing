@@ -6,6 +6,7 @@ import ConnectionManager from '../../src/utils/ConnectionManager';
 import FacebookConnectionManager from '../../src/utils/FacebookConnectionManager';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
+import { SECRET_STORE_LOCKED_MESSAGE, isStoredSecretUnreadable } from '../../src/services/secure/secretStore';
 import ZaloLoginHelper from '../../src/utils/ZaloLoginHelper';
 import * as TelegramUserListener from '../../src/services/telegram/TelegramUserListener';
 import * as TelegramBotChannelService from '../../src/services/telegram/TelegramBotChannelService';
@@ -167,6 +168,12 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
             }
         } catch {}
 
+        // Cookie còn ở dạng mã hoá vì kho mật khẩu của máy chưa mở (máy đang khóa): thử kết nối chỉ sinh lỗi "cookie không
+        // hợp lệ" và đánh dấu tài khoản là đã ngắt, khiến lần mở app sau không tự kết nối nữa. Báo đúng nguyên nhân rồi dừng.
+        if (isStoredSecretUnreadable(auth?.cookies || '')) {
+            Logger.warn('[loginIpc] connect: kho mật khẩu của máy chưa mở, chưa kết nối (không đánh dấu tài khoản là đã ngắt)');
+            return { success: false, error: SECRET_STORE_LOCKED_MESSAGE, secretStoreLocked: true };
+        }
 
         try {
             const success = await loginService.connectUser(auth);

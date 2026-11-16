@@ -8,6 +8,7 @@ import * as fs from "fs";
 import { imageSize } from "image-size";
 import { extractUserProfile } from "./profileUtils";
 import { createProxyAgent } from "./ProxyHelper";
+import { SECRET_STORE_LOCKED_MESSAGE, isSecretStoreAvailable } from "../services/secure/secretStore";
 import { enqueuePerKey } from "./enqueuePerKey";
 import { wireZaloListenerLifecycle, isCurrentZaloListener } from "./zaloListenerRetry";
 import { applyZaloReadElsewhere, attachZaloReadElsewhere } from "../services/zalo/zaloReadElsewhere";
@@ -689,6 +690,8 @@ class ZaloLoginHelper {
             const prefix = (auth.cookies || '').substring(0, 40);
             const len = (auth.cookies || '').length;
             console.error(`[loginZalo] JSON.parse FAIL: len=${len}, prefix="${prefix}", startsWith=${JSON.stringify((auth.cookies || '').substring(0, 5))}`);
+            // Kho mật khẩu của máy chưa mở: cookie vẫn nguyên, chỉ là chưa giải mã được. Không bảo người dùng đăng nhập lại.
+            if (!isSecretStoreAvailable()) throw new Error(SECRET_STORE_LOCKED_MESSAGE);
             throw new Error(
                 'Cookies tài khoản không hợp lệ (có thể bị mã hóa sai hoặc dữ liệu cũ). ' +
                 'Vui lòng đăng xuất và đăng nhập lại tài khoản này.'

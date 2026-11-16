@@ -39,6 +39,7 @@ import { registerErpHrmIpc } from './ipc/erpHrmIpc';
 import { registerLockScreenIpc } from './ipc/lockScreenIpc';
 import { registerLibraryIpc } from './ipc/libraryIpc';
 import WorkspaceManager from '../src/utils/WorkspaceManager';
+import { whenSecretStoreReady } from '../src/services/secure/secretStore';
 import HttpConnectionManager from '../src/services/http/HttpConnectionManager';
 import WorkflowEngineService from '../src/services/workflow/WorkflowEngineService';
 import WebhookGatewayService from '../src/services/workflow/WebhookGatewayService';
@@ -1319,22 +1320,26 @@ app.whenReady().then(async () => {
     if (connectorServicesStarted) return;
     connectorServicesStarted = true;
     runStartupPathMigration();
-    // Auto-reconnect Facebook accounts
-    reconnectAllFBAccounts().catch(err => {
-      console.error('[main] reconnectAllFBAccounts error:', err.message);
+    // Tự kết nối tài khoản cần cookie / khoá đã lưu ở dạng mã hoá. Nếu kho mật khẩu của máy chưa mở (app được mở lúc máy đang
+    // khóa) thì chờ tới khi mở được rồi mới kết nối, thay vì kết nối bằng dữ liệu chưa giải mã (xem secretStore.ts).
+    whenSecretStoreReady(() => {
+      // Auto-reconnect Facebook accounts
+      reconnectAllFBAccounts().catch(err => {
+        console.error('[main] reconnectAllFBAccounts error:', err.message);
+      });
+      // Auto-reconnect Telegram accounts
+      reconnectAllTelegramAccounts().catch(err => {
+        console.error('[main] reconnectAllTelegramAccounts error:', err.message);
+      });
+      // Start periodic health check for Telegram bots (every 60s)
+      startTelegramBotHealthCheck();
+      // Ordered startup: relay + Zalo for all local workspaces FIRST, then remote workspaces
+      setTimeout(() => startupAllWorkspaces().catch(err => {
+        console.error('[main] startupAllWorkspaces error:', err.message);
+      }), 500);
+      // Resume active CRM campaigns only after connectors start, so Telegram items are not failed while disconnected.
+      setTimeout(() => CRMQueueService.getInstance().resumeActiveCampaigns(), 3000);
     });
-    // Auto-reconnect Telegram accounts
-    reconnectAllTelegramAccounts().catch(err => {
-      console.error('[main] reconnectAllTelegramAccounts error:', err.message);
-    });
-    // Start periodic health check for Telegram bots (every 60s)
-    startTelegramBotHealthCheck();
-    // Ordered startup: relay + Zalo for all local workspaces FIRST, then remote workspaces
-    setTimeout(() => startupAllWorkspaces().catch(err => {
-      console.error('[main] startupAllWorkspaces error:', err.message);
-    }), 500);
-    // Resume active CRM campaigns only after connectors start, so Telegram items are not failed while disconnected.
-    setTimeout(() => CRMQueueService.getInstance().resumeActiveCampaigns(), 3000);
   };
   onRendererReportedReady = startConnectorServices;
   if (rendererReportedReady) onRendererReportedReady();
