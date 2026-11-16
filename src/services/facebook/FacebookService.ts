@@ -69,7 +69,7 @@ export class FacebookService {
   private _facebookId: string | null = null;
   /** Dòng này là Page con (có parent_facebook_id): không E2EE bridge, gửi qua trình duyệt Business Suite */
   private _isPage = false;
-  /** THỬ NGHIỆM (sẽ gỡ): bridge thử nối dưới danh nghĩa Page, xem pageBridgeProbe.ts. */
+  /** THỬ NGHIỆM (sẽ gỡ): thử nối thẳng vào hộp thư Page, xem pageBridgeProbe.ts. */
   private pageBridgeProbe: Promise<{ close: () => Promise<void> } | null> | null = null;
   /** Một bộ giới hạn tốc độ + một bộ tải lịch sử cho mỗi service (mỗi tài khoản). */
   private historyLimiter: FacebookHistoryLimiter;
@@ -488,7 +488,7 @@ export class FacebookService {
       // 4. Start E2EE bridge (cho 1:1 encrypted messages)
       await this.startE2EEBridge(fbId);
       // THỬ NGHIỆM (sẽ gỡ, xem pageBridgeProbe.ts): chỉ khi mở app với cờ thử; không chặn việc kết nối.
-      if (this._isPage && isPageBridgeProbeEnabled()) this.pageBridgeProbe = runPageBridgeProbe(this.accountId, this.cookie).catch(() => null);
+      if (this._isPage && isPageBridgeProbeEnabled()) this.pageBridgeProbe = runPageBridgeProbe(this.accountId, this.cookie, this._delegatePageId, { agent: this.httpsAgent }).catch(() => null);
     } catch (err: any) {
       Logger.error(`[FacebookService:${this.accountId}] Connect error: ${err.message}`);
       if (this.status !== 'cookie_expired') {
