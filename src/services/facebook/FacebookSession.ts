@@ -8,6 +8,8 @@ import axios from 'axios';
 import { FBSessionData } from './FacebookTypes';
 import { dataSplit } from './FacebookUtils';
 import Logger from '../../utils/Logger';
+import { FB_SEC_CH_UA, FB_SEC_CH_UA_PLATFORM, FB_USER_AGENT } from './facebookIdentity';
+import { mergeRefreshedCookies, refreshedCookiesFrom } from './facebookCookieRefresh';
 
 const FB_HOME_URL = 'https://www.facebook.com/';
 
@@ -41,14 +43,14 @@ export function fbHeaders(cookie: string): Record<string, string> {
     'accept-language': 'vi-VN,vi;q=0.9,en-US;q=0.6,en;q=0.5',
     'cache-control': 'max-age=0',
     'cookie': cookie,
-    'sec-ch-ua': '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+    'sec-ch-ua': FB_SEC_CH_UA,
     'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
+    'sec-ch-ua-platform': FB_SEC_CH_UA_PLATFORM,
     'sec-fetch-dest': 'document',
     'sec-fetch-mode': 'navigate',
     'sec-fetch-site': 'same-origin',
     'upgrade-insecure-requests': '1',
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+    'user-agent': FB_USER_AGENT,
   };
 }
 
@@ -57,6 +59,11 @@ export function fbHeaders(cookie: string): Record<string, string> {
  * @throws Error nếu HTTP request thất bại
  */
 export async function fetchFBHomepage(cookie: string, httpsAgent?: any): Promise<string> {
+  return (await loadHomepage(cookie, httpsAgent)).html;
+}
+
+/** Trang chủ Facebook kèm các dòng Set-Cookie của phản hồi. */
+async function loadHomepage(cookie: string, httpsAgent?: any): Promise<{ html: string; setCookie: unknown }> {
   try {
     const response = await axios.get(FB_HOME_URL, {
       headers: fbHeaders(cookie),
@@ -64,12 +71,24 @@ export async function fetchFBHomepage(cookie: string, httpsAgent?: any): Promise
       timeout: 60000,
       ...(httpsAgent ? { httpsAgent } : {}),
     });
-    return response.data as string;
+    return { html: response.data as string, setCookie: response.headers?.['set-cookie'] };
   } catch (err: any) {
     const status = err.response?.status ?? '?';
     const msg = err.message || 'Unknown error';
-    throw new Error(`[FacebookSession] Cannot fetch Facebook homepage (HTTP ${status}): ${msg}`);
+    // Qua proxy, 403 / 407 thường là của chính máy chủ proxy (hết hạn, sai tài khoản, chặn đích) hoặc Facebook chặn địa chỉ
+    // của proxy: đều không nói gì về cookie. Đánh dấu để isTransientFacebookError không coi là cookie hết hạn.
+    const viaProxy = httpsAgent && (status === 403 || status === 407) ? ' qua proxy' : '';
+    throw new Error(`[FacebookSession] Cannot fetch Facebook homepage (HTTP ${status}${viaProxy}): ${msg}`);
   }
+}
+
+/** Kết quả initSession được dùng lại trong khoảng này, để các lần kiểm tra cookie liên tiếp không tải lại trang chủ. */
+export const SESSION_REUSE_MS = 60_000;
+const recentSessions = new Map<string, { at: number; agent: unknown; session: FBSessionData }>();
+
+/** Quên các session đang nhớ (test, hoặc khi cần buộc tải lại trang chủ). */
+export function forgetRecentSessions(): void {
+  recentSessions.clear();
 }
 
 /**
@@ -83,10 +102,18 @@ export async function fetchFBHomepage(cookie: string, httpsAgent?: any): Promise
  *
  * @throws Error nếu không fetch được homepage hoặc thiếu session fields bắt buộc
  */
-export async function initSession(cookie: string, httpsAgent?: any): Promise<FBSessionData> {
+export async function initSession(cookie: string, httpsAgent?: any, opts: { fresh?: boolean } = {}): Promise<FBSessionData> {
+  const now = Date.now();
+  for (const [key, entry] of recentSessions) if (now - entry.at >= SESSION_REUSE_MS) recentSessions.delete(key);
+  // Chỉ dùng lại khi đi cùng một đường mạng (cùng proxy agent): đổi proxy thì phải kiểm tra thật qua proxy mới.
+  // `fresh`: bên gọi cần token mới (làm mới session), không lấy bản đang nhớ.
+  const recent = opts.fresh ? undefined : recentSessions.get(cookie);
+  if (recent && recent.agent === httpsAgent) return { ...recent.session };
+
   let html: string;
+  let setCookie: unknown;
   try {
-    html = await fetchFBHomepage(cookie, httpsAgent);
+    ({ html, setCookie } = await loadHomepage(cookie, httpsAgent));
   } catch (err: any) {
     Logger.error(err.message);
     throw err;
@@ -97,14 +124,17 @@ export async function initSession(cookie: string, httpsAgent?: any): Promise<FBS
 
   for (const [name, start, end] of SESSION_FIELDS) {
     try {
-      result[name] = dataSplit(html, start, end);
+      (result as Record<string, string>)[name] = dataSplit(html, start, end);
     } catch {
       parseErrors.push(name);
       result[name] = null as any;
     }
   }
 
-  result.cookieFacebook = cookie;
+  // Facebook có thể làm mới cookie phiên ngay trong phản hồi này: dùng bản mới cho mọi yêu cầu sau.
+  const refreshed = mergeRefreshedCookies(cookie, refreshedCookiesFrom(setCookie));
+  result.cookieFacebook = refreshed.cookie;
+  if (refreshed.changed.length) result.refreshedCookieNames = refreshed.changed;
 
   // Validate required fields (port từ Python REQUIRED_SESSION_FIELDS)
   const missing = REQUIRED_SESSION_FIELDS.filter((f) => !hasValue(result[f]));
@@ -121,12 +151,15 @@ export async function initSession(cookie: string, httpsAgent?: any): Promise<FBS
     throw new Error(`[FacebookSession] FacebookID is not numeric: ${fbId}`);
   }
 
-  return result as FBSessionData;
+  const session = result as FBSessionData;
+  // Nhớ theo cả cookie đầu vào lẫn cookie đã làm mới: bên gọi nào cũng tìm lại được.
+  for (const key of new Set([cookie, session.cookieFacebook])) recentSessions.set(key, { at: Date.now(), agent: httpsAgent, session: { ...session } });
+  return session;
 }
 
 const TRANSIENT_NETWORK_RE =
   /\b(?:ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|EPROTO|ERR_SOCKET_CLOSED)\b|ERR_SOCKET_CLOSED|socket hang up|Proxy connection ended|\b(?:network|socket|timeout|timed out)\b|fetch failed/i;
-const TRANSIENT_STATUS_RE = /(?:status code|HTTP)\s*(?:407|429|5\d\d)\b/i;
+const TRANSIENT_STATUS_RE = /(?:status code|HTTP)\s*(?:407|429|5\d\d)\b|HTTP \d+ qua proxy/i;
 
 /** Lỗi mạng/timeout/429/5xx — tạm thời, KHÔNG có nghĩa cookie hết hạn. Lỗi lạ khác → false (giữ nghĩa "hết hạn"). */
 export function isTransientFacebookError(err: unknown): boolean {
@@ -333,7 +366,7 @@ async function tryFetchCdnRedirect(cookie: string, userId: string, httpsAgent?: 
   try {
     const response = await axios.head(`https://www.facebook.com/${userId}/picture?type=large`, {
       headers: {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'user-agent': FB_USER_AGENT,
         'cookie': cookie,
       },
       timeout: 15000,
@@ -358,7 +391,7 @@ async function tryFetchCdnRedirect(cookie: string, userId: string, httpsAgent?: 
   try {
     const response = await axios.head(`https://www.facebook.com/${userId}/picture?type=large`, {
       headers: {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'user-agent': FB_USER_AGENT,
         'cookie': cookie,
       },
       timeout: 15000,
@@ -419,7 +452,7 @@ async function tryFetchMbasic(cookie: string, userId: string, httpsAgent?: any):
   try {
     const response = await axios.get(`https://mbasic.facebook.com/${userId}`, {
       headers: {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'user-agent': FB_USER_AGENT,
         'cookie': cookie,
         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },

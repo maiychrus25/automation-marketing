@@ -11,6 +11,7 @@ import {
 import { buildFormData, buildPostConfig, parseFBResponse, genThreadingId, rateLimitDelay } from './FacebookUtils';
 import Logger from '../../utils/Logger';
 import { assertFacebookMutationSuccess } from './FacebookGraphQLResult';
+import { FB_USER_AGENT } from './facebookIdentity';
 
 const SEND_URL = 'https://www.facebook.com/messaging/send/';
 const UNSEND_URL = 'https://www.facebook.com/messaging/unsend_message/';
@@ -215,7 +216,7 @@ export async function addReaction(
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': String(formBody.length),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Accept': '*/*',
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
@@ -268,7 +269,7 @@ export async function editMessage(
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': String(formBody.length),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Accept': '*/*',
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
@@ -323,7 +324,7 @@ export async function forwardMessage(
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': String(formBody.length),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Accept': '*/*',
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
@@ -375,7 +376,7 @@ export async function pinMessage(
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': String(formBody.length),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Accept': '*/*',
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
@@ -426,7 +427,7 @@ export async function unpinMessage(
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': String(formBody.length),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Accept': '*/*',
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
@@ -479,7 +480,7 @@ export async function createPoll(
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': String(formBody.length),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Accept': '*/*',
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
@@ -532,7 +533,7 @@ export async function votePoll(
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': String(formBody.length),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Accept': '*/*',
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',

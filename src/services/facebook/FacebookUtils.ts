@@ -6,6 +6,7 @@
 
 import { FBSessionData } from './FacebookTypes';
 import Logger from '../../utils/Logger';
+import { FB_SEC_CH_UA, FB_SEC_CH_UA_PLATFORM, FB_USER_AGENT } from './facebookIdentity';
 
 // ─── Base Conversion ──────────────────────────────────────────────────────────
 
@@ -95,16 +96,16 @@ export function buildHeaders(cookie: string, contentLength?: number, host: strin
   const headers: Record<string, string> = {
     'Host': host,
     'Connection': 'keep-alive',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+    'User-Agent': FB_USER_AGENT,
     'Accept': '*/*',
     'Origin': `https://${host}`,
     'Sec-Fetch-Site': 'same-origin',
     'Sec-Fetch-Mode': 'cors',
     'Sec-Fetch-Dest': 'empty',
     'Referer': `https://${host}`,
-    'sec-ch-ua': '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+    'sec-ch-ua': FB_SEC_CH_UA,
     'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
+    'sec-ch-ua-platform': FB_SEC_CH_UA_PLATFORM,
     'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
     'Cookie': cookie,
   };

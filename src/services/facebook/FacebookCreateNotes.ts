@@ -8,6 +8,7 @@ import axios from 'axios';
 import { FBSessionData } from './FacebookTypes';
 import { buildFormData, rateLimitDelay } from './FacebookUtils';
 import Logger from '../../utils/Logger';
+import { FB_USER_AGENT } from './facebookIdentity';
 
 const GRAPHQL_URL = 'https://www.facebook.com/webgraphql/mutation/';
 
@@ -46,7 +47,7 @@ export async function createNote(
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
         'Cookie': dataFB.cookieFacebook,

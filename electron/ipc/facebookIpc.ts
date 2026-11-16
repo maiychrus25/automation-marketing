@@ -19,7 +19,7 @@ import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import FacebookService from "../../src/services/facebook/FacebookService";
 import { resolveFBCookie, resolveFBProxyId } from '../../src/services/facebook/FacebookAccountCookie';
-import { reconnectPageChildren } from '../../src/services/facebook/facebookProxyChange';
+import { forgetProxyChangeFailure, reconnectPageChildren } from '../../src/services/facebook/facebookProxyChange';
 import { fetchManagedPages, mergePageList, stripPageCookie, buildPageCookie } from '../../src/services/facebook/FacebookPages';
 
 // ─── Cookie secure storage helpers ───────────────────────────────────────────
@@ -170,7 +170,7 @@ export function registerFacebookIpc(): void {
     let name = fbId;
     let avatarUrl = '';
     try {
-      const html = await fetchFBHomepage(cookie);
+      const html = await fetchFBHomepage(cookie, httpsAgent);
       const profile = await fetchBasicProfileFromHome(html);
       name = profile.name || fbId;
       avatarUrl = profile.avatarUrl || '';
@@ -289,6 +289,7 @@ export function registerFacebookIpc(): void {
       const fbAcc = DatabaseService.getInstance().getFBAccount(internalId);
       if (fbAcc && !fbAcc.parent_facebook_id) await removePageChildren(fbAcc.facebook_id, 'delete');
       fbStartupRetry.clear(internalId);
+      forgetProxyChangeFailure(internalId);
       cancelHistorySync(internalId, fbAcc?.facebook_id);
       await FacebookConnectionManager.disconnect(internalId);
       secureDelete(fbCookieKey(internalId));
@@ -316,7 +317,9 @@ export function registerFacebookIpc(): void {
       cookie = stripPageCookie(cookie);
 
       // Verify cookie alive + init session
-      const sessionData = await initSession(cookie);
+      // Mọi yêu cầu bằng cookie của tài khoản đi qua proxy của chính tài khoản đó (kể cả lần kiểm tra trước khi kết nối).
+      const httpsAgent = proxyAgentFor(resolveFBProxyId(account));
+      const sessionData = await initSession(cookie, httpsAgent);
       const fbId = sessionData.FacebookID;
       if (!fbId || !fbId.match(/^\d+$/) || fbId.includes('Unable')) {
         return { success: false, error: 'Cookie không hợp lệ hoặc đã hết hạn' };
@@ -326,7 +329,7 @@ export function registerFacebookIpc(): void {
       let name = account.name || fbId;
       let avatarUrl = account.avatar_url || '';
       try {
-        const html = await fetchFBHomepage(cookie);
+        const html = await fetchFBHomepage(cookie, httpsAgent);
         const profile = await fetchBasicProfileFromHome(html);
         if (profile.name) name = profile.name;
         if (profile.avatarUrl) avatarUrl = profile.avatarUrl;
@@ -390,7 +393,7 @@ export function registerFacebookIpc(): void {
             Logger.warn(`[facebookIpc] fb:refreshProfile: không thấy Page ${account.facebook_id} trong danh sách của cha, giữ nguyên`);
           }
         } else {
-          const html = await fetchFBHomepage(cookie);
+          const html = await fetchFBHomepage(cookie, proxyAgentFor(resolveFBProxyId(account)));
           const profile = await fetchBasicProfileFromHome(html);
           if (profile.name) name = profile.name;
           if (profile.avatarUrl) avatarUrl = profile.avatarUrl;
@@ -585,7 +588,7 @@ export function registerFacebookIpc(): void {
 
       try {
         const { checkCookieAlive } = require('../../src/services/facebook/FacebookSession');
-        const alive = await checkCookieAlive(cookie);
+        const alive = await checkCookieAlive(cookie, proxyAgentFor(proxyId));
         if (!alive) return { success: false, error: 'Cookie đã hết hạn. Vui lòng đăng nhập lại Facebook và copy cookie mới.' };
       } catch (healthErr: any) {
         Logger.warn(`[facebookIpc] fb:connect health check failed: ${healthErr.message}, proceeding anyway`);
@@ -613,6 +616,7 @@ export function registerFacebookIpc(): void {
     try {
       const internalId = resolveInternalId(accountId);
       fbStartupRetry.clear(internalId);
+      forgetProxyChangeFailure(internalId);
       cancelHistorySync(internalId, DatabaseService.getInstance().getFBAccount(internalId)?.facebook_id);
       await FacebookConnectionManager.disconnect(internalId);
       DatabaseService.getInstance().updateFBAccountStatus(internalId, 'disconnected');
@@ -2255,7 +2259,7 @@ async function connectStartupAccount(acc: any): Promise<void> {
   // Test cookie health trước khi connect
   let state: 'alive' | 'expired' | 'unknown' = 'alive';
   try {
-    state = await checkCookieState(cookie);
+    state = await checkCookieState(cookie, proxyAgentFor(resolveFBProxyId(acc)));
   } catch (healthErr: any) {
     Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: health check failed: ${healthErr.message}, trying anyway`);
   }

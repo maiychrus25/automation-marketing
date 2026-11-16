@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import Logger from '../../src/utils/Logger';
-import { createProxyAgent } from '../../src/utils/ProxyHelper';
+import { checkProxyWorks, createProxyAgent } from '../../src/utils/ProxyHelper';
 import { applyFacebookProxyChange } from '../../src/services/facebook/facebookProxyChange';
 
 export function registerProxyIpc() {
@@ -73,13 +73,21 @@ export function registerProxyIpc() {
             const channel = account.channel || 'zalo';
             if (channel !== 'zalo' && channel !== 'facebook') return { success: false, error: 'Kênh này chưa hỗ trợ proxy' };
             const nextProxyId: number | null = proxyId ?? null;
-            if (nextProxyId !== null && (!Number.isInteger(nextProxyId) || !db.getProxyById(nextProxyId))) {
-                return { success: false, error: 'Proxy không tồn tại' };
-            }
+            const proxy = nextProxyId !== null && Number.isInteger(nextProxyId) ? db.getProxyById(nextProxyId) : null;
+            if (nextProxyId !== null && !proxy) return { success: false, error: 'Proxy không tồn tại' };
             if (channel === 'facebook') {
                 // Page đi cùng proxy với tài khoản cha (resolveFBProxyId): gán riêng cho Page không có tác dụng.
                 const fb = db.queryOne<{ parent_facebook_id: string | null }>('SELECT parent_facebook_id FROM fb_accounts WHERE facebook_id = ?', [zaloId]);
                 if (fb?.parent_facebook_id) return { success: false, error: 'Page dùng proxy của tài khoản Facebook chính' };
+            }
+            if (proxy) {
+                // Thử trước khi đổi, bằng đúng phép thử của nút Test: gán một proxy không dùng được sẽ làm tài khoản đang chạy
+                // mất kết nối (với Facebook là ngay lập tức).
+                const agent = createProxyAgent(proxy);
+                const probe = agent ? await checkProxyWorks(agent) : { ok: false, status: 0 };
+                if (!probe.ok) {
+                    return { success: false, error: `Proxy này không kết nối được (HTTP ${probe.status || 'timeout'}). Hãy kiểm tra lại proxy bằng nút Test; tài khoản vẫn giữ thiết lập cũ.` };
+                }
             }
             db.setAccountProxy(zaloId, nextProxyId);
             // Facebook đang kết nối: nối lại ngay (cùng các Page con) qua proxy mới. Zalo đọc proxy lúc đăng nhập, và lần tự nối lại
@@ -123,41 +131,10 @@ export function registerProxyIpc() {
                 return { success: false, error: 'Không thể tạo proxy agent' };
             }
 
-            // Test bằng cách kết nối đến URL qua proxy (HEAD request)
-            const https = require('https');
-            const URLS = ['https://www.google.com', 'https://httpbin.org/get'];
-
-            const testReq = (url: string): Promise<{ ok: boolean; status: number; ms: number }> =>
-                new Promise((resolve) => {
-                    const start = Date.now();
-                    const parsedUrl = new URL(url);
-                    const req = https.request(
-                        {
-                            hostname: parsedUrl.hostname,
-                            path: parsedUrl.pathname,
-                            method: 'HEAD',
-                            agent,
-                            timeout: 10000,
-                        },
-                        (res: any) => {
-                            resolve({ ok: true, status: res.statusCode, ms: Date.now() - start });
-                            res.resume();
-                        }
-                    );
-                    req.on('error', () => resolve({ ok: false, status: 0, ms: Date.now() - start }));
-                    req.on('timeout', () => { req.destroy(); resolve({ ok: false, status: 0, ms: Date.now() - start }); });
-                    req.end();
-                });
-
-            // Thử lần lượt các URL
-            let lastError = '';
-            for (const url of URLS) {
-                const result = await testReq(url);
-                if (result.ok) {
-                    return { success: true, ms: result.ms, status: result.status };
-                }
-                lastError = `HTTP ${result.status || 'timeout'}`;
-            }
+            // Thử qua proxy tới các trang trung lập (HEAD); chỉ mã 2xx / 3xx mới tính là qua được.
+            const result = await checkProxyWorks(agent);
+            if (result.ok) return { success: true, ms: result.ms, status: result.status };
+            const lastError = `HTTP ${result.status || 'timeout'}`;
             return { success: false, error: `Proxy không phản hồi (${lastError}). Kiểm tra lại host/port/credentials.` };
         } catch (err: any) {
             Logger.error(`[proxyIpc] test error: ${err.message}`);

@@ -40,13 +40,16 @@ import DatabaseService from '../database/DatabaseService';
 import FileStorageService from '../file/FileStorageService';
 import { createProxyAgent } from '../../utils/ProxyHelper';
 import { secureGet } from '../secure/SecureSettingsService';
-import { resolveFBCookie } from './FacebookAccountCookie';
+import { storeRefreshedFBCookie, resolveFBCookie } from './FacebookAccountCookie';
+import { mergeRefreshedCookies } from './facebookCookieRefresh';
 import path from 'path';
 import Logger from '../../utils/Logger';
 
 /** Facebook đăng xuất thiết bị E2EE liên tiếp quá số lần này trong cửa sổ thì thôi đăng ký thiết bị mới (chờ thử lại tay). */
 export const E2EE_LOGOUT_MAX_STREAK = 5;
 export const E2EE_LOGOUT_STREAK_WINDOW_MS = 15 * 60_000;
+/** Cứ sau chừng này nhịp heartbeat (30 giây mỗi nhịp) thì hỏi bridge xem Facebook có làm mới cookie không. */
+export const BRIDGE_COOKIE_POLL_EVERY = 10;
 
 // ─── Cookie key helper ─────────────────────────────────────────────────
 
@@ -325,6 +328,7 @@ export class FacebookService {
       const session = await initSession(this.cookie, this.httpsAgent);
       this.assertPageRole(session);
       this.dataFB = session;
+      this.adoptSessionCookie(session);
 
       // 2. Fetch latest seqId via GraphQL to avoid ERROR_QUEUE_OVERFLOW
       // Sending seq=0 asks Facebook to sync ALL messages → overflow on accounts with many messages
@@ -1466,6 +1470,7 @@ export class FacebookService {
   private _startE2EEHeartbeat(bridgeInstance: FacebookE2EEBridge, bridgeGen: number, fbId: string): void {
     this._clearE2EEHeartbeat();
     this._e2eeHeartbeatFailCount = 0;
+    let beats = 0;
     this._e2eeHeartbeatTimer = setInterval(async () => {
       // Chỉ check nếu bridge instance không thay đổi (tránh stale timer)
       if (this.e2eeBridge !== bridgeInstance || this.e2eeBridgeGen !== bridgeGen) {
@@ -1479,6 +1484,7 @@ export class FacebookService {
           new Promise((_, reject) => setTimeout(() => reject(new Error('heartbeat_timeout')), 6000)),
         ]);
         this._e2eeHeartbeatFailCount = 0; // Reset on success
+        void this.pollBridgeCookies(bridgeInstance, ++beats);
       } catch {
         this._e2eeHeartbeatFailCount++;
         Logger.warn(`[FacebookService:${this.accountId}] E2EE heartbeat fail #${this._e2eeHeartbeatFailCount}`);
@@ -1534,6 +1540,49 @@ export class FacebookService {
       default:
         return EventPriority.LOW;
     }
+  }
+
+  /**
+   * Facebook đã làm mới cookie phiên: từ đây dùng bản mới, và với tài khoản cá nhân thì ghi lại vào kho bảo mật để lần mở app
+   * sau (và các Page con, vốn dựng cookie từ bản đã lưu của tài khoản cha) không gửi bản cũ. Page chỉ giữ trong bộ nhớ.
+   * Log chỉ ghi tên cookie, không bao giờ ghi giá trị.
+   */
+  private applyRefreshedCookie(cookie: string, names: string[], source: string): void {
+    if (!names.length || cookie === this.cookie) return;
+    const previous = this.cookie;
+    this.cookie = cookie;
+    if (this.dataFB) this.dataFB.cookieFacebook = cookie;
+    let stored = false;
+    if (!this._isPage) {
+      try { stored = storeRefreshedFBCookie(this.accountId, previous, cookie); } catch (err: any) {
+        Logger.warn(`[FacebookService:${this.accountId}] Could not store refreshed cookie: ${err.message}`);
+      }
+    }
+    Logger.log(`[FacebookService:${this.accountId}] Facebook refreshed session cookies (${source}): ${names.join(', ')} (${stored ? 'stored' : 'kept in memory'})`);
+  }
+
+  /** Cookie được làm mới trong lần tải trang chủ của initSession (đã gộp sẵn vào session.cookieFacebook). */
+  private adoptSessionCookie(session: Pick<FBSessionData, 'cookieFacebook' | 'refreshedCookieNames'>): void {
+    this.applyRefreshedCookie(session.cookieFacebook, session.refreshedCookieNames ?? [], 'homepage');
+  }
+
+  /** Cookie bridge đang giữ (thư viện của nó tự gộp Set-Cookie): gộp phần mới vào cookie của tài khoản. */
+  private adoptBridgeCookies(bridgeCookies: Record<string, string> | null | undefined): void {
+    if (!bridgeCookies || typeof bridgeCookies !== 'object') return;
+    // Từ bridge chỉ nhận `xs` (cookie đăng nhập). fr / datr / sb của bridge có thể khác bản phía app; nhận từ cả hai phía
+    // thì hai nguồn ghi qua ghi lại mãi.
+    const { cookie, changed } = mergeRefreshedCookies(this.cookie, { c_user: bridgeCookies.c_user, xs: bridgeCookies.xs });
+    this.applyRefreshedCookie(cookie, changed, 'bridge');
+  }
+
+  /** Mỗi BRIDGE_COOKIE_POLL_EVERY nhịp heartbeat hỏi bridge một lần. Bridge cũ không có lệnh này: bỏ qua. */
+  private async pollBridgeCookies(bridge: Pick<FacebookE2EEBridge, 'getCookies'>, beat: number): Promise<void> {
+    if (beat % BRIDGE_COOKIE_POLL_EVERY !== 0) return;
+    try {
+      const cookies = await bridge.getCookies();
+      // Bridge có thể đã bị thay trong lúc chờ (cập nhật cookie, ngắt, khởi động lại): cookie của bridge cũ không còn đúng.
+      if ((this.e2eeBridge as unknown) === bridge) this.adoptBridgeCookies(cookies);
+    } catch { /* bridge bận hoặc chưa hỗ trợ: thử lại ở lượt sau */ }
   }
 
   private _clearE2EEHeartbeat(): void {
@@ -3098,9 +3147,10 @@ export class FacebookService {
     if (this._mqttOverflowCount > 2) {
       Logger.warn(`[FacebookService:${this.accountId}] MQTT overflow persistent (${this._mqttOverflowCount}x) - using REST only`);
       try {
-        const session = await initSession(this.cookie, this.httpsAgent);
+        const session = await initSession(this.cookie, this.httpsAgent, { fresh: true }); // cần token mới, không dùng bản đang nhớ
         this.assertPageRole(session);
         this.dataFB = session;
+        this.adoptSessionCookie(session);
         Logger.log(`[FacebookService:${this.accountId}] Session refreshed for overflow fallback`);
         if (this.status !== 'connected') this.setStatus('connected');
         return true;

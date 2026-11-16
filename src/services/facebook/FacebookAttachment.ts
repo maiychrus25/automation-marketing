@@ -14,14 +14,9 @@ import * as mime from 'mime-types';
 import { FBSessionData, FBAttachmentUploadResult } from './FacebookTypes';
 import { strBase } from './FacebookUtils';
 import Logger from '../../utils/Logger';
+import { FB_USER_AGENT } from './facebookIdentity';
 
 const UPLOAD_URL = 'https://upload.facebook.com/ajax/mercury/upload.php';
-
-const USER_AGENTS = [
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.90 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.90 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/22.0.1207.1 Safari/537.1',
-];
 
 let _uploadReqCounter = 0;
 
@@ -74,7 +69,7 @@ export async function uploadAttachment(
 
   _uploadReqCounter += 1;
   const reqId = strBase(_uploadReqCounter, 36);
-  const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+  const userAgent = FB_USER_AGENT;
   let mimeType = (mime.lookup(filePath) || 'application/octet-stream') as string;
   const fileName = path.basename(filePath);
   const fileBuffer = fs.readFileSync(filePath);

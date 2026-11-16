@@ -58,7 +58,7 @@ Async event (no id):
 ```
 
 Methods: `newClient`, `connect`, `connectE2EE`, `isConnected`, `sendMessage`,
-`sendE2EEMessage`, `fetchMessages`, `markRead`, `getUserInfo`, `disconnect`.
+`sendE2EEMessage`, `fetchMessages`, `markRead`, `getUserInfo`, `getCookies`, `disconnect`.
 
 `fetchMessages` loads one page of older messages for a thread:
 `{"method":"fetchMessages","params":{"threadId":"123","beforeTimestampMs":0,"beforeMessageId":"","timeoutMs":25000}}`
@@ -71,6 +71,9 @@ returns `{}`. `threadId` is a JSON string holding a positive decimal id (no `@..
 `sendE2EEReaction` (`{chatJid, messageId, senderJid, emoji}`; empty `emoji` removes the reaction) stamps the
 reaction with the send time (`SenderTimestampMS`). The official app orders reactions by it and silently
 ignores a reaction without one.
+
+`getCookies` returns `{"cookies": {...}}`, the session cookies the client currently holds (the library merges every
+`Set-Cookie` it receives), so the app can store refreshed values. The result carries login cookies: never log it.
 
 `getUserInfo` looks a user up in Messenger's contact table: `{"method":"getUserInfo","params":{"userId":"123"}}`
 returns `{id, name, firstName, username, profilePictureUrl, ...}` or fails with `user not found`. `userId` is a JSON string holding a positive decimal id.

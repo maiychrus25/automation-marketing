@@ -12,6 +12,7 @@ import { buildFormData, buildPostConfig, parseFBResponse, rateLimitDelay } from 
 import Logger from '../../utils/Logger';
 import { assertFacebookMutationSuccess } from './FacebookGraphQLResult';
 import { templateTextFromStoryAttachment } from './facebookTemplateText';
+import { FB_USER_AGENT } from './facebookIdentity';
 
 const GRAPHQL_BATCH_URL = 'https://www.facebook.com/api/graphqlbatch/';
 const GRAPHQL_URL = 'https://www.facebook.com/webgraphql/mutation/';
@@ -310,7 +311,7 @@ export async function changeThreadName(
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Cookie': dataFB.cookieFacebook,
-        'User-Agent': 'Mozilla/5.0',
+        'User-Agent': FB_USER_AGENT,
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
       },
@@ -346,7 +347,7 @@ export async function changeThreadEmoji(
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Cookie': dataFB.cookieFacebook,
-        'User-Agent': 'Mozilla/5.0',
+        'User-Agent': FB_USER_AGENT,
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
       },
@@ -385,7 +386,7 @@ export async function changeNickname(
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Cookie': dataFB.cookieFacebook,
-        'User-Agent': 'Mozilla/5.0',
+        'User-Agent': FB_USER_AGENT,
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
       },
@@ -616,7 +617,7 @@ async function changeGroupAdminStatus(
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
         'Cookie': dataFB.cookieFacebook,
@@ -664,7 +665,7 @@ export async function changeApprovalMode(
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
         'Cookie': dataFB.cookieFacebook,
@@ -712,7 +713,7 @@ export async function approvePendingMember(
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
         'Cookie': dataFB.cookieFacebook,
@@ -756,7 +757,7 @@ export async function getGroupLink(
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
         'Cookie': dataFB.cookieFacebook,
@@ -807,7 +808,7 @@ export async function setGroupLink(
       headers: {
         'Host': 'www.facebook.com',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': FB_USER_AGENT,
         'Origin': 'https://www.facebook.com',
         'Referer': 'https://www.facebook.com/',
         'Cookie': dataFB.cookieFacebook,

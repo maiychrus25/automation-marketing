@@ -66,6 +66,7 @@ export const BRIDGE_METHODS = [
   'fetchMessages',
   'markRead',
   'getUserInfo',
+  'getCookies',
 ] as const;
 
 export type BridgeMethod = (typeof BRIDGE_METHODS)[number];
@@ -643,6 +644,15 @@ export class FacebookE2EEBridge extends EventEmitter {
   /** Tên và ảnh của một người dùng theo bảng liên hệ của Messenger. userId là chuỗi: id > 2^53 không mất chính xác. */
   public async getUserInfo(userId: string): Promise<{ name?: string; profilePictureUrl?: string } | null> {
     return this.call('getUserInfo', { userId }, 15_000);
+  }
+
+  /**
+   * Cookie hiện có trong bridge (thư viện của nó tự gộp cookie Facebook làm mới qua Set-Cookie). Kết quả chứa cookie đăng nhập:
+   * chỉ trả cho bên gọi, không ghi log.
+   */
+  public async getCookies(): Promise<Record<string, string> | null> {
+    const res = await this.call('getCookies', {}, 5000);
+    return res?.cookies && typeof res.cookies === 'object' ? res.cookies : null;
   }
 
   // ─── Shutdown ─────────────────────────────────────────────────────────────

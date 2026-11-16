@@ -33,6 +33,7 @@ import { fbHeaders } from './FacebookSession';
 import DatabaseService from '../database/DatabaseService';
 import { secureGet } from '../secure/SecureSettingsService';
 import Logger from '../../utils/Logger';
+import { FB_USER_AGENT } from './facebookIdentity';
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -703,7 +704,7 @@ export class FacebookScanService {
           const res = await axios.get(scriptUrl, {
             headers: {
               'Accept': '*/*',
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+              'User-Agent': FB_USER_AGENT,
               'Cookie': cookie,
               'Referer': 'https://www.facebook.com/',
             },
@@ -1059,7 +1060,7 @@ export class FacebookScanService {
       'Content-Type': 'application/x-www-form-urlencoded',
       'x-fb-friendly-name': friendlyName,
       'x-fb-lsd': lsd,                              // ⚠️ LUÔN gửi header (working extension luôn gửi, kể cả "undefined")
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+      'User-Agent': FB_USER_AGENT,
       'Origin': 'https://www.facebook.com',
       'Referer': 'https://www.facebook.com/',
       // ⚠️ Browser headers - Chrome tự động thêm, axios/Node không có

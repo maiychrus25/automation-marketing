@@ -10,10 +10,10 @@ import WebSocket from 'ws';
 import { fbHeaders } from './FacebookSession';
 import { parseCookieString } from './FacebookUtils';
 import { PAGE_MAILBOX_DB } from './pageInboxTables';
+import { FB_USER_AGENT } from './facebookIdentity';
 
 export const PAGE_INBOX_ENDPOINT = 'wss://edge-chat.facebook.com/chat';
 const ORIGIN = 'https://business.facebook.com';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const BUSINESS_SUITE_APP_ID = '514771569228061';
 /** Dự phòng khi trang hộp thư không cho phiên bản lược đồ: chép từ một phiên Business Suite ngày 16/11/2026. */
 export const FALLBACK_LS_VERSION = '29437738132510565';
@@ -34,7 +34,7 @@ export function pageInboxLogin(cookie: string): { userId: string; cookieHeader: 
 /** Username của gói MQTT CONNECT như Business Suite gửi: người dùng là tài khoản cá nhân, `p` / `aids.PAGE` nêu Page. */
 export function pageInboxUsername(userId: string, pageId: string, sessionId: number, deviceId: string): Record<string, unknown> {
   return {
-    a: USER_AGENT, asi: null, aid: Number(BUSINESS_SUITE_APP_ID), aids: { PAGE: pageId }, chat_on: false, cp: 3, ct: 'websocket',
+    a: FB_USER_AGENT, asi: null, aid: Number(BUSINESS_SUITE_APP_ID), aids: { PAGE: pageId }, chat_on: false, cp: 3, ct: 'websocket',
     d: deviceId, dc: '', ecp: 10, fg: true, gas: null, mqtt_sid: '', no_auto_fg: true, p: pageId, pack: [], php_override: '',
     pm: [], s: sessionId, st: [], u: userId,
   };
@@ -115,6 +115,6 @@ export const connectInbox: ConnectInbox = (url, username, cookieHeader, agent) =
   protocolId: 'MQIsdp', protocolVersion: 3, clientId: 'mqttwsclient', clean: true, keepalive: 15, connectTimeout: 20000, reconnectPeriod: 0,
   username: JSON.stringify(username),
   createWebsocket: (wsUrl: string) => new WebSocket(wsUrl, {
-    headers: { Cookie: cookieHeader, Origin: ORIGIN, 'User-Agent': USER_AGENT, Host: 'edge-chat.facebook.com' }, agent: agent as any,
+    headers: { Cookie: cookieHeader, Origin: ORIGIN, 'User-Agent': FB_USER_AGENT, Host: 'edge-chat.facebook.com' }, agent: agent as any,
   }) as any,
 } as any) as unknown as InboxClient;

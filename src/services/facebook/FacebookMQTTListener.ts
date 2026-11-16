@@ -13,6 +13,7 @@ import {
 } from './FacebookUtils';
 import Logger from '../../utils/Logger';
 import { templateTextFromStoryAttachment } from './facebookTemplateText';
+import { FB_USER_AGENT } from './facebookIdentity';
 
 const FB_MQTT_ENDPOINT = 'wss://edge-chat.facebook.com/chat';
 const FB_TOPICS = ['/t_ms', '/thread_typing', '/orca_typing_notifications', '/orca_presence'];
@@ -194,7 +195,7 @@ export class FacebookMQTTListener extends EventEmitter {
     const wsHeaders = {
           'Cookie': this.dataFB.cookieFacebook,
           'Origin': 'https://www.facebook.com',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          'User-Agent': FB_USER_AGENT,
           'Host': 'edge-chat.facebook.com',
         };
 

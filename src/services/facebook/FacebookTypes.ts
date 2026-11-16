@@ -14,6 +14,8 @@ export interface FBSessionData {
   FacebookID: string;
   clientRevision: string;
   cookieFacebook: string;
+  /** Tên các cookie phiên Facebook vừa làm mới trong lần tải trang chủ này (đã gộp vào `cookieFacebook`); không có nếu không đổi. */
+  refreshedCookieNames?: string[];
 }
 
 export interface FBLoginResult {

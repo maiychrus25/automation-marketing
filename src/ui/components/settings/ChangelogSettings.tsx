@@ -15,6 +15,34 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.40.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🔐 Đăng nhập Facebook ổn định hơn: lưu lại cookie Facebook làm mới, dùng một danh tính trình duyệt thống nhất và bớt tải lại trang khi mở app',
+      '🛡️ Không còn gán nhầm proxy hỏng: app thử proxy trước khi đổi, và nút Test báo đúng khi máy chủ proxy từ chối',
+    ],
+    changes: [
+      {
+        category: 'improved',
+        items: [
+          'Cookie phiên mà Facebook làm mới trong lúc dùng được lưu lại, thay vì dùng mãi bản bạn dán lúc thêm tài khoản',
+          'Mọi kết nối Facebook của MaiHub dùng chung một danh tính trình duyệt',
+          'Mở app chỉ kiểm tra đăng nhập Facebook một lần cho mỗi tài khoản (trước là ba lần liên tiếp)',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Gán proxy không dùng được cho tài khoản làm tài khoản Facebook và các Page mất kết nối: nay app thử proxy trước, không qua được thì giữ nguyên thiết lập cũ',
+          'Nút Test proxy báo "OK" cả khi máy chủ proxy từ chối kết nối (ví dụ gói proxy hết hạn hoặc sai tài khoản)',
+          'Kiểm tra đăng nhập Facebook không đi qua proxy của tài khoản',
+          'Proxy gặp sự cố bị báo nhầm thành "cookie hết hạn": nay app tự thử lại thay vì bắt đăng nhập lại',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.39.0',
     date: '11/2026',
     type: 'minor',

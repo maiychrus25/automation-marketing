@@ -235,6 +235,15 @@ func handle(req *request) {
 		}
 		ok(req.ID, map[string]interface{}{})
 
+	case "getCookies":
+		// Cookie hiện có của phiên (thư viện tự gộp cookie Facebook làm mới qua Set-Cookie), để app lưu lại bản mới.
+		// Kết quả chứa cookie đăng nhập: chỉ trả về qua JSON-RPC, không ghi log.
+		if client == nil {
+			fail(req.ID, fmt.Errorf("client not initialised"))
+			return
+		}
+		ok(req.ID, map[string]interface{}{"cookies": client.GetCookies()})
+
 	case "getUserInfo":
 		if client == nil {
 			fail(req.ID, fmt.Errorf("client not initialised"))
