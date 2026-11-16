@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws';
 import {
-  connectInbox, historyRequest, pageInboxLogin, pageInboxUsername, readInboxPage, syncRequest, threadListRequest,
+  connectInbox, historyRequest, markReadRequest, newOfflineThreadingId, pageInboxLogin, pageInboxUsername, readInboxPage, sendTextRequest,
+  syncRequest, threadListRequest,
 } from '../../services/facebook/pageInboxProtocol';
 import { BLOKS, COOKIE, DEVICE, INBOX_HTML, LOGIN_HEADER, PAGE, PAGE_VERSION, USER } from './pageInboxFixtures';
 
@@ -43,6 +44,40 @@ describe('pageInboxProtocol', () => {
     const task = JSON.parse(outer.payload).tasks[0];
     expect(task).toMatchObject({ label: '228', queue_name: 'mrq.9007199254740993123', task_id: 1 });
     expect(task.payload).toBe('{"thread_key":9007199254740993123,"direction":0,"reference_timestamp_ms":1700000000000,"reference_message_id":"mid.$a","sync_group":205,"cursor":"CUR"}');
+  });
+
+  // Đúng gói Business Suite gửi (bản ghi 16/11/2026): một yêu cầu hai tác vụ, gửi tin (46) rồi đánh dấu đã đọc (21),
+  // cả hai xếp hàng theo id hội thoại.
+  test('sendingTextIsASendTaskFollowedByAMarkReadTask', () => {
+    const outer = JSON.parse(sendTextRequest(9, 4, { threadId: '9007199254740993123', text: 'xin "chào"\n', otid: '7000000000000000042', nowMs: 1700000000000 }, PAGE_VERSION));
+    expect(outer).toMatchObject({ app_id: '514771569228061', request_id: 9, type: 3 });
+    const payload = JSON.parse(outer.payload);
+    expect(payload.version_id).toBe(PAGE_VERSION);
+    expect(payload.tasks.map((t: any) => [t.label, t.queue_name, t.task_id, t.failure_count])).toEqual([
+      ['46', '9007199254740993123', 4, null], ['21', '9007199254740993123', 5, null],
+    ]);
+    expect(payload.tasks[0].payload).toBe('{"thread_id":9007199254740993123,"otid":"7000000000000000042","source":4456448,"send_type":1,"sync_group":205,"mark_thread_read":1,"text":"xin \\"chào\\"\\n"}');
+    expect(payload.tasks[1].payload).toBe('{"thread_id":9007199254740993123,"last_read_watermark_ts":1700000000000,"sync_group":205,"offline_threading_id":null}');
+  });
+
+  test('aReplyCarriesTheMessageItAnswers', () => {
+    const outer = JSON.parse(sendTextRequest(9, 4, { threadId: '100000000005141', text: 'ok', otid: '7000000000000000042', nowMs: 1, replyToMessageId: 'mid.$orig' }));
+    expect(JSON.parse(JSON.parse(outer.payload).tasks[0].payload).reply_metadata).toEqual({ reply_source_id: 'mid.$orig', reply_source_type: 1, reply_type: 0 });
+    const plain = JSON.parse(sendTextRequest(9, 4, { threadId: '100000000005141', text: 'ok', otid: '7000000000000000042', nowMs: 1 }));
+    expect(JSON.parse(plain.payload).tasks[0].payload).not.toContain('reply_metadata');
+  });
+
+  test('markReadIsOneTaskOnTheThreadQueue', () => {
+    const payload = JSON.parse(JSON.parse(markReadRequest(3, 7, '100000000005141', 1700000000123, PAGE_VERSION)).payload);
+    expect(payload.tasks).toHaveLength(1);
+    expect(payload.tasks[0]).toMatchObject({ label: '21', queue_name: '100000000005141', task_id: 7 });
+    expect(payload.tasks[0].payload).toBe('{"thread_id":100000000005141,"last_read_watermark_ts":1700000000123,"sync_group":205,"offline_threading_id":null}');
+  });
+
+  test('offlineThreadingIdsAreNineteenDigitsAndDistinct', () => {
+    const ids = new Set(Array.from({ length: 200 }, () => newOfflineThreadingId()));
+    expect(ids.size).toBe(200);
+    for (const id of ids) expect(id).toMatch(/^\d{19}$/);
   });
 
   // Con trỏ của trang gắn với mã thiết bị trang cấp (kết quả 26.37.12): cả hai phải đọc được từ cùng một trang.

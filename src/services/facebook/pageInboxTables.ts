@@ -29,6 +29,8 @@ export interface InboxBatch {
   reactions: Array<{ threadId: string; messageId: string; actorId: string; emoji: string }>; // emoji '' = gỡ cảm xúc
   readReceipts: Array<{ threadId: string; contactId: string; watermarkMs: number }>;
   typing: Array<{ threadId: string; senderId: string; isTyping: boolean }>;
+  /** Tin vừa gửi được Facebook xác nhận: mã tạm (otid) lúc gửi và mã tin thật. */
+  sent: Array<{ otid: string; messageId: string }>;
   calls: Record<string, number>;
 }
 
@@ -59,7 +61,7 @@ function blobAttachment(a: LsValue[]): InboxAttachment {
 
 export function readInboxBatch(calls: LsCall[], database: number = PAGE_MAILBOX_DB): InboxBatch {
   const batch: InboxBatch = {
-    cursor: null, syncStatus: null, messages: [], threads: [], contacts: [], ranges: [], reactions: [], readReceipts: [], typing: [], calls: {},
+    cursor: null, syncStatus: null, messages: [], threads: [], contacts: [], ranges: [], reactions: [], readReceipts: [], typing: [], sent: [], calls: {},
   };
   const attachments = new Map<string, InboxAttachment[]>(); // theo mã tin, đúng thứ tự máy chủ gửi
   const seenBlobs = new Set<string>();
@@ -106,6 +108,8 @@ export function readInboxBatch(calls: LsCall[], database: number = PAGE_MAILBOX_
     } else if (CONTACT_CALLS.has(name)) {
       const id = id64(a[0]);
       if (id) batch.contacts.push({ id, name: str(a[3]), pictureUrl: str(a[2]) });
+    } else if (name === 'replaceOptimsiticMessage') { // tên thủ tục viết sai chính tả từ phía Facebook
+      if (str(a[0]) && str(a[1])) batch.sent.push({ otid: str(a[0]), messageId: str(a[1]) });
     } else if (name === 'insertNewMessageRange') {
       const threadId = id64(a[0]);
       if (threadId) batch.ranges.push({ threadId, hasMoreBefore: a[7] === true, minTimestampMs: num(a[5]), minMessageId: str(a[3]) });

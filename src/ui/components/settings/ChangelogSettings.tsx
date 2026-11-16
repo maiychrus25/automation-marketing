@@ -15,6 +15,30 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.41.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '✉️ Page Facebook gửi tin chữ trực tiếp, không cần cài trình duyệt Business Suite: tin đi trong vài giây',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Tin chữ (kể cả tin trả lời) gửi từ Page đi thẳng qua kết nối hộp thư của Page. Trước đây Page chỉ gửi được khi máy đã cài lõi trình duyệt và đăng nhập Business Suite',
+          'Mở một hội thoại của Page trong MaiHub thì hội thoại đó được đánh dấu đã đọc trên Facebook',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Nếu Facebook không xác nhận một tin đã gửi, MaiHub báo lỗi rõ thay vì tự gửi lại bằng đường khác (tránh gửi hai lần)',
+          'Ảnh, tệp và nhãn dán gửi từ Page vẫn dùng cách cũ ở bản này',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.40.0',
     date: '11/2026',
     type: 'minor',

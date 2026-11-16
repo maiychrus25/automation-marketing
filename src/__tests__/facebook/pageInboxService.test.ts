@@ -19,6 +19,8 @@ jest.mock('../../services/facebook/FacebookPageInbox', () => {
     start = jest.fn().mockResolvedValue(undefined);
     stop = jest.fn();
     resync = jest.fn();
+    sendText = jest.fn();
+    markRead = jest.fn(() => true);
     fetchMessages = jest.fn();
     constructor(public deps: any) { super(); mockInboxes.push(this); }
     isAlive() { return this.alive; }
@@ -232,6 +234,81 @@ describe('FacebookService with the direct Page inbox', () => {
     mockInboxes[0].emit('threads', [{ id, name: '', pictureUrl: '', snippet: '', lastActivityMs: 0, unreadCount: 0 }], []);
     expect(db.queryOne<any>('SELECT last_message_at FROM fb_threads WHERE id = ? AND account_id = ?', [id, PAGE_ACC]).last_message_at).toBe(1_700_000_005_000);
     expect(contact(id).display_name).toBe('Khách D');
+  });
+
+  // Đợt 2: Page gửi tin chữ thẳng qua kết nối hộp thư, không cần trình duyệt Business Suite (máy chưa cài lõi trình duyệt thì
+  // trước đây mọi tin gửi từ Page đều không đi được).
+  describe('sending text from a Page', () => {
+    const sender = () => {
+      const svc = pageService();
+      svc.ensureConnected = jest.fn().mockResolvedValue(true);
+      svc.startPageInbox();
+      mockInboxes[0].alive = true;
+      return { svc, inbox: mockInboxes[0] };
+    };
+
+    test('goesThroughTheLiveInboxAndReturnsTheRealMessageId', async () => {
+      const { svc, inbox } = sender();
+      inbox.sendText.mockResolvedValue({ messageId: 'mid.$direct1' });
+      const res = await svc.sendMessage(PEER, 'tra loi', { typeChat: 'user', replyToMessageId: 'mid.$orig' });
+      expect(res).toMatchObject({ success: true, messageId: 'mid.$direct1' });
+      expect(inbox.sendText).toHaveBeenCalledWith({ threadId: PEER, text: 'tra loi', replyToMessageId: 'mid.$orig' });
+      expect(mockBrowserSender.send).not.toHaveBeenCalled();
+
+      // Tin dội về sau khi đã gửi xong: đường gửi đã lưu và hiển thị tin này, không lưu / phát lần hai.
+      inbox.emit('event', { type: 'message', data: message('mid.$direct1', { senderId: DELEGATE, text: 'tra loi' }) });
+      await new Promise(r => setImmediate(r));
+      await new Promise(r => setImmediate(r));
+      expect(saved('mid.$direct1')).toBeFalsy();
+      expect(emitted('fb:onMessage')).toHaveLength(0);
+    });
+
+    // Thứ tự thật trong bản ghi Business Suite: tin dội về TRƯỚC khi có xác nhận gửi.
+    test('anEchoThatArrivesBeforeTheConfirmationIsNotSavedTwice', async () => {
+      const { svc, inbox } = sender();
+      let confirm: (r: any) => void = () => {};
+      inbox.sendText.mockReturnValue(new Promise(r => { confirm = r; }));
+      const sending = svc.sendMessage(PEER, 'gui nhanh', { typeChat: 'user' });
+      await new Promise(r => setImmediate(r));
+      inbox.emit('event', { type: 'message', data: message('mid.$direct2', { senderId: DELEGATE, text: 'gui nhanh' }) });
+      inbox.emit('event', { type: 'message', data: message('mid.$elsewhere', { senderId: DELEGATE, text: 'go tu may khac' }) });
+      await new Promise(r => setImmediate(r));
+      confirm({ messageId: 'mid.$direct2' });
+      await expect(sending).resolves.toMatchObject({ success: true, messageId: 'mid.$direct2' });
+      await until(() => !!saved('mid.$elsewhere'));
+      expect(saved('mid.$direct2')).toBeFalsy();
+      expect(emitted('fb:onMessage').map(e => e.message.messageID)).toEqual(['mid.$elsewhere']);
+    });
+
+    // Không biết tin đã tới chưa: báo lỗi, KHÔNG gửi lại qua trình duyệt (có thể thành hai tin).
+    test('anUnconfirmedSendIsAnErrorAndIsNotRetriedThroughTheBrowser', async () => {
+      const { svc, inbox } = sender();
+      inbox.sendText.mockRejectedValue(new Error('Facebook không xác nhận tin đã gửi'));
+      const res = await svc.sendMessage(PEER, 'x', { typeChat: 'user' });
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('Facebook không xác nhận tin đã gửi');
+      expect(mockBrowserSender.send).not.toHaveBeenCalled();
+    });
+
+    test('fallsBackToTheBrowserWhenTheInboxIsNotLive', async () => {
+      const { svc, inbox } = sender();
+      inbox.alive = false;
+      mockBrowserSender.send.mockResolvedValue({ success: true, messageId: 'page:1' });
+      await expect(svc.sendMessage(PEER, 'x', { typeChat: 'user' })).resolves.toEqual({ success: true, messageId: 'page:1' });
+      expect(inbox.sendText).not.toHaveBeenCalled();
+    });
+
+    test('openingAThreadMarksItReadThroughTheInboxOncePerNewMessage', async () => {
+      const { svc, inbox } = sender();
+      db.saveFBMessage({ id: 'mid.$toRead1', account_id: PAGE_ACC, thread_id: OTHER, sender_id: OTHER, body: 'a', timestamp: 1_700_000_100_000, type: 'text', is_self: 0, is_unsent: 0 } as any);
+      await svc.markReadOnServer(OTHER);
+      await svc.markReadOnServer(OTHER); // mốc không đổi: không gửi lại
+      expect(inbox.markRead.mock.calls).toEqual([[OTHER, 1_700_000_100_000]]);
+      inbox.alive = false;
+      db.saveFBMessage({ id: 'mid.$toRead2', account_id: PAGE_ACC, thread_id: OTHER, sender_id: OTHER, body: 'b', timestamp: 1_700_000_200_000, type: 'text', is_self: 0, is_unsent: 0 } as any);
+      await svc.markReadOnServer(OTHER); // hộp thư không sống: không làm gì, lần sau thử lại
+      expect(inbox.markRead).toHaveBeenCalledTimes(1);
+    });
   });
 
   // Tin Page gửi từ MaiHub qua trình duyệt được lưu với mã tạm `page:<ms>`; hộp thư dội lại chính tin đó với mã thật.

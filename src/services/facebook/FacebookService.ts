@@ -1345,9 +1345,10 @@ export class FacebookService {
   }
 
   /**
-   * Bọc một lượt gửi của Page qua trình duyệt. Trình duyệt chỉ trả mã tạm `page:<ms>` và mất vài giây mới xác nhận, trong khi
-   * hộp thư thường dội lại tin thật ngay lúc gửi. Tin dội của chính Page về trong lúc lượt gửi đang chạy được giữ lại
-   * (holdPageSendEcho): lượt gửi nhận tin có cùng nội dung chữ và trả về mã thật của nó, để mọi nơi lưu tin dùng mã thật.
+   * Bọc một lượt gửi của Page. Hộp thư thường dội lại tin vừa gửi trước khi lượt gửi kết thúc (gửi trực tiếp: trước cả xác
+   * nhận; gửi qua trình duyệt: trình duyệt mất vài giây và chỉ trả mã tạm `page:<ms>`). Tin dội của chính Page về trong lúc
+   * lượt gửi đang chạy được giữ lại (holdPageSendEcho): tin mang đúng mã của lượt gửi bị bỏ (bên gọi lưu tin đó), còn với mã
+   * tạm thì lượt gửi nhận tin có cùng nội dung chữ và trả về mã thật của nó, để mọi nơi lưu tin dùng mã thật.
    * Tin dội không được nhận (gõ từ máy khác trong lúc đó, hoặc lượt gửi báo lỗi) được xử lý như tin thường khi lượt gửi xong.
    */
   private async trackPageSend(threadId: string, text: string, send: () => Promise<FBSendResult>): Promise<FBSendResult> {
@@ -1356,9 +1357,16 @@ export class FacebookService {
     this._pageSendsInFlight.set(threadId, entry);
     try {
       const result = await send();
-      if (result.success && result.messageId?.startsWith('page:')) {
-        const i = entry.echoes.findIndex(e => (e.text || '') === text);
-        if (i >= 0) return { ...result, messageId: entry.echoes.splice(i, 1)[0].id };
+      if (result.success && result.messageId) {
+        // Gửi trực tiếp: đã có mã thật, tin dội mang đúng mã đó là của chính lượt gửi này (bên gọi sẽ lưu và hiển thị nó).
+        const own = entry.echoes.findIndex(e => e.id === result.messageId);
+        if (own >= 0) {
+          entry.echoes.splice(own, 1);
+        } else if (result.messageId.startsWith('page:')) {
+          // Gửi qua trình duyệt: chỉ có mã tạm, nhận tin dội có cùng nội dung chữ để lấy mã thật.
+          const i = entry.echoes.findIndex(e => (e.text || '') === text);
+          if (i >= 0) return { ...result, messageId: entry.echoes.splice(i, 1)[0].id };
+        }
       }
       return result;
     } finally {
@@ -2388,10 +2396,13 @@ export class FacebookService {
   /** Mốc "đã đọc" đã gửi thành công theo hội thoại, để không gửi lại khi mốc không đổi. */
   private readMarkSent = new Map<string, number>();
 
-  /** Gửi "đã đọc" lên Facebook qua bridge (chỉ tài khoản cá nhân; Page không hỗ trợ). */
+  /** Gửi "đã đọc" lên Facebook: tài khoản cá nhân qua bridge, Page qua kết nối hộp thư Page. */
   public async markReadOnServer(threadId: string): Promise<void> {
     const id = String(threadId ?? '').replace(/@.*$/, '');
-    if (this._delegatePageId || !/^\d+$/.test(id) || this.e2eeBridge?.isAlive() !== true) return;
+    if (!/^\d+$/.test(id)) return;
+    // Tài khoản gắn với một Page không bao giờ đi qua bridge (bridge đăng nhập vai tài khoản cá nhân).
+    const viaPageInbox = this._isPage || !!this._delegatePageId;
+    if (viaPageInbox ? this.pageInbox?.isAlive() !== true : this.e2eeBridge?.isAlive() !== true) return;
     try {
       const owner = this.getFacebookId();
       let latest = 0;
@@ -2402,7 +2413,11 @@ export class FacebookService {
       });
       const watermarkTs = latest || Date.now();
       if (watermarkTs <= (this.readMarkSent.get(id) ?? 0)) return;
-      await this.e2eeBridge.markRead({ threadId: id, watermarkTs });
+      if (viaPageInbox) {
+        if (!this.pageInbox?.markRead(id, watermarkTs)) return;
+      } else {
+        await this.e2eeBridge!.markRead({ threadId: id, watermarkTs });
+      }
       this.readMarkSent.set(id, watermarkTs);
     } catch (err: any) {
       Logger.warn(`[FacebookService:${this.accountId}] markRead ...${id.slice(-4)} lỗi: ${err.message}`);
@@ -2534,9 +2549,12 @@ export class FacebookService {
       return { success: false, error: 'Mất kết nối Facebook. Vui lòng kết nối lại tài khoản.' };
     }
 
-    // Page: gửi qua tự động hoá Meta Business Suite (endpoint REST cổ điển không tới nơi).
+    // Page: tin chữ đi thẳng qua kết nối hộp thư Page khi nó đang sống; không thì qua tự động hoá Meta Business Suite
+    // (endpoint REST cổ điển không tới nơi).
     if (this._isPage) {
-      const pageResult = await this.sendViaPageBrowser(threadId, { text: body, replyToMessageId: opts?.replyToMessageId });
+      const pageResult = this.pageInbox?.isAlive() && body?.trim()
+        ? await this.sendViaPageInbox(threadId, body, opts?.replyToMessageId)
+        : await this.sendViaPageBrowser(threadId, { text: body, replyToMessageId: opts?.replyToMessageId });
       if (pageResult.success && pageResult.messageId) this.markMessageLocallySent(pageResult.messageId);
       return pageResult;
     }
@@ -2764,6 +2782,23 @@ export class FacebookService {
 
   public async uploadAttachment(filePath: string): Promise<FBAttachmentUploadResult | null> {
     return uploadAttachment(this.requireSession(), filePath, this.httpsAgent);
+  }
+
+  /**
+   * Gửi tin chữ của Page thẳng qua kết nối hộp thư (không cần trình duyệt). Lỗi (kể cả không có xác nhận) được trả về,
+   * không gửi lại bằng đường khác: không biết tin đã tới hay chưa, gửi lại có thể thành hai tin.
+   */
+  private async sendViaPageInbox(threadId: string, text: string, replyToMessageId?: string): Promise<FBSendResult> {
+    const inbox = this.pageInbox!;
+    return this.trackPageSend(threadId, text, async () => {
+      try {
+        const { messageId } = await inbox.sendText({ threadId, text, replyToMessageId });
+        return { success: true, messageId, timestamp: Date.now() };
+      } catch (err: any) {
+        Logger.warn(`[FacebookService:${this.accountId}] Page inbox send failed: ${err?.message}`);
+        return { success: false, error: `Không gửi được tin qua hộp thư Page: ${err?.message}` };
+      }
+    });
   }
 
   /** Gửi qua trình duyệt Business Suite (chỉ dùng cho Page). Lazy-require để tài khoản thường không nạp playwright. */

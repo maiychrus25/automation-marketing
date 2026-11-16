@@ -1,7 +1,7 @@
 # Hộp thư Page Facebook: nối trực tiếp, không qua trình duyệt
 
 **Ngày:** 2026-11-16  
-**Trạng thái:** Anh duyệt ngày 16/11/2026. Đợt 1 đã triển khai và phát hành trong 26.38.0 (16/11/2026), chờ anh kiểm trên Page thật (plan: `docs/plans/2026-11-16-facebook-page-inbox-direct.md`). Đợt 2 và 3 chưa làm.  
+**Trạng thái:** Anh duyệt ngày 16/11/2026. Đợt 1 đã triển khai và phát hành trong 26.38.0 (16/11/2026), chờ anh kiểm trên Page thật (plan: `docs/plans/2026-11-16-facebook-page-inbox-direct.md`). Đợt 1 đã được anh xác nhận trên Page thật ngày 16/11/2026 (chữ, nhãn dán, tệp, ảnh động, ảnh về đúng loại). Đợt 2 phần gửi chữ và đã đọc phát hành trong 26.41.0 (16/11/2026); "Đồng bộ lịch sử" cho Page và đợt 3 chưa làm.  
 **Phạm vi:** Tài khoản Page (dòng `fb_accounts` có `parent_facebook_id`): nhận tin, danh sách hội thoại, tin cũ, gửi tin. Tài khoản Facebook cá nhân, cầu nối Go và E2EE không đổi.  
 **Nguồn:** Kết quả các bản thử 26.37.9–26.37.13 (`SYSTEM_DOCUMENTATION.md` mục 4.11) và một bản ghi mạng của Meta Business Suite do anh ghi ngày 16/11/2026 (chỉ lấy cấu trúc, không lưu vào repo). Số thứ tự trường của các bảng Messenger lấy từ mautrix-meta (`pkg/messagix/table`, commit đang ghim ở `scripts/build-bridge-e2ee.js`, giấy phép AGPL: chỉ tham chiếu số thứ tự trường, không chép mã).
 
@@ -133,3 +133,10 @@ Mỗi đợt là một bản phát hành riêng, kiểm trên Page thật của 
 - Khi kết nối mới đang sống, thông báo qua tài khoản cha không lưu ngay: nó điền tên và ảnh người gửi, chờ 10 giây, rồi chỉ lưu (như luồng cũ) nếu tin thật chưa về, đồng thời bảo kết nối lấy lại con trỏ. Mục 3.2 viết "bỏ qua"; cách này thêm vào sau lượt soát mã để một kết nối "sống nhưng không nhận được tin" không làm mất tin của khách.
 - Thêm sau lượt soát mã, ngoài mô tả ở mục 3: tin Page gửi từ MaiHub qua trình duyệt (mã tạm `page:<ms>`) nhận mã thật từ tin dội của kết nối (dội về trong lúc đang gửi thì lượt gửi lấy luôn mã thật; dội về sau thì dòng mã tạm được đổi mã), thay vì hiện hai lần; `connect()` gọi lại không dựng lại kết nối đang chạy; phiên đồng bộ dưới 60 giây rồi bị đóng tính là một lần hỏng; cookie hết hạn thì dừng kết nối; trang tin cũ chỉ nhận tin cũ hơn mốc của yêu cầu; tin đã thu hồi thành sự kiện thu hồi; thẻ liên kết không chữ lấy địa chỉ làm nội dung.
 - `fb_threads.id` là khoá chính toàn cục (có từ trước): một khách nhắn cho hai Page của cùng máy dùng chung một dòng `fb_threads`. Danh sách hội thoại trên giao diện đọc từ `contacts` (khoá theo từng Page) nên không ảnh hưởng; chưa sửa trong đợt này.
+
+## Ghi chú sau phát hành (26.41.0, đợt 2 phần gửi chữ và đã đọc)
+
+- Làm trước phần gửi chữ vì máy của anh chưa cài lõi trình duyệt nên mọi tin gửi từ Page đều không đi được; "Đồng bộ lịch sử" cả tài khoản cho Page để lại sau.
+- Gói gửi lấy đúng theo bản ghi Business Suite: tác vụ 46 và tác vụ 21 trong một yêu cầu, xác nhận bằng `replaceOptimsiticMessage`. Bản ghi cho thấy tin dội (`insertMessage`) về trước xác nhận, nên lượt gửi giữ tin dội lại và bỏ tin mang đúng mã của nó.
+- Không gửi lại qua trình duyệt khi không có xác nhận (mục 3.5 chưa nói rõ điểm này).
+- Trả lời (`reply_metadata`) lấy tên trường theo tác vụ gửi của Messenger; bản ghi không có mẫu trả lời nên chưa kiểm trên Page thật.

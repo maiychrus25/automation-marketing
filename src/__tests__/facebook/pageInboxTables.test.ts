@@ -145,6 +145,17 @@ describe('readInboxBatch', () => {
     expect(readInboxBatch([first('1', 'PERSONAL')], 1).cursor).toBe('PERSONAL');
   });
 
+  // Facebook xác nhận một tin đã gửi bằng cách đổi mã tạm (otid) của nó thành mã tin thật.
+  test('aSentMessageIsConfirmedByItsRealId', () => {
+    const batch = readInboxBatch([
+      { name: 'replaceOptimsiticMessage', args: ['7000000000000000042', 'mid.$real'] },
+      { name: 'replaceOptimsiticMessage', args: ['7000000000000000043', null] },
+      { name: 'replaceOptimsiticMessage', args: [] },
+    ]);
+    expect(batch.sent).toEqual([{ otid: '7000000000000000042', messageId: 'mid.$real' }]);
+    expect(readInboxBatch([]).sent).toEqual([]);
+  });
+
   test('callCountsAreKeptForTheLogAndUnknownProceduresAreHarmless', () => {
     const batch = readInboxBatch([message('insertMessage', 'mid.$a'), { name: 'someFutureProcedure', args: ['x'] }, { name: 'someFutureProcedure', args: [] }]);
     expect(batch.calls).toEqual({ insertMessage: 1, someFutureProcedure: 2 });

@@ -43,12 +43,55 @@ export function pageInboxUsername(userId: string, pageId: string, sessionId: num
 const lsRequest = (requestId: number, type: number, payload: string) =>
   JSON.stringify({ app_id: BUSINESS_SUITE_APP_ID, payload, request_id: requestId, type });
 
-const taskRequest = (requestId: number, taskId: number, label: string, queueName: string, payload: string, version: string) =>
+interface LsTask { label: string; queueName: string; payload: string }
+
+/** Một yêu cầu loại 3 gồm một hay nhiều tác vụ; tác vụ thứ i mang task_id = firstTaskId + i. */
+const tasksRequest = (requestId: number, firstTaskId: number, tasks: LsTask[], version: string) =>
   lsRequest(requestId, 3, toJson({
     epoch_id: big(epochId()),
-    tasks: [{ failure_count: null, label, payload, queue_name: queueName, task_id: taskId }],
+    tasks: tasks.map((t, i) => ({ failure_count: null, label: t.label, payload: t.payload, queue_name: t.queueName, task_id: firstTaskId + i })),
     version_id: version,
   }));
+
+const taskRequest = (requestId: number, taskId: number, label: string, queueName: string, payload: string, version: string) =>
+  tasksRequest(requestId, taskId, [{ label, queueName, payload }], version);
+
+const markReadTask = (threadId: string, watermarkMs: number): LsTask => ({
+  label: '21', queueName: threadId,
+  payload: toJson({ thread_id: big(threadId), last_read_watermark_ts: big(Math.trunc(watermarkMs)), sync_group: PAGE_MAILBOX_DB, offline_threading_id: null }),
+});
+
+let otidCounter = 0;
+/** Mã tạm của một tin sắp gửi (19 chữ số: thời điểm << 22 cộng số đếm); Facebook trả lại nó kèm mã tin thật khi xác nhận. */
+export function newOfflineThreadingId(): string {
+  otidCounter = (otidCounter + 1) % 4194304; // 22 bit
+  return ((BigInt(Date.now()) << BigInt(22)) | BigInt(otidCounter)).toString();
+}
+
+/**
+ * Gửi một tin chữ vào hội thoại của Page, như Business Suite: tác vụ gửi (46) rồi tác vụ đánh dấu đã đọc (21) trong cùng
+ * một yêu cầu, dùng hai task_id liên tiếp bắt đầu từ `firstTaskId`.
+ */
+export function sendTextRequest(
+  requestId: number, firstTaskId: number,
+  message: { threadId: string; text: string; otid: string; nowMs: number; replyToMessageId?: string },
+  version = FALLBACK_LS_VERSION,
+): string {
+  const send: LsTask = {
+    label: '46', queueName: message.threadId,
+    payload: toJson({
+      thread_id: big(message.threadId), otid: message.otid, source: 4456448, send_type: 1, sync_group: PAGE_MAILBOX_DB, mark_thread_read: 1,
+      ...(message.replyToMessageId ? { reply_metadata: { reply_source_id: message.replyToMessageId, reply_source_type: 1, reply_type: 0 } } : {}),
+      text: message.text,
+    }),
+  };
+  return tasksRequest(requestId, firstTaskId, [send, markReadTask(message.threadId, message.nowMs)], version);
+}
+
+/** Đánh dấu đã đọc một hội thoại của Page tới mốc thời gian cho trước. */
+export function markReadRequest(requestId: number, taskId: number, threadId: string, watermarkMs: number, version = FALLBACK_LS_VERSION): string {
+  return tasksRequest(requestId, taskId, [markReadTask(threadId, watermarkMs)], version);
+}
 
 /** Xin đồng bộ một cơ sở dữ liệu: tiếp từ con trỏ đã có (loại 2), hoặc lần đầu kèm tham số đồng bộ (loại 1). */
 export function syncRequest(requestId: number, database: number, cursor: string | null, syncParams: string | null, version = FALLBACK_LS_VERSION): string {

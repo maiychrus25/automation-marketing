@@ -392,6 +392,73 @@ describe('FacebookPageInbox', () => {
     expect((connect.mock.calls as any[][]).map(c => c[3])).toEqual(['A1', 'A2']);
   });
 
+  describe('sending', () => {
+    const confirm = (client: FakeMqtt, messageId: string) => {
+      const otid = client.taskPayload(client.requests().length - 1).otid;
+      client.receive(lsResp([wireCall('replaceOptimsiticMessage', { 0: otid, 1: messageId })], client.requests().length));
+    };
+
+    test('sendTextResolvesWithTheRealMessageIdOnceFacebookConfirms', async () => {
+      const { inbox, client } = await connected();
+      const sending = inbox.sendText({ threadId: PEER, text: 'SECRET TEXT' });
+      expect(client.labels()).toEqual(['sync2', '313', '46']);
+      expect(client.taskPayload(2)).toMatchObject({ thread_id: Number(PEER), text: 'SECRET TEXT', sync_group: 205, send_type: 1 });
+      client.receive(lsResp([wireCall('taskExists', { 0: i64(1) })], 3)); // chưa phải xác nhận
+      confirm(client, 'mid.$sent1');
+      await expect(sending).resolves.toEqual({ messageId: 'mid.$sent1' });
+      expect(logged()).not.toContain('SECRET');
+    });
+
+    test('twoSendsAreConfirmedIndependently', async () => {
+      const { inbox, client } = await connected();
+      const first = inbox.sendText({ threadId: PEER, text: 'one' });
+      const second = inbox.sendText({ threadId: PEER, text: 'two', replyToMessageId: 'mid.$orig' });
+      const [otid1, otid2] = [client.taskPayload(2).otid, client.taskPayload(3).otid];
+      expect(otid1).not.toBe(otid2);
+      expect(client.taskPayload(3).reply_metadata).toMatchObject({ reply_source_id: 'mid.$orig' });
+      client.receive(lsResp([wireCall('replaceOptimsiticMessage', { 0: otid2, 1: 'mid.$two' })]));
+      client.receive(lsResp([wireCall('replaceOptimsiticMessage', { 0: otid1, 1: 'mid.$one' })]));
+      await expect(first).resolves.toEqual({ messageId: 'mid.$one' });
+      await expect(second).resolves.toEqual({ messageId: 'mid.$two' });
+    });
+
+    // Không biết tin đã tới hay chưa: báo lỗi rõ, không âm thầm coi là đã gửi.
+    test('aSendThatFacebookNeverConfirmsFailsAfterTwentySeconds', async () => {
+      const { inbox } = await connected();
+      const sending = inbox.sendText({ threadId: PEER, text: 'x' });
+      const failed = expect(sending).rejects.toThrow('Facebook không xác nhận');
+      await jest.advanceTimersByTimeAsync(20_000);
+      await failed;
+    });
+
+    test('pendingSendsFailWhenTheConnectionDrops', async () => {
+      const { inbox, client } = await connected();
+      const sending = inbox.sendText({ threadId: PEER, text: 'x' });
+      const dropped = expect(sending).rejects.toThrow('Mất kết nối');
+      client.emit('close');
+      await dropped;
+    });
+
+    test('sendingNeedsALiveConnectionAValidThreadAndSomeText', async () => {
+      const idle = setup();
+      await expect(idle.inbox.sendText({ threadId: PEER, text: 'x' })).rejects.toThrow('chưa kết nối');
+      const { inbox, client } = await connected();
+      await expect(inbox.sendText({ threadId: 'abc', text: 'x' })).rejects.toThrow('không hợp lệ');
+      await expect(inbox.sendText({ threadId: PEER, text: '   ' })).rejects.toThrow('không hợp lệ');
+      expect(client.labels()).toEqual(['sync2', '313']);
+    });
+
+    test('markReadSendsOneTaskAndIsSilentWhenNotConnected', async () => {
+      const idle = setup();
+      expect(idle.inbox.markRead(PEER, 1700000000000)).toBe(false);
+      const { inbox, client } = await connected();
+      expect(inbox.markRead(PEER, 1700000000000)).toBe(true);
+      expect(inbox.markRead('abc', 1)).toBe(false);
+      expect(client.labels()).toEqual(['sync2', '313', '21']);
+      expect(client.taskPayload(2)).toEqual({ thread_id: Number(PEER), last_read_watermark_ts: 1700000000000, sync_group: 205, offline_threading_id: null });
+    });
+  });
+
   test('withoutLoginCookiesItDoesNotLoadOrConnect', async () => {
     const connect = jest.fn();
     const fetchPage = jest.fn();
