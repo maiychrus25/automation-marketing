@@ -23,7 +23,8 @@ describe('shouldFetchFbHistoryOnOpen', () => {
 describe('shouldFetchFbOlder', () => {
   it('true for Facebook non-employee', () => expect(shouldFetchFbOlder({ channel: 'facebook', isEmployee: false })).toBe(true));
   it('false for employee', () => expect(shouldFetchFbOlder({ channel: 'facebook', isEmployee: true })).toBe(false));
-  it('false for a Page account', () => expect(shouldFetchFbOlder({ channel: 'facebook', isEmployee: false, isPage: true })).toBe(false));
+  // Từ 26.44.0 tài khoản Page (kênh facebook) cũng kéo lên tải tin cũ được.
+  it('true for a Facebook Page account', () => expect(shouldFetchFbOlder({ channel: 'facebook', isEmployee: false })).toBe(true));
   it.each(['zalo', 'telegram_user', undefined])('false for channel %s', (channel) =>
     expect(shouldFetchFbOlder({ channel, isEmployee: false })).toBe(false));
 });

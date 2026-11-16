@@ -52,8 +52,7 @@ export default function FacebookSyncButton() {
   const showNotification = useAppStore(s => s.showNotification);
   const activeAccountId = useAccountStore(s => s.activeAccountId);
   const account = useAccountStore(s => s.accounts.find(a => a.zalo_id === activeAccountId));
-  // Page Facebook có parent_zalo_id; main từ chối đồng bộ Page nên ẩn nút.
-  const visible = !!activeAccountId && isFacebook(account?.channel) && !account?.parent_zalo_id;
+  const visible = !!activeAccountId && isFacebook(account?.channel);
 
   const [open, setOpen] = useState(false);
   const [statuses, setStatuses] = useState<Record<string, FbHistorySyncStatus>>({});

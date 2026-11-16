@@ -139,10 +139,16 @@ export function syncRequest(requestId: number, database: number, cursor: string 
   }));
 }
 
-/** Xin trang đầu danh sách hội thoại của hộp thư Page. */
-export function threadListRequest(requestId: number, taskId: number, cursor: string, version = FALLBACK_LS_VERSION): string {
+/**
+ * Xin một trang danh sách hội thoại của hộp thư Page: trang đầu, hoặc (có `before`) các hội thoại cũ hơn hội thoại đã cho,
+ * tính theo thời điểm hoạt động cuối và id của nó.
+ */
+export function threadListRequest(
+  requestId: number, taskId: number, cursor: string, version = FALLBACK_LS_VERSION, before?: { timestampMs: number; threadKey: string },
+): string {
   return taskRequest(requestId, taskId, '313', 'trq', toJson({
-    cursor, filter: 0, is_after: 0, parent_thread_key: 0, reference_activity_timestamp: 9999999999999, reference_thread_key: 0,
+    cursor, filter: 0, is_after: 0, parent_thread_key: 0,
+    reference_activity_timestamp: before ? big(Math.trunc(before.timestampMs)) : 9999999999999, reference_thread_key: before ? big(before.threadKey) : 0,
     secondary_filter: 24, filter_value: '', sync_group: PAGE_MAILBOX_DB,
   }), version);
 }

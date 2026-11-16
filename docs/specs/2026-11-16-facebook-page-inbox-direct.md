@@ -154,3 +154,14 @@ Mỗi đợt là một bản phát hành riêng, kiểm trên Page thật của 
 - Lời nhắn kèm tệp đi thành một tin riêng sau tệp: bản ghi chỉ có tệp không kèm chữ (`text: null`), nên không ghép chữ vào tác vụ gửi tệp khi chưa có bằng chứng Facebook nhận dạng đó cho hộp thư Page.
 - Tải lên và danh sách nhãn dán chưa kiểm trên tài khoản thật lúc phát hành; cả hai rơi về đường trình duyệt khi hỏng. Gửi tệp / nhãn dán / cảm xúc đã phát lệnh mà không được xác nhận thì báo lỗi, không gửi lại.
 - Chưa làm: Page hiện "đang soạn" cho khách (hai bản ghi đều không có gói này trên kết nối hộp thư), "Đồng bộ lịch sử" cả tài khoản cho Page (bản ghi không có thao tác kéo danh sách hội thoại vì Page có ít hội thoại), nhận lại tin đến lúc app tắt.
+
+## Ghi chú sau phát hành (26.44.0: lịch sử, tìm nhãn dán, avatar khách)
+
+- Phát hiện khi đọc lại mã: từ 26.38.0 phần lõi tải tin cũ đã nối với hộp thư Page, nhưng IPC `fb:fetchOlderMessages` và quy tắc ở giao diện vẫn loại Page, nên kéo lên trong hội thoại của Page chưa bao giờ tải được tin cũ. 26.44.0 mở chặn đó.
+- "Đồng bộ lịch sử" cho Page: không cần bản ghi mới. Bản ghi 16/11/2026 (23:35) đã có yêu cầu "tải thêm hội thoại" do Business Suite tự gửi, đủ để biết cách xin trang kế tiếp. Trang thứ hai trở đi chưa kiểm trên tài khoản thật.
+- Tìm nhãn dán theo từ khoá: truy vấn tìm đọc từ mã trang Business Suite có trong bản ghi (bản ghi không có thao tác tìm), chưa kiểm trên tài khoản thật; hỏng thì dùng khay và đường trình duyệt.
+- Avatar khách bị đổi sai (anh báo 17/11/2026): Page không còn đọc trang cá nhân của khách; tên và ảnh chỉ lấy từ hộp thư Page.
+- "Page đang soạn" cho khách: không làm, theo anh thì hộp thư Page không có tính năng này.
+- Sau lượt review độc lập trước khi phát hành: trang danh sách không được trả lời là lỗi chứ không phải hết danh sách; hội thoại của Page chưa có tin làm mốc báo lỗi ngay, không tính vào hạn mức; tìm nhãn dán không có kết quả không làm tắt chức năng tìm; lượt đồng bộ chờ hộp thư Page nối lại; điền tên khách không ghi đè ảnh đã lưu.
+- Còn lại: tự lấp tin đến lúc app tắt mà không cần bấm "Đồng bộ lịch sử".
+

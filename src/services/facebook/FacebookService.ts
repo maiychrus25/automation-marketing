@@ -34,7 +34,7 @@ import { FacebookE2EEDeviceStore } from './FacebookE2EEDeviceStore';
 import { parseE2EECookies, resolveE2EEBinaryPath, normalizeChatJid } from './FacebookUtils';
 import { FacebookPageInbox } from './FacebookPageInbox';
 import type { InboxContact, InboxThread } from './pageInboxTables';
-import { PageSticker, fetchPageStickers, findStickers } from './pageStickers';
+import { PageSticker, fetchPageStickers, findStickers, searchPageStickers } from './pageStickers';
 import EventBroadcaster from '../event/EventBroadcaster';
 import { recordFacebookReceipt } from '../receipts/peerReceipts';
 import DatabaseService from '../database/DatabaseService';
@@ -65,6 +65,8 @@ const PAGE_SEND_ECHO_WINDOW_MS = 120_000;
 /** Khay nhãn dán của Page lấy thẳng từ Business Suite được giữ chừng này; bảng chọn hiện tối đa PAGE_STICKERS_SHOWN nhãn dán. */
 const PAGE_STICKERS_TTL_MS = 60 * 60_000;
 const PAGE_STICKERS_SHOWN = 60;
+/** Tìm nhãn dán trên Facebook hỏng (mã truy vấn hết hạn) thì thôi không hỏi nữa trong chừng này. */
+const PAGE_STICKER_SEARCH_RETRY_MS = 10 * 60_000;
 
 export class FacebookService {
   private static instances = new Map<string, FacebookService>();
@@ -91,6 +93,12 @@ export class FacebookService {
   private _pageSendsInFlight = new Map<string, { count: number; echoes: any[] }>();
   /** Nhãn dán trong khay của Page lấy thẳng từ Business Suite, giữ PAGE_STICKERS_TTL_MS (đường dẫn ảnh của Facebook có hạn). */
   private _pageStickers: { at: number; list: Promise<PageSticker[]> } | null = null;
+  /** Tìm nhãn dán trực tiếp bị tạm ngưng tới mốc này (sau một lần hỏng). */
+  private _pageStickerSearchOffUntil = 0;
+  /** Tên và ảnh của khách do hộp thư Page cung cấp trong phiên này: nguồn duy nhất cho thông tin khách của Page. */
+  private _pageContacts = new Map<string, { name: string; pictureUrl: string }>();
+  /** Mốc trang danh sách hội thoại của Page: thời điểm hoạt động của hội thoại cũ nhất → id của nó. */
+  private _pageThreadCursors = new Map<number, string>();
   /** Một bộ giới hạn tốc độ + một bộ tải lịch sử cho mỗi service (mỗi tài khoản). */
   private historyLimiter: FacebookHistoryLimiter;
   private historyFetcher: FacebookHistoryFetcher;
@@ -148,7 +156,10 @@ export class FacebookService {
       facebookId: () => this.getFacebookId(),
       bridge: () => this.pageInbox ?? this.e2eeBridge,
       fetchGraphQLPage: (id, limit) => this.fetchThreadMessages(id, limit),
+      // Page không đọc được tin qua GraphQL của tài khoản cá nhân: hội thoại chưa có tin làm mốc thì báo rõ, không gọi nhầm đường.
+      latestPageUnavailable: () => (this._isPage ? 'Hội thoại này chưa có tin nào trong máy để làm mốc tải tin cũ' : null),
       limiter: this.historyLimiter,
+      hasEncryptedChats: () => !this._isPage,
       isOwnSender: (senderId) => isOwnSender(senderId, this.getFacebookId(), this._delegatePageId),
     });
     try {
@@ -1326,6 +1337,7 @@ export class FacebookService {
     });
     inbox.on('threads', (threads: InboxThread[], contacts: InboxContact[]) => {
       if (this.pageInbox !== inbox) return;
+      this.rememberPageContacts(threads, contacts);
       try { this.savePageInboxThreads(threads, contacts); } catch (err: any) {
         Logger.warn(`[FacebookService:${this.accountId}] Page inbox threads save error: ${err.message}`);
       }
@@ -1429,10 +1441,20 @@ export class FacebookService {
   }
 
   /** Lưu hội thoại và tên/ảnh người liên hệ mà hộp thư Page gửi về. Hội thoại 1-1 không có tên riêng: lấy của người liên hệ cùng id. */
-  private savePageInboxThreads(threads: InboxThread[], contacts: InboxContact[]): void {
+  /** Ghi nhớ tên và ảnh mà hộp thư Page cho biết về từng khách (giá trị rỗng không đè giá trị đã có). */
+  private rememberPageContacts(threads: InboxThread[], contacts: InboxContact[]): void {
+    for (const c of [...contacts, ...threads]) {
+      if (!c.id || c.id === this._delegatePageId || (!c.name && !c.pictureUrl)) continue;
+      const known = this._pageContacts.get(c.id);
+      this._pageContacts.set(c.id, { name: c.name || known?.name || '', pictureUrl: c.pictureUrl || known?.pictureUrl || '' });
+    }
+  }
+
+  /** Hàng `fb_threads` của các hội thoại hộp thư Page (dùng chung cho việc lưu và cho danh sách của "Đồng bộ lịch sử"). */
+  private pageThreadRows(threads: InboxThread[], contacts: InboxContact[]) {
     const db = DatabaseService.getInstance();
     const byId = new Map(contacts.map(c => [c.id, c]));
-    const rows = threads.map(t => {
+    return threads.map(t => {
       // Bản cập nhật về sau thường không kèm tên / tin cuối, mà saveFBThread ghi đè các cột đó: giữ lại giá trị đang lưu.
       const stored = db.queryOne<{ name: string | null; last_message_preview: string | null; last_message_at: number | null }>(
         'SELECT name, last_message_preview, last_message_at FROM fb_threads WHERE id = ? AND account_id = ?', [t.id, this.accountId]);
@@ -1443,6 +1465,11 @@ export class FacebookService {
         metadata: { avatar_url: t.pictureUrl || byId.get(t.id)?.pictureUrl || '' },
       };
     });
+  }
+
+  private savePageInboxThreads(threads: InboxThread[], contacts: InboxContact[]): void {
+    const db = DatabaseService.getInstance();
+    const rows = this.pageThreadRows(threads, contacts);
     if (rows.length) db.saveFBThreads(this.accountId, rows);
     const fbAccountId = this.getFacebookId();
     const threadIds = new Set(threads.map(t => t.id));
@@ -2146,7 +2173,11 @@ export class FacebookService {
            VALUES (?, ?, ?, ?, 0, 'user', 0, '', 0, 'facebook')
            ON CONFLICT(owner_zalo_id, contact_id) DO UPDATE SET
              display_name = excluded.display_name,
-             avatar_url = excluded.avatar_url`,
+             avatar_url = CASE
+               WHEN excluded.avatar_url != '' AND (contacts.avatar_url IS NULL OR contacts.avatar_url = '' OR contacts.avatar_url NOT LIKE 'media/%')
+               THEN excluded.avatar_url
+               ELSE contacts.avatar_url
+             END`,
           [fbId, fbUserId, info.name, info.avatarUrl || '']
         );
       } else if (info.avatarUrl) {
@@ -2887,12 +2918,14 @@ export class FacebookService {
   }
 
   /**
-   * Nhãn dán FB cho bảng chọn của Page. Hộp thư Page đang sống: lấy thẳng khay nhãn dán từ Business Suite (kèm mã để gửi
-   * qua hộp thư), lọc theo mô tả; từ khoá rỗng = cả khay. Không lấy được khay, hoặc từ khoá không khớp nhãn dán nào trong
-   * khay (khay chỉ có nhãn dán của tài khoản): tìm theo từ khoá trên Facebook qua trình duyệt như trước.
+   * Nhãn dán FB cho bảng chọn của Page. Hộp thư Page đang sống: có từ khoá thì tìm trong kho của Facebook; không có kết quả
+   * (hoặc tìm hỏng) thì lọc khay nhãn dán của tài khoản theo mô tả; từ khoá rỗng = cả khay. Cả hai nguồn đều kèm mã để gửi
+   * qua hộp thư. Vẫn không có gì: tìm theo từ khoá qua trình duyệt như trước.
    */
   public async listPageStickers(threadId: string, keyword: string): Promise<{ label: string; thumbUrl: string; stickerId?: string }[]> {
     if (!this._isPage) return [];
+    const searched = await this.searchPageStickersOnFacebook(keyword.trim());
+    if (searched.length) return searched.slice(0, PAGE_STICKERS_SHOWN);
     const tray = await this.pageStickerTray();
     const found = tray ? findStickers(tray, keyword, PAGE_STICKERS_SHOWN) : [];
     if (found.length || !keyword.trim()) return found; // từ khoá rỗng không bao giờ mở trình duyệt
@@ -2901,6 +2934,27 @@ export class FacebookService {
       getCookie: () => this.cookie, delegatePageId: this._delegatePageId || '',
     });
     return sender.listStickers(threadId, keyword, 24);
+  }
+
+  /**
+   * Tìm nhãn dán theo từ khoá trong kho của Facebook (truy vấn tìm của Business Suite), kèm mã để gửi qua hộp thư.
+   * Rỗng nếu không có từ khoá, hộp thư không sống, không có kết quả hoặc tìm hỏng. Hỏng thì thử lại một lần với mã phiên mới
+   * rồi tạm ngưng tìm trực tiếp một lúc, để mỗi lần gõ phím không kéo theo các yêu cầu hỏng.
+   */
+  private async searchPageStickersOnFacebook(keyword: string): Promise<PageSticker[]> {
+    const inbox = this.pageInbox;
+    if (!keyword || !inbox?.isAlive() || Date.now() < this._pageStickerSearchOffUntil) return [];
+    for (const fresh of [false, true]) {
+      try {
+        const session = await inbox.webSession(fresh);
+        if (!session) break;
+        return await searchPageStickers(session, keyword);
+      } catch (err: any) {
+        Logger.warn(`[FacebookService:${this.accountId}] Page sticker search failed${fresh ? ' again' : ''}: ${err?.message}`);
+      }
+    }
+    this._pageStickerSearchOffUntil = Date.now() + PAGE_STICKER_SEARCH_RETRY_MS;
+    return [];
   }
 
   /** Khay nhãn dán lấy thẳng (giữ lại một thời gian); null nếu hộp thư không sống hoặc Facebook không trả danh sách. */
@@ -3001,11 +3055,23 @@ export class FacebookService {
     this.avatarRefreshDebounce.add(fbUserId);
 
     const session = this.requireSession();
-    const db = DatabaseService.getInstance();
     const cookie = session.cookieFacebook;
     const fbId = session.FacebookID;
 
     try {
+      // Page: ảnh của khách chỉ lấy từ hộp thư Page. Đọc trang cá nhân dưới danh nghĩa Page có thể ra ảnh của người khác.
+      if (this._isPage) {
+        const fromMailbox = this._pageContacts.get(fbUserId)?.pictureUrl;
+        if (!fromMailbox) {
+          this.avatarRefreshDebounce.delete(fbUserId); // hộp thư chưa cho ảnh: lần sau thử lại
+          return null;
+        }
+        const stored = await this.storeContactAvatar(fbUserId, fromMailbox, cookie, fbId);
+        // Không tải về máy được (ảnh của hộp thư có thể đã hết hạn): cho phép thử lại ở lần sau.
+        if (stored === fromMailbox) this.avatarRefreshDebounce.delete(fbUserId);
+        return stored;
+      }
+
       // Bc 1: Scrape profile page ca user Facebook ly URL CDN fresh nht
       let freshCdnUrl = await fetchUserAvatarFromProfile(cookie, fbUserId);
 
@@ -3026,51 +3092,57 @@ export class FacebookService {
         return null;
       }
 
-      // Bc 3: Download v local vi Facebook cookie gii quyt vnh vin vn oe
-      try {
-        const localPath = await FileStorageService.downloadImage(
-          fbId,
-          freshCdnUrl,
-          `fb_avatar_${fbUserId}.jpg`,
-          cookie,
-          undefined,
-          'https://www.facebook.com/',
-        );
-        if (localPath) {
-          // Thnh cng → update DB vi local path (vn vnh vin)
-          db.run?.(
-            `UPDATE contacts SET avatar_url = ? WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'`,
-            [localPath, fbId, fbUserId]
-          );
-          Logger.log(`[FacebookService:${this.accountId}] refreshContactAvatar: saved locally for ${fbUserId}: ${localPath}`);
-          return localPath;
-        }
-      } catch (dlErr) {
-        Logger.warn(`[FacebookService:${this.accountId}] refreshContactAvatar: download failed, fallback to CDN URL`);
-      }
-
-      // Fallback: update DB vi URL CDN mi (fresh, valid trong vi gi)
-      db.run?.(
-        `UPDATE contacts SET avatar_url = ? WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'`,
-        [freshCdnUrl, fbId, fbUserId]
-      );
-      // Update fb_threads metadata
-      const existing = db.queryOne?.(
-        `SELECT metadata FROM fb_threads WHERE id = ? AND account_id = ?`,
-        [fbUserId, this.accountId]
-      ) as { metadata?: string } | undefined;
-      const meta = existing?.metadata ? JSON.parse(existing.metadata) : {};
-      meta.avatar_url = freshCdnUrl;
-      db.run?.(
-        `UPDATE fb_threads SET metadata = ? WHERE id = ? AND account_id = ?`,
-        [JSON.stringify(meta), fbUserId, this.accountId]
-      );
-      Logger.log(`[FacebookService:${this.accountId}] refreshContactAvatar: updated CDN URL for ${fbUserId}`);
-      return freshCdnUrl;
+      return await this.storeContactAvatar(fbUserId, freshCdnUrl, cookie, fbId);
     } catch (err: any) {
       Logger.warn(`[FacebookService:${this.accountId}] refreshContactAvatar error: ${err.message}`);
     }
     return null;
+  }
+
+  /** Tải ảnh đại diện của một liên hệ về máy và ghi vào DB; không tải được thì ghi đường dẫn CDN mới. Trả giá trị đã ghi. */
+  private async storeContactAvatar(fbUserId: string, cdnUrl: string, cookie: string, fbId: string): Promise<string | null> {
+    const db = DatabaseService.getInstance();
+    // Bc 3: Download v local vi Facebook cookie gii quyt vnh vin vn oe
+    try {
+      const localPath = await FileStorageService.downloadImage(
+        fbId,
+        cdnUrl,
+        `fb_avatar_${fbUserId}.jpg`,
+        cookie,
+        undefined,
+        'https://www.facebook.com/',
+      );
+      if (localPath) {
+        // Thnh cng → update DB vi local path (vn vnh vin)
+        db.run?.(
+          `UPDATE contacts SET avatar_url = ? WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'`,
+          [localPath, fbId, fbUserId]
+        );
+        Logger.log(`[FacebookService:${this.accountId}] refreshContactAvatar: saved locally for ${fbUserId}: ${localPath}`);
+        return localPath;
+      }
+    } catch (dlErr) {
+      Logger.warn(`[FacebookService:${this.accountId}] refreshContactAvatar: download failed, fallback to CDN URL`);
+  }
+
+  // Fallback: update DB vi URL CDN mi (fresh, valid trong vi gi)
+  db.run?.(
+    `UPDATE contacts SET avatar_url = ? WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'`,
+    [cdnUrl, fbId, fbUserId]
+  );
+  // Update fb_threads metadata
+  const existing = db.queryOne?.(
+    `SELECT metadata FROM fb_threads WHERE id = ? AND account_id = ?`,
+    [fbUserId, this.accountId]
+  ) as { metadata?: string } | undefined;
+  const meta = existing?.metadata ? JSON.parse(existing.metadata) : {};
+  meta.avatar_url = cdnUrl;
+  db.run?.(
+    `UPDATE fb_threads SET metadata = ? WHERE id = ? AND account_id = ?`,
+    [JSON.stringify(meta), fbUserId, this.accountId]
+  );
+  Logger.log(`[FacebookService:${this.accountId}] refreshContactAvatar: updated CDN URL for ${fbUserId}`);
+  return cdnUrl;
   }
 
   /**
@@ -3092,6 +3164,12 @@ export class FacebookService {
    * khi bridge chỉ có tên.
    */
   private async resolveUserInfo(fbUserId: string): Promise<{ name: string; avatarUrl: string } | null> {
+    // Page: chỉ dùng tên và ảnh mà hộp thư Page cho biết. Đọc trang cá nhân của khách dưới danh nghĩa Page có thể ra ảnh
+    // của người khác (trang không có ảnh ở chỗ quen thuộc thì phần dự phòng lấy một ảnh bất kỳ trên trang).
+    if (this._isPage) {
+      const known = this._pageContacts.get(fbUserId);
+      return known ? { name: known.name, avatarUrl: known.pictureUrl } : null;
+    }
     const fromBridge = await this.getBridgeUserInfo(fbUserId);
     if (fromBridge?.avatarUrl) return fromBridge;
     const fromHtml = await getUserInfoFacebookHtml(this.requireSession().cookieFacebook, fbUserId);
@@ -3139,6 +3217,8 @@ export class FacebookService {
   // ─── Lịch sử tin nhắn (uỷ quyền cho FacebookHistoryFetcher) ────────────────
 
   public isE2EEThread(threadId: string): boolean { return this.historyFetcher.isE2EEThread(threadId); }
+  /** Tải lịch sử được ngay lúc này: Page cần hộp thư Page đang sống (tài khoản vẫn "đã kết nối" trong lúc hộp thư nối lại). */
+  public isHistoryReady(): boolean { return !this._isPage || this.pageInbox?.isAlive() === true; }
   public historyLimiterFor(): FacebookHistoryLimiter { return this.historyLimiter; }
 
   public fetchHistoryPage(threadId: string, anchor: FbHistoryAnchor, range?: FbHistoryRange, opts?: FetchPageOptions): Promise<FbHistoryPageResult> {
@@ -3146,11 +3226,38 @@ export class FacebookService {
   }
 
   public syncThreadHistory(threadId: string, range: FbHistoryRange, opts?: Parameters<FacebookHistoryFetcher['syncThread']>[2]): ReturnType<FacebookHistoryFetcher['syncThread']> {
-    return this.historyFetcher.syncThread(threadId, range, opts);
+    // Page không có trang "tin mới nhất" của GraphQL để lấp khoảng trống ở đầu: luôn lùi từ tin mới nhất đang có trong máy
+    // (danh sách hội thoại của hộp thư Page đã kèm tin cuối của từng hội thoại).
+    return this.historyFetcher.syncThread(threadId, range, this._isPage && opts ? { ...opts, latestKnownMs: undefined } : opts);
   }
 
   public getThreadListPage(before: number | null): ReturnType<typeof getThreadListPage> {
+    if (this._isPage) return this.pageThreadListPage(before) as ReturnType<typeof getThreadListPage>;
     return getThreadListPage(this.requireSession(), this.accountId, before, 50, this.httpsAgent);
+  }
+
+  /**
+   * Một trang danh sách hội thoại của Page lấy qua hộp thư Page. `before` là thời điểm hoạt động của hội thoại cũ nhất
+   * trang trước; trang rỗng (nextBefore = null) nghĩa là đã hết danh sách.
+   */
+  private async pageThreadListPage(before: number | null): Promise<{ threads: any[]; nextBefore: number | null; error?: string }> {
+    const inbox = this.pageInbox;
+    if (!inbox?.isAlive()) return { threads: [], nextBefore: null, error: 'Hộp thư Page chưa kết nối — thử lại sau ít phút' };
+    if (before === null) this._pageThreadCursors.clear();
+    const threadKey = before === null ? undefined : this._pageThreadCursors.get(before);
+    if (before !== null && !threadKey) return { threads: [], nextBefore: null };
+    try {
+      const page = await inbox.fetchThreadList(before === null ? undefined : { timestampMs: before, threadKey: threadKey! });
+      const oldest = page.threads.reduce<InboxThread | null>((min, t) => (t.lastActivityMs > 0 && (!min || t.lastActivityMs < min.lastActivityMs) ? t : min), null);
+      if (oldest) this._pageThreadCursors.set(oldest.lastActivityMs, oldest.id);
+      return {
+        threads: this.pageThreadRows(page.threads, page.contacts).map(row => ({ ...row, lastActivityMs: row.last_message_at })),
+        nextBefore: oldest ? oldest.lastActivityMs : null,
+      };
+    } catch (err: any) {
+      Logger.warn(`[FacebookService:${this.accountId}] Page thread list page failed: ${err?.message}`);
+      return { threads: [], nextBefore: null, error: err?.message || 'Không lấy được danh sách hội thoại của Page' };
+    }
   }
 
   public persistGraphQLHistory(threadId: string, messages: any[]): { stored: number; fresh: number; received: number } {

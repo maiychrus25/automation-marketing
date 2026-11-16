@@ -19,6 +19,8 @@ export interface FbHistorySyncTarget {
   getStatus(): string; // 'cookie_expired' stops the run
   getAccountId(): string; // fb_accounts.id
   isPage(): boolean;
+  /** Tải lịch sử được ngay lúc này (Page: hộp thư Page đang sống). Không có = luôn sẵn sàng khi đã kết nối. */
+  isHistoryReady?(): boolean;
   isE2EEThread(threadId: string): boolean;
   historyLimiterFor(): FacebookHistoryLimiter;
   getThreadListPage(before: number | null): Promise<{ threads: Array<{ id: string; name?: string; lastActivityMs: number; [k: string]: any }>; nextBefore: number | null; error?: string }>;
@@ -40,7 +42,6 @@ const MSG = {
   stopping: 'Đang dừng…',
   busy: 'Đang đồng bộ tài khoản này',
   notConnected: 'Tài khoản Facebook chưa kết nối — kết nối lại rồi đồng bộ',
-  page: 'Tài khoản Page chưa hỗ trợ đồng bộ lịch sử',
   cookie: 'Phiên Facebook hết hạn hoặc cần xác minh — đã dừng đồng bộ để bảo vệ tài khoản',
   disconnected: 'Tài khoản Facebook mất kết nối — đã dừng đồng bộ',
   risk: 'Facebook có dấu hiệu hạn chế — đã dừng đồng bộ để bảo vệ tài khoản',
@@ -171,7 +172,6 @@ export default class FacebookHistorySyncService {
       let target: FbHistorySyncTarget | null = null;
       try { target = await getService(); } catch (err: any) { Logger.warn(`[FbHistorySync] getService failed: ${err?.message || err}`); }
       if (!target || !target.isConnected()) throw new RunFailure(MSG.notConnected);
-      if (target.isPage()) throw new RunFailure(MSG.page);
 
       const rows = await this.listThreads(session, target, range, accountId);
       if (session.cancelled) return this.finish(session, 'cancelled', this.cancelMessage(session));
@@ -206,13 +206,14 @@ export default class FacebookHistorySyncService {
 
   /** Phiên hết hạn → dừng ngay; mất kết nối → chờ tối đa 2 phút cho nối lại (huỷ được) rồi mới dừng. */
   private async ensureUsable(session: Session, target: FbHistorySyncTarget): Promise<void> {
+    const usable = () => target.isConnected() && (target.isHistoryReady?.() ?? true);
     if (target.getStatus() === 'cookie_expired') throw new RunFailure(MSG.cookie);
-    if (target.isConnected()) return;
+    if (usable()) return;
     for (let waited = 0; waited < RECONNECT_WAIT_MS; waited += RECONNECT_SLICE_MS) {
       if (session.cancelled) return;
       await this.deps.sleep(RECONNECT_SLICE_MS);
       if (target.getStatus() === 'cookie_expired') throw new RunFailure(MSG.cookie);
-      if (target.isConnected()) return;
+      if (usable()) return;
     }
     throw new RunFailure(MSG.disconnected);
   }

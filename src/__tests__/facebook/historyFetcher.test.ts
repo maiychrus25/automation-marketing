@@ -109,6 +109,34 @@ describe('FacebookHistoryFetcher', () => {
       seedLocal(id, 'mid.$cAAA1', T0 - 1_000);
       expect(fetcher.isE2EEThread(id)).toBe(false);
     });
+
+    // Hội thoại của Page không bao giờ mã hoá đầu cuối: một hội thoại chỉ có tin mang mã tạm `page:<ms>` (Page gửi qua
+    // trình duyệt) không được báo nhầm là "mã hoá, không tải được tin cũ".
+    test('anAccountWithoutEncryptedChatsNeverTreatsAThreadAsE2EE', async () => {
+      const { fetcher } = make({ hasEncryptedChats: () => false, latestPageUnavailable: () => 'chưa có tin làm mốc' });
+      const id = String(200000 + ++seq);
+      seedLocal(id, 'page:1700000000000', T0);
+      expect(fetcher.isE2EEThread(id)).toBe(false);
+      expect(await fetcher.fetchPage(id, NO_ANCHOR)).toMatchObject({ success: false, code: 'FETCH', error: 'chưa có tin làm mốc' });
+    });
+
+    // Page không có trang "tin mới nhất": hội thoại chưa có tin làm mốc thì báo lỗi ngay, không gọi mạng, không tính vào
+    // hạn mức tải lịch sử (nhiều hội thoại như vậy không được làm cạn hạn mức của cả tài khoản).
+    test('anAccountWithoutALatestPageFailsFastWithoutChargingTheLimiter', async () => {
+      const { fetcher, gql, bridge, limiter, sleep } = make({ latestPageUnavailable: () => 'chưa có tin làm mốc' });
+      const charged = jest.spyOn(limiter, 'recordRequest');
+      const id = String(200000 + ++seq);
+      expect(await fetcher.fetchPage(id, NO_ANCHOR)).toEqual({ success: false, code: 'FETCH', error: 'chưa có tin làm mốc' });
+      expect(await fetcher.syncThread(id, { fromTs: null, toTs: null })).toMatchObject({ complete: false, error: 'chưa có tin làm mốc', pages: 0 });
+      expect(gql).not.toHaveBeenCalled();
+      expect(bridge.fetchMessages).not.toHaveBeenCalled();
+      expect(charged).not.toHaveBeenCalled();
+      expect(sleep).not.toHaveBeenCalled();
+      // Có tin làm mốc thì vẫn tải qua kết nối như thường.
+      seedLocal(id, 'mid.$cAAA9', T0);
+      bridge.fetchMessages.mockResolvedValue({ threadId: id, messages: [], hasMoreBefore: false, minTimestampMs: 0 });
+      expect(await fetcher.fetchPage(id, NO_ANCHOR)).toMatchObject({ success: true, source: 'lightspeed' });
+    });
   });
 
   describe('save order', () => {

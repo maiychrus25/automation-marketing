@@ -3,7 +3,7 @@ jest.mock('../../utils/Logger', () => ({ __esModule: true, default: { log: jest.
 
 import axios from 'axios';
 import Logger from '../../utils/Logger';
-import { fetchPageStickers, findStickers } from '../../services/facebook/pageStickers';
+import { fetchPageStickers, findStickers, searchPageStickers } from '../../services/facebook/pageStickers';
 
 // Mọi id, mã phiên và cookie ở đây đều giả.
 const SESSION = { pageId: '1000000000003955', userId: '100000000008724', cookieHeader: 'c_user=100000000008724; xs=SECRETXS', agent: 'AGENT', fbDtsg: 'DTSG:SECRET', lsd: 'LSD-SECRET', jazoest: '25999' };
@@ -58,6 +58,39 @@ describe('pageStickers', () => {
     post.mockResolvedValueOnce({ status: 200, data: JSON.stringify(packs('111')) }).mockResolvedValueOnce({ status: 500, data: '' });
     await expect(fetchPageStickers(SESSION)).rejects.toThrow('không có nhãn dán');
     expect(((Logger.warn as jest.Mock).mock.calls.map(c => String(c[0])).join('\n'))).not.toMatch(/SECRET/);
+  });
+
+  // Truy vấn tìm nhãn dán của bảng chọn Business Suite (đọc từ mã trang trong bản ghi 16/11/2026): biến `query`,
+  // kết quả ở sticker_search.sticker_results.
+  test('searchAsksFacebookForTheKeywordAndReturnsStickersWithIds', async () => {
+    post.mockResolvedValue({ status: 200, data: JSON.stringify({ data: { sticker_search: { sticker_results: { edges: [
+      { node: { id: '369239263222830', label: 'Haha', image: { uri: 'https://x.test/h.png' } } },
+      { node: { id: '369239263222830', label: 'Haha', image: { uri: 'https://x.test/h.png' } } },
+      { node: { id: 'bad', label: 'x', image: { uri: 'https://x.test/b.png' } } },
+      { node: { id: '369239263222831', label: 'Cười', image: null } },
+    ] } } } }) });
+    await expect(searchPageStickers(SESSION, ' haha ')).resolves.toEqual([{ stickerId: '369239263222830', label: 'Haha', thumbUrl: 'https://x.test/h.png' }]);
+    expect(post.mock.calls[0][0]).toBe('https://business.facebook.com/api/graphql/');
+    expect(form(post.mock.calls[0])).toMatchObject({ fb_api_req_friendly_name: 'StickersFlyoutTagSelectorQuery', av: SESSION.userId, fb_dtsg: SESSION.fbDtsg });
+    expect(JSON.parse(form(post.mock.calls[0]).variables)).toEqual({ query: 'haha', stickerWidth: 128, stickerHeight: 128, stickerInterface: 'messages' });
+  });
+
+  // Không có kết quả là câu trả lời hợp lệ; câu trả lời không đúng dạng (mã truy vấn hết hạn, phiên hỏng) là lỗi.
+  test('noResultsIsAnEmptyListButAnUnusableAnswerIsAnError', async () => {
+    post.mockResolvedValue({ status: 200, data: JSON.stringify({ data: { sticker_search: { sticker_results: { edges: [] } } } }) });
+    await expect(searchPageStickers(SESSION, 'zzz')).resolves.toEqual([]);
+    // Facebook có thể trả phần kết quả là null khi không khớp gì: vẫn là "không có kết quả", không phải lỗi.
+    for (const empty of [{ sticker_search: null }, { sticker_search: { sticker_results: null } }, { sticker_search: {} }]) {
+      post.mockResolvedValue({ status: 200, data: JSON.stringify({ data: empty }) });
+      await expect(searchPageStickers(SESSION, 'zzz')).resolves.toEqual([]);
+    }
+    post.mockResolvedValue({ status: 200, data: 'for (;;);{"error":1357004}' });
+    await expect(searchPageStickers(SESSION, 'zzz')).rejects.toThrow('tìm nhãn dán');
+    post.mockResolvedValue({ status: 200, data: JSON.stringify({ data: { viewer: {} }, errors: [{ message: 'x' }] }) });
+    await expect(searchPageStickers(SESSION, 'zzz')).rejects.toThrow('tìm nhãn dán');
+    post.mockReset();
+    await expect(searchPageStickers(SESSION, '   ')).resolves.toEqual([]);
+    expect(post).not.toHaveBeenCalled();
   });
 
   test('findingIgnoresCaseAndVietnameseAccentsAndAnEmptyKeywordListsEverything', () => {

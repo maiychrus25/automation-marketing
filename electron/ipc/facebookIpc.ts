@@ -463,6 +463,11 @@ export function registerFacebookIpc(): void {
       if (!cookie) return { success: false, error: 'Cookie not found' };
       // Tài khoản đang kết nối hỏi qua service: nó ưu tiên bridge (có tên cả khi trang cá nhân không đọc ra tên).
       const connected = FacebookConnectionManager.get(internalId);
+      // Page chưa kết nối thì không có nguồn đúng (hộp thư Page): không đọc trang cá nhân của khách dưới danh nghĩa Page,
+      // cách đó có thể trả ảnh của người khác.
+      if (connected?.getStatus() !== 'connected' && fbAcc?.parent_facebook_id) {
+        return { success: false, error: 'Tài khoản Page chưa kết nối' };
+      }
       const info = connected?.getStatus() === 'connected'
         ? await connected.getUserInfoFacebookHtml(userId)
         : await getUserInfoFacebookHtml(cookie, userId);

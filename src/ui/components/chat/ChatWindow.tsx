@@ -1529,7 +1529,7 @@ export default function ChatWindow() {
           // button active on the first page.
           // Facebook (không phải nhân viên): tin cũ còn nằm trên Facebook → không kết luận hết từ DB cục bộ.
           if (realCount === MESSAGE_LOAD_LIMIT && activeAccountId && activeThreadId
-            && !shouldFetchFbOlder({ channel: getActiveAccount()?.channel, isPage: !!getActiveAccount()?.parent_zalo_id, isEmployee: useEmployeeStore.getState().mode === 'employee' })) {
+            && !shouldFetchFbOlder({ channel: getActiveAccount()?.channel, isEmployee: useEmployeeStore.getState().mode === 'employee' })) {
             // Exactly 20 items → probe if there are actually more
             const minTs = realMsgs.reduce((min, m) => {
               const ts = m.timestamp || 0;
@@ -1635,7 +1635,7 @@ export default function ChatWindow() {
         setLoadingMore(false);
         loadingMoreRef.current = false;
       }
-    }, shouldFetchFbOlder({ channel: getActiveAccount()?.channel, isPage: !!getActiveAccount()?.parent_zalo_id, isEmployee: useEmployeeStore.getState().mode === 'employee' }) ? 40_000 : LOAD_MORE_TIMEOUT_MS); // Facebook: chờ giới hạn tới 5s + bridge tới 30s
+    }, shouldFetchFbOlder({ channel: getActiveAccount()?.channel, isEmployee: useEmployeeStore.getState().mode === 'employee' }) ? 40_000 : LOAD_MORE_TIMEOUT_MS); // Facebook: chờ giới hạn tới 5s + bridge tới 30s
 
     // Lưu scrollHeight trước khi prepend để khôi phục vị trí
     savedScrollHeightRef.current = messagesContainerRef.current?.scrollHeight || 0;
@@ -1645,7 +1645,7 @@ export default function ChatWindow() {
       // Step 1: Try REST (employee) hoặc local DB (boss/standalone)
       const isEmployee = useEmployeeStore.getState().mode === 'employee';
       // Facebook: DB cục bộ hết không có nghĩa là hết tin (trang cũ nằm trên Facebook)
-      const fbOlder = shouldFetchFbOlder({ channel: getActiveAccount()?.channel, isPage: !!getActiveAccount()?.parent_zalo_id, isEmployee });
+      const fbOlder = shouldFetchFbOlder({ channel: getActiveAccount()?.channel, isEmployee });
       let res: any;
       if (isEmployee) {
         const DataAccessor = (await import('../../lib/data/DataAccessor')).default;
@@ -1795,7 +1795,7 @@ export default function ChatWindow() {
       }
 
       // Step 2b: Facebook — tải trang cũ hơn qua bridge/GraphQL khi DB hết
-      if (shouldFetchFbOlder({ channel: activeAcc?.channel, isPage: !!activeAcc?.parent_zalo_id, isEmployee })) {
+      if (shouldFetchFbOlder({ channel: activeAcc?.channel, isEmployee })) {
         const anchor = fbOlderAnchor(useChatStore.getState().messages[getMessageCacheKey(activeAccountId, activeThreadId, activeTopicId)] || []);
         if (anchor) {
           const outcome = interpretFbOlderResult(await ipc.fb?.fetchOlderMessages({ accountId: activeAccountId, threadId: activeThreadId, ...anchor }));

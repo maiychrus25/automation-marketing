@@ -7,7 +7,6 @@ import { getFBServiceOrReconnect, resolveInternalId } from './facebookIpc';
 const EMPLOYEE_ERROR = 'Chỉ chủ tài khoản (máy đang đăng nhập Facebook) mới tải được lịch sử tin nhắn';
 const INVALID_ERROR = 'Tham số không hợp lệ';
 const NOT_CONNECTED_ERROR = 'Tài khoản chưa kết nối. Vui lòng kết nối lại Facebook.';
-const PAGE_ERROR = 'Tài khoản Page chưa hỗ trợ tải lịch sử';
 
 function isEmployeeMode(): boolean {
     try {
@@ -47,7 +46,6 @@ export function registerFbHistoryIpc(): void {
         try {
             const service = await getFBServiceOrReconnect(resolveInternalId(p.accountId));
             if (!service) return { success: false, code: 'NOT_CONNECTED', error: NOT_CONNECTED_ERROR };
-            if (service.isPage()) return { success: false, code: 'NOT_CONNECTED', error: PAGE_ERROR };
             return await service.fetchHistoryPage(
                 p.threadId.split('@')[0], { timestampMs: p.beforeTimestampMs ?? 0, messageId: p.beforeMessageId ?? '' }, undefined, { mode: 'interactive' },
             );

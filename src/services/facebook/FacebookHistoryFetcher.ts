@@ -34,6 +34,13 @@ export interface FacebookHistoryDeps {
   limiter: FacebookHistoryLimiter;
   sleep?: (ms: number) => Promise<void>;     // injectable for tests
   now?: () => number;                        // default Date.now
+  /**
+   * Tài khoản không tải được "trang tin mới nhất" khi hội thoại chưa có tin làm mốc (Page không đọc được GraphQL của tài
+   * khoản cá nhân): trả câu báo lỗi, khi đó fetchPage dừng ngay, không gọi mạng và không tính vào hạn mức. null = tải được.
+   */
+  latestPageUnavailable?: () => string | null;
+  /** false = tài khoản này không có hội thoại mã hoá đầu cuối (Page): không hội thoại nào bị coi là mã hoá. Mặc định có. */
+  hasEncryptedChats?: () => boolean;
   /** Tin do chính tài khoản gửi; mặc định so với facebookId(). Page gửi dưới id Page cổ điển nên cần hàm riêng. */
   isOwnSender?: (senderId: string) => boolean;
   /** Mọi truy cập DB chạy trên DB chính của chủ tài khoản, kể cả khi đang mở workspace khác. */
@@ -79,6 +86,7 @@ export class FacebookHistoryFetcher {
   }
 
   isE2EEThread(threadId: string): boolean {
+    if (this.deps.hasEncryptedChats?.() === false) return false;
     const id = stripJid(threadId);
     return this.onBossDb(db => {
       if (db.queryOne<any>('SELECT 1 AS hit FROM fb_threads WHERE id = ? AND account_id = ? AND is_e2ee = 1', [id, this.deps.accountId])) return true;
@@ -138,6 +146,8 @@ export class FacebookHistoryFetcher {
     if (this.isE2EEThread(threadId)) return this.fail('E2EE', 'Hội thoại mã hoá đầu cuối: Facebook không cho tải tin cũ');
 
     const start = this.resolveAnchor(threadId, anchor, opts.latestKnownMs);
+    const noLatestPage = start ? null : this.deps.latestPageUnavailable?.();
+    if (noLatestPage) return this.fail('FETCH', noLatestPage);
     if (start && !this.liveBridge()) return this.bridgeDown();
 
     const blocked = await this.waitForTurn(opts);

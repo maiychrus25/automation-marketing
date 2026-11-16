@@ -22,6 +22,13 @@ jest.mock('../../services/file/FileStorageService', () => ({
   default: { saveBuffer: jest.fn(async () => '/media/saved.png'), toRelativePath: (p: string) => `rel:${p}`, downloadImage: jest.fn(async () => '/media/sticker.webp') },
 }));
 
+jest.mock('../../services/facebook/FacebookAccountCookie', () => ({ resolveFBCookie: () => 'c_user=1; xs=t', resolveFBProxyId: () => null }));
+const mockProfileInfo = jest.fn();
+jest.mock('../../services/facebook/FacebookSession', () => ({
+  ...jest.requireActual('../../services/facebook/FacebookSession'),
+  getUserInfoFacebookHtml: (...args: any[]) => mockProfileInfo(...args),
+}));
+
 import { registerFacebookIpc } from '../../../electron/ipc/facebookIpc';
 
 const ACC = 'acc-page-ipc';
@@ -99,6 +106,35 @@ describe('Page sends through the Facebook IPC', () => {
       await expect(call('fb:sendAttachments', { accountId: ACC, threadId: PEER, filePaths: [file, file], body: 'chu' })).resolves.toMatchObject({ success: true, uploadedCount: 2 });
       expect(mockService.sendPageAttachment.mock.calls.map((c: any[]) => c[2])).toEqual(['chu', undefined]);
       expect(mockPersistSent.mock.calls.map(c => c[0].body)).toEqual([null, null]);
+    });
+  });
+
+  // Lỗi avatar sai (17/11/2026): thông tin khách của Page không bao giờ lấy bằng cách đọc trang cá nhân dưới danh nghĩa Page,
+  // kể cả khi tài khoản Page đang không kết nối.
+  describe('fb:getUserInfoFacebookHtml', () => {
+    beforeEach(() => { mockProfileInfo.mockReset(); mockDb.getFBAccount.mockReset(); });
+
+    test('aConnectedPageAnswersFromItsService', async () => {
+      mockDb.getFBAccount.mockReturnValue({ id: ACC, facebook_id: PAGE_FB, parent_facebook_id: '100000000008724' });
+      mockService.getStatus = jest.fn(() => 'connected');
+      mockService.getUserInfoFacebookHtml = jest.fn().mockResolvedValue({ name: 'Khách B', avatarUrl: 'https://x.test/right.jpg' });
+      await expect(call('fb:getUserInfoFacebookHtml', { accountId: ACC, userId: PEER })).resolves.toEqual({ success: true, name: 'Khách B', avatarUrl: 'https://x.test/right.jpg' });
+      expect(mockProfileInfo).not.toHaveBeenCalled();
+    });
+
+    test('aDisconnectedPageDoesNotReadTheProfilePage', async () => {
+      mockDb.getFBAccount.mockReturnValue({ id: ACC, facebook_id: PAGE_FB, parent_facebook_id: '100000000008724' });
+      mockService.getStatus = jest.fn(() => 'disconnected');
+      await expect(call('fb:getUserInfoFacebookHtml', { accountId: ACC, userId: PEER })).resolves.toMatchObject({ success: false });
+      expect(mockProfileInfo).not.toHaveBeenCalled();
+    });
+
+    test('aDisconnectedPersonalAccountStillReadsTheProfilePage', async () => {
+      mockDb.getFBAccount.mockReturnValue({ id: ACC, facebook_id: '100000000008724', parent_facebook_id: null });
+      mockService.getStatus = jest.fn(() => 'disconnected');
+      mockProfileInfo.mockResolvedValue({ name: '', avatarUrl: 'https://x.test/friend.jpg' });
+      await expect(call('fb:getUserInfoFacebookHtml', { accountId: ACC, userId: PEER })).resolves.toEqual({ success: true, name: '', avatarUrl: 'https://x.test/friend.jpg' });
+      expect(mockProfileInfo).toHaveBeenCalledTimes(1);
     });
   });
 

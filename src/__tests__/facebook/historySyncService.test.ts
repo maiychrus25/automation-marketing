@@ -27,6 +27,7 @@ interface FakeOpts {
   thread?: (id: string, opts: any) => Promise<ThreadResult> | ThreadResult;
   status?: () => string;
   connected?: () => boolean;
+  ready?: () => boolean;
   page?: boolean;
   e2ee?: string[];
 }
@@ -40,6 +41,7 @@ function makeTarget(o: FakeOpts = {}) {
     getStatus: () => (o.status ? o.status() : 'connected'),
     getAccountId: () => INTERNAL,
     isPage: () => !!o.page,
+    ...(o.ready ? { isHistoryReady: o.ready } : {}),
     isE2EEThread: id => (o.e2ee || []).includes(id),
     historyLimiterFor: () => limiter,
     getThreadListPage: async before => {
@@ -98,10 +100,32 @@ describe('FacebookHistorySyncService', () => {
     expect(s.getStatus(id)?.stage).toBe('failed');
   });
 
-  test('failsForPageAccount', async () => {
+  // Từ 26.44.0 tài khoản Page đồng bộ như tài khoản cá nhân (danh sách hội thoại và tin cũ lấy qua hộp thư Page).
+  test('aPageAccountIsSyncedLikeAPersonalOne', async () => {
     const s = svc();
-    await run(s, makeTarget({ page: true }).target);
-    expect(s.getStatus(id)).toMatchObject({ stage: 'failed', error: 'Tài khoản Page chưa hỗ trợ đồng bộ lịch sử' });
+    const { target, calls } = makeTarget({ page: true, pages: [{ threads: [{ id: '777001', name: 'Khach', lastActivityMs: T0 - DAY }], nextBefore: null }] });
+    await run(s, target);
+    expect(calls.sync).toEqual(['777001']);
+    expect(s.getStatus(id)).toMatchObject({ stage: 'completed', threadsDone: 1, messagesSaved: 2 });
+  });
+
+  // Page: tài khoản vẫn "đã kết nối" trong lúc hộp thư Page đang nối lại. Lượt đồng bộ chờ hộp thư như chờ một kết nối rớt.
+  test('aPageWhoseInboxIsReconnectingIsWaitedFor', async () => {
+    const s = svc();
+    let checks = 0;
+    const { target, calls } = makeTarget({ page: true, ready: () => ++checks > 2, pages: [{ threads: [{ id: '777002', name: 'Khach', lastActivityMs: T0 - DAY }], nextBefore: null }] });
+    await run(s, target);
+    expect(calls.sync).toEqual(['777002']);
+    expect(s.getStatus(id)?.stage).toBe('completed');
+    expect(sleep).toHaveBeenCalledWith(5_000);
+  });
+
+  test('aPageWhoseInboxNeverComesBackStopsTheRun', async () => {
+    const s = svc();
+    const { target, calls } = makeTarget({ page: true, ready: () => false });
+    await run(s, target);
+    expect(calls.list).toEqual([]);
+    expect(s.getStatus(id)).toMatchObject({ stage: 'failed', error: 'Tài khoản Facebook mất kết nối — đã dừng đồng bộ' });
   });
 
   test('secondStartWhileRunningIsRejected', async () => {

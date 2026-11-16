@@ -15,6 +15,31 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.44.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🕘 Page Facebook: kéo lên xem tin cũ và "Đồng bộ lịch sử" đã chạy',
+      '🖼️ Sửa lỗi avatar của khách trong hội thoại Page bị đổi thành ảnh sai',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Trong một hội thoại của Page, kéo lên để tải các tin cũ hơn',
+          'Nút "Đồng bộ lịch sử" dùng được với tài khoản Page: tải lại tin của mọi hội thoại trong khoảng thời gian bạn chọn, kể cả tin đến lúc MaiHub đang tắt',
+          'Bảng nhãn dán của Page: gõ từ khoá là tìm trong kho nhãn dán của Facebook, không chỉ trong khay của tài khoản',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Mở thông tin một hội thoại của Page không còn làm avatar của khách bị đổi thành ảnh của người khác. Tên và ảnh của khách nay lấy từ chính hộp thư Page; avatar đã bị sai sẽ được sửa khi bạn mở lại hội thoại đó',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.43.0',
     date: '11/2026',
     type: 'minor',

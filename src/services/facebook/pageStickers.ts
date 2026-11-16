@@ -1,7 +1,7 @@
 /**
- * Nhãn dán cho hộp thư Page, lấy thẳng từ Business Suite (không cần trình duyệt): danh sách gói trong khay, rồi nhãn dán
- * của từng gói, kèm mã nhãn dán để gửi qua kết nối hộp thư. Hai truy vấn và mã của chúng chép từ một phiên Business Suite
- * ngày 16/11/2026; khi Facebook đổi mã truy vấn, fetchPageStickers báo lỗi và bên gọi dùng đường trình duyệt cũ.
+ * Nhãn dán cho hộp thư Page, lấy thẳng từ Business Suite (không cần trình duyệt): danh sách gói trong khay, nhãn dán của
+ * từng gói, và tìm theo từ khoá, đều kèm mã nhãn dán để gửi qua kết nối hộp thư. Các truy vấn và mã của chúng chép từ một
+ * phiên Business Suite ngày 16/11/2026; khi Facebook đổi mã truy vấn, các hàm ở đây báo lỗi và bên gọi dùng đường khác.
  * Log không chứa cookie, mã phiên hay nội dung trả về.
  */
 import axios from 'axios';
@@ -12,6 +12,8 @@ import type { PageWebSession } from './pageInboxProtocol';
 const GRAPHQL_URL = 'https://business.facebook.com/api/graphql/';
 const PACK_LIST_QUERY = { name: 'StickersFlyoutPackSelectorQuery', docId: '9935900063142310' };
 const PACK_QUERY = { name: 'StickersFlyoutPackQuery', docId: '37626186746972141' };
+// Truy vấn tìm theo từ khoá của cùng bảng chọn; tên biến và đường tới kết quả đọc từ mã trang Business Suite cùng ngày.
+const SEARCH_QUERY = { name: 'StickersFlyoutTagSelectorQuery', docId: '9445868985541190' };
 
 export interface PageSticker { stickerId: string; label: string; thumbUrl: string }
 
@@ -57,6 +59,27 @@ export async function fetchPageStickers(session: PageWebSession): Promise<PageSt
     }
   }
   if (!stickers.size) throw new Error('Các gói trả về không có nhãn dán');
+  return [...stickers.values()];
+}
+
+/**
+ * Tìm nhãn dán theo từ khoá trong kho của Facebook (không chỉ khay của tài khoản). Không có kết quả thì trả mảng rỗng;
+ * ném lỗi khi Facebook không trả đúng dạng (mã truy vấn hết hạn, phiên hỏng) để bên gọi dùng đường khác.
+ */
+export async function searchPageStickers(session: PageWebSession, keyword: string): Promise<PageSticker[]> {
+  const wanted = keyword.trim();
+  if (!wanted) return [];
+  const data = await query(session, SEARCH_QUERY, { query: wanted, stickerWidth: 128, stickerHeight: 128, stickerInterface: 'messages' });
+  // Lỗi = không có trường sticker_search (mã truy vấn hết hạn, phiên hỏng). Có trường đó mà phần kết quả trống / null thì
+  // chỉ là không khớp nhãn dán nào.
+  if (!data?.data || typeof data.data !== 'object' || !('sticker_search' in data.data)) throw new Error('Facebook không trả kết quả tìm nhãn dán');
+  const edges = data.data.sticker_search?.sticker_results?.edges;
+  const stickers = new Map<string, PageSticker>();
+  for (const edge of Array.isArray(edges) ? edges : []) {
+    const stickerId = String(edge?.node?.id ?? '');
+    const thumbUrl = String(edge?.node?.image?.uri ?? '');
+    if (/^\d+$/.test(stickerId) && thumbUrl && !stickers.has(stickerId)) stickers.set(stickerId, { stickerId, label: String(edge.node.label ?? ''), thumbUrl });
+  }
   return [...stickers.values()];
 }
 

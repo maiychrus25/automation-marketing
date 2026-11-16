@@ -4,13 +4,14 @@ import { isFacebook } from '../channelHelper';
 
 export const FB_E2EE_HISTORY_NOTE = 'Hội thoại mã hoá đầu cuối: Facebook không cho tải tin cũ';
 
-// isPage: tài khoản Page (bản ghi tài khoản có parent_zalo_id) chưa hỗ trợ tải lịch sử.
+// isPage: tài khoản Page (bản ghi tài khoản có parent_zalo_id). Hội thoại trống của Page không có tin làm mốc nên không tự
+// tải khi mở; kéo lên tải tin cũ thì Page làm được như tài khoản cá nhân (từ 26.44.0).
 export function shouldFetchFbHistoryOnOpen(input: { channel?: string; isEmployee: boolean; isPage?: boolean; localCount: number; alreadyTried: boolean }): boolean {
   return isFacebook(input.channel) && !input.isEmployee && !input.isPage && input.localCount === 0 && !input.alreadyTried;
 }
 
-export function shouldFetchFbOlder(input: { channel?: string; isEmployee: boolean; isPage?: boolean }): boolean {
-  return isFacebook(input.channel) && !input.isEmployee && !input.isPage;
+export function shouldFetchFbOlder(input: { channel?: string; isEmployee: boolean }): boolean {
+  return isFacebook(input.channel) && !input.isEmployee;
 }
 
 /** Tin thật (không phải temp_…) có thời điểm nhỏ nhất. */

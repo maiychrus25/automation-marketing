@@ -560,6 +560,83 @@ describe('FacebookPageInbox', () => {
     });
   });
 
+  // "Đồng bộ lịch sử" của Page đi từng trang danh sách hội thoại. Dữ liệu của một trang về trong một phản hồi do máy chủ đẩy
+  // (không mang request_id); trả lời của chính yêu cầu chỉ báo tác vụ đã xong.
+  describe('listing threads page by page', () => {
+    const threadCall = (id: string, lastActivityMs: number) => wireCall('deleteThenInsertThread', { 0: i64(lastActivityMs), 2: 'snippet', 3: `Khách ${id.slice(-2)}`, 7: i64(id), 89: i64(0) });
+    const OLD = '100000000006262';
+
+    test('theFirstPageResolvesWithTheThreadsAndContactsFacebookPushes', async () => {
+      const { inbox, client } = await connected();
+      const listing = inbox.fetchThreadList();
+      expect(client.labels()).toEqual(['sync2', '313', '313']);
+      expect(client.taskPayload(2)).toMatchObject({ reference_activity_timestamp: 9999999999999, reference_thread_key: 0 });
+      client.receive(lsResp([wireCall('removeTask', { 0: i64(1) })], 3)); // trả lời của chính yêu cầu, chưa có dữ liệu
+      client.receive(lsResp([threadCall(PEER, 1700000002000), threadCall(OLD, 1700000001000), wireCall('verifyContactRowExists', { 0: i64(PEER), 2: 'https://x.test/p.jpg', 3: 'Khách A' })]));
+      const page = await listing;
+      expect(page.threads.map(t => [t.id, t.lastActivityMs])).toEqual([[PEER, 1700000002000], [OLD, 1700000001000]]);
+      expect(page.contacts).toEqual([{ id: PEER, name: 'Khách A', pictureUrl: 'https://x.test/p.jpg' }]);
+    });
+
+    test('aLaterPageAsksFromTheGivenThreadAndIgnoresNewerThreadUpdates', async () => {
+      const { inbox, client } = await connected();
+      const listing = inbox.fetchThreadList({ timestampMs: 1700000001000, threadKey: OLD });
+      expect(JSON.parse(client.requests()[2].payload).tasks[0].payload).toContain(`"reference_activity_timestamp":1700000001000,"reference_thread_key":${OLD},`);
+      let done = false;
+      void listing.then(() => { done = true; });
+      // Một hội thoại vừa có tin mới (mới hơn mốc) không phải là nội dung của trang cũ hơn.
+      client.receive(lsResp([threadCall(PEER, 1700000009000)]));
+      await Promise.resolve();
+      expect(done).toBe(false);
+      client.receive(lsResp([threadCall('100000000007373', 1700000000500)]));
+      await expect(listing).resolves.toMatchObject({ threads: [{ id: '100000000007373', lastActivityMs: 1700000000500 }] });
+    });
+
+    // Hết hội thoại: Facebook chỉ trả lời "tác vụ đã xong". Chờ thêm 3 giây phòng dữ liệu về sau trả lời đó.
+    test('anAnswerWithoutThreadsEndsTheListAfterAShortGrace', async () => {
+      const { inbox, client } = await connected();
+      const listing = inbox.fetchThreadList({ timestampMs: 1700000001000, threadKey: OLD });
+      let page: any = null;
+      void listing.then(p => { page = p; });
+      client.receive(lsResp([wireCall('removeTask', { 0: i64(1) })], 3));
+      await jest.advanceTimersByTimeAsync(2_900);
+      expect(page).toBeNull();
+      await jest.advanceTimersByTimeAsync(200);
+      expect(page).toEqual({ threads: [], contacts: [] });
+    });
+
+    // Không có trả lời nào là lỗi, không phải "hết danh sách": lượt đồng bộ phải biết danh sách có thể chưa đủ.
+    test('noAnswerAtAllIsAnErrorAfterFifteenSeconds', async () => {
+      const { inbox } = await connected();
+      const listing = inbox.fetchThreadList();
+      const failed = expect(listing).rejects.toThrow('không trả lời');
+      await jest.advanceTimersByTimeAsync(15_000);
+      await failed;
+      // Yêu cầu hỏng không chặn yêu cầu sau.
+      const again = inbox.fetchThreadList();
+      const dropped = expect(again).rejects.toThrow('Mất kết nối');
+      inbox.stop();
+      await dropped;
+    });
+
+    test('oneListingAtATimeAndADropFailsIt', async () => {
+      const { inbox, client } = await connected();
+      const first = inbox.fetchThreadList();
+      await expect(inbox.fetchThreadList()).rejects.toThrow('already running');
+      const dropped = expect(first).rejects.toThrow('Mất kết nối');
+      client.emit('close');
+      await dropped;
+      await expect(setup().inbox.fetchThreadList()).rejects.toThrow('chưa kết nối');
+    });
+
+    test('aPageMarkerMustBeAThreadIdAndATime', async () => {
+      const { inbox, client } = await connected();
+      await expect(inbox.fetchThreadList({ timestampMs: 0, threadKey: PEER })).rejects.toThrow('không hợp lệ');
+      await expect(inbox.fetchThreadList({ timestampMs: 1700000000000, threadKey: 'x' })).rejects.toThrow('không hợp lệ');
+      expect(client.labels()).toEqual(['sync2', '313']);
+    });
+  });
+
   test('withoutLoginCookiesItDoesNotLoadOrConnect', async () => {
     const connect = jest.fn();
     const fetchPage = jest.fn();

@@ -46,6 +46,15 @@ describe('pageInboxProtocol', () => {
     expect(task.payload).toBe('{"thread_key":9007199254740993123,"direction":0,"reference_timestamp_ms":1700000000000,"reference_message_id":"mid.$a","sync_group":205,"cursor":"CUR"}');
   });
 
+  // Bản ghi Business Suite 16/11/2026 (23:35): trang hội thoại kế tiếp được xin từ hội thoại cũ nhất đã có, bằng thời điểm
+  // hoạt động cuối và id của nó.
+  test('olderThreadsAreAskedForFromTheOldestThreadAlreadyListed', () => {
+    const task = JSON.parse(JSON.parse(threadListRequest(2, 5, 'CUR', PAGE_VERSION, { timestampMs: 1700000000123, threadKey: '9007199254740993123' })).payload).tasks[0];
+    expect(task).toMatchObject({ label: '313', queue_name: 'trq', task_id: 5 });
+    expect(task.payload).toBe('{"cursor":"CUR","filter":0,"is_after":0,"parent_thread_key":0,"reference_activity_timestamp":1700000000123,'
+      + '"reference_thread_key":9007199254740993123,"secondary_filter":24,"filter_value":"","sync_group":205}');
+  });
+
   // Đúng gói Business Suite gửi (bản ghi 16/11/2026): một yêu cầu hai tác vụ, gửi tin (46) rồi đánh dấu đã đọc (21),
   // cả hai xếp hàng theo id hội thoại.
   test('sendingTextIsASendTaskFollowedByAMarkReadTask', () => {

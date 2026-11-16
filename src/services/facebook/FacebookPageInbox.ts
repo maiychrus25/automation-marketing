@@ -2,7 +2,7 @@
  * Kết nối trực tiếp tới hộp thư của một Page (giao thức lightspeed của Meta Business Suite trên MQTT).
  * Đóng vai "cầu nối" của tài khoản Page: phát sự kiện cùng dạng với cầu nối Go (`{ type, data }`) và có
  * `isAlive()` / `fetchMessages()` cùng chữ ký, để FacebookService và FacebookHistoryFetcher dùng chung một đường.
- * Nhận tin, tải tin cũ, gửi tin chữ / đính kèm đã tải lên / nhãn dán, thả cảm xúc và đánh dấu đã đọc.
+ * Nhận tin, tải tin cũ và danh sách hội thoại từng trang, gửi tin chữ / đính kèm đã tải lên / nhãn dán, thả cảm xúc và đánh dấu đã đọc.
  * Log không chứa nội dung tin, cookie, con trỏ, mã thiết bị hay mã phiên.
  */
 import { EventEmitter } from 'events';
@@ -16,15 +16,21 @@ import {
   historyRequest, markReadRequest, newOfflineThreadingId, pageInboxLogin, pageInboxUsername, reactionRequest, readInboxPage, sendAttachmentRequest,
   sendStickerRequest, sendTextRequest, syncRequest, threadListRequest,
 } from './pageInboxProtocol';
-import { InboxBatch, InboxMessage, PAGE_MAILBOX_DB, readInboxBatch } from './pageInboxTables';
+import { InboxBatch, InboxContact, InboxMessage, InboxThread, PAGE_MAILBOX_DB, readInboxBatch } from './pageInboxTables';
 
 const SYNC_ANSWER_TIMEOUT_MS = 10_000;
 const HISTORY_TIMEOUT_MS = 30_000;
 /** Chờ Facebook xác nhận một tin đã gửi (trả mã tin thật) hoặc một cảm xúc đã thả tối đa chừng này. */
 const SEND_CONFIRM_TIMEOUT_MS = 20_000;
+/** Một trang danh sách hội thoại: quá chừng này không có trả lời nào thì báo lỗi. */
+const THREAD_LIST_TIMEOUT_MS = 15_000;
+/** Facebook đã báo tác vụ danh sách xong mà chưa thấy hội thoại nào: chờ thêm chừng này phòng dữ liệu về sau. */
+const THREAD_LIST_GRACE_MS = 3_000;
 const RELOAD_PAGE_AFTER_FAILURES = 3;
 /** Phiên phải đồng bộ được lâu chừng này mới coi là ổn định; ngắn hơn thì tính là một lần nối hỏng. */
 const STABLE_SESSION_MS = 60_000;
+
+export interface InboxThreadPage { threads: InboxThread[]; contacts: InboxContact[] }
 
 export interface PageInboxDeps {
   accountId: string;
@@ -71,6 +77,11 @@ export class FacebookPageInbox extends EventEmitter {
   private readonly pendingSends = new Map<string, Pending<{ messageId: string }>>();
   /** Cảm xúc đã thả đang chờ Facebook xác nhận, theo mã tin. */
   private readonly pendingReactions = new Map<string, Set<Pending<void>>>();
+  /** Yêu cầu danh sách hội thoại đang chờ (mỗi lúc một yêu cầu). `before` = mốc của trang đang xin, null = trang đầu. */
+  private pendingThreadList: {
+    requestId: number; before: number | null; done: (page: InboxThreadPage) => void; reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>; grace: ReturnType<typeof setTimeout> | null;
+  } | null = null;
   /** Mã phiên của trang hộp thư (fb_dtsg, lsd, jazoest), dùng cho việc tải tệp lên. */
   private webTokens: Pick<InboxPageInfo, 'fbDtsg' | 'lsd' | 'jazoest'> | null = null;
   private readonly reportedSteps = new Set<number>();
@@ -121,6 +132,37 @@ export class FacebookPageInbox extends EventEmitter {
       }, HISTORY_TIMEOUT_MS);
       this.pendingHistory.set(threadId, { before: p.beforeTimestampMs, held: [], resolve, reject, timer });
       this.send(historyRequest(++this.requestId, this.taskId++, { threadId, messageId: p.beforeMessageId, timestampMs: p.beforeTimestampMs }, this.cursor!, this.session!.version));
+    });
+  }
+
+  /**
+   * Một trang danh sách hội thoại: trang đầu, hoặc các hội thoại cũ hơn `before` (hội thoại cũ nhất của trang trước).
+   * Dữ liệu về trong một phản hồi do máy chủ đẩy; trang hoàn tất khi phản hồi đó có hội thoại thuộc trang (với trang sau:
+   * cũ hơn mốc, để một hội thoại vừa có tin mới không bị nhầm là nội dung của trang). Facebook báo tác vụ đã xong mà không
+   * có hội thoại nào: trang rỗng, tức đã hết danh sách. Không có trả lời nào trong 15 giây là lỗi, không phải hết danh sách.
+   */
+  fetchThreadList(before?: { timestampMs: number; threadKey: string }): Promise<InboxThreadPage> {
+    if (!this.isAlive() || !this.cursor || !this.session) return Promise.reject(new Error('Hộp thư Page chưa kết nối'));
+    if (before && (!/^\d+$/.test(before.threadKey) || !(before.timestampMs > 0))) return Promise.reject(new Error('Mốc danh sách hội thoại không hợp lệ'));
+    if (this.pendingThreadList) return Promise.reject(new Error('thread list request already running'));
+    const version = this.session.version;
+    return new Promise<InboxThreadPage>((resolve, reject) => {
+      const requestId = ++this.requestId;
+      const done = (page: InboxThreadPage) => {
+        const pending = this.pendingThreadList;
+        if (!pending || pending.requestId !== requestId) return;
+        this.pendingThreadList = null;
+        clearTimeout(pending.timer);
+        if (pending.grace) clearTimeout(pending.grace);
+        resolve(page);
+      };
+      const timer = setTimeout(() => {
+        if (this.pendingThreadList?.requestId !== requestId) return;
+        this.pendingThreadList = null;
+        reject(new Error('Facebook không trả lời yêu cầu danh sách hội thoại'));
+      }, THREAD_LIST_TIMEOUT_MS);
+      this.pendingThreadList = { requestId, before: before?.timestampMs ?? null, done, reject, timer, grace: null };
+      this.send(threadListRequest(requestId, this.taskId++, this.cursor!, version, before));
     });
   }
 
@@ -312,9 +354,11 @@ export class FacebookPageInbox extends EventEmitter {
   private onMessage(topic: string, payload: Buffer): void {
     if (topic !== '/ls_resp') return;
     let batch: InboxBatch;
+    let answeredRequestId: unknown;
     try {
-      const step = JSON.parse(JSON.parse(payload.toString('utf8')).payload).step;
-      batch = readInboxBatch(decodeLightspeed(step, type => this.reportStep(type)));
+      const response = JSON.parse(payload.toString('utf8'));
+      answeredRequestId = response.request_id;
+      batch = readInboxBatch(decodeLightspeed(JSON.parse(response.payload).step, type => this.reportStep(type)));
     } catch {
       Logger.warn(`${this.tag} không đọc được một phản hồi (len=${payload.length})`);
       return;
@@ -324,6 +368,14 @@ export class FacebookPageInbox extends EventEmitter {
       if (!this.synced) this.markSynced();
     }
     if (batch.threads.length || batch.contacts.length) this.emit('threads', batch.threads, batch.contacts);
+    const listing = this.pendingThreadList;
+    if (listing) {
+      const page = listing.before === null ? batch.threads : batch.threads.filter(t => t.lastActivityMs > 0 && t.lastActivityMs < listing.before!);
+      if (page.length) listing.done({ threads: page, contacts: batch.contacts });
+      else if (answeredRequestId === listing.requestId && !listing.grace) {
+        listing.grace = setTimeout(() => listing.done({ threads: [], contacts: [] }), THREAD_LIST_GRACE_MS);
+      }
+    }
     for (const { otid, messageId } of batch.sent) {
       const pending = this.pendingSends.get(otid);
       if (!pending) continue;
@@ -460,6 +512,13 @@ export class FacebookPageInbox extends EventEmitter {
       clearTimeout(pending.timer);
       pending.reject(new Error('Mất kết nối hộp thư Page khi đang gửi tin'));
       this.pendingSends.delete(otid);
+    }
+    const listing = this.pendingThreadList;
+    if (listing) {
+      this.pendingThreadList = null;
+      clearTimeout(listing.timer);
+      if (listing.grace) clearTimeout(listing.grace);
+      listing.reject(new Error('Mất kết nối hộp thư Page khi đang lấy danh sách hội thoại'));
     }
     for (const waiting of this.pendingReactions.values()) {
       for (const pending of waiting) { clearTimeout(pending.timer); pending.reject(new Error('Mất kết nối hộp thư Page khi đang thả cảm xúc')); }

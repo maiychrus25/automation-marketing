@@ -84,10 +84,12 @@ describe('fbHistory IPC', () => {
         expect(await call('fb:fetchOlderMessages', { accountId: '1', threadId: '2' })).toEqual({ success: false, code: 'NOT_CONNECTED', error: NOT_CONNECTED });
     });
 
-    it('fetchOlderMessages refuses Page accounts', async () => {
+    // Từ 26.44.0 tin cũ của Page lấy qua hộp thư Page, cùng đường với tài khoản cá nhân.
+    it('fetchOlderMessages serves Page accounts too', async () => {
         service.isPage.mockReturnValue(true);
-        expect(await call('fb:fetchOlderMessages', { accountId: '1', threadId: '2' })).toEqual({ success: false, code: 'NOT_CONNECTED', error: 'Tài khoản Page chưa hỗ trợ tải lịch sử' });
-        expect(service.fetchHistoryPage).not.toHaveBeenCalled();
+        service.fetchHistoryPage.mockResolvedValue({ success: true, saved: 3 });
+        expect(await call('fb:fetchOlderMessages', { accountId: '1', threadId: '2', beforeTimestampMs: 1700, beforeMessageId: 'mid.$a' })).toEqual({ success: true, saved: 3 });
+        expect(service.fetchHistoryPage).toHaveBeenCalledWith('2', { timestampMs: 1700, messageId: 'mid.$a' }, undefined, { mode: 'interactive' });
     });
 
     it('fetchOlderMessages passes the anchor and interactive mode, resolving the internal id', async () => {

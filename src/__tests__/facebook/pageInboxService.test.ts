@@ -24,6 +24,7 @@ jest.mock('../../services/facebook/FacebookPageInbox', () => {
     sendSticker = jest.fn();
     sendReaction = jest.fn();
     webSession = jest.fn();
+    fetchThreadList = jest.fn();
     markRead = jest.fn(() => true);
     fetchMessages = jest.fn();
     constructor(public deps: any) { super(); mockInboxes.push(this); }
@@ -41,9 +42,19 @@ jest.mock('../../services/facebook/FacebookAttachment', () => ({
   uploadPageAttachment: (...args: any[]) => mockUploadPageAttachment(...args),
 }));
 const mockFetchPageStickers = jest.fn();
+const mockSearchPageStickers = jest.fn();
 jest.mock('../../services/facebook/pageStickers', () => ({
   ...jest.requireActual('../../services/facebook/pageStickers'),
   fetchPageStickers: (...args: any[]) => mockFetchPageStickers(...args),
+  searchPageStickers: (...args: any[]) => mockSearchPageStickers(...args),
+}));
+// Đọc trang cá nhân gọi mạng thật: thay bằng bản giả để kiểm rằng Page không bao giờ dùng tới nó.
+const mockProfileInfo = jest.fn();
+const mockProfileAvatar = jest.fn();
+jest.mock('../../services/facebook/FacebookSession', () => ({
+  ...jest.requireActual('../../services/facebook/FacebookSession'),
+  getUserInfoFacebookHtml: (...args: any[]) => mockProfileInfo(...args),
+  fetchUserAvatarFromProfile: (...args: any[]) => mockProfileAvatar(...args),
 }));
 jest.mock('../../services/facebook/pagePlaywrightDriver', () => ({
   getPageBrowserSender: jest.fn(async () => mockBrowserSender),
@@ -53,6 +64,7 @@ jest.mock('../../services/facebook/pagePlaywrightDriver', () => ({
 import DatabaseService from '../../services/database/DatabaseService';
 import EventBroadcaster from '../../services/event/EventBroadcaster';
 import FacebookService from '../../services/facebook/FacebookService';
+import FileStorageService from '../../services/file/FileStorageService';
 
 const PARENT_ACC = 'acc-parent-inbox';
 const PARENT_FB = '100000000008724';
@@ -98,6 +110,9 @@ describe('FacebookService with the direct Page inbox', () => {
     mockBrowserSender.listStickers.mockReset();
     mockUploadPageAttachment.mockReset();
     mockFetchPageStickers.mockReset();
+    mockSearchPageStickers.mockReset().mockResolvedValue([]);
+    mockProfileInfo.mockReset();
+    mockProfileAvatar.mockReset();
     emit = jest.spyOn(EventBroadcaster, 'emit').mockImplementation((() => {}) as any);
     // Mỗi test bắt đầu từ 0 chưa đọc, để số đếm tuyệt đối đúng với mọi thứ tự chạy (các test dùng chung một khách).
     db.run("UPDATE contacts SET unread_count = 0 WHERE channel = 'facebook'");
@@ -612,7 +627,31 @@ describe('FacebookService with the direct Page inbox', () => {
         expect(mockFetchPageStickers).toHaveBeenCalledTimes(1);
         expect(mockFetchPageStickers).toHaveBeenCalledWith(SESSION);
         expect(mockBrowserSender.listStickers).not.toHaveBeenCalled();
-        expect(inbox.webSession).toHaveBeenCalledTimes(1);
+        expect(inbox.webSession).toHaveBeenCalled();
+      });
+
+      // Từ 26.44.0: có từ khoá thì hỏi thẳng kho nhãn dán của Facebook (truy vấn tìm của Business Suite), không cần trình duyệt.
+      test('aKeywordIsSearchedOnFacebookFirstAndTheResultsCarryIds', async () => {
+        const { svc } = sender();
+        const found = [{ stickerId: '369239263222830', label: 'Haha', thumbUrl: 'https://x.test/h.png' }];
+        mockSearchPageStickers.mockResolvedValue(found);
+        await expect(svc.listPageStickers(PEER, ' haha ')).resolves.toEqual(found);
+        expect(mockSearchPageStickers).toHaveBeenCalledWith(SESSION, 'haha');
+        expect(mockFetchPageStickers).not.toHaveBeenCalled();
+        expect(mockBrowserSender.listStickers).not.toHaveBeenCalled();
+      });
+
+      // Tìm hỏng (mã truy vấn hết hạn): thử lại một lần với mã phiên mới, rồi thôi không hỏi nữa trong một lúc để mỗi
+      // lần gõ phím không kéo theo các yêu cầu hỏng; trong lúc đó bảng chọn dùng khay và đường trình duyệt như trước.
+      test('aBrokenSearchIsRetriedOnceWithFreshTokensThenLeftAloneForAWhile', async () => {
+        const { svc, inbox } = sender();
+        mockSearchPageStickers.mockRejectedValue(new Error('Facebook không trả kết quả tìm nhãn dán'));
+        mockFetchPageStickers.mockResolvedValue(STICKERS);
+        await expect(svc.listPageStickers(PEER, 'vui')).resolves.toEqual([STICKERS[0]]);
+        expect(mockSearchPageStickers).toHaveBeenCalledTimes(2);
+        expect(inbox.webSession.mock.calls.slice(0, 2)).toEqual([[false], [true]]);
+        await expect(svc.listPageStickers(PEER, 'gau')).resolves.toEqual([STICKERS[1]]);
+        expect(mockSearchPageStickers).toHaveBeenCalledTimes(2);
       });
 
       // Mã truy vấn của Facebook đổi theo thời gian: khi đó bảng nhãn dán quay về đường trình duyệt như trước.
@@ -733,6 +772,152 @@ describe('FacebookService with the direct Page inbox', () => {
         expect(reactionsOf('mid.$react4')).toEqual({});
         expect(emitted('fb:onReaction').map(e => e.emoji)).toEqual(['😮', '']);
       });
+    });
+  });
+
+  // Từ 26.44.0: danh sách hội thoại và tin cũ của Page lấy qua hộp thư Page, nên "Đồng bộ lịch sử" chạy được với Page.
+  describe('history of a Page', () => {
+    const live = () => {
+      const svc = pageService();
+      svc.startPageInbox();
+      mockInboxes[0].alive = true;
+      return { svc, inbox: mockInboxes[0] };
+    };
+    const thread = (id: string, lastActivityMs: number) => ({ id, name: `Khach ${id.slice(-2)}`, pictureUrl: '', snippet: 'tin cuoi', lastActivityMs, unreadCount: 0 });
+
+    test('theThreadListComesFromTheInboxPageByPage', async () => {
+      const { svc, inbox } = live();
+      inbox.fetchThreadList
+        .mockResolvedValueOnce({ threads: [thread(PEER, 1_700_000_300_000), thread(OTHER, 1_700_000_200_000)], contacts: [] })
+        .mockResolvedValueOnce({ threads: [], contacts: [] });
+      const first = await svc.getThreadListPage(null);
+      expect(inbox.fetchThreadList).toHaveBeenCalledWith(undefined);
+      expect(first.threads.map((t: any) => [t.id, t.lastActivityMs, t.type])).toEqual([[PEER, 1_700_000_300_000, 'user'], [OTHER, 1_700_000_200_000, 'user']]);
+      expect(first.nextBefore).toBe(1_700_000_200_000);
+      // Trang kế tiếp xin từ hội thoại cũ nhất của trang trước (thời điểm + id của nó).
+      const second = await svc.getThreadListPage(first.nextBefore);
+      expect(inbox.fetchThreadList).toHaveBeenLastCalledWith({ timestampMs: 1_700_000_200_000, threadKey: OTHER });
+      expect(second).toEqual({ threads: [], nextBefore: null });
+    });
+
+    test('aDeadInboxOrAFailedListingIsAnErrorNotAnEmptyList', async () => {
+      const { svc, inbox } = live();
+      inbox.fetchThreadList.mockRejectedValue(new Error('Mất kết nối hộp thư Page'));
+      await expect(svc.getThreadListPage(null)).resolves.toMatchObject({ threads: [], nextBefore: null, error: expect.stringContaining('Mất kết nối') });
+      inbox.alive = false;
+      await expect(svc.getThreadListPage(null)).resolves.toMatchObject({ threads: [], error: expect.stringContaining('Hộp thư Page') });
+      expect(inbox.fetchThreadList).toHaveBeenCalledTimes(1);
+    });
+
+    // Page không có trang "tin mới nhất" của GraphQL: luôn lùi từ tin mới nhất đang có trong máy (danh sách hội thoại của
+    // hộp thư đã kèm tin cuối), và không bao giờ gọi điểm cuối GraphQL của tài khoản cá nhân.
+    test('aThreadIsWalkedBackFromItsNewestStoredMessageWithoutThePersonalGraphQLPage', async () => {
+      const { svc } = live();
+      svc.historyFetcher.syncThread = jest.fn().mockResolvedValue({ saved: 0, received: 0, pages: 0, complete: true });
+      const shouldStop = () => false;
+      await svc.syncThreadHistory(PEER, { fromTs: null, toTs: null }, { shouldStop, latestKnownMs: 1_700_000_300_000 });
+      const passed = svc.historyFetcher.syncThread.mock.calls[0][2];
+      expect(passed.shouldStop).toBe(shouldStop);
+      expect(passed.latestKnownMs).toBeUndefined();
+
+      expect(svc.historyFetcher.deps.latestPageUnavailable()).toContain('chưa có tin nào');
+      expect(svc.historyFetcher.deps.hasEncryptedChats()).toBe(false);
+    });
+
+    // Hộp thư Page rớt giữa lượt đồng bộ: lượt đồng bộ phải thấy là "chưa sẵn sàng" để chờ nối lại, như với tài khoản cá nhân.
+    test('historyIsReadyOnlyWhileTheInboxIsAlive', () => {
+      const { svc, inbox } = live();
+      expect(svc.isHistoryReady()).toBe(true);
+      inbox.alive = false;
+      expect(svc.isHistoryReady()).toBe(false);
+      expect(parentService().isHistoryReady()).toBe(true);
+    });
+
+    test('aPersonalAccountKeepsItsGraphQLThreadListAndLatestMarker', async () => {
+      const svc = parentService();
+      svc.historyFetcher.syncThread = jest.fn().mockResolvedValue({ saved: 0, received: 0, pages: 0, complete: true });
+      await svc.syncThreadHistory(PEER, { fromTs: null, toTs: null }, { latestKnownMs: 7 });
+      expect(svc.historyFetcher.syncThread.mock.calls[0][2].latestKnownMs).toBe(7);
+      svc.fetchThreadMessages = jest.fn().mockResolvedValue({ success: true, messages: [] });
+      await svc.historyFetcher.deps.fetchGraphQLPage(PEER, 20);
+      expect(svc.fetchThreadMessages).toHaveBeenCalledWith(PEER, 20);
+      expect(svc.historyFetcher.deps.latestPageUnavailable()).toBeNull();
+      expect(svc.historyFetcher.deps.hasEncryptedChats()).toBe(true);
+    });
+  });
+
+  // Lỗi anh báo 17/11/2026: mở thông tin một hội thoại của Page thì avatar khách bị đổi thành ảnh sai. Với Page, MaiHub đọc
+  // trang cá nhân của khách dưới danh nghĩa Page; trang đó không có ảnh ở chỗ quen thuộc thì mã lấy một ảnh khác trên trang.
+  // Hộp thư Page đã cho sẵn tên và ảnh đúng của khách: Page chỉ dùng nguồn đó.
+  describe('customer name and picture in a Page conversation', () => {
+    const live = () => {
+      const svc = pageService();
+      svc.dataFB = { cookieFacebook: COOKIE, FacebookID: PAGE_FB };
+      svc.startPageInbox();
+      mockInboxes[0].alive = true;
+      return { svc, inbox: mockInboxes[0] };
+    };
+    const avatarOf = (id: string) => contact(id)?.avatar_url;
+    let download: jest.SpyInstance;
+    beforeEach(() => {
+      download = jest.spyOn(FileStorageService, 'downloadImage').mockResolvedValue('media/fb/avatar-right.jpg' as any);
+      db.run("INSERT OR REPLACE INTO contacts (owner_zalo_id, contact_id, display_name, avatar_url, channel, unread_count) VALUES (?, ?, 'Khach', 'media/fb/avatar-wrong.jpg', 'facebook', 0)", [PAGE_FB, OTHER]);
+    });
+    afterEach(() => download.mockRestore());
+
+    test('comeFromThePageMailboxAndNeverFromTheProfilePage', async () => {
+      const { svc, inbox } = live();
+      inbox.emit('threads', [], [{ id: OTHER, name: 'Khách B', pictureUrl: 'https://x.test/right.jpg' }]);
+      await expect(svc.getUserInfoFacebookHtml(OTHER)).resolves.toEqual({ name: 'Khách B', avatarUrl: 'https://x.test/right.jpg' });
+      await expect(svc.getUserInfoFacebookHtml('100000000009999')).resolves.toBeNull(); // hộp thư chưa cho thông tin: không đoán
+      expect(mockProfileInfo).not.toHaveBeenCalled();
+    });
+
+    test('refreshingTheAvatarSavesTheMailboxPictureOverAWrongOne', async () => {
+      const { svc, inbox } = live();
+      inbox.emit('threads', [{ id: OTHER, name: 'Khách B', pictureUrl: 'https://x.test/right.jpg', snippet: '', lastActivityMs: 0, unreadCount: 0 }], []);
+      await expect(svc.refreshContactAvatar(OTHER)).resolves.toBe('media/fb/avatar-right.jpg');
+      expect(download.mock.calls[0].slice(0, 3)).toEqual([PAGE_FB, 'https://x.test/right.jpg', `fb_avatar_${OTHER}.jpg`]);
+      expect(avatarOf(OTHER)).toBe('media/fb/avatar-right.jpg');
+      expect(mockProfileAvatar).not.toHaveBeenCalled();
+    });
+
+    test('withoutAMailboxPictureTheStoredAvatarIsLeftAloneAndALaterRefreshStillWorks', async () => {
+      const { svc, inbox } = live();
+      await expect(svc.refreshContactAvatar(OTHER)).resolves.toBeNull();
+      expect(avatarOf(OTHER)).toBe('media/fb/avatar-wrong.jpg');
+      expect(download).not.toHaveBeenCalled();
+      expect(mockProfileAvatar).not.toHaveBeenCalled();
+      inbox.emit('threads', [], [{ id: OTHER, name: 'Khách B', pictureUrl: 'https://x.test/right.jpg' }]);
+      await expect(svc.refreshContactAvatar(OTHER)).resolves.toBe('media/fb/avatar-right.jpg');
+    });
+
+    // Ảnh của hộp thư có thể đã hết hạn: tải về không được thì lần sau phải thử lại được, không bị khoá cả phiên.
+    test('aPictureThatCouldNotBeDownloadedIsTriedAgainLater', async () => {
+      const { svc, inbox } = live();
+      inbox.emit('threads', [], [{ id: OTHER, name: 'Khách B', pictureUrl: 'https://x.test/right.jpg' }]);
+      download.mockResolvedValue(null as any);
+      await expect(svc.refreshContactAvatar(OTHER)).resolves.toBe('https://x.test/right.jpg');
+      download.mockResolvedValue('media/fb/avatar-right.jpg' as any);
+      await expect(svc.refreshContactAvatar(OTHER)).resolves.toBe('media/fb/avatar-right.jpg');
+      expect(download).toHaveBeenCalledTimes(2);
+    });
+
+    // Tin đến của một khách chưa có tên: điền tên từ hộp thư, nhưng hộp thư không kèm ảnh thì không được xoá ảnh đang lưu.
+    test('fillingInANameNeverBlanksAStoredAvatar', async () => {
+      const { svc, inbox } = live();
+      db.run("UPDATE contacts SET display_name = '' WHERE owner_zalo_id = ? AND contact_id = ?", [PAGE_FB, OTHER]);
+      inbox.emit('threads', [], [{ id: OTHER, name: 'Khách B', pictureUrl: '' }]);
+      await (FacebookService as any).prototype.checkAndFetchUserInfo.call(svc, OTHER);
+      expect(contact(OTHER)).toMatchObject({ display_name: 'Khách B', avatar_url: 'media/fb/avatar-wrong.jpg' });
+    });
+
+    test('aPersonalAccountStillReadsTheProfilePage', async () => {
+      const svc = parentService();
+      svc.dataFB = { cookieFacebook: `c_user=${PARENT_FB}; xs=tok`, FacebookID: PARENT_FB };
+      mockProfileInfo.mockResolvedValue({ name: 'Ban A', avatarUrl: 'https://x.test/friend.jpg' });
+      await expect(svc.getUserInfoFacebookHtml(PEER)).resolves.toEqual({ name: 'Ban A', avatarUrl: 'https://x.test/friend.jpg' });
+      expect(mockProfileInfo).toHaveBeenCalledTimes(1);
     });
   });
 
