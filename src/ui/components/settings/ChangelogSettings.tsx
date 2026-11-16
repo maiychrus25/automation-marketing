@@ -15,6 +15,22 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.37.10',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🔎 Nội bộ: bổ sung công cụ thử nghiệm hộp thư Page (tắt mặc định, không đổi cách dùng)',
+    ],
+    changes: [
+      {
+        category: 'improved',
+        items: [
+          'Công cụ thử nghiệm hộp thư Page ghi thêm thông tin chẩn đoán khi được bật thủ công. Bản này không thay đổi gì trong cách dùng',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.9',
     date: '11/2026',
     type: 'patch',

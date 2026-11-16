@@ -1,10 +1,11 @@
 jest.mock('../../utils/Logger', () => ({ __esModule: true, default: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), info: jest.fn(), debug: jest.fn() } }));
 
 import Logger from '../../utils/Logger';
-import { describeProbeEvent, isPageBridgeProbeEnabled, pageBridgeCookies, runPageBridgeProbe } from '../../services/facebook/pageBridgeProbe';
+import { describeInboxPage, describeProbeEvent, isPageBridgeProbeEnabled, pageBridgeCookies, runPageBridgeProbe } from '../../services/facebook/pageBridgeProbe';
 
 const PAGE = '100000000004280';
 const COOKIE = `c_user=100000000008724; xs=tok; datr=d; fr=f; sb=s; wd=1x1; i_user=${PAGE}`;
+const noPages = jest.fn().mockResolvedValue({ status: 200, finalUrl: 'https://www.facebook.com/messages/', html: '' });
 const logged = () => (Logger.log as jest.Mock).mock.calls.map(c => String(c[0])).join('\n');
 
 const fakeBridge = (userId: string) => {
@@ -47,7 +48,7 @@ describe('pageBridgeProbe', () => {
 
   test('connectsAsThePageWithoutE2EEAndFetchesHistoryOnceOnTheFirstLiveMessage', async () => {
     const bridge = fakeBridge(PAGE);
-    const probe = await runPageBridgeProbe('acc-page-1', COOKIE, { createBridge: () => bridge as any });
+    const probe = await runPageBridgeProbe('acc-page-1', COOKIE, { createBridge: () => bridge as any, fetchPage: noPages });
     expect(bridge.newClient).toHaveBeenCalledWith(expect.objectContaining({ cookies: expect.objectContaining({ i_user: PAGE }), e2eeMemoryOnly: true }));
     expect(bridge.connect).toHaveBeenCalled();
     expect(bridge.connectE2EE).not.toHaveBeenCalled();
@@ -68,20 +69,51 @@ describe('pageBridgeProbe', () => {
 
   test('reportsWhenFacebookConnectsAsThePersonalAccountInstead', async () => {
     const bridge = fakeBridge('100000000008724');
-    await runPageBridgeProbe('acc-page-1', COOKIE, { createBridge: () => bridge as any });
+    await runPageBridgeProbe('acc-page-1', COOKIE, { createBridge: () => bridge as any, fetchPage: noPages });
     expect(logged()).toContain('connected user=…8724 asPage=false');
   });
 
   test('aFailedConnectClosesTheBridgeAndReturnsNull', async () => {
     const bridge = fakeBridge(PAGE);
     bridge.connect.mockRejectedValue(new Error('boom'));
-    await expect(runPageBridgeProbe('acc-page-1', COOKIE, { createBridge: () => bridge as any })).resolves.toBeNull();
+    await expect(runPageBridgeProbe('acc-page-1', COOKIE, { createBridge: () => bridge as any, fetchPage: noPages })).resolves.toBeNull();
     expect(bridge.close).toHaveBeenCalled();
   });
 
   test('aCookieWithoutThePageSwitchDoesNothing', async () => {
     const create = jest.fn();
-    await expect(runPageBridgeProbe('acc-page-1', 'c_user=1; xs=tok', { createBridge: create })).resolves.toBeNull();
+    await expect(runPageBridgeProbe('acc-page-1', 'c_user=1; xs=tok', { createBridge: create, fetchPage: noPages })).resolves.toBeNull();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  // Trang Facebook trả về khi dùng cookie của Page: chỉ ghi dấu hiệu, không ghi nội dung.
+  test('inboxPageSummaryListsIdentityMarkersWithoutContent', () => {
+    const html = '<title>SECRET NAME</title>{"USER_ID":"100000000004280","ACCOUNT_ID":"100000000008724"} {"USER_ID":"0"} "CurrentUserInitialData" x "MessengerWebInitData" y';
+    const s = describeInboxPage(html, 'https://business.facebook.com/latest/inbox/all?asset_id=123&x=SECRET', 200);
+    expect(s).toBe(`page status=200 url=business.facebook.com/latest/inbox/all len=${html.length} userIds=…4280,0 accountIds=…8724 markers=CurrentUserInitialData,MessengerWebInitData`);
+    expect(describeInboxPage('', 'not a url', 302)).toBe('page status=302 url=? len=0 userIds=- accountIds=- markers=-');
+  });
+
+  test('inspectsTheInboxPagesWithTheSameCookiesAsTheBridge', async () => {
+    const bridge = fakeBridge(PAGE);
+    const fetchPage = jest.fn().mockResolvedValue({ status: 200, finalUrl: 'https://www.facebook.com/messages/', html: '{"USER_ID":"0"}' });
+    await runPageBridgeProbe('acc-page-1', COOKIE, { createBridge: () => bridge as any, fetchPage });
+    expect(fetchPage).toHaveBeenCalledTimes(4);
+    const control = fetchPage.mock.calls[3];
+    expect(control[0]).toBe('https://www.facebook.com/messages/');
+    expect(control[1]).not.toContain('i_user');
+    expect(control[1]).toContain('c_user=100000000008724');
+    const [url, cookieHeader] = fetchPage.mock.calls[0];
+    expect(url).toBe('https://www.facebook.com/messages/');
+    expect(cookieHeader).toContain(`i_user=${PAGE}`);
+    expect(cookieHeader).not.toContain('wd=');
+    expect(logged()).toContain('www.facebook.com/messages/ -> page status=200 url=www.facebook.com/messages/ len=15 userIds=0 accountIds=- markers=-');
+  });
+
+  test('aPageFetchErrorIsLoggedAndDoesNotStopTheProbe', async () => {
+    const bridge = fakeBridge(PAGE);
+    const fetchPage = jest.fn().mockRejectedValue(new Error('timeout'));
+    await expect(runPageBridgeProbe('acc-page-1', COOKIE, { createBridge: () => bridge as any, fetchPage })).resolves.not.toBeNull();
+    expect(logged()).toContain('fetch failed: timeout');
   });
 });

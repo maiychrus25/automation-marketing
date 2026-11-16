@@ -4,8 +4,10 @@
  * Chỉ chạy khi app được mở với MAIHUB_FB_PAGE_BRIDGE_PROBE=1. Chỉ ghi log: không lưu tin, không gửi gì,
  * không đăng ký thiết bị mã hoá. Log không bao giờ chứa nội dung tin.
  */
+import axios from 'axios';
 import Logger from '../../utils/Logger';
 import { FacebookE2EEBridge } from './FacebookE2EEBridge';
+import { fbHeaders } from './FacebookSession';
 import { parseCookieString, resolveE2EEBinaryPath } from './FacebookUtils';
 
 type ProbeBridge = Pick<FacebookE2EEBridge, 'on' | 'spawn' | 'newClient' | 'connect' | 'fetchMessages' | 'close'>;
@@ -38,14 +40,49 @@ export function describeProbeEvent(evt: any): string {
   return String(evt?.type);
 }
 
+/** Các trang hộp thư thử tải bằng cookie của Page, để biết Facebook phục vụ Page ở đâu. */
+const INBOX_PAGES = ['https://www.facebook.com/messages/', 'https://www.messenger.com/', 'https://business.facebook.com/latest/inbox/all'];
+const PAGE_MARKERS = ['CurrentUserInitialData', 'MessengerWebInitData', 'LSPlatformGraphQLLightspeedRequest', 'MWChat', 'BizInbox', 'checkpoint', 'login_form'];
+
+type FetchedPage = { status: number; finalUrl: string; html: string };
+
+/** Dấu hiệu của một trang hộp thư: danh tính Facebook ghi trong trang và vài mốc nhận dạng. Không có nội dung trang. */
+export function describeInboxPage(html: string, finalUrl: string, status: number): string {
+  const ids = (name: string) => {
+    const found = [...new Set([...html.matchAll(new RegExp(`"${name}":"(\\d+)"`, 'g'))].map(m => m[1]))].slice(0, 5);
+    return found.length ? found.map(id => (id === '0' ? '0' : tail(id))).join(',') : '-';
+  };
+  let url = '?';
+  try { const u = new URL(finalUrl); url = u.host + u.pathname; } catch { /* giữ '?' */ }
+  const markers = PAGE_MARKERS.filter(m => html.includes(m));
+  return `page status=${status} url=${url} len=${html.length} userIds=${ids('USER_ID')} accountIds=${ids('ACCOUNT_ID')} markers=${markers.join(',') || '-'}`;
+}
+
+async function fetchInboxPage(url: string, cookieHeader: string): Promise<FetchedPage> {
+  const res = await axios.get(url, { headers: fbHeaders(cookieHeader), timeout: 30_000, maxRedirects: 5, validateStatus: () => true, responseType: 'text' });
+  return { status: res.status, finalUrl: res.request?.res?.responseUrl || url, html: typeof res.data === 'string' ? res.data : '' };
+}
+
 export async function runPageBridgeProbe(
   accountId: string,
   cookie: string,
-  deps: { createBridge?: () => ProbeBridge } = {},
+  deps: { createBridge?: () => ProbeBridge; fetchPage?: (url: string, cookieHeader: string) => Promise<FetchedPage> } = {},
 ): Promise<{ close: () => Promise<void> } | null> {
   const cookies = pageBridgeCookies(cookie);
   if (!cookies) return null;
   const tag = `[PageBridgeProbe:${accountId.slice(0, 8)}]`;
+  const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+  // Đối chứng: cùng trang, cookie của tài khoản cha (bỏ i_user), để biết khác biệt là do i_user chứ không do cách tải.
+  const parentHeader = Object.entries(cookies).filter(([k]) => k !== 'i_user').map(([k, v]) => `${k}=${v}`).join('; ');
+  const pages: Array<[string, string, string]> = [
+    ...INBOX_PAGES.map((url): [string, string, string] => [url, cookieHeader, url.replace('https://', '')]),
+    [INBOX_PAGES[0], parentHeader, 'control(no i_user) www.facebook.com/messages/'],
+  ];
+  for (const [url, header, where] of pages) {
+    await (deps.fetchPage ?? fetchInboxPage)(url, header)
+      .then(p => Logger.log(`${tag} ${where} -> ${describeInboxPage(p.html, p.finalUrl, p.status)}`))
+      .catch((err: Error) => Logger.log(`${tag} ${where} -> fetch failed: ${err.message}`));
+  }
   const bridge = (deps.createBridge ?? (() => FacebookE2EEBridge.create(resolveE2EEBinaryPath())))();
   let historyAsked = false;
   bridge.on('error', (err: Error) => Logger.log(`${tag} bridge error: ${err.message}`));
