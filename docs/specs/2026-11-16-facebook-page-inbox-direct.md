@@ -140,3 +140,8 @@ Mỗi đợt là một bản phát hành riêng, kiểm trên Page thật của 
 - Gói gửi lấy đúng theo bản ghi Business Suite: tác vụ 46 và tác vụ 21 trong một yêu cầu, xác nhận bằng `replaceOptimsiticMessage`. Bản ghi cho thấy tin dội (`insertMessage`) về trước xác nhận, nên lượt gửi giữ tin dội lại và bỏ tin mang đúng mã của nó.
 - Không gửi lại qua trình duyệt khi không có xác nhận (mục 3.5 chưa nói rõ điểm này).
 - Trả lời (`reply_metadata`) lấy tên trường theo tác vụ gửi của Messenger; bản ghi không có mẫu trả lời nên chưa kiểm trên Page thật.
+
+## Ghi chú sau phát hành (26.42.0, trạng thái tin)
+
+- Thêm theo yêu cầu của anh ngày 16/11/2026, ngoài danh sách ban đầu của mục 4: trạng thái "đã nhận" (sự kiện `delivered`). "Đã xem" và "đang soạn tin" (khách gõ) đã có từ 26.38.0 qua các sự kiện `seen` / `typing`; 26.42.0 thêm test khóa lại hành vi này cho Page.
+- Gửi trạng thái "Page đang soạn" tới khách chưa làm: cần một bản ghi Business Suite có thao tác gõ trong ô soạn tin để lấy đúng gói tin.

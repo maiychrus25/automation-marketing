@@ -236,6 +236,47 @@ describe('FacebookService with the direct Page inbox', () => {
     expect(contact(id).display_name).toBe('Khách D');
   });
 
+  // Trạng thái của tin Page gửi: khách đã nhận / đã xem ghi thành mốc trên hội thoại (giao diện hiện "Đã nhận" / "Đã xem"
+  // dưới tin cuối của mình theo hai mốc này), và khách đang gõ hiện thành "đang soạn tin".
+  describe('delivery, seen and typing states from the Page inbox', () => {
+    const marks = () => db.queryOne<any>("SELECT peer_delivered_ts, peer_read_ts FROM contacts WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'", [PAGE_FB, PEER]);
+    const wait = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)); };
+    beforeEach(() => {
+      db.run("INSERT OR IGNORE INTO contacts (owner_zalo_id, contact_id, display_name, channel, unread_count) VALUES (?, ?, 'Khach', 'facebook', 0)", [PAGE_FB, PEER]);
+      db.run("UPDATE contacts SET peer_delivered_ts = NULL, peer_read_ts = NULL WHERE owner_zalo_id = ? AND contact_id = ?", [PAGE_FB, PEER]);
+    });
+
+    test('aDeliveredEventRecordsTheDeliveredMark', async () => {
+      const svc = pageService();
+      svc.startPageInbox();
+      mockInboxes[0].emit('event', { type: 'delivered', data: { threadId: PEER, userId: PEER, timestampMs: 1_700_000_000_555 } });
+      await wait();
+      expect(marks()).toMatchObject({ peer_delivered_ts: 1_700_000_000_555, peer_read_ts: 0 }); // 0 = chưa xem
+      expect(emitted('fb:onSeen')).toEqual([]); // đã nhận chưa phải đã xem
+    });
+
+    test('aSeenEventRecordsTheReadMarkAndTellsTheInterface', async () => {
+      const svc = pageService();
+      svc.startPageInbox();
+      mockInboxes[0].emit('event', { type: 'seen', data: { threadId: PEER, userId: PEER, timestampMs: 1_700_000_000_777 } });
+      await wait();
+      expect(marks().peer_read_ts).toBe(1_700_000_000_777);
+      expect(emitted('fb:onSeen')).toEqual([expect.objectContaining({ fbAccountId: PAGE_FB, threadId: PEER, userId: PEER })]);
+    });
+
+    test('typingOfTheCustomerIsShownAndCleared', async () => {
+      const svc = pageService();
+      svc.startPageInbox();
+      mockInboxes[0].emit('event', { type: 'typing', data: { threadId: PEER, userId: PEER, isTyping: true } });
+      mockInboxes[0].emit('event', { type: 'typing', data: { threadId: PEER, userId: PEER, isTyping: false } });
+      await wait();
+      expect(emitted('fb:onTyping')).toEqual([
+        { fbAccountId: PAGE_FB, threadId: PEER, userId: PEER, isTyping: true },
+        { fbAccountId: PAGE_FB, threadId: PEER, userId: PEER, isTyping: false },
+      ]);
+    });
+  });
+
   // Đợt 2: Page gửi tin chữ thẳng qua kết nối hộp thư, không cần trình duyệt Business Suite (máy chưa cài lõi trình duyệt thì
   // trước đây mọi tin gửi từ Page đều không đi được).
   describe('sending text from a Page', () => {

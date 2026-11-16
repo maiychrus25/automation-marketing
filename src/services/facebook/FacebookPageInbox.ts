@@ -38,6 +38,7 @@ export type PageInboxEvent =
   | { type: 'unsend'; data: { messageId: string; threadId: string } }
   | { type: 'reaction'; data: { messageId: string; threadId: string; userId: string; emoji: string } }
   | { type: 'seen'; data: { threadId: string; userId: string; timestampMs: number } }
+  | { type: 'delivered'; data: { threadId: string; userId: string; timestampMs: number } }
   | { type: 'typing'; data: { threadId: string; userId: string; isTyping: boolean } };
 
 interface Session { deviceId: string; version: string; syncParams: string; needThreads: boolean }
@@ -256,7 +257,9 @@ export class FacebookPageInbox extends EventEmitter {
     const { pageId } = this.deps;
     const events: PageInboxEvent[] = [
       ...batch.reactions.map((r): PageInboxEvent => ({ type: 'reaction', data: { messageId: r.messageId, threadId: r.threadId, userId: r.actorId, emoji: r.emoji } })),
-      // "Đã xem" và "đang gõ" của chính Page (thao tác ở máy khác) không phải tín hiệu từ khách.
+      // "Đã nhận", "đã xem" và "đang gõ" của chính Page (thao tác ở máy khác) không phải tín hiệu từ khách.
+      ...batch.deliveryReceipts.filter(r => r.contactId !== pageId)
+        .map((r): PageInboxEvent => ({ type: 'delivered', data: { threadId: r.threadId, userId: r.contactId, timestampMs: r.watermarkMs } })),
       ...batch.readReceipts.filter(r => r.contactId !== pageId)
         .map((r): PageInboxEvent => ({ type: 'seen', data: { threadId: r.threadId, userId: r.contactId, timestampMs: r.watermarkMs } })),
       ...batch.typing.filter(t => t.senderId !== pageId)

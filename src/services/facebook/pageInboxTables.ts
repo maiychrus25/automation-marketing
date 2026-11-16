@@ -28,6 +28,8 @@ export interface InboxBatch {
   messages: InboxMessage[]; threads: InboxThread[]; contacts: InboxContact[]; ranges: InboxRange[];
   reactions: Array<{ threadId: string; messageId: string; actorId: string; emoji: string }>; // emoji '' = gỡ cảm xúc
   readReceipts: Array<{ threadId: string; contactId: string; watermarkMs: number }>;
+  /** Người nhận đã nhận được tin tới mốc này (chưa chắc đã xem). */
+  deliveryReceipts: Array<{ threadId: string; contactId: string; watermarkMs: number }>;
   typing: Array<{ threadId: string; senderId: string; isTyping: boolean }>;
   /** Tin vừa gửi được Facebook xác nhận: mã tạm (otid) lúc gửi và mã tin thật. */
   sent: Array<{ otid: string; messageId: string }>;
@@ -61,7 +63,7 @@ function blobAttachment(a: LsValue[]): InboxAttachment {
 
 export function readInboxBatch(calls: LsCall[], database: number = PAGE_MAILBOX_DB): InboxBatch {
   const batch: InboxBatch = {
-    cursor: null, syncStatus: null, messages: [], threads: [], contacts: [], ranges: [], reactions: [], readReceipts: [], typing: [], sent: [], calls: {},
+    cursor: null, syncStatus: null, messages: [], threads: [], contacts: [], ranges: [], reactions: [], readReceipts: [], deliveryReceipts: [], typing: [], sent: [], calls: {},
   };
   const attachments = new Map<string, InboxAttachment[]>(); // theo mã tin, đúng thứ tự máy chủ gửi
   const seenBlobs = new Set<string>();
@@ -100,6 +102,8 @@ export function readInboxBatch(calls: LsCall[], database: number = PAGE_MAILBOX_
       batch.reactions.push({ threadId: id64(a[0]), messageId: str(a[1]), actorId: str(a[2]), emoji: '' });
     } else if (name === 'updateReadReceipt') {
       batch.readReceipts.push({ threadId: id64(a[1]), contactId: str(a[2]), watermarkMs: num(a[0]) });
+    } else if (name === 'updateDeliveryReceipt') {
+      if (num(a[0]) > 0) batch.deliveryReceipts.push({ threadId: id64(a[1]), contactId: str(a[2]), watermarkMs: num(a[0]) });
     } else if (name === 'updateTypingIndicator') {
       batch.typing.push({ threadId: id64(a[0]), senderId: str(a[1]), isTyping: a[2] === true });
     } else if (name === 'deleteThenInsertThread') {

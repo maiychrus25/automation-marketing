@@ -117,6 +117,8 @@ describe('readInboxBatch', () => {
       call('upsertReaction', { 0: PEER, 1: TS, 2: 'mid.$a', 3: PEER, 4: '❤' }),
       call('deleteReaction', { 0: PEER, 1: 'mid.$a', 2: PEER }),
       call('updateReadReceipt', { 0: TS, 1: PEER, 2: PEER, 3: TS }),
+      call('updateDeliveryReceipt', { 0: '1700000000555', 1: PEER, 2: PEER }),
+      call('updateDeliveryReceipt', { 0: null, 1: PEER, 2: PEER }),
       call('updateTypingIndicator', { 0: PEER, 1: PEER, 2: true }),
     ]);
     expect(batch.reactions).toEqual([
@@ -124,6 +126,7 @@ describe('readInboxBatch', () => {
       { threadId: PEER, messageId: 'mid.$a', actorId: PEER, emoji: '' },
     ]);
     expect(batch.readReceipts).toEqual([{ threadId: PEER, contactId: PEER, watermarkMs: 1700000000000 }]);
+    expect(batch.deliveryReceipts).toEqual([{ threadId: PEER, contactId: PEER, watermarkMs: 1700000000555 }]); // mốc trống bị bỏ
     expect(batch.typing).toEqual([{ threadId: PEER, senderId: PEER, isTyping: true }]);
   });
 

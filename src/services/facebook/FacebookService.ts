@@ -1723,6 +1723,19 @@ export class FacebookService {
         break;
       }
 
+      case 'delivered': {
+        // Hộp thư Page: khách đã nhận tin tới mốc này. data: { threadId, userId, timestampMs }
+        // Ghi mốc đã nhận; giao diện hiện "Đã nhận" dưới tin cuối của mình theo mốc đó (không phát fb:onSeen: chưa phải đã xem).
+        if (data?.threadId && data?.userId) {
+          try {
+            recordFacebookReceipt(this.getFacebookId(), this.getFacebookId(), {
+              threadId: String(data.threadId), actorFbId: String(data.userId), timestampMs: Number(data.timestampMs) || 0,
+            }, 'delivered');
+          } catch (err: any) { Logger.warn(`[FacebookService:${this.accountId}] delivered receipt error: ${err.message}`); }
+        }
+        break;
+      }
+
       case 'typing': {
         // data: { threadId, userId, isTyping }
         if (data?.threadId) {

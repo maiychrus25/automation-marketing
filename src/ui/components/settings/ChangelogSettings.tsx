@@ -15,6 +15,28 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.42.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '✅ Tin gửi từ Page hiện trạng thái Đã gửi, Đã nhận, Đã xem',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Page Facebook: dưới tin cuối bạn gửi hiện "Đã nhận" khi tin tới máy khách và "Đã xem" khi khách đọc',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Page Facebook: khi khách đang gõ, hội thoại hiện "đang soạn tin" (đã có từ 26.38.0, nay có kiểm thử riêng cho Page)',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.41.0',
     date: '11/2026',
     type: 'minor',

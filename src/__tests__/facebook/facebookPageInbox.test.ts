@@ -84,6 +84,15 @@ describe('FacebookPageInbox', () => {
     }]);
   });
 
+  test('deliveryReceiptsOfTheCustomerBecomeDeliveredEvents', async () => {
+    const { client, events } = await connected();
+    client.receive(lsResp([
+      wireCall('updateDeliveryReceipt', { 0: i64(1700000000555), 1: i64(PEER), 2: i64(PEER) }),
+      wireCall('updateDeliveryReceipt', { 0: i64(1700000000666), 1: i64(PEER), 2: i64(PAGE) }), // của chính Page: bỏ
+    ]));
+    expect(events).toEqual([{ type: 'delivered', data: { threadId: PEER, userId: PEER, timestampMs: 1700000000555 } }]);
+  });
+
   test('reactionsSeenAndTypingOfTheCustomerBecomeEventsButThePagesOwnDoNot', async () => {
     const { client, events } = await connected();
     client.receive(lsResp([
