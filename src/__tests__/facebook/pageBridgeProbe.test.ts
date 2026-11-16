@@ -5,7 +5,7 @@ import { WebSocketServer } from 'ws';
 import Logger from '../../utils/Logger';
 import {
   connectInbox, describeLsResponse, historyRequest, isPageBridgeProbeEnabled, pageInboxLogin, pageInboxUsername,
-  readLsResponse, runPageBridgeProbe, syncRequest, threadListRequest,
+  readInboxPage, readLsResponse, runPageBridgeProbe, syncRequest, threadListRequest,
 } from '../../services/facebook/pageBridgeProbe';
 
 const USER = '100000000008724';
@@ -27,11 +27,20 @@ class FakeMqtt extends EventEmitter {
   end = jest.fn();
   receive(body: unknown) { this.emit('message', '/ls_resp', Buffer.from(JSON.stringify(body))); }
   requests() { return this.publish.mock.calls.filter(c => c[0] === '/ls_req').map(c => JSON.parse(c[1])); }
+  labels() { return this.requests().map(r => (r.type === 3 ? JSON.parse(r.payload).tasks[0].label : `sync${r.type}`)); }
 }
+
+// Trang hộp thư Business Suite nhúng sẵn kết quả đồng bộ đầu tiên của hộp thư Page (JSON lồng trong JSON nên dấu nháy bị thoát).
+const BLOKS = 'ab'.repeat(32);
+const INBOX_HTML = `<script>{"variables":{"requestPayload":"{\\"database\\":205,\\"epoch_id\\":0,\\"last_applied_cursor\\":null,`
+  + `\\"sync_params\\":\\"{\\\\\\"locale\\\\\\":\\\\\\"vi_VN\\\\\\",\\\\\\"bloks_version\\\\\\":\\\\\\"${BLOKS}\\\\\\"}\\",\\"version\\":29437738132519999}","requestType":1}}`
+  + `{"payload":"{\\"step\\":[1,[5,\\"executeFirstBlockForSyncTransactionV4\\",[19,\\"2\\"],[19,\\"1\\"],[9],\\"CONTACTS\\"],`
+  + `[5,\\"executeFirstBlockForSyncTransactionV4\\",[19,\\"205\\"],[19,\\"7000000000000000001\\"],[9],\\"PAGECUR\\",[19,\\"1\\"]],[5,\\"upsertMessage\\",\\"SECRET TEXT\\"]]}"}</script>`;
+const inboxPage = (html: string) => jest.fn().mockResolvedValue({ status: 200, html });
 
 describe('pageBridgeProbe', () => {
   beforeEach(() => (Logger.log as jest.Mock).mockClear());
-  afterEach(() => { delete process.env.MAIHUB_FB_PAGE_BRIDGE_PROBE; });
+  afterEach(() => { delete process.env.MAIHUB_FB_PAGE_BRIDGE_PROBE; jest.useRealTimers(); });
 
   test('onlyRunsWhenTheLaunchFlagIsSet', () => {
     expect(isPageBridgeProbeEnabled()).toBe(false);
@@ -53,10 +62,22 @@ describe('pageBridgeProbe', () => {
 
   // version và epoch_id vượt 2^53: phải nằm trong JSON đúng từng chữ số, không qua kiểu number của JS.
   test('syncRequestKeepsBigNumbersExact', () => {
-    const req = JSON.parse(syncRequest(7, 205, null));
+    const req = JSON.parse(syncRequest(7, 205, 'CUR', null));
     expect(req).toMatchObject({ app_id: '514771569228061', request_id: 7, type: 2 });
-    expect(req.payload).toMatch(/^\{"database":205,"epoch_id":\d{19},"failure_count":null,"last_applied_cursor":null,"sync_params":null,"version":29437738132510565\}$/);
-    expect(JSON.parse(syncRequest(8, 205, 'CUR')).payload).toContain('"last_applied_cursor":"CUR"');
+    expect(req.payload).toMatch(/^\{"database":205,"epoch_id":\d{19},"failure_count":null,"last_applied_cursor":"CUR","sync_params":null,"version":29437738132510565\}$/);
+    expect(JSON.parse(syncRequest(8, 205, 'CUR', null, '29437738132519999')).payload).toContain('"version":29437738132519999}');
+  });
+
+  // Lần đồng bộ đầu (chưa có con trỏ) phải kèm tham số, như trang Business Suite làm; xin từ con trỏ rỗng thì Facebook không trả lời (kết quả 26.37.11).
+  test('aFirstSyncCarriesSyncParamsInsteadOfACursor', () => {
+    const req = JSON.parse(syncRequest(1, 205, null, '{"locale":"vi_VN"}'));
+    expect(req.type).toBe(1);
+    expect(JSON.parse(req.payload)).toMatchObject({ database: 205, last_applied_cursor: null, sync_params: '{"locale":"vi_VN"}' });
+  });
+
+  test('inboxPageGivesTheMailboxCursorAndVersionsWithoutContent', () => {
+    expect(readInboxPage(INBOX_HTML)).toEqual({ cursor: 'PAGECUR', version: '29437738132519999', bloksVersion: BLOKS });
+    expect(readInboxPage('<html>login</html>')).toEqual({ cursor: null, version: null, bloksVersion: null });
   });
 
   test('threadListAndHistoryAreTasksOnThePageMailbox', () => {
@@ -95,10 +116,13 @@ describe('pageBridgeProbe', () => {
     expect(readLsResponse(lsResp([syncBlock(2, 'CONTACTS')])).cursor).toBeNull();
   });
 
-  test('connectsSyncsListsThreadsAndAsksHistoryOnce', async () => {
+  test('startsFromThePageCursorThenListsThreadsAndAsksHistoryOnce', async () => {
+    jest.useFakeTimers();
     const client = new FakeMqtt();
     const connect = jest.fn().mockReturnValue(client);
-    const probe = await runPageBridgeProbe('acc-page-1', COOKIE, PAGE, { connect, agent: 'AGENT' });
+    const fetchPage = inboxPage(INBOX_HTML);
+    const probe = await runPageBridgeProbe('acc-page-1', COOKIE, PAGE, { connect, fetchPage, agent: 'AGENT' });
+    expect(fetchPage).toHaveBeenCalledWith(PAGE, `c_user=${USER}; xs=tok; datr=d; fr=f; sb=s`, 'AGENT');
     const [url, username, cookieHeader, agent] = connect.mock.calls[0];
     expect(url).toMatch(/^wss:\/\/edge-chat\.facebook\.com\/chat\?region=eag&sid=\d+&cid=[a-z0-9-]+$/);
     expect(username).toMatchObject({ u: USER, p: PAGE });
@@ -106,29 +130,58 @@ describe('pageBridgeProbe', () => {
     expect(agent).toBe('AGENT');
 
     client.emit('connect');
-    expect(client.publish).toHaveBeenCalledWith('/ls_app_settings', '{"ls_fdid":"","ls_sv":"29437738132510565"}', { qos: 1 });
+    expect(client.publish).toHaveBeenCalledWith('/ls_app_settings', '{"ls_fdid":"","ls_sv":"29437738132519999"}', { qos: 1 });
     expect(client.subscribe).toHaveBeenCalledWith(['/ls_foreground_state', '/ls_resp'], { qos: 0 });
-    expect(client.requests().map(r => r.type)).toEqual([2]);
-    expect(client.requests()[0].payload).toContain('"database":205');
+    expect(client.labels()).toEqual(['sync2', '313']);
+    expect(client.requests()[0].payload).toContain('"last_applied_cursor":"PAGECUR"');
+    expect(client.requests()[0].payload).toContain('"version":29437738132519999');
+    expect(client.requests()[1].payload).toContain('PAGECUR');
 
-    client.receive(lsResp([syncBlock(205, 'CUR2')], 1)); // có con trỏ: xin danh sách hội thoại
+    client.receive(lsResp([syncBlock(205, 'CUR2')], 1));
     client.receive(lsResp([messageCall('insertMessage', 'SECRET TEXT', 'mid.$abcdef123456')])); // tin đầu tiên: xin tin cũ
     client.receive(lsResp([messageCall('insertMessage', 'SECRET TEXT', 'mid.$abcdef123457')])); // tin sau: không xin nữa
-    const labels = client.requests().slice(1).map(r => JSON.parse(r.payload).tasks[0].label);
-    expect(labels).toEqual(['313', '228']);
+    jest.advanceTimersByTime(60_000); // đã có trả lời đồng bộ: không thử lại
+    expect(client.labels()).toEqual(['sync2', '313', '228']);
     expect(client.requests()[2].payload).toContain('CUR2');
     expect(client.requests().map(r => r.request_id)).toEqual([1, 2, 3]);
+    expect(logged()).toContain('[PageBridgeProbe:acc-page] inbox page status=200 len=' + INBOX_HTML.length + ' cursor=yes version=page bloks=yes');
     expect(logged()).toContain('[PageBridgeProbe:acc-page] connected page=…3955 user=…8724');
     expect(logged()).toContain('asking history thread=…5141');
     expect(logged()).not.toContain('SECRET');
+    expect(logged()).not.toContain('PAGECUR');
 
     await probe!.close();
     expect(client.end).toHaveBeenCalledWith(true);
   });
 
+  test('withoutAPageCursorTheFirstSyncSendsParamsAndThreadsWaitForTheAnswer', async () => {
+    const client = new FakeMqtt();
+    await runPageBridgeProbe('acc-page-1', COOKIE, PAGE, { connect: () => client, fetchPage: jest.fn().mockRejectedValue(new Error('timeout')) });
+    client.emit('connect');
+    expect(client.publish).toHaveBeenCalledWith('/ls_app_settings', '{"ls_fdid":"","ls_sv":"29437738132510565"}', { qos: 1 });
+    expect(client.labels()).toEqual(['sync1']);
+    expect(JSON.parse(client.requests()[0].payload).sync_params).toBe('{"locale":"vi_VN"}');
+    client.receive(lsResp([syncBlock(205, 'CUR2')], 1));
+    expect(client.labels()).toEqual(['sync1', '313']);
+    expect(logged()).toContain('inbox page failed: timeout');
+  });
+
+  test('anUnansweredCursorSyncIsRetriedOnceWithSyncParams', async () => {
+    jest.useFakeTimers();
+    const client = new FakeMqtt();
+    await runPageBridgeProbe('acc-page-1', COOKIE, PAGE, { connect: () => client, fetchPage: inboxPage(INBOX_HTML) });
+    client.emit('connect');
+    client.receive(lsResp([[5, 'updateTypingIndicator', i64(PEER)]])); // sự kiện khác không tính là trả lời đồng bộ
+    jest.advanceTimersByTime(10_000);
+    jest.advanceTimersByTime(60_000);
+    expect(client.labels()).toEqual(['sync2', '313', 'sync1']);
+    expect(JSON.parse(JSON.parse(client.requests()[2].payload).sync_params)).toEqual({ locale: 'vi_VN', bloks_version: BLOKS });
+    expect(logged()).toContain('no sync answer in 10s, retrying with sync params');
+  });
+
   test('unreadableFramesAndErrorsAreLoggedWithoutStoppingTheProbe', async () => {
     const client = new FakeMqtt();
-    await runPageBridgeProbe('acc-page-1', COOKIE, PAGE, { connect: () => client });
+    await runPageBridgeProbe('acc-page-1', COOKIE, PAGE, { connect: () => client, fetchPage: inboxPage('') });
     client.emit('message', '/ls_resp', Buffer.from('not json SECRET'));
     client.emit('message', '/ls_foreground_state', Buffer.from('{}'));
     client.emit('error', new Error('boom'));
@@ -176,8 +229,10 @@ describe('pageBridgeProbe', () => {
 
   test('doesNothingWithoutALoginOrAPageId', async () => {
     const connect = jest.fn();
-    await expect(runPageBridgeProbe('acc-page-1', 'datr=d', PAGE, { connect })).resolves.toBeNull();
-    await expect(runPageBridgeProbe('acc-page-1', COOKIE, null, { connect })).resolves.toBeNull();
+    const fetchPage = jest.fn();
+    await expect(runPageBridgeProbe('acc-page-1', 'datr=d', PAGE, { connect, fetchPage })).resolves.toBeNull();
+    await expect(runPageBridgeProbe('acc-page-1', COOKIE, null, { connect, fetchPage })).resolves.toBeNull();
     expect(connect).not.toHaveBeenCalled();
+    expect(fetchPage).not.toHaveBeenCalled();
   });
 });

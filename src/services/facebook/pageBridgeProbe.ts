@@ -1,20 +1,24 @@
 /**
  * THỬ NGHIỆM, sẽ gỡ sau khi có kết quả: nối thẳng vào hộp thư Page theo cách Meta Business Suite làm
  * (đăng nhập bằng cookie tài khoản cá nhân, gói kết nối nêu tên Page, hộp thư là nhóm đồng bộ 205), xem có nhận
- * tin trực tiếp và tải được tin cũ không. Chỉ chạy khi app được mở với MAIHUB_FB_PAGE_BRIDGE_PROBE=1.
+ * tin trực tiếp và tải được tin cũ không. Trình tự như trình duyệt: tải trang hộp thư để lấy con trỏ đồng bộ và
+ * phiên bản, rồi mới xin đồng bộ qua MQTT. Chỉ chạy khi app được mở với MAIHUB_FB_PAGE_BRIDGE_PROBE=1.
  * Chỉ đọc và ghi log: không lưu tin, không gửi tin, không đánh dấu đã đọc. Log không bao giờ chứa nội dung tin.
  */
+import axios from 'axios';
 import mqtt from 'mqtt';
 import WebSocket from 'ws';
 import Logger from '../../utils/Logger';
+import { fbHeaders } from './FacebookSession';
 import { generateClientId, generateSessionId, parseCookieString } from './FacebookUtils';
 
 const ENDPOINT = 'wss://edge-chat.facebook.com/chat';
 const ORIGIN = 'https://business.facebook.com';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const BUSINESS_SUITE_APP_ID = '514771569228061';
-// shortcut: phiên bản lược đồ chép từ một phiên Business Suite ngày 16/11/2026; khi thành tính năng thật phải đọc từ trang hộp thư.
+// Dự phòng khi trang hộp thư không cho phiên bản lược đồ: chép từ một phiên Business Suite ngày 16/11/2026.
 const LS_VERSION = '29437738132510565';
+const SYNC_RETRY_MS = 10_000;
 const PAGE_MAILBOX = 205;
 const LOGIN_COOKIE_NAMES = ['c_user', 'xs', 'datr', 'fr', 'sb'];
 const MESSAGE_CALLS = ['insertMessage', 'upsertMessage'];
@@ -46,34 +50,47 @@ export function pageInboxUsername(userId: string, pageId: string, sessionId: num
 const lsRequest = (requestId: number, type: number, payload: string) =>
   JSON.stringify({ app_id: BUSINESS_SUITE_APP_ID, payload, request_id: requestId, type });
 
-const taskRequest = (requestId: number, taskId: number, label: string, queueName: string, payload: string) =>
+const taskRequest = (requestId: number, taskId: number, label: string, queueName: string, payload: string, version: string) =>
   lsRequest(requestId, 3, toJson({
     epoch_id: big(epochId()),
     tasks: [{ failure_count: null, label, payload, queue_name: queueName, task_id: taskId }],
-    version_id: LS_VERSION,
+    version_id: version,
   }));
 
-/** Xin đồng bộ một cơ sở dữ liệu từ con trỏ đã có (null = từ đầu). */
-export function syncRequest(requestId: number, database: number, cursor: string | null): string {
-  return lsRequest(requestId, 2, toJson({
-    database, epoch_id: big(epochId()), failure_count: null, last_applied_cursor: cursor, sync_params: null, version: big(LS_VERSION),
+/** Xin đồng bộ một cơ sở dữ liệu: tiếp từ con trỏ đã có (loại 2), hoặc lần đầu kèm tham số đồng bộ (loại 1). */
+export function syncRequest(requestId: number, database: number, cursor: string | null, syncParams: string | null, version = LS_VERSION): string {
+  return lsRequest(requestId, cursor ? 2 : 1, toJson({
+    database, epoch_id: big(epochId()), failure_count: null, last_applied_cursor: cursor, sync_params: cursor ? null : syncParams, version: big(version),
   }));
 }
 
 /** Xin trang đầu danh sách hội thoại của hộp thư Page. */
-export function threadListRequest(requestId: number, taskId: number, cursor: string): string {
+export function threadListRequest(requestId: number, taskId: number, cursor: string, version = LS_VERSION): string {
   return taskRequest(requestId, taskId, '313', 'trq', toJson({
     cursor, filter: 0, is_after: 0, parent_thread_key: 0, reference_activity_timestamp: 9999999999999, reference_thread_key: 0,
     secondary_filter: 24, filter_value: '', sync_group: PAGE_MAILBOX,
-  }));
+  }), version);
 }
 
 /** Xin các tin cũ hơn một tin đã biết trong một hội thoại. */
-export function historyRequest(requestId: number, taskId: number, from: Pick<LsMessage, 'threadKey' | 'messageId' | 'timestampMs'>, cursor: string): string {
+export function historyRequest(requestId: number, taskId: number, from: Pick<LsMessage, 'threadKey' | 'messageId' | 'timestampMs'>, cursor: string, version = LS_VERSION): string {
   return taskRequest(requestId, taskId, '228', `mrq.${from.threadKey}`, toJson({
     thread_key: big(from.threadKey), direction: 0, reference_timestamp_ms: big(from.timestampMs), reference_message_id: from.messageId,
     sync_group: PAGE_MAILBOX, cursor,
-  }));
+  }), version);
+}
+
+/**
+ * Trang hộp thư Business Suite nhúng sẵn lần đồng bộ đầu của hộp thư Page: lấy con trỏ tiếp theo, phiên bản lược đồ và
+ * bloks_version. JSON trong trang lồng nhiều lớp nên dấu nháy có thể đi kèm một hay nhiều dấu gạch chéo ngược.
+ */
+export function readInboxPage(html: string): { cursor: string | null; version: string | null; bloksVersion: string | null } {
+  const q = String.raw`\\*"`;
+  const i64 = String.raw`\[19,\s*${q}-?\d+${q}\]`;
+  const cursor = new RegExp(String.raw`executeFirstBlockForSyncTransaction\w*${q},\s*\[19,\s*${q}${PAGE_MAILBOX}${q}\],\s*${i64},\s*(?:\[9\]|${q}[^"\\]*${q}),\s*${q}([^"\\]+)${q}`).exec(html);
+  const version = new RegExp(String.raw`${q}database${q}:${PAGE_MAILBOX},.{0,600}?${q}version${q}:(\d+)`).exec(html);
+  const bloks = new RegExp(String.raw`bloks_version${q}:${q}([0-9a-f]{64})`).exec(html);
+  return { cursor: cursor?.[1] ?? null, version: version?.[1] ?? null, bloksVersion: bloks?.[1] ?? null };
 }
 
 export interface LsMessage { threadKey: string; senderId: string; messageId: string; timestampMs: string; hasText: boolean; sticker: boolean; live: boolean }
@@ -139,15 +156,32 @@ export const connectInbox: ConnectInbox = (url, username, cookieHeader, agent) =
   }) as any,
 } as any) as unknown as InboxClient;
 
+type FetchInboxPage = (pageId: string, cookieHeader: string, agent?: unknown) => Promise<{ status: number; html: string }>;
+
+const fetchInboxPage: FetchInboxPage = async (pageId, cookieHeader, agent) => {
+  const res = await axios.get(`https://business.facebook.com/latest/inbox/all/?asset_id=${pageId}`, {
+    headers: fbHeaders(cookieHeader), httpsAgent: agent, timeout: 30_000, maxRedirects: 5, validateStatus: () => true, responseType: 'text',
+  });
+  return { status: res.status, html: typeof res.data === 'string' ? res.data : '' };
+};
+
 export async function runPageBridgeProbe(
   accountId: string,
   cookie: string,
   pageId: string | null,
-  deps: { connect?: ConnectInbox; agent?: unknown } = {},
+  deps: { connect?: ConnectInbox; fetchPage?: FetchInboxPage; agent?: unknown } = {},
 ): Promise<{ close: () => Promise<void> } | null> {
   const login = pageInboxLogin(cookie);
   if (!login || !pageId || !/^\d+$/.test(pageId)) return null;
   const tag = `[PageBridgeProbe:${accountId.slice(0, 8)}]`;
+  const page = await (deps.fetchPage ?? fetchInboxPage)(pageId, login.cookieHeader, deps.agent)
+    .then(p => ({ status: p.status, length: p.html.length, ...readInboxPage(p.html) }))
+    .catch((err: Error) => { Logger.log(`${tag} inbox page failed: ${err?.message}`); return null; });
+  if (page) {
+    Logger.log(`${tag} inbox page status=${page.status} len=${page.length} cursor=${page.cursor ? 'yes' : 'no'} version=${page.version ? 'page' : 'builtin'} bloks=${page.bloksVersion ? 'yes' : 'no'}`);
+  }
+  const version = page?.version ?? LS_VERSION;
+  const syncParams = JSON.stringify({ locale: 'vi_VN', ...(page?.bloksVersion ? { bloks_version: page.bloksVersion } : {}) });
   const sessionId = generateSessionId();
   const deviceId = generateClientId();
   const client = (deps.connect ?? connectInbox)(
@@ -155,33 +189,43 @@ export async function runPageBridgeProbe(
   );
   let requestId = 0;
   let taskId = 0;
-  let cursor: string | null = null;
+  let cursor: string | null = page?.cursor ?? null;
+  let synced = false; // đã có trả lời đồng bộ của hộp thư Page
   let threadsAsked = false;
   let historyAsked = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const send = (request: string) => client.publish('/ls_req', request, { qos: 1 });
+  const askThreads = (from: string) => { threadsAsked = true; send(threadListRequest(++requestId, taskId++, from, version)); };
 
   client.on('connect', () => {
     Logger.log(`${tag} connected page=${tail(pageId)} user=${tail(login.userId)}`);
-    client.publish('/ls_app_settings', JSON.stringify({ ls_fdid: '', ls_sv: LS_VERSION }), { qos: 1 });
+    client.publish('/ls_app_settings', JSON.stringify({ ls_fdid: '', ls_sv: version }), { qos: 1 });
     client.subscribe(['/ls_foreground_state', '/ls_resp'], { qos: 0 });
-    send(syncRequest(++requestId, PAGE_MAILBOX, cursor));
+    send(syncRequest(++requestId, PAGE_MAILBOX, cursor, syncParams, version));
+    if (!cursor) return;
+    if (!threadsAsked) askThreads(cursor);
+    retryTimer = setTimeout(() => {
+      if (synced) return;
+      Logger.log(`${tag} no sync answer in ${SYNC_RETRY_MS / 1000}s, retrying with sync params`);
+      send(syncRequest(++requestId, PAGE_MAILBOX, null, syncParams, version));
+    }, SYNC_RETRY_MS);
   });
   client.on('message', (topic: string, payload: Buffer) => {
     if (topic !== '/ls_resp') return;
     let resp: LsResponse;
     try { resp = readLsResponse(JSON.parse(payload.toString('utf8'))); } catch { Logger.log(`${tag} unreadable response len=${payload.length}`); return; }
     Logger.log(`${tag} ${describeLsResponse(resp)}`);
-    if (resp.cursor) cursor = resp.cursor;
+    if (resp.cursor) { cursor = resp.cursor; synced = true; }
     if (!cursor) return;
-    if (!threadsAsked) { threadsAsked = true; send(threadListRequest(++requestId, taskId++, cursor)); }
+    if (!threadsAsked) askThreads(cursor);
     const first = resp.messages.find(m => /^\d+$/.test(m.threadKey) && /^\d+$/.test(m.timestampMs) && m.messageId);
     if (first && !historyAsked) {
       historyAsked = true; // một lần: đủ để biết tin cũ có tải được không
       Logger.log(`${tag} asking history thread=${tail(first.threadKey)}`);
-      send(historyRequest(++requestId, taskId++, first, cursor));
+      send(historyRequest(++requestId, taskId++, first, cursor, version));
     }
   });
   client.on('error', (err: Error) => Logger.log(`${tag} error: ${err?.message}`));
   client.on('close', () => Logger.log(`${tag} closed`));
-  return { close: async () => { client.end(true); } };
+  return { close: async () => { if (retryTimer) clearTimeout(retryTimer); client.end(true); } };
 }
