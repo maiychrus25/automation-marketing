@@ -9,9 +9,12 @@ export const LOGIN_HEADER = `c_user=${USER}; xs=tok; datr=d; fr=f; sb=s`;
 export const DEVICE = '11111111-2222-3333-4444-555555555555';
 export const BLOKS = 'ab'.repeat(32);
 export const PAGE_VERSION = '29437738132519999';
+export const DTSG = 'DTSG-TOKEN:12:1700000000';
+export const LSD = 'LSD-TOKEN';
+export const JAZOEST = '25999';
 
 // Trang hộp thư Business Suite nhúng sẵn kết quả đồng bộ đầu tiên của hộp thư Page (JSON lồng trong JSON nên dấu nháy bị thoát).
-export const INBOX_HTML = `<script>["MqttWebDeviceID",[],{"clientID":"${DEVICE}"},5003]{"variables":{"requestPayload":"{\\"database\\":205,\\"epoch_id\\":0,\\"last_applied_cursor\\":null,`
+export const INBOX_HTML = `<script>["DTSGInitialData",[],{"token":"${DTSG}"},258],["LSD",[],{"token":"${LSD}"},323],{"sprinkle":"&jazoest=${JAZOEST}"}["MqttWebDeviceID",[],{"clientID":"${DEVICE}"},5003]{"variables":{"requestPayload":"{\\"database\\":205,\\"epoch_id\\":0,\\"last_applied_cursor\\":null,`
   + `\\"sync_params\\":\\"{\\\\\\"locale\\\\\\":\\\\\\"vi_VN\\\\\\",\\\\\\"bloks_version\\\\\\":\\\\\\"${BLOKS}\\\\\\"}\\",\\"version\\":${PAGE_VERSION}}","requestType":1}}`
   + `{"payload":"{\\"step\\":[1,[5,\\"executeFirstBlockForSyncTransactionV4\\",[19,\\"2\\"],[19,\\"1\\"],[9],\\"CONTACTS\\"],`
   + `[5,\\"executeFirstBlockForSyncTransactionV4\\",[19,\\"205\\"],[19,\\"7000000000000000001\\"],[9],\\"PAGECUR\\",[19,\\"1\\"]],[5,\\"upsertMessage\\",\\"SECRET TEXT\\"]]}"}</script>`;

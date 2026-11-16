@@ -145,3 +145,12 @@ Mỗi đợt là một bản phát hành riêng, kiểm trên Page thật của 
 
 - Thêm theo yêu cầu của anh ngày 16/11/2026, ngoài danh sách ban đầu của mục 4: trạng thái "đã nhận" (sự kiện `delivered`). "Đã xem" và "đang soạn tin" (khách gõ) đã có từ 26.38.0 qua các sự kiện `seen` / `typing`; 26.42.0 thêm test khóa lại hành vi này cho Page.
 - Gửi trạng thái "Page đang soạn" tới khách chưa làm: cần một bản ghi Business Suite có thao tác gõ trong ô soạn tin để lấy đúng gói tin.
+
+## Ghi chú sau phát hành (26.43.0, đợt 3: ảnh / tệp, nhãn dán, cảm xúc)
+
+- Định dạng lấy từ bản ghi Business Suite thứ hai của anh (16/11/2026, 23:35): tải tệp lên `upload-business.facebook.com`, tác vụ 46 với `send_type: 3` (tệp) và `send_type: 2` (nhãn dán), tác vụ 29 cho cảm xúc. Chi tiết ở `SYSTEM_DOCUMENTATION.md` mục 4.11.
+- Khác mục 4 của spec: nhãn dán không có trong danh sách ban đầu; bảng chọn nhãn dán lấy khay thẳng từ Business Suite (hai truy vấn GraphQL) thay vì tìm qua trình duyệt, vì gửi qua hộp thư cần mã nhãn dán mà đường trình duyệt không cho. Tìm theo từ khoá là lọc theo mô tả trong khay, không phải tìm trên máy chủ Facebook (bản ghi không có thao tác tìm).
+- Sau lượt review độc lập trước khi phát hành: nhãn dán chọn từ khay không bao giờ gửi theo vị trí qua trình duyệt; lời nhắn kèm tệp không được xác nhận thì ở lại trên tin chứa tệp; tệp được đánh dấu là tin của lượt gửi trước khi gửi lời nhắn; từ khoá không khớp trong khay thì tìm qua trình duyệt; khay được thử lại một lần với mã phiên mới.
+- Lời nhắn kèm tệp đi thành một tin riêng sau tệp: bản ghi chỉ có tệp không kèm chữ (`text: null`), nên không ghép chữ vào tác vụ gửi tệp khi chưa có bằng chứng Facebook nhận dạng đó cho hộp thư Page.
+- Tải lên và danh sách nhãn dán chưa kiểm trên tài khoản thật lúc phát hành; cả hai rơi về đường trình duyệt khi hỏng. Gửi tệp / nhãn dán / cảm xúc đã phát lệnh mà không được xác nhận thì báo lỗi, không gửi lại.
+- Chưa làm: Page hiện "đang soạn" cho khách (hai bản ghi đều không có gói này trên kết nối hộp thư), "Đồng bộ lịch sử" cả tài khoản cho Page (bản ghi không có thao tác kéo danh sách hội thoại vì Page có ít hội thoại), nhận lại tin đến lúc app tắt.

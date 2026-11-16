@@ -3,7 +3,8 @@ jest.mock('../../utils/Logger', () => ({ __esModule: true, default: { log: jest.
 import Logger from '../../utils/Logger';
 import { FacebookPageInbox } from '../../services/facebook/FacebookPageInbox';
 import {
-  COOKIE, DEVICE, FakeMqtt, INBOX_HTML, LOGIN_HEADER, PAGE, PAGE_VERSION, PEER, historyEndCall, i64, lsResp, messageCall, rangeCall, syncBlock, wireCall,
+  COOKIE, DEVICE, DTSG, FakeMqtt, INBOX_HTML, JAZOEST, LOGIN_HEADER, LSD, PAGE, PAGE_VERSION, PEER, USER, historyEndCall, i64, lsResp, messageCall, rangeCall,
+  syncBlock, wireCall,
 } from './pageInboxFixtures';
 
 const logged = () => [...(Logger.log as jest.Mock).mock.calls, ...(Logger.warn as jest.Mock).mock.calls].map(c => String(c[0])).join('\n');
@@ -455,6 +456,97 @@ describe('FacebookPageInbox', () => {
       await expect(inbox.sendText({ threadId: 'abc', text: 'x' })).rejects.toThrow('không hợp lệ');
       await expect(inbox.sendText({ threadId: PEER, text: '   ' })).rejects.toThrow('không hợp lệ');
       expect(client.labels()).toEqual(['sync2', '313']);
+    });
+
+    const lastTasks = (client: FakeMqtt) => JSON.parse(client.requests()[client.requests().length - 1].payload).tasks;
+
+    test('sendAttachmentIsOneTaskAndResolvesWithTheRealMessageId', async () => {
+      const { inbox, client } = await connected();
+      const sending = inbox.sendAttachment({ threadId: PEER, attachmentId: '9007199254740993' });
+      expect(client.labels()).toEqual(['sync2', '313', '46']);
+      expect(lastTasks(client)).toHaveLength(1); // không kèm tác vụ đã đọc, như Business Suite
+      expect(lastTasks(client)[0].payload).toContain('"send_type":3,"sync_group":205,"mark_thread_read":0,"text":null,"attachment_fbids":[9007199254740993]}');
+      confirm(client, 'mid.$file1');
+      await expect(sending).resolves.toEqual({ messageId: 'mid.$file1' });
+    });
+
+    test('sendStickerCarriesTheStickerIdAndMarksTheThreadRead', async () => {
+      const { inbox, client } = await connected();
+      const sending = inbox.sendSticker({ threadId: PEER, stickerId: '369239263222822' });
+      expect(lastTasks(client).map((t: any) => t.label)).toEqual(['46', '21']);
+      expect(lastTasks(client).map((t: any) => t.task_id)).toEqual([1, 2]); // 0 là tác vụ danh sách hội thoại
+      expect(JSON.parse(lastTasks(client)[0].payload)).toMatchObject({ send_type: 2, sticker_id: 369239263222822 });
+      confirm(client, 'mid.$sticker1');
+      await expect(sending).resolves.toEqual({ messageId: 'mid.$sticker1' });
+      // Tác vụ kế tiếp không dùng lại task_id của tác vụ đã đọc đi kèm.
+      inbox.markRead(PEER, 1700000000000);
+      expect(lastTasks(client)[0].task_id).toBe(3);
+    });
+
+    test('attachmentAndStickerIdsMustBeNumbers', async () => {
+      const { inbox, client } = await connected();
+      await expect(inbox.sendAttachment({ threadId: PEER, attachmentId: 'abc' })).rejects.toThrow('không hợp lệ');
+      await expect(inbox.sendSticker({ threadId: PEER, stickerId: '' })).rejects.toThrow('không hợp lệ');
+      await expect(setup().inbox.sendAttachment({ threadId: PEER, attachmentId: '1' })).rejects.toThrow('chưa kết nối');
+      expect(client.labels()).toEqual(['sync2', '313']);
+    });
+
+    test('aReactionIsSentAsThePageAndResolvesWhenFacebookConfirmsIt', async () => {
+      const { inbox, client } = await connected();
+      const reacting = inbox.sendReaction({ threadId: PEER, messageId: 'mid.$a', emoji: '❤' });
+      expect(client.labels()).toEqual(['sync2', '313', '29']);
+      expect(lastTasks(client)[0].queue_name).toBe('reaction:mid.$a');
+      expect(lastTasks(client)[0].payload).toContain(`"actor_id":${PAGE},"reaction":"❤"`);
+      let done = false;
+      void reacting.then(() => { done = true; });
+      // Cảm xúc của khách trên cùng tin, hay xác nhận của tin khác, không phải là xác nhận.
+      client.receive(lsResp([wireCall('upsertReaction', { 0: i64(PEER), 1: i64(1700000000000), 2: 'mid.$a', 3: i64(PEER), 4: '👍' })]));
+      client.receive(lsResp([wireCall('replaceOptimisticReaction', { 0: i64(PEER), 1: i64(PAGE), 2: 'mid.$other' })]));
+      await Promise.resolve();
+      expect(done).toBe(false);
+      client.receive(lsResp([wireCall('replaceOptimisticReaction', { 0: i64(PEER), 1: i64(PAGE), 2: 'mid.$a' })]));
+      await expect(reacting).resolves.toBeUndefined();
+    });
+
+    // Thay đổi cảm xúc đứng tên Page (ở đây là gỡ) cũng là xác nhận, phòng khi replaceOptimisticReaction về muộn hoặc không về.
+    test('removingAReactionAlsoResolvesOnThePagesOwnDeleteReaction', async () => {
+      const { inbox, client } = await connected();
+      const removing = inbox.sendReaction({ threadId: PEER, messageId: 'mid.$a', emoji: '' });
+      expect(JSON.parse(lastTasks(client)[0].payload).reaction).toBe('');
+      client.receive(lsResp([wireCall('deleteReaction', { 0: i64(PEER), 1: 'mid.$a', 2: i64(PAGE) })]));
+      await expect(removing).resolves.toBeUndefined();
+    });
+
+    test('anUnconfirmedReactionFailsAfterTwentySecondsAndAPendingOneFailsOnDrop', async () => {
+      const { inbox, client } = await connected();
+      const slow = inbox.sendReaction({ threadId: PEER, messageId: 'mid.$a', emoji: '👍' });
+      const failed = expect(slow).rejects.toThrow('Facebook không xác nhận');
+      await jest.advanceTimersByTimeAsync(20_000);
+      await failed;
+      const pending = inbox.sendReaction({ threadId: PEER, messageId: 'mid.$b', emoji: '👍' });
+      const dropped = expect(pending).rejects.toThrow('Mất kết nối');
+      client.emit('close');
+      await dropped;
+      await expect(inbox.sendReaction({ threadId: PEER, messageId: '', emoji: '👍' })).rejects.toThrow();
+    });
+
+    // Tải tệp lên cho Page dùng mã phiên đọc từ trang hộp thư; làm mới mã không được đụng tới kết nối đang chạy.
+    test('theWebSessionComesFromTheInboxPageAndIsRefreshedWithoutTouchingTheConnection', async () => {
+      const { inbox, client, fetchPage, connect } = await connected();
+      await expect(inbox.webSession()).resolves.toEqual({ pageId: PAGE, userId: USER, cookieHeader: LOGIN_HEADER, agent: 'AGENT', fbDtsg: DTSG, lsd: LSD, jazoest: JAZOEST });
+      expect(fetchPage).toHaveBeenCalledTimes(1); // dùng lại trang đã tải lúc nối
+      fetchPage.mockResolvedValueOnce({ status: 200, html: INBOX_HTML.replace(DTSG, 'DTSG-NEW').replace(DEVICE, 'other-device-0000') });
+      await expect(inbox.webSession(true)).resolves.toMatchObject({ fbDtsg: 'DTSG-NEW' });
+      expect(fetchPage).toHaveBeenCalledTimes(2);
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(inbox.isAlive()).toBe(true);
+      // Kết nối vẫn dùng con trỏ của nó: nối lại sau đó không lấy con trỏ / mã thiết bị của lần tải làm mới.
+      client.emit('close');
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect((connect.mock.calls[1] as any[])[0]).toContain(`cid=${DEVICE}`);
+      fetchPage.mockResolvedValueOnce({ status: 200, html: '<html>login</html>' });
+      await expect(inbox.webSession(true)).resolves.toBeNull();
+      expect(logged()).not.toMatch(/DTSG|LSD-TOKEN/);
     });
 
     test('markReadSendsOneTaskAndIsSilentWhenNotConnected', async () => {

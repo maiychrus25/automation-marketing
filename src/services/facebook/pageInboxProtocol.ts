@@ -88,6 +88,45 @@ export function sendTextRequest(
   return tasksRequest(requestId, firstTaskId, [send, markReadTask(message.threadId, message.nowMs)], version);
 }
 
+/**
+ * Gửi một đính kèm đã tải lên (ảnh, video, tệp) vào hội thoại của Page: một tác vụ gửi duy nhất, không kèm đánh dấu đã đọc,
+ * đúng như Business Suite (bản ghi 16/11/2026). `attachmentId` là mã do bước tải lên trả về.
+ */
+export function sendAttachmentRequest(
+  requestId: number, taskId: number, message: { threadId: string; otid: string; attachmentId: string }, version = FALLBACK_LS_VERSION,
+): string {
+  return taskRequest(requestId, taskId, '46', message.threadId, toJson({
+    thread_id: big(message.threadId), otid: message.otid, source: 0, send_type: 3, sync_group: PAGE_MAILBOX_DB, mark_thread_read: 0,
+    text: null, attachment_fbids: [big(message.attachmentId)],
+  }), version);
+}
+
+/** Gửi một nhãn dán vào hội thoại của Page: tác vụ gửi (46) rồi tác vụ đánh dấu đã đọc (21), như tin chữ. */
+export function sendStickerRequest(
+  requestId: number, firstTaskId: number, message: { threadId: string; otid: string; stickerId: string; nowMs: number }, version = FALLBACK_LS_VERSION,
+): string {
+  const send: LsTask = {
+    label: '46', queueName: message.threadId,
+    payload: toJson({
+      thread_id: big(message.threadId), otid: message.otid, source: 4456448, send_type: 2, sync_group: PAGE_MAILBOX_DB, mark_thread_read: 1,
+      sticker_id: big(message.stickerId),
+    }),
+  };
+  return tasksRequest(requestId, firstTaskId, [send, markReadTask(message.threadId, message.nowMs)], version);
+}
+
+/** Thả cảm xúc đứng tên Page lên một tin (`emoji` rỗng = gỡ). Mỗi tin có hàng đợi riêng. */
+export function reactionRequest(
+  requestId: number, taskId: number, reaction: { threadId: string; messageId: string; pageId: string; emoji: string; nowMs: number },
+  version = FALLBACK_LS_VERSION,
+): string {
+  return taskRequest(requestId, taskId, '29', `reaction:${reaction.messageId}`, toJson({
+    thread_key: big(reaction.threadId), timestamp_ms: big(Math.trunc(reaction.nowMs)), message_id: reaction.messageId, actor_id: big(reaction.pageId),
+    reaction: reaction.emoji, reaction_style: null, sync_group: PAGE_MAILBOX_DB, send_attribution: 4456448, dataclass_params: null,
+    attachment_fbid: null, offline_threading_id: null,
+  }), version);
+}
+
 /** Đánh dấu đã đọc một hội thoại của Page tới mốc thời gian cho trước. */
 export function markReadRequest(requestId: number, taskId: number, threadId: string, watermarkMs: number, version = FALLBACK_LS_VERSION): string {
   return tasksRequest(requestId, taskId, [markReadTask(threadId, watermarkMs)], version);
@@ -118,11 +157,21 @@ export function historyRequest(
   }), version);
 }
 
-export interface InboxPageInfo { cursor: string | null; version: string | null; bloksVersion: string | null; deviceId: string | null }
+export interface InboxPageInfo {
+  cursor: string | null; version: string | null; bloksVersion: string | null; deviceId: string | null;
+  /** Mã phiên của trang (phiên tài khoản cá nhân ở business.facebook.com): cần cho việc tải tệp lên và các truy vấn của trang. */
+  fbDtsg: string | null; lsd: string | null; jazoest: string | null;
+}
+
+/** Phiên web của hộp thư Page: đủ để gọi các địa chỉ HTTP của Business Suite (tải tệp lên, danh sách nhãn dán). */
+export interface PageWebSession {
+  pageId: string; userId: string; cookieHeader: string; agent?: unknown; fbDtsg: string; lsd: string | null; jazoest: string;
+}
 
 /**
  * Trang hộp thư Business Suite nhúng sẵn lần đồng bộ đầu của hộp thư Page: lấy con trỏ tiếp theo, phiên bản lược đồ,
- * bloks_version và mã thiết bị. JSON trong trang lồng nhiều lớp nên dấu nháy có thể đi kèm một hay nhiều dấu gạch chéo ngược.
+ * bloks_version, mã thiết bị và mã phiên của trang. JSON trong trang lồng nhiều lớp nên dấu nháy có thể đi kèm một hay nhiều
+ * dấu gạch chéo ngược.
  */
 export function readInboxPage(html: string): InboxPageInfo {
   const q = String.raw`\\*"`;
@@ -132,7 +181,13 @@ export function readInboxPage(html: string): InboxPageInfo {
   const bloks = new RegExp(String.raw`bloks_version${q}:${q}([0-9a-f]{64})`).exec(html);
   // Con trỏ trên là của lần đồng bộ máy chủ đã làm cho đúng mã thiết bị này: kết nối MQTT phải dùng lại nó.
   const device = /"MqttWebDeviceID",\[\],\{"clientID":"([0-9a-zA-Z-]{8,64})"/.exec(html);
-  return { cursor: cursor?.[1] ?? null, version: version?.[1] ?? null, bloksVersion: bloks?.[1] ?? null, deviceId: device?.[1] ?? null };
+  const fbDtsg = /"DTSGInitialData",\[\],\{"token":"([^"\\]+)"/.exec(html)?.[1] ?? null;
+  const lsd = /"LSD",\[\],\{"token":"([^"\\]+)"/.exec(html)?.[1] ?? null;
+  // Trang không in sẵn jazoest thì tính từ fb_dtsg như trình duyệt: "2" + tổng mã ký tự.
+  const jazoest = /jazoest=(\d+)/.exec(html)?.[1] ?? (fbDtsg ? `2${[...fbDtsg].reduce((sum, ch) => sum + ch.charCodeAt(0), 0)}` : null);
+  return {
+    cursor: cursor?.[1] ?? null, version: version?.[1] ?? null, bloksVersion: bloks?.[1] ?? null, deviceId: device?.[1] ?? null, fbDtsg, lsd, jazoest,
+  };
 }
 
 export type FetchInboxPage = (pageId: string, cookieHeader: string, agent?: unknown) => Promise<{ status: number; html: string }>;

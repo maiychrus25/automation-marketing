@@ -2,7 +2,8 @@
  * Kết nối trực tiếp tới hộp thư của một Page (giao thức lightspeed của Meta Business Suite trên MQTT).
  * Đóng vai "cầu nối" của tài khoản Page: phát sự kiện cùng dạng với cầu nối Go (`{ type, data }`) và có
  * `isAlive()` / `fetchMessages()` cùng chữ ký, để FacebookService và FacebookHistoryFetcher dùng chung một đường.
- * Nhận tin, tải tin cũ, gửi tin chữ và đánh dấu đã đọc. Log không chứa nội dung tin, cookie, con trỏ hay mã thiết bị.
+ * Nhận tin, tải tin cũ, gửi tin chữ / đính kèm đã tải lên / nhãn dán, thả cảm xúc và đánh dấu đã đọc.
+ * Log không chứa nội dung tin, cookie, con trỏ, mã thiết bị hay mã phiên.
  */
 import { EventEmitter } from 'events';
 import Logger from '../../utils/Logger';
@@ -11,14 +12,15 @@ import { generateSessionId } from './FacebookUtils';
 import { e2eeReconnectDelayMs } from './facebookBridgeBackoff';
 import { decodeLightspeed } from './lightspeedDecoder';
 import {
-  ConnectInbox, FALLBACK_LS_VERSION, FetchInboxPage, InboxClient, PAGE_INBOX_ENDPOINT, connectInbox, fetchInboxPage, historyRequest,
-  markReadRequest, newOfflineThreadingId, pageInboxLogin, pageInboxUsername, readInboxPage, sendTextRequest, syncRequest, threadListRequest,
+  ConnectInbox, FALLBACK_LS_VERSION, FetchInboxPage, InboxClient, InboxPageInfo, PAGE_INBOX_ENDPOINT, PageWebSession, connectInbox, fetchInboxPage,
+  historyRequest, markReadRequest, newOfflineThreadingId, pageInboxLogin, pageInboxUsername, reactionRequest, readInboxPage, sendAttachmentRequest,
+  sendStickerRequest, sendTextRequest, syncRequest, threadListRequest,
 } from './pageInboxProtocol';
 import { InboxBatch, InboxMessage, PAGE_MAILBOX_DB, readInboxBatch } from './pageInboxTables';
 
 const SYNC_ANSWER_TIMEOUT_MS = 10_000;
 const HISTORY_TIMEOUT_MS = 30_000;
-/** Chờ Facebook xác nhận một tin đã gửi (trả mã tin thật) tối đa chừng này. */
+/** Chờ Facebook xác nhận một tin đã gửi (trả mã tin thật) hoặc một cảm xúc đã thả tối đa chừng này. */
 const SEND_CONFIRM_TIMEOUT_MS = 20_000;
 const RELOAD_PAGE_AFTER_FAILURES = 3;
 /** Phiên phải đồng bộ được lâu chừng này mới coi là ổn định; ngắn hơn thì tính là một lần nối hỏng. */
@@ -42,6 +44,7 @@ export type PageInboxEvent =
   | { type: 'typing'; data: { threadId: string; userId: string; isTyping: boolean } };
 
 interface Session { deviceId: string; version: string; syncParams: string; needThreads: boolean }
+interface Pending<T> { resolve: (value: T) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
 interface PendingHistory {
   before: number;             // mốc thời gian của yêu cầu: chỉ tin cũ hơn mốc này mới thuộc trang trả về
   held: InboxMessage[];       // tin cũ hơn mốc đã về, chờ khoảng tin xác nhận
@@ -65,7 +68,11 @@ export class FacebookPageInbox extends EventEmitter {
   private syncTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pendingHistory = new Map<string, PendingHistory>();
   /** Tin đã gửi đang chờ Facebook xác nhận, theo mã tạm (otid). */
-  private readonly pendingSends = new Map<string, { resolve: (r: { messageId: string }) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pendingSends = new Map<string, Pending<{ messageId: string }>>();
+  /** Cảm xúc đã thả đang chờ Facebook xác nhận, theo mã tin. */
+  private readonly pendingReactions = new Map<string, Set<Pending<void>>>();
+  /** Mã phiên của trang hộp thư (fb_dtsg, lsd, jazoest), dùng cho việc tải tệp lên. */
+  private webTokens: Pick<InboxPageInfo, 'fbDtsg' | 'lsd' | 'jazoest'> | null = null;
   private readonly reportedSteps = new Set<number>();
 
   constructor(private readonly deps: PageInboxDeps) {
@@ -122,8 +129,31 @@ export class FacebookPageInbox extends EventEmitter {
    * Quá hạn mà chưa có xác nhận thì báo lỗi: không biết tin đã tới hay chưa nên không coi là đã gửi.
    */
   sendText(p: { threadId: string; text: string; replyToMessageId?: string }): Promise<{ messageId: string }> {
+    if (!p.text?.trim()) return Promise.reject(new Error('Tin gửi không hợp lệ'));
+    return this.sendConfirmed(p.threadId, 2, (requestId, firstTaskId, otid, version) =>
+      sendTextRequest(requestId, firstTaskId, { threadId: p.threadId, text: p.text, otid, nowMs: Date.now(), replyToMessageId: p.replyToMessageId }, version));
+  }
+
+  /** Gửi một đính kèm đã tải lên (`attachmentId` do bước tải lên trả về). Xác nhận và lỗi như sendText. */
+  sendAttachment(p: { threadId: string; attachmentId: string }): Promise<{ messageId: string }> {
+    if (!/^\d+$/.test(p.attachmentId)) return Promise.reject(new Error('Đính kèm không hợp lệ'));
+    return this.sendConfirmed(p.threadId, 1, (requestId, taskId, otid, version) =>
+      sendAttachmentRequest(requestId, taskId, { threadId: p.threadId, otid, attachmentId: p.attachmentId }, version));
+  }
+
+  /** Gửi một nhãn dán theo mã của nó (kèm đánh dấu đã đọc). Xác nhận và lỗi như sendText. */
+  sendSticker(p: { threadId: string; stickerId: string }): Promise<{ messageId: string }> {
+    if (!/^\d+$/.test(p.stickerId)) return Promise.reject(new Error('Nhãn dán không hợp lệ'));
+    return this.sendConfirmed(p.threadId, 2, (requestId, firstTaskId, otid, version) =>
+      sendStickerRequest(requestId, firstTaskId, { threadId: p.threadId, otid, stickerId: p.stickerId, nowMs: Date.now() }, version));
+  }
+
+  /** Gửi một yêu cầu gửi tin gồm `taskCount` tác vụ và chờ Facebook đổi mã tạm (otid) thành mã tin thật. */
+  private sendConfirmed(
+    threadId: string, taskCount: number, build: (requestId: number, firstTaskId: number, otid: string, version: string) => string,
+  ): Promise<{ messageId: string }> {
     if (!this.isAlive() || !this.session) return Promise.reject(new Error('Hộp thư Page chưa kết nối'));
-    if (!/^\d+$/.test(p.threadId) || !p.text?.trim()) return Promise.reject(new Error('Tin gửi không hợp lệ'));
+    if (!/^\d+$/.test(threadId)) return Promise.reject(new Error('Tin gửi không hợp lệ'));
     const otid = newOfflineThreadingId();
     const version = this.session.version;
     return new Promise((resolve, reject) => {
@@ -133,9 +163,61 @@ export class FacebookPageInbox extends EventEmitter {
       }, SEND_CONFIRM_TIMEOUT_MS);
       this.pendingSends.set(otid, { resolve, reject, timer });
       const firstTaskId = this.taskId;
-      this.taskId += 2; // tác vụ gửi và tác vụ đã đọc
-      this.send(sendTextRequest(++this.requestId, firstTaskId, { threadId: p.threadId, text: p.text, otid, nowMs: Date.now(), replyToMessageId: p.replyToMessageId }, version));
+      this.taskId += taskCount;
+      this.send(build(++this.requestId, firstTaskId, otid, version));
     });
+  }
+
+  /**
+   * Thả cảm xúc đứng tên Page lên một tin (`emoji` rỗng = gỡ). Hoàn tất khi Facebook xác nhận; quá hạn thì báo lỗi.
+   */
+  sendReaction(p: { threadId: string; messageId: string; emoji: string }): Promise<void> {
+    if (!this.isAlive() || !this.session) return Promise.reject(new Error('Hộp thư Page chưa kết nối'));
+    if (!/^\d+$/.test(p.threadId) || !p.messageId) return Promise.reject(new Error('Cảm xúc không hợp lệ'));
+    const { messageId } = p;
+    const version = this.session.version;
+    return new Promise<void>((resolve, reject) => {
+      const waiting = this.pendingReactions.get(messageId) ?? new Set<Pending<void>>();
+      this.pendingReactions.set(messageId, waiting);
+      const pending: Pending<void> = {
+        resolve, reject,
+        timer: setTimeout(() => {
+          waiting.delete(pending);
+          if (!waiting.size && this.pendingReactions.get(messageId) === waiting) this.pendingReactions.delete(messageId);
+          reject(new Error('Facebook không xác nhận cảm xúc'));
+        }, SEND_CONFIRM_TIMEOUT_MS),
+      };
+      waiting.add(pending);
+      this.send(reactionRequest(++this.requestId, this.taskId++, { threadId: p.threadId, messageId, pageId: this.deps.pageId, emoji: p.emoji || '', nowMs: Date.now() }, version));
+    });
+  }
+
+  /**
+   * Phiên web của hộp thư (cookie cá nhân + mã phiên của trang), cho các lời gọi HTTP của Business Suite như tải tệp lên.
+   * `fresh` = tải lại trang để lấy mã phiên mới (mã cũ hết hạn); việc đó không đụng tới con trỏ hay kết nối đang chạy.
+   * null nếu thiếu cookie đăng nhập hoặc trang không cho mã phiên.
+   */
+  async webSession(fresh = false): Promise<PageWebSession | null> {
+    const login = pageInboxLogin(this.deps.getCookie());
+    if (!login) return null;
+    const agent = this.deps.getAgent?.();
+    if (fresh || !this.webTokens?.fbDtsg) {
+      try {
+        const page = await (this.deps.fetchPage ?? fetchInboxPage)(this.deps.pageId, login.cookieHeader, agent);
+        this.keepWebTokens(readInboxPage(page.html));
+      } catch (err: any) {
+        Logger.warn(`${this.tag} không tải được trang hộp thư để lấy mã phiên: ${err?.message}`);
+        return null;
+      }
+    }
+    const tokens = this.webTokens;
+    if (!tokens?.fbDtsg || !tokens.jazoest) return null;
+    return { pageId: this.deps.pageId, userId: login.userId, cookieHeader: login.cookieHeader, agent, fbDtsg: tokens.fbDtsg, lsd: tokens.lsd, jazoest: tokens.jazoest };
+  }
+
+  /** Giữ mã phiên của một lần tải trang; trang không có mã (ví dụ trang đăng nhập) thì bỏ mã cũ. */
+  private keepWebTokens(info: InboxPageInfo): void {
+    this.webTokens = info.fbDtsg ? { fbDtsg: info.fbDtsg, lsd: info.lsd, jazoest: info.jazoest } : null;
   }
 
   /** Đánh dấu đã đọc một hội thoại tới mốc cho trước. false nếu chưa kết nối hoặc tham số không hợp lệ (không gửi gì). */
@@ -188,6 +270,7 @@ export class FacebookPageInbox extends EventEmitter {
     try {
       const page = await (this.deps.fetchPage ?? fetchInboxPage)(this.deps.pageId, cookieHeader, agent);
       const info = readInboxPage(page.html);
+      this.keepWebTokens(info);
       if (!info.cursor || !info.deviceId) {
         Logger.warn(`${this.tag} trang hộp thư không cho con trỏ hoặc mã thiết bị (status=${page.status} len=${page.html.length})`);
         return false;
@@ -248,13 +331,20 @@ export class FacebookPageInbox extends EventEmitter {
       clearTimeout(pending.timer);
       pending.resolve({ messageId });
     }
+    const { pageId } = this.deps;
+    // Cảm xúc vừa thả hay gỡ được xác nhận bằng replaceOptimisticReaction; thay đổi cảm xúc đứng tên Page trên tin đó cũng được tính.
+    for (const messageId of [...batch.confirmedReactions, ...batch.reactions.filter(r => r.actorId === pageId).map(r => r.messageId)]) {
+      const waiting = this.pendingReactions.get(messageId);
+      if (!waiting) continue;
+      this.pendingReactions.delete(messageId);
+      for (const pending of waiting) { clearTimeout(pending.timer); pending.resolve(); }
+    }
 
     const messages = this.takeHistory(batch);
     if (messages.length || batch.threads.length) {
       Logger.log(`${this.tag} nhận tin=${messages.length} (mới=${messages.filter(m => !m.isHistory).length}) hội thoại=${batch.threads.length}`);
     }
     this.emitMessages(messages);
-    const { pageId } = this.deps;
     const events: PageInboxEvent[] = [
       ...batch.reactions.map((r): PageInboxEvent => ({ type: 'reaction', data: { messageId: r.messageId, threadId: r.threadId, userId: r.actorId, emoji: r.emoji } })),
       // "Đã nhận", "đã xem" và "đang gõ" của chính Page (thao tác ở máy khác) không phải tín hiệu từ khách.
@@ -352,7 +442,7 @@ export class FacebookPageInbox extends EventEmitter {
     }, delay);
   }
 
-  /** Bỏ máy khách hiện tại: không nghe nó nữa, đóng socket, trả lỗi cho các yêu cầu tin cũ đang chờ. */
+  /** Bỏ máy khách hiện tại: không nghe nó nữa, đóng socket, trả lỗi cho các yêu cầu tin cũ, tin gửi và cảm xúc đang chờ. */
   private drop(): void {
     this.generation++;
     const client = this.client;
@@ -371,6 +461,10 @@ export class FacebookPageInbox extends EventEmitter {
       pending.reject(new Error('Mất kết nối hộp thư Page khi đang gửi tin'));
       this.pendingSends.delete(otid);
     }
+    for (const waiting of this.pendingReactions.values()) {
+      for (const pending of waiting) { clearTimeout(pending.timer); pending.reject(new Error('Mất kết nối hộp thư Page khi đang thả cảm xúc')); }
+    }
+    this.pendingReactions.clear();
     try { client?.end(true); } catch { /* socket đã đóng */ }
     if (wasSynced) this.emit('status', 'disconnected');
   }

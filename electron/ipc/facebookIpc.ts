@@ -693,7 +693,7 @@ export function registerFacebookIpc(): void {
       const service = await getFBServiceOrReconnect(internalId);
       if (!service) return { success: false, error: 'Tài khoản chưa kết nối. Vui lòng kết nối lại Facebook.' };
 
-      // Page: gửi đính kèm qua tự động hoá Business Suite (không upload REST, không E2EE)
+      // Page: gửi đính kèm qua hộp thư Page (hoặc tự động hoá Business Suite khi hộp thư không sống); không upload REST, không E2EE
       if (service.isPage()) {
         const path = require('path');
         const fileName = path.basename(params.filePath);
@@ -717,7 +717,8 @@ export function registerFacebookIpc(): void {
             const { FacebookSendService } = require('../../src/services/facebook/FacebookSendService');
             await FacebookSendService.persistSentMessage({
               accountId: internalId, threadId: params.threadId, messageId: result.messageId,
-              body: params.body || null, fbSenderId: fbId, timestamp: result.timestamp || Date.now(),
+              // Lời nhắn đã đi thành một tin riêng (tự được lưu khi hộp thư dội lại) thì không ghi vào tin chứa tệp.
+              body: result.captionSentSeparately ? null : (params.body || null), fbSenderId: fbId, timestamp: result.timestamp || Date.now(),
               type: attachType, isUserMessage: true,
               attachments: JSON.stringify([{ type: attachType, name: fileName, ...(localRelPath ? { localPath: localRelPath } : {}) }]),
               ...(localRelPath ? { localPath: localRelPath } : {}),
@@ -927,7 +928,7 @@ export function registerFacebookIpc(): void {
     }
   });
 
-  /** Liệt kê sticker FB theo keyword, vai Page (qua Business Suite). */
+  /** Liệt kê sticker FB theo keyword, vai Page (khay nhãn dán lấy thẳng khi hộp thư Page đang sống, không thì qua Business Suite). */
   ipcMain.handle('fb:listPageStickers', async (_event, params: { accountId: string; threadId: string; keyword: string }) => {
     try {
       const internalId = resolveInternalId(params.accountId);
@@ -938,12 +939,12 @@ export function registerFacebookIpc(): void {
     } catch (e: any) { return { success: false, stickers: [], error: e?.message }; }
   });
 
-  ipcMain.handle('fb:sendPageSticker', async (_event, params: { accountId: string; threadId: string; keyword: string; index: number; thumbUrl?: string }) => {
+  ipcMain.handle('fb:sendPageSticker', async (_event, params: { accountId: string; threadId: string; keyword: string; index: number; thumbUrl?: string; stickerId?: string }) => {
     try {
       const internalId = resolveInternalId(params.accountId);
       const service = await getFBServiceOrReconnect(internalId);
       if (!service || !service.isPage()) return { success: false, error: 'Tài khoản không phải Page.' };
-      const r = await service.sendPageSticker(params.threadId, params.keyword, params.index);
+      const r = await service.sendPageSticker(params.threadId, params.keyword, params.index, params.stickerId);
       if (!r.success || !r.messageId) return { success: false, error: r.error || 'Gửi sticker thất bại' };
       // Lưu + hiển thị như ảnh gửi (đứng tên Page). Tải thumbUrl về làm ảnh local.
       try {
@@ -1004,7 +1005,7 @@ export function registerFacebookIpc(): void {
               } catch {}
               await FacebookSendService.persistSentMessage({
                 accountId: internalId, threadId: params.threadId, messageId: r.messageId,
-                body: i === 0 ? (params.body || null) : null, fbSenderId: fbId, timestamp: r.timestamp || Date.now(),
+                body: i === 0 && !r.captionSentSeparately ? (params.body || null) : null, fbSenderId: fbId, timestamp: r.timestamp || Date.now(),
                 type: attachType, isUserMessage: true,
                 attachments: JSON.stringify([{ type: attachType, name: fileName, ...(localRelPath ? { localPath: localRelPath } : {}) }]),
                 ...(localRelPath ? { localPath: localRelPath } : {}),
@@ -1238,8 +1239,15 @@ export function registerFacebookIpc(): void {
 
       let success = false;
 
+      // Page: cảm xúc đứng tên Page chỉ đi được qua hộp thư Page. Lỗi thì báo lỗi, không ghi cảm xúc chưa tới nơi vào DB.
+      if (service.isPage()) {
+        const sent = await service.sendPageReaction(params.messageId, params.action === 'remove' ? '' : (params.emoji || ''));
+        if (!sent.success) return sent;
+        success = true;
+      }
+
       // Try bridge reaction first (works for group via sendReaction)
-      if (service.isE2EEConnected()) {
+      if (!success && service.isE2EEConnected()) {
         // Look up thread_id from message DB for context
         const db = DatabaseService.getInstance();
         const msg = db.queryOne?.('SELECT thread_id, sender_id FROM fb_messages WHERE id = ? AND account_id = ?',

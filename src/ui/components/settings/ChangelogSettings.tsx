@@ -15,6 +15,40 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.43.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '📎 Page gửi ảnh, tệp và nhãn dán thẳng qua hộp thư, không cần cài lõi trình duyệt',
+      '❤️ Thả cảm xúc đứng tên Page nay tới được khách',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Ảnh, video và tệp gửi từ một Page Facebook đi thẳng qua kết nối hộp thư Page, như tin chữ. Máy chưa cài lõi trình duyệt vẫn gửi được',
+          'Bảng nhãn dán của Page mở ra là thấy ngay các nhãn dán trong khay của tài khoản; gõ từ khoá để lọc theo mô tả. Nhãn dán trong khay gửi thẳng qua hộp thư Page',
+          'Thả và gỡ cảm xúc trên tin của khách khi đang dùng tài khoản Page: khách thấy cảm xúc đứng tên Page. Trước đây cảm xúc chỉ hiện trong MaiHub',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Lời nhắn gõ kèm ảnh / tệp khi gửi từ Page đi thành một tin riêng ngay sau tệp',
+          'Khi cảm xúc không gửi được (ví dụ hộp thư Page đang nối lại), MaiHub báo lý do và gỡ cảm xúc vừa hiện tạm, thay vì để nguyên như đã thả',
+          'Nếu không tải được tệp lên hoặc không lấy được khay nhãn dán, MaiHub tự dùng cách gửi cũ qua Business Suite',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Khách gỡ cảm xúc khỏi một tin: mở lại hội thoại không còn thấy cảm xúc cũ hiện lại',
+          'Cảm xúc Page thả từ nơi khác (Business Suite, điện thoại) không còn bị tính thành một người thả riêng',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.42.1',
     date: '11/2026',
     type: 'patch',

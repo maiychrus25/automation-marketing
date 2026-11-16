@@ -150,6 +150,8 @@ export interface FBSendResult {
   messageId?: string;
   timestamp?: number;
   error?: string;
+  /** Page gửi tệp qua hộp thư: lời nhắn kèm theo đã đi thành một tin riêng (tin đó tự được lưu), không thuộc tin chứa tệp. */
+  captionSentSeparately?: boolean;
 }
 
 // ─── Attachment Upload ────────────────────────────────────────────────────────

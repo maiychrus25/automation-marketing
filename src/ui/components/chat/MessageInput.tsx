@@ -4505,7 +4505,10 @@ type StickerPack = {
 // Popular Vietnamese keywords to seed the sticker store
 const STICKER_SEED_KEYWORDS = ['haha', 'buồn', 'yêu', 'vui', 'hi', 'ok', 'cảm ơn', 'chúc mừng', 'giận', 'ngủ'];
 
-/** Bảng chọn sticker cho Facebook Page: search keyword → lưới thumbnail → click gửi qua Business Suite. */
+/**
+ * Bảng chọn sticker cho Facebook Page: mở ra là thấy khay nhãn dán (khi hộp thư Page đang nối), gõ từ khoá để lọc,
+ * bấm để gửi. Nhãn dán có mã thì gửi thẳng qua hộp thư Page; không có mã thì gửi qua Business Suite như trước.
+ */
 function FbStickerPicker({ accountId, threadId, onClose, showNotification }: {
   accountId: string; threadId: string; onClose: () => void;
   showNotification: (msg: string, type: 'warning' | 'error' | 'success') => void;
@@ -4513,9 +4516,10 @@ function FbStickerPicker({ accountId, threadId, onClose, showNotification }: {
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
-  const [results, setResults] = useState<Array<{ label: string; thumbUrl: string }>>([]);
+  const [results, setResults] = useState<Array<{ label: string; thumbUrl: string; stickerId?: string }>>([]);
   const ref = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchSeq = useRef(0);
 
   useEffect(() => {
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
@@ -4523,14 +4527,17 @@ function FbStickerPicker({ accountId, threadId, onClose, showNotification }: {
     return () => document.removeEventListener('mousedown', h, true);
   }, [onClose]);
 
+  // Từ khoá rỗng = cả khay nhãn dán (chỉ có khi lấy thẳng được; đường Business Suite cần từ khoá nên trả rỗng).
   const doSearch = (kw: string) => {
-    if (!kw.trim()) { setResults([]); return; }
+    const mine = ++searchSeq.current; // kết quả của lần tìm cũ về muộn không được đè lên lần tìm mới
     setLoading(true);
     ipc.fb?.listPageStickers({ accountId, threadId, keyword: kw.trim() })
-      .then((r: any) => setResults(r?.success ? (r.stickers || []) : []))
-      .catch(() => setResults([]))
-      .finally(() => setLoading(false));
+      .then((r: any) => { if (mine === searchSeq.current) setResults(r?.success ? (r.stickers || []) : []); })
+      .catch(() => { if (mine === searchSeq.current) setResults([]); })
+      .finally(() => { if (mine === searchSeq.current) setLoading(false); });
   };
+
+  useEffect(() => { doSearch(''); }, [accountId, threadId]);
 
   const onType = (v: string) => {
     setKeyword(v);
@@ -4543,7 +4550,7 @@ function FbStickerPicker({ accountId, threadId, onClose, showNotification }: {
     setSending(true);
     try {
       const r = await ipc.fb?.sendPageSticker({
-        accountId, threadId, keyword: keyword.trim(), index, thumbUrl: results[index]?.thumbUrl,
+        accountId, threadId, keyword: keyword.trim(), index, thumbUrl: results[index]?.thumbUrl, stickerId: results[index]?.stickerId,
       });
       if (r?.success) onClose();
       else showNotification(r?.error || 'Gửi sticker thất bại', 'error');
@@ -4557,7 +4564,7 @@ function FbStickerPicker({ accountId, threadId, onClose, showNotification }: {
         className="mb-2 w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100" />
       {loading && <div className="py-6 text-center text-sm text-gray-400">Đang tìm…</div>}
       {!loading && keyword.trim() && results.length === 0 && <div className="py-6 text-center text-sm text-gray-400">Không tìm thấy nhãn dán</div>}
-      {!loading && !keyword.trim() && <div className="py-6 text-center text-sm text-gray-400">Gõ từ khoá để tìm nhãn dán</div>}
+      {!loading && !keyword.trim() && results.length === 0 && <div className="py-6 text-center text-sm text-gray-400">Gõ từ khoá để tìm nhãn dán</div>}
       <div className="grid max-h-64 grid-cols-4 gap-2 overflow-y-auto">
         {results.map((s, i) => (
           <button key={i} disabled={sending} onClick={() => pick(i)} title={s.label}

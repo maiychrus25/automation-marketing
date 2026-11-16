@@ -20,6 +20,10 @@ jest.mock('../../services/facebook/FacebookPageInbox', () => {
     stop = jest.fn();
     resync = jest.fn();
     sendText = jest.fn();
+    sendAttachment = jest.fn();
+    sendSticker = jest.fn();
+    sendReaction = jest.fn();
+    webSession = jest.fn();
     markRead = jest.fn(() => true);
     fetchMessages = jest.fn();
     constructor(public deps: any) { super(); mockInboxes.push(this); }
@@ -29,7 +33,18 @@ jest.mock('../../services/facebook/FacebookPageInbox', () => {
 });
 
 // Trình duyệt Business Suite (đường gửi của Page ở bản này) được thay bằng một bản giả điều khiển được.
-const mockBrowserSender = { send: jest.fn(), sendSticker: jest.fn() };
+const mockBrowserSender = { send: jest.fn(), sendSticker: jest.fn(), listStickers: jest.fn() };
+// Tải tệp lên và danh sách nhãn dán gọi mạng thật: thay bằng bản giả; phần còn lại của hai mô-đun giữ nguyên.
+const mockUploadPageAttachment = jest.fn();
+jest.mock('../../services/facebook/FacebookAttachment', () => ({
+  ...jest.requireActual('../../services/facebook/FacebookAttachment'),
+  uploadPageAttachment: (...args: any[]) => mockUploadPageAttachment(...args),
+}));
+const mockFetchPageStickers = jest.fn();
+jest.mock('../../services/facebook/pageStickers', () => ({
+  ...jest.requireActual('../../services/facebook/pageStickers'),
+  fetchPageStickers: (...args: any[]) => mockFetchPageStickers(...args),
+}));
 jest.mock('../../services/facebook/pagePlaywrightDriver', () => ({
   getPageBrowserSender: jest.fn(async () => mockBrowserSender),
   closePageBrowserSender: jest.fn(),
@@ -79,6 +94,10 @@ describe('FacebookService with the direct Page inbox', () => {
   beforeEach(() => {
     mockInboxes.length = 0;
     mockBrowserSender.send.mockReset();
+    mockBrowserSender.sendSticker.mockReset();
+    mockBrowserSender.listStickers.mockReset();
+    mockUploadPageAttachment.mockReset();
+    mockFetchPageStickers.mockReset();
     emit = jest.spyOn(EventBroadcaster, 'emit').mockImplementation((() => {}) as any);
     // Mỗi test bắt đầu từ 0 chưa đọc, để số đếm tuyệt đối đúng với mọi thứ tự chạy (các test dùng chung một khách).
     db.run("UPDATE contacts SET unread_count = 0 WHERE channel = 'facebook'");
@@ -440,6 +459,280 @@ describe('FacebookService with the direct Page inbox', () => {
       mockInboxes[0].emit('event', { type: 'message', data: message('mid.$peerOk', { text: 'ok', timestampMs: now }) });
       await until(() => !!saved('mid.$peerOk'));
       expect(rowsWith('ok').sort()).toEqual(['mid.$peerOk', 'page:fixture-ok'].sort());
+    });
+  });
+
+  // Đợt 3 (bản ghi Business Suite 16/11/2026, 23:35): ảnh / tệp, nhãn dán và cảm xúc của Page cũng đi thẳng qua hộp thư.
+  describe('sending files, stickers and reactions from a Page', () => {
+    const SESSION = { pageId: DELEGATE, userId: PARENT_FB, cookieHeader: 'c', fbDtsg: 'd', lsd: 'l', jazoest: '2' };
+    const sender = () => {
+      const svc = pageService();
+      svc.startPageInbox();
+      const inbox = mockInboxes[0];
+      inbox.alive = true;
+      inbox.webSession.mockResolvedValue(SESSION);
+      return { svc, inbox };
+    };
+    const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)); };
+
+    test('aFileIsUploadedThenSentThroughTheLiveInbox', async () => {
+      const { svc, inbox } = sender();
+      mockUploadPageAttachment.mockResolvedValue({ attachmentId: '9007199254740993', attachmentType: 'image/png' });
+      inbox.sendAttachment.mockResolvedValue({ messageId: 'mid.$file1' });
+      const res = await svc.sendPageAttachment(PEER, '/tmp/a.png');
+      expect(res).toMatchObject({ success: true, messageId: 'mid.$file1' });
+      expect(res.captionSentSeparately).toBeFalsy();
+      expect(mockUploadPageAttachment).toHaveBeenCalledWith(SESSION, '/tmp/a.png');
+      expect(inbox.sendAttachment).toHaveBeenCalledWith({ threadId: PEER, attachmentId: '9007199254740993' });
+      expect(inbox.sendText).not.toHaveBeenCalled();
+      expect(mockBrowserSender.send).not.toHaveBeenCalled();
+
+      // Tin dội của chính tệp vừa gửi: bên gọi đã lưu tin này (kèm bản sao tệp), không lưu / phát lần hai.
+      inbox.emit('event', { type: 'message', data: message('mid.$file1', { senderId: DELEGATE, text: '', attachments: [{ type: 'image', url: 'https://x.test/a.png' }] }) });
+      await settle();
+      expect(saved('mid.$file1')).toBeFalsy();
+      expect(emitted('fb:onMessage')).toHaveLength(0);
+    });
+
+    // Business Suite gửi tệp không kèm chữ: lời nhắn đi thành một tin riêng ngay sau tệp và được lưu khi hộp thư dội lại.
+    test('aCaptionGoesAsASeparateTextMessageAfterTheFile', async () => {
+      const { svc, inbox } = sender();
+      const order: string[] = [];
+      mockUploadPageAttachment.mockResolvedValue({ attachmentId: '11', attachmentType: 'image/png' });
+      inbox.sendAttachment.mockImplementation(async () => { order.push('file'); return { messageId: 'mid.$file2' }; });
+      inbox.sendText.mockImplementation(async () => { order.push('text'); return { messageId: 'mid.$caption2' }; });
+      const res = await svc.sendPageAttachment(PEER, '/tmp/a.png', 'chu thich anh');
+      expect(res).toMatchObject({ success: true, messageId: 'mid.$file2', captionSentSeparately: true });
+      expect(order).toEqual(['file', 'text']);
+      expect(inbox.sendText).toHaveBeenCalledWith({ threadId: PEER, text: 'chu thich anh' });
+
+      inbox.emit('event', { type: 'message', data: message('mid.$caption2', { senderId: DELEGATE, text: 'chu thich anh' }) });
+      await until(() => !!saved('mid.$caption2'));
+      expect(saved('mid.$caption2')).toMatchObject({ body: 'chu thich anh', is_self: 1 });
+    });
+
+    // Lời nhắn không được xác nhận: tệp vẫn tính là đã gửi, và lời nhắn ở lại trên tin chứa tệp để chữ người dùng gõ không mất.
+    test('aCaptionThatIsNotConfirmedStaysOnTheFileMessage', async () => {
+      const { svc, inbox } = sender();
+      mockUploadPageAttachment.mockResolvedValue({ attachmentId: '11', attachmentType: 'image/png' });
+      inbox.sendAttachment.mockResolvedValue({ messageId: 'mid.$file3' });
+      inbox.sendText.mockRejectedValue(new Error('Facebook không xác nhận tin đã gửi'));
+      const res = await svc.sendPageAttachment(PEER, '/tmp/a.png', 'chu thich');
+      expect(res).toMatchObject({ success: true, messageId: 'mid.$file3' });
+      expect(res.captionSentSeparately).toBeFalsy();
+    });
+
+    // Tin dội của tệp có thể về trong lúc lời nhắn đang được gửi (tới 20 giây): lúc đó tệp đã phải được đánh dấu là tin
+    // của lượt gửi này, không thì nó bị lưu như tin thường rồi bên gọi lưu thêm lần nữa.
+    test('theEchoOfTheFileDuringTheCaptionSendIsNotSavedAsANewMessage', async () => {
+      const { svc, inbox } = sender();
+      mockUploadPageAttachment.mockResolvedValue({ attachmentId: '11', attachmentType: 'image/png' });
+      inbox.sendAttachment.mockResolvedValue({ messageId: 'mid.$file5' });
+      let confirmCaption: (r: any) => void = () => {};
+      inbox.sendText.mockReturnValue(new Promise(r => { confirmCaption = r; }));
+      const sending = svc.sendPageAttachment(PEER, '/tmp/a.png', 'chu thich 5');
+      await until(() => inbox.sendText.mock.calls.length === 1);
+      inbox.emit('event', { type: 'message', data: message('mid.$file5', { senderId: DELEGATE, text: '', attachments: [{ type: 'image', url: 'https://x.test/a.png' }] }) });
+      await settle();
+      expect(saved('mid.$file5')).toBeFalsy();
+      expect(emitted('fb:onMessage')).toHaveLength(0);
+      confirmCaption({ messageId: 'mid.$caption5' });
+      await expect(sending).resolves.toMatchObject({ success: true, messageId: 'mid.$file5', captionSentSeparately: true });
+    });
+
+    // Kết nối rớt trong lúc tải tệp lên: chưa có lệnh gửi nào được phát, nên đường trình duyệt vẫn dùng được.
+    test('anInboxThatDropsDuringTheUploadLeavesTheFileToTheBrowser', async () => {
+      const { svc, inbox } = sender();
+      mockUploadPageAttachment.mockImplementation(async () => { inbox.alive = false; return { attachmentId: '14', attachmentType: 'image/png' }; });
+      mockBrowserSender.send.mockResolvedValue({ success: true, messageId: 'page:81' });
+      await expect(svc.sendPageAttachment(PEER, '/tmp/a.png')).resolves.toMatchObject({ success: true, messageId: 'page:81' });
+      expect(inbox.sendAttachment).not.toHaveBeenCalled();
+    });
+
+    // Mã phiên của trang hết hạn: lấy mã mới đúng một lần rồi thử lại.
+    test('staleTokensAreRefreshedOnceBeforeGivingUp', async () => {
+      const { svc, inbox } = sender();
+      mockUploadPageAttachment.mockResolvedValueOnce(null).mockResolvedValueOnce({ attachmentId: '12', attachmentType: 'text/xml' });
+      inbox.sendAttachment.mockResolvedValue({ messageId: 'mid.$file4' });
+      await expect(svc.sendPageAttachment(PEER, '/tmp/a.xml')).resolves.toMatchObject({ success: true, messageId: 'mid.$file4' });
+      expect(inbox.webSession.mock.calls).toEqual([[false], [true]]);
+      expect(mockBrowserSender.send).not.toHaveBeenCalled();
+    });
+
+    // Tải lên không thành thì chưa có gì được gửi: dùng đường trình duyệt cũ là an toàn, không thể thành hai tin.
+    test('whenTheUploadFailsTheBrowserSendsTheFile', async () => {
+      const { svc, inbox } = sender();
+      mockUploadPageAttachment.mockResolvedValue(null);
+      mockBrowserSender.send.mockResolvedValue({ success: true, messageId: 'page:77' });
+      await expect(svc.sendPageAttachment(PEER, '/tmp/a.png', 'kem chu')).resolves.toEqual({ success: true, messageId: 'page:77' });
+      expect(mockUploadPageAttachment).toHaveBeenCalledTimes(2);
+      expect(inbox.sendAttachment).not.toHaveBeenCalled();
+      expect(mockBrowserSender.send).toHaveBeenCalledWith(PEER, { text: 'kem chu', files: [{ path: '/tmp/a.png', type: 'image' }] });
+    });
+
+    test('aPageWithoutUploadTokensUsesTheBrowser', async () => {
+      const { svc, inbox } = sender();
+      inbox.webSession.mockResolvedValue(null);
+      mockBrowserSender.send.mockResolvedValue({ success: true, messageId: 'page:78' });
+      await expect(svc.sendPageAttachment(PEER, '/tmp/a.png')).resolves.toMatchObject({ success: true, messageId: 'page:78' });
+      expect(mockUploadPageAttachment).not.toHaveBeenCalled();
+    });
+
+    // Đã tải lên và đã phát lệnh gửi mà không có xác nhận: không biết tệp đã tới chưa, không gửi lại bằng trình duyệt.
+    test('anUnconfirmedFileSendIsAnErrorAndIsNotRetriedThroughTheBrowser', async () => {
+      const { svc, inbox } = sender();
+      mockUploadPageAttachment.mockResolvedValue({ attachmentId: '13', attachmentType: 'image/png' });
+      inbox.sendAttachment.mockRejectedValue(new Error('Facebook không xác nhận tin đã gửi'));
+      const res = await svc.sendPageAttachment(PEER, '/tmp/a.png', 'chu');
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('Facebook không xác nhận');
+      expect(mockBrowserSender.send).not.toHaveBeenCalled();
+      expect(inbox.sendText).not.toHaveBeenCalled(); // tệp chưa chắc tới thì không gửi lời nhắn kèm
+    });
+
+    test('withoutALiveInboxFilesUseTheBrowser', async () => {
+      const { svc, inbox } = sender();
+      inbox.alive = false;
+      mockBrowserSender.send.mockResolvedValue({ success: true, messageId: 'page:79' });
+      await expect(svc.sendPageAttachment(PEER, '/tmp/a.png')).resolves.toMatchObject({ success: true, messageId: 'page:79' });
+      expect(inbox.webSession).not.toHaveBeenCalled();
+    });
+
+    describe('stickers', () => {
+      const STICKERS = [
+        { stickerId: '369239263222822', label: 'Mèo vui vẻ', thumbUrl: 'https://x.test/1.png' },
+        { stickerId: '369239263222823', label: 'Gấu buồn', thumbUrl: 'https://x.test/2.png' },
+      ];
+
+      test('areListedStraightFromBusinessSuiteWithTheirIdsAndFetchedOnce', async () => {
+        const { svc, inbox } = sender();
+        mockFetchPageStickers.mockResolvedValue(STICKERS);
+        await expect(svc.listPageStickers(PEER, 'vui')).resolves.toEqual([STICKERS[0]]);
+        await expect(svc.listPageStickers(PEER, '')).resolves.toEqual(STICKERS);
+        expect(mockFetchPageStickers).toHaveBeenCalledTimes(1);
+        expect(mockFetchPageStickers).toHaveBeenCalledWith(SESSION);
+        expect(mockBrowserSender.listStickers).not.toHaveBeenCalled();
+        expect(inbox.webSession).toHaveBeenCalledTimes(1);
+      });
+
+      // Mã truy vấn của Facebook đổi theo thời gian: khi đó bảng nhãn dán quay về đường trình duyệt như trước.
+      test('fallBackToTheBrowserSearchWhenTheDirectListFails', async () => {
+        const { svc } = sender();
+        mockFetchPageStickers.mockRejectedValue(new Error('Không lấy được danh sách gói nhãn dán'));
+        mockBrowserSender.listStickers.mockResolvedValue([{ label: 'vui', thumbUrl: 'https://x.test/b.png' }]);
+        await expect(svc.listPageStickers(PEER, 'vui')).resolves.toEqual([{ label: 'vui', thumbUrl: 'https://x.test/b.png' }]);
+        // Từ khoá rỗng không bao giờ mở trình duyệt.
+        await expect(svc.listPageStickers(PEER, '  ')).resolves.toEqual([]);
+        expect(mockBrowserSender.listStickers).toHaveBeenCalledTimes(1);
+      });
+
+      test('aStickerWithAnIdGoesThroughTheInbox', async () => {
+        const { svc, inbox } = sender();
+        inbox.sendSticker.mockResolvedValue({ messageId: 'mid.$sticker1' });
+        await expect(svc.sendPageSticker(PEER, 'vui', 0, '369239263222822')).resolves.toMatchObject({ success: true, messageId: 'mid.$sticker1' });
+        expect(inbox.sendSticker).toHaveBeenCalledWith({ threadId: PEER, stickerId: '369239263222822' });
+        expect(mockBrowserSender.sendSticker).not.toHaveBeenCalled();
+      });
+
+      test('anUnconfirmedStickerIsAnErrorAndIsNotRetriedThroughTheBrowser', async () => {
+        const { svc, inbox } = sender();
+        inbox.sendSticker.mockRejectedValue(new Error('Facebook không xác nhận tin đã gửi'));
+        const res = await svc.sendPageSticker(PEER, 'vui', 0, '369239263222822');
+        expect(res).toMatchObject({ success: false });
+        expect(mockBrowserSender.sendSticker).not.toHaveBeenCalled();
+      });
+
+      test('aStickerFoundThroughTheBrowserIsSentByItsPositionThere', async () => {
+        const { svc, inbox } = sender();
+        mockBrowserSender.sendSticker.mockResolvedValue({ success: true, messageId: 'page:80' });
+        await expect(svc.sendPageSticker(PEER, 'vui', 2)).resolves.toMatchObject({ success: true, messageId: 'page:80' });
+        expect(mockBrowserSender.sendSticker).toHaveBeenCalledWith(PEER, 'vui', 2);
+        expect(inbox.sendSticker).not.toHaveBeenCalled();
+      });
+
+      // Vị trí của một nhãn dán trong khay không phải vị trí của nó trong kết quả tìm của trình duyệt: hộp thư rớt sau khi
+      // bảng chọn đã tải thì báo lỗi, không gửi "nhãn dán thứ n" của một danh sách khác.
+      test('aStickerFromTheTrayIsNeverSentByPositionThroughTheBrowser', async () => {
+        const { svc, inbox } = sender();
+        inbox.alive = false;
+        const res = await svc.sendPageSticker(PEER, '', 2, '369239263222822');
+        expect(res.success).toBe(false);
+        expect(res.error).toContain('Hộp thư Page');
+        expect(mockBrowserSender.sendSticker).not.toHaveBeenCalled();
+        expect(inbox.sendSticker).not.toHaveBeenCalled();
+      });
+
+      // Khay chỉ có nhãn dán của tài khoản: từ khoá không khớp gì trong khay thì vẫn tìm trên Facebook qua trình duyệt như trước.
+      test('aKeywordWithNoMatchInTheTrayIsSearchedThroughTheBrowser', async () => {
+        const { svc } = sender();
+        mockFetchPageStickers.mockResolvedValue(STICKERS);
+        mockBrowserSender.listStickers.mockResolvedValue([{ label: 'haha', thumbUrl: 'https://x.test/h.png' }]);
+        await expect(svc.listPageStickers(PEER, 'haha')).resolves.toEqual([{ label: 'haha', thumbUrl: 'https://x.test/h.png' }]);
+        await expect(svc.listPageStickers(PEER, 'gau')).resolves.toEqual([STICKERS[1]]);
+        expect(mockBrowserSender.listStickers).toHaveBeenCalledTimes(1);
+      });
+
+      // Mã phiên của trang có hạn: khay hỏng thì lấy mã mới đúng một lần rồi thử lại, như bước tải tệp lên.
+      test('theTrayIsRetriedOnceWithFreshTokens', async () => {
+        const { svc, inbox } = sender();
+        mockFetchPageStickers.mockRejectedValueOnce(new Error('Không lấy được danh sách gói nhãn dán')).mockResolvedValueOnce(STICKERS);
+        await expect(svc.listPageStickers(PEER, '')).resolves.toEqual(STICKERS);
+        expect(inbox.webSession.mock.calls).toEqual([[false], [true]]);
+        expect(mockBrowserSender.listStickers).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('reactions', () => {
+      const reactionsOf = (id: string) => JSON.parse(db.queryOne<any>('SELECT reactions FROM fb_messages WHERE id = ?', [id])?.reactions || '{}');
+      const seed = (id: string) =>
+        db.saveFBMessage({ id, account_id: PAGE_ACC, thread_id: PEER, sender_id: PEER, body: 'hay qua', timestamp: 1_700_000_200_000, type: 'text', is_self: 0, is_unsent: 0 } as any);
+
+      test('aReactionOfThePageGoesThroughTheInboxOnTheThreadOfTheMessage', async () => {
+        const { svc, inbox } = sender();
+        seed('mid.$react1');
+        inbox.sendReaction.mockResolvedValue(undefined);
+        await expect(svc.sendPageReaction('mid.$react1', '❤')).resolves.toEqual({ success: true });
+        expect(inbox.sendReaction).toHaveBeenCalledWith({ threadId: PEER, messageId: 'mid.$react1', emoji: '❤' });
+        await expect(svc.sendPageReaction('mid.$react1', '')).resolves.toEqual({ success: true });
+        expect(inbox.sendReaction).toHaveBeenLastCalledWith({ threadId: PEER, messageId: 'mid.$react1', emoji: '' });
+      });
+
+      test('aReactionThatCannotBeSentIsAnError', async () => {
+        const { svc, inbox } = sender();
+        seed('mid.$react2');
+        await expect(svc.sendPageReaction('mid.$unknown', '❤')).resolves.toMatchObject({ success: false });
+        await expect(svc.sendPageReaction('page:1700000000000', '❤')).resolves.toMatchObject({ success: false }); // mã tạm, Facebook không biết
+        inbox.sendReaction.mockRejectedValue(new Error('Facebook không xác nhận cảm xúc'));
+        const res = await svc.sendPageReaction('mid.$react2', '❤');
+        expect(res.success).toBe(false);
+        expect(res.error).toContain('Facebook không xác nhận cảm xúc');
+        inbox.alive = false;
+        await expect(svc.sendPageReaction('mid.$react2', '❤')).resolves.toMatchObject({ success: false });
+        expect(inbox.sendReaction).toHaveBeenCalledTimes(1);
+      });
+
+      // Hộp thư báo cảm xúc của chính Page dưới id Page cổ điển; giao diện và DB ghi "cảm xúc của mình" theo id tài khoản.
+      // Không quy về một id thì cảm xúc Page thả từ MaiHub hiện thành hai người thả.
+      test('thePagesOwnReactionFromTheInboxIsRecordedUnderTheAccountId', async () => {
+        const { inbox } = sender();
+        seed('mid.$react3');
+        inbox.emit('event', { type: 'reaction', data: { messageId: 'mid.$react3', threadId: PEER, userId: DELEGATE, emoji: '👍' } });
+        inbox.emit('event', { type: 'reaction', data: { messageId: 'mid.$react3', threadId: PEER, userId: PEER, emoji: '😮' } });
+        await until(() => Object.keys(reactionsOf('mid.$react3')).length === 2);
+        expect(reactionsOf('mid.$react3')).toEqual({ [PAGE_FB]: '👍', [PEER]: '😮' });
+        expect(emitted('fb:onReaction').map(e => [e.userId, e.emoji])).toEqual([[PAGE_FB, '👍'], [PEER, '😮']]);
+      });
+
+      test('aRemovedReactionIsRemovedFromTheStoredMessage', async () => {
+        const { inbox } = sender();
+        seed('mid.$react4');
+        inbox.emit('event', { type: 'reaction', data: { messageId: 'mid.$react4', threadId: PEER, userId: PEER, emoji: '😮' } });
+        await until(() => Object.keys(reactionsOf('mid.$react4')).length === 1);
+        inbox.emit('event', { type: 'reaction', data: { messageId: 'mid.$react4', threadId: PEER, userId: PEER, emoji: '' } });
+        await until(() => Object.keys(reactionsOf('mid.$react4')).length === 0);
+        expect(reactionsOf('mid.$react4')).toEqual({});
+        expect(emitted('fb:onReaction').map(e => e.emoji)).toEqual(['😮', '']);
+      });
     });
   });
 

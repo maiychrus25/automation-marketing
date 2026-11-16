@@ -1942,13 +1942,19 @@ export default function ChatWindow() {
       DataAccessor.updateReaction?.({ zaloId: accId, msgId: msg.msg_id, userId: accId, emoji }).catch(() => {});
 
       if (isNonZalo(ch)) {
-        await channelIpc.addReaction(ch, {
+        const res = await channelIpc.addReaction(ch, {
           accountId: accId,
           messageId: msg.msg_id,
           emoji,
           threadId: msg.thread_id,
           action: 'add',
         });
+        // Facebook báo rõ là cảm xúc không tới nơi (ví dụ hộp thư Page chưa nối): gỡ cảm xúc vừa hiện tạm và báo lý do.
+        if (ch === CHANNEL.FACEBOOK && res?.success === false && res.error) {
+          useChatStore.getState().updateMessageReaction(accId, msg.thread_id, msg.msg_id, accId, '');
+          DataAccessor.updateReaction?.({ zaloId: accId, msgId: msg.msg_id, userId: accId, emoji: '' }).catch(() => {});
+          showNotification(res.error, 'error');
+        }
       } else if (isZalo(ch)) {
         const auth = getAuth();
         if (!auth) return;
@@ -1976,13 +1982,14 @@ export default function ChatWindow() {
       useChatStore.getState().updateMessageReaction(accId, msg.thread_id, msg.msg_id, accId, '');
 
       if (isNonZalo(ch)) {
-        await channelIpc.addReaction(ch, {
+        const res = await channelIpc.addReaction(ch, {
           accountId: accId,
           messageId: msg.msg_id,
           emoji: '',
           threadId: msg.thread_id,
           action: 'remove',
         });
+        if (ch === CHANNEL.FACEBOOK && res?.success === false && res.error) showNotification(res.error, 'error');
       } else if (isZalo(ch)) {
         const auth = getAuth();
         if (!auth) return;

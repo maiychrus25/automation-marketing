@@ -1,6 +1,6 @@
 /**
  * Đổi các lời gọi thủ tục lightspeed của hộp thư Page thành dữ liệu có kiểu: tin (đã ghép đính kèm), hội thoại,
- * người liên hệ, cảm xúc, đã xem, khoảng tin cũ, con trỏ đồng bộ. Hàm thuần, không ghi log, không chạm mạng hay DB.
+ * người liên hệ, cảm xúc, đã xem, khoảng tin cũ, con trỏ đồng bộ, xác nhận tin và cảm xúc vừa gửi. Hàm thuần, không ghi log, không chạm mạng hay DB.
  * Số thứ tự trường của từng thủ tục: xem docs/plans/2026-11-16-facebook-page-inbox-direct.md.
  * Tin (`InboxMessage`) cùng tên trường với Message JSON của cầu nối Go để FacebookService xử lý chung một đường.
  */
@@ -33,6 +33,8 @@ export interface InboxBatch {
   typing: Array<{ threadId: string; senderId: string; isTyping: boolean }>;
   /** Tin vừa gửi được Facebook xác nhận: mã tạm (otid) lúc gửi và mã tin thật. */
   sent: Array<{ otid: string; messageId: string }>;
+  /** Mã các tin mà cảm xúc vừa thả từ máy này đã được Facebook xác nhận. */
+  confirmedReactions: string[];
   calls: Record<string, number>;
 }
 
@@ -63,7 +65,7 @@ function blobAttachment(a: LsValue[]): InboxAttachment {
 
 export function readInboxBatch(calls: LsCall[], database: number = PAGE_MAILBOX_DB): InboxBatch {
   const batch: InboxBatch = {
-    cursor: null, syncStatus: null, messages: [], threads: [], contacts: [], ranges: [], reactions: [], readReceipts: [], deliveryReceipts: [], typing: [], sent: [], calls: {},
+    cursor: null, syncStatus: null, messages: [], threads: [], contacts: [], ranges: [], reactions: [], readReceipts: [], deliveryReceipts: [], typing: [], sent: [], confirmedReactions: [], calls: {},
   };
   const attachments = new Map<string, InboxAttachment[]>(); // theo mã tin, đúng thứ tự máy chủ gửi
   const seenBlobs = new Set<string>();
@@ -114,6 +116,8 @@ export function readInboxBatch(calls: LsCall[], database: number = PAGE_MAILBOX_
       if (id) batch.contacts.push({ id, name: str(a[3]), pictureUrl: str(a[2]) });
     } else if (name === 'replaceOptimsiticMessage') { // tên thủ tục viết sai chính tả từ phía Facebook
       if (str(a[0]) && str(a[1])) batch.sent.push({ otid: str(a[0]), messageId: str(a[1]) });
+    } else if (name === 'replaceOptimisticReaction') {
+      if (str(a[2])) batch.confirmedReactions.push(str(a[2]));
     } else if (name === 'insertNewMessageRange') {
       const threadId = id64(a[0]);
       if (threadId) batch.ranges.push({ threadId, hasMoreBefore: a[7] === true, minTimestampMs: num(a[5]), minMessageId: str(a[3]) });

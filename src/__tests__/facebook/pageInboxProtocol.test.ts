@@ -1,9 +1,9 @@
 import { WebSocketServer } from 'ws';
 import {
-  connectInbox, historyRequest, markReadRequest, newOfflineThreadingId, pageInboxLogin, pageInboxUsername, readInboxPage, sendTextRequest,
-  syncRequest, threadListRequest,
+  connectInbox, historyRequest, markReadRequest, newOfflineThreadingId, pageInboxLogin, pageInboxUsername, reactionRequest, readInboxPage,
+  sendAttachmentRequest, sendStickerRequest, sendTextRequest, syncRequest, threadListRequest,
 } from '../../services/facebook/pageInboxProtocol';
-import { BLOKS, COOKIE, DEVICE, INBOX_HTML, LOGIN_HEADER, PAGE, PAGE_VERSION, USER } from './pageInboxFixtures';
+import { BLOKS, COOKIE, DEVICE, DTSG, INBOX_HTML, JAZOEST, LOGIN_HEADER, LSD, PAGE, PAGE_VERSION, USER } from './pageInboxFixtures';
 
 describe('pageInboxProtocol', () => {
   // Business Suite đăng nhập bằng tài khoản cá nhân: cookie i_user của Page làm Facebook trả USER_ID 0 (kết quả 26.37.9).
@@ -82,8 +82,44 @@ describe('pageInboxProtocol', () => {
 
   // Con trỏ của trang gắn với mã thiết bị trang cấp (kết quả 26.37.12): cả hai phải đọc được từ cùng một trang.
   test('inboxPageGivesTheMailboxCursorVersionsAndDeviceWithoutContent', () => {
-    expect(readInboxPage(INBOX_HTML)).toEqual({ cursor: 'PAGECUR', version: PAGE_VERSION, bloksVersion: BLOKS, deviceId: DEVICE });
-    expect(readInboxPage('<html>login</html>')).toEqual({ cursor: null, version: null, bloksVersion: null, deviceId: null });
+    expect(readInboxPage(INBOX_HTML)).toMatchObject({ cursor: 'PAGECUR', version: PAGE_VERSION, bloksVersion: BLOKS, deviceId: DEVICE });
+    expect(readInboxPage('<html>login</html>')).toEqual({ cursor: null, version: null, bloksVersion: null, deviceId: null, fbDtsg: null, lsd: null, jazoest: null });
+  });
+
+  // Tải tệp lên cho Page cần mã phiên của trang hộp thư (phiên tài khoản cá nhân ở business.facebook.com).
+  test('inboxPageGivesTheTokensForUploads', () => {
+    expect(readInboxPage(INBOX_HTML)).toMatchObject({ fbDtsg: DTSG, lsd: LSD, jazoest: JAZOEST });
+    // Trang không in sẵn jazoest: tính từ fb_dtsg như trình duyệt làm ("2" + tổng mã ký tự).
+    const sum = [...DTSG].reduce((n, ch) => n + ch.charCodeAt(0), 0);
+    expect(readInboxPage(INBOX_HTML.replace(`&jazoest=${JAZOEST}`, '')).jazoest).toBe(`2${sum}`);
+  });
+
+  // Bản ghi Business Suite 16/11/2026 (23:35): đính kèm đi một tác vụ gửi duy nhất, không kèm đánh dấu đã đọc,
+  // và mã đính kèm là số nguyên (16 chữ số, có thể vượt 2^53).
+  test('sendingAnAttachmentIsASingleSendTask', () => {
+    const payload = JSON.parse(JSON.parse(sendAttachmentRequest(9, 4, { threadId: '9007199254740993123', otid: '7000000000000000042', attachmentId: '9007199254740993' }, PAGE_VERSION)).payload);
+    expect(payload.version_id).toBe(PAGE_VERSION);
+    expect(payload.tasks.map((t: any) => [t.label, t.queue_name, t.task_id, t.failure_count])).toEqual([['46', '9007199254740993123', 4, null]]);
+    expect(payload.tasks[0].payload).toBe('{"thread_id":9007199254740993123,"otid":"7000000000000000042","source":0,"send_type":3,"sync_group":205,"mark_thread_read":0,"text":null,"attachment_fbids":[9007199254740993]}');
+  });
+
+  test('sendingAStickerIsASendTaskFollowedByAMarkReadTask', () => {
+    const payload = JSON.parse(JSON.parse(sendStickerRequest(9, 4, { threadId: '100000000005141', otid: '7000000000000000042', stickerId: '369239263222822', nowMs: 1700000000000 })).payload);
+    expect(payload.tasks.map((t: any) => [t.label, t.queue_name, t.task_id])).toEqual([['46', '100000000005141', 4], ['21', '100000000005141', 5]]);
+    expect(payload.tasks[0].payload).toBe('{"thread_id":100000000005141,"otid":"7000000000000000042","source":4456448,"send_type":2,"sync_group":205,"mark_thread_read":1,"sticker_id":369239263222822}');
+    expect(payload.tasks[1].payload).toBe('{"thread_id":100000000005141,"last_read_watermark_ts":1700000000000,"sync_group":205,"offline_threading_id":null}');
+  });
+
+  // Thả cảm xúc đứng tên Page (actor_id là id Page), xếp hàng theo từng tin; cảm xúc rỗng là gỡ.
+  test('aReactionIsOneTaskQueuedPerMessageAndAnEmptyOneRemovesIt', () => {
+    const outer = JSON.parse(reactionRequest(9, 4, { threadId: '100000000005141', messageId: 'mid.$a', pageId: PAGE, emoji: '👍', nowMs: 1700000000123 }, PAGE_VERSION));
+    const payload = JSON.parse(outer.payload);
+    expect(payload.tasks).toHaveLength(1);
+    expect(payload.tasks[0]).toMatchObject({ label: '29', queue_name: 'reaction:mid.$a', task_id: 4, failure_count: null });
+    expect(payload.tasks[0].payload).toBe(`{"thread_key":100000000005141,"timestamp_ms":1700000000123,"message_id":"mid.$a","actor_id":${PAGE},"reaction":"👍","reaction_style":null,`
+      + '"sync_group":205,"send_attribution":4456448,"dataclass_params":null,"attachment_fbid":null,"offline_threading_id":null}');
+    const removal = JSON.parse(reactionRequest(9, 4, { threadId: '100000000005141', messageId: 'mid.$a', pageId: PAGE, emoji: '', nowMs: 1 }));
+    expect(JSON.parse(JSON.parse(removal.payload).tasks[0].payload).reaction).toBe('');
   });
 
   // Gói CONNECT thật do thư viện mqtt tạo ra, so với gói Business Suite gửi (bản ghi 16/11/2026): MQIsdp v3, cờ 0x82, keepalive 15.

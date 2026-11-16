@@ -159,6 +159,16 @@ describe('readInboxBatch', () => {
     expect(readInboxBatch([]).sent).toEqual([]);
   });
 
+  // Facebook xác nhận một cảm xúc vừa thả bằng replaceOptimisticReaction(hội thoại, người thả, mã tin).
+  test('aSentReactionIsConfirmedByItsMessageId', () => {
+    const batch = readInboxBatch([
+      { name: 'replaceOptimisticReaction', args: [PEER, PAGE, 'mid.$liked'] },
+      { name: 'replaceOptimisticReaction', args: [PEER, PAGE, null] },
+    ]);
+    expect(batch.confirmedReactions).toEqual(['mid.$liked']);
+    expect(readInboxBatch([]).confirmedReactions).toEqual([]);
+  });
+
   test('callCountsAreKeptForTheLogAndUnknownProceduresAreHarmless', () => {
     const batch = readInboxBatch([message('insertMessage', 'mid.$a'), { name: 'someFutureProcedure', args: ['x'] }, { name: 'someFutureProcedure', args: [] }]);
     expect(batch.calls).toEqual({ insertMessage: 1, someFutureProcedure: 2 });

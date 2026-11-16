@@ -11,7 +11,7 @@ import {
 } from './FacebookTypes';
 import { initSession, checkCookieAlive, fetchUserAvatarFromProfile, getUserInfoFacebookHtml } from './FacebookSession';
 import { sendMessage as sendMessageREST, unsendMessage, addReaction, editMessage, forwardMessage, pinMessage, unpinMessage, createPoll, votePoll } from './FacebookMessageSender';
-import { uploadAttachment } from './FacebookAttachment';
+import { uploadAttachment, uploadPageAttachment } from './FacebookAttachment';
 import { isOwnSender, parsePageSenderName } from './FacebookPages';
 import {
   getThreadList, parseThreadNodes, fetchThreadMessages,
@@ -34,6 +34,7 @@ import { FacebookE2EEDeviceStore } from './FacebookE2EEDeviceStore';
 import { parseE2EECookies, resolveE2EEBinaryPath, normalizeChatJid } from './FacebookUtils';
 import { FacebookPageInbox } from './FacebookPageInbox';
 import type { InboxContact, InboxThread } from './pageInboxTables';
+import { PageSticker, fetchPageStickers, findStickers } from './pageStickers';
 import EventBroadcaster from '../event/EventBroadcaster';
 import { recordFacebookReceipt } from '../receipts/peerReceipts';
 import DatabaseService from '../database/DatabaseService';
@@ -61,6 +62,9 @@ function fbCookieKey(accountId: string): string {
 const PAGE_INBOX_GRACE_MS = 10_000;
 /** Tin dội của một tin Page gửi từ MaiHub được khớp với dòng mã tạm trong khoảng lệch thời gian này. */
 const PAGE_SEND_ECHO_WINDOW_MS = 120_000;
+/** Khay nhãn dán của Page lấy thẳng từ Business Suite được giữ chừng này; bảng chọn hiện tối đa PAGE_STICKERS_SHOWN nhãn dán. */
+const PAGE_STICKERS_TTL_MS = 60 * 60_000;
+const PAGE_STICKERS_SHOWN = 60;
 
 export class FacebookService {
   private static instances = new Map<string, FacebookService>();
@@ -85,6 +89,8 @@ export class FacebookService {
   private _pageInboxDeliveredIds = new Set<string>();
   /** Lượt gửi qua trình duyệt đang chạy, theo hội thoại, kèm các tin dội của chính Page về trong lúc đó (chờ lượt gửi nhận). */
   private _pageSendsInFlight = new Map<string, { count: number; echoes: any[] }>();
+  /** Nhãn dán trong khay của Page lấy thẳng từ Business Suite, giữ PAGE_STICKERS_TTL_MS (đường dẫn ảnh của Facebook có hạn). */
+  private _pageStickers: { at: number; list: Promise<PageSticker[]> } | null = null;
   /** Một bộ giới hạn tốc độ + một bộ tải lịch sử cho mỗi service (mỗi tài khoản). */
   private historyLimiter: FacebookHistoryLimiter;
   private historyFetcher: FacebookHistoryFetcher;
@@ -1672,10 +1678,11 @@ export class FacebookService {
       case 'reaction': {
         // data: { messageId, threadId, userId, emoji, action }
         if (data?.messageId) {
-          const userId = data.userId || data.senderId || '';
-          if (data.emoji) {
-            this.persistReactionToDB(data.messageId, userId, data.emoji);
-          }
+          const actorId = data.userId || data.senderId || '';
+          // Hộp thư Page báo cảm xúc của chính Page dưới id Page cổ điển; "cảm xúc của mình" được ghi theo id tài khoản.
+          const userId = this._isPage && isOwnSender(String(actorId), this.getFacebookId(), this._delegatePageId) ? this.getFacebookId() : actorId;
+          // emoji rỗng = người đó gỡ cảm xúc: gỡ cả trong DB, không thì mở lại hội thoại cảm xúc cũ lại hiện.
+          if (typeof data.emoji === 'string') this.persistReactionToDB(data.messageId, userId, data.emoji);
           EventBroadcaster.emit('fb:onReaction', {
             fbAccountId: this.getFacebookId(),
             messageId: data.messageId,
@@ -2828,24 +2835,67 @@ export class FacebookService {
   }
 
   /**
-   * Gửi đính kèm (ảnh/file) vai Page qua Business Suite.
-   * Driver chờ upload xong (ATTACH_SETTLE_MS), Enter một lần rồi xác nhận bằng tín hiệu dương:
-   * nút "Gửi lượt thích" quay lại = nội dung đã được tiêu thụ (waitSent). Quá hạn thì trả lỗi,
-   * không báo success giả.
+   * Gửi đính kèm (ảnh/file) vai Page. Hộp thư Page đang sống: tải tệp lên rồi gửi thẳng qua kết nối đó. Không tải lên được
+   * (chưa có gì được gửi) hoặc hộp thư không sống: qua trình duyệt Business Suite như trước — driver chờ upload xong, Enter một
+   * lần rồi xác nhận bằng tín hiệu dương (waitSent); quá hạn thì trả lỗi, không báo success giả.
    */
   public async sendPageAttachment(threadId: string, filePath: string, body?: string): Promise<FBSendResult> {
+    const direct = this.pageInbox?.isAlive() ? await this.sendPageAttachmentViaInbox(threadId, filePath, body) : null;
+    if (direct) return direct;
     const { classifyFile } = require('./pageSendHelpers');
-    const result = await this.sendViaPageBrowser(threadId, {
-      text: body,
-      files: [{ path: filePath, type: classifyFile(filePath) }],
-    });
+    const result = await this.sendViaPageBrowser(threadId, { text: body, files: [{ path: filePath, type: classifyFile(filePath) }] });
     if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
     return result;
   }
 
-  /** Liệt kê sticker FB theo keyword (vai Page, qua Business Suite). */
-  public async listPageStickers(threadId: string, keyword: string): Promise<{ label: string; thumbUrl: string }[]> {
+  /**
+   * Tải tệp lên rồi gửi qua hộp thư Page. null = chưa có lệnh gửi nào được phát (không tải lên được, hoặc kết nối rớt trong
+   * lúc tải lên): bên gọi được dùng đường khác. Đã phát lệnh gửi mà không có xác nhận thì trả lỗi: không biết tệp đã tới chưa,
+   * gửi lại có thể thành hai tin. Business Suite gửi tệp không kèm chữ, nên lời nhắn đi thành một tin riêng ngay sau; tin đó
+   * được lưu khi hộp thư dội lại (`captionSentSeparately`). Lời nhắn không được xác nhận thì ở lại trên tin chứa tệp.
+   */
+  private async sendPageAttachmentViaInbox(threadId: string, filePath: string, body?: string): Promise<FBSendResult | null> {
+    const inbox = this.pageInbox!;
+    let attachmentId = '';
+    for (const fresh of [false, true]) { // mã phiên của trang có hạn: hỏng thì lấy mã mới đúng một lần
+      const session = await inbox.webSession(fresh);
+      if (!session) return null;
+      const uploaded = await uploadPageAttachment(session, filePath);
+      if (uploaded) { attachmentId = String(uploaded.attachmentId); break; }
+    }
+    if (!attachmentId || !inbox.isAlive()) return null;
+
+    const result = await this.trackPageSend(threadId, '', async () => {
+      try {
+        const { messageId } = await inbox.sendAttachment({ threadId, attachmentId });
+        return { success: true, messageId, timestamp: Date.now() };
+      } catch (err: any) {
+        Logger.warn(`[FacebookService:${this.accountId}] Page inbox file send failed: ${err?.message}`);
+        return { success: false, error: `Không gửi được tệp qua hộp thư Page: ${err?.message}` };
+      }
+    });
+    // Đánh dấu ngay, trước khi gửi lời nhắn (có thể mất tới 20 giây): tin dội của tệp về trong lúc đó là tin của lượt gửi này.
+    if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
+    if (!result.success || !body?.trim()) return result;
+    try {
+      await inbox.sendText({ threadId, text: body });
+      return { ...result, captionSentSeparately: true };
+    } catch (err: any) {
+      Logger.warn(`[FacebookService:${this.accountId}] Page inbox caption send failed: ${err?.message}`);
+      return result;
+    }
+  }
+
+  /**
+   * Nhãn dán FB cho bảng chọn của Page. Hộp thư Page đang sống: lấy thẳng khay nhãn dán từ Business Suite (kèm mã để gửi
+   * qua hộp thư), lọc theo mô tả; từ khoá rỗng = cả khay. Không lấy được khay, hoặc từ khoá không khớp nhãn dán nào trong
+   * khay (khay chỉ có nhãn dán của tài khoản): tìm theo từ khoá trên Facebook qua trình duyệt như trước.
+   */
+  public async listPageStickers(threadId: string, keyword: string): Promise<{ label: string; thumbUrl: string; stickerId?: string }[]> {
     if (!this._isPage) return [];
+    const tray = await this.pageStickerTray();
+    const found = tray ? findStickers(tray, keyword, PAGE_STICKERS_SHOWN) : [];
+    if (found.length || !keyword.trim()) return found; // từ khoá rỗng không bao giờ mở trình duyệt
     const { getPageBrowserSender } = require('./pagePlaywrightDriver');
     const sender = await getPageBrowserSender(this.accountId, {
       getCookie: () => this.cookie, delegatePageId: this._delegatePageId || '',
@@ -2853,16 +2903,78 @@ export class FacebookService {
     return sender.listStickers(threadId, keyword, 24);
   }
 
-  /** Gửi sticker FB thứ `index` (kết quả search `keyword`) vai Page. */
-  public async sendPageSticker(threadId: string, keyword: string, index: number): Promise<FBSendResult> {
+  /** Khay nhãn dán lấy thẳng (giữ lại một thời gian); null nếu hộp thư không sống hoặc Facebook không trả danh sách. */
+  private async pageStickerTray(): Promise<PageSticker[] | null> {
+    const inbox = this.pageInbox;
+    if (!inbox?.isAlive()) return null;
+    if (!this._pageStickers || Date.now() - this._pageStickers.at > PAGE_STICKERS_TTL_MS) {
+      const fetchTray = async (fresh: boolean) => {
+        const session = await inbox.webSession(fresh);
+        if (!session) throw new Error('Trang hộp thư không cho mã phiên');
+        return fetchPageStickers(session);
+      };
+      // Mã phiên của trang có hạn: hỏng thì lấy mã mới đúng một lần rồi thử lại.
+      const loading = { at: Date.now(), list: fetchTray(false).catch(() => fetchTray(true)) };
+      this._pageStickers = loading;
+      loading.list.catch((err: any) => {
+        Logger.warn(`[FacebookService:${this.accountId}] Page sticker tray unavailable: ${err?.message}`);
+        if (this._pageStickers === loading) this._pageStickers = null; // lần mở bảng kế tiếp thử lại
+      });
+    }
+    try { return await this._pageStickers.list; } catch { return null; }
+  }
+
+  /**
+   * Gửi một nhãn dán vai Page. Có mã nhãn dán (chọn từ khay lấy thẳng): chỉ gửi qua hộp thư; hộp thư không sống hoặc không có
+   * xác nhận thì trả lỗi, không gửi bằng đường khác (vị trí trong khay không phải vị trí trong kết quả tìm của trình duyệt).
+   * Không có mã (chọn từ kết quả tìm của trình duyệt): nhãn dán thứ `index` của kết quả tìm `keyword` qua trình duyệt.
+   */
+  public async sendPageSticker(threadId: string, keyword: string, index: number, stickerId?: string): Promise<FBSendResult> {
     if (!this._isPage) return { success: false, error: 'Chỉ Page mới gửi sticker qua Business Suite' };
+    const inbox = this.pageInbox;
+    if (stickerId && !inbox?.isAlive()) return { success: false, error: 'Hộp thư Page đang nối lại, chưa gửi được nhãn dán. Hãy thử lại sau ít phút.' };
+    const result = stickerId && inbox
+      ? await this.trackPageSend(threadId, '', async () => {
+        try {
+          const { messageId } = await inbox.sendSticker({ threadId, stickerId });
+          return { success: true, messageId, timestamp: Date.now() };
+        } catch (err: any) {
+          Logger.warn(`[FacebookService:${this.accountId}] Page inbox sticker send failed: ${err?.message}`);
+          return { success: false, error: `Không gửi được nhãn dán qua hộp thư Page: ${err?.message}` };
+        }
+      })
+      : await this.sendPageStickerViaBrowser(threadId, keyword, index);
+    if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
+    return result;
+  }
+
+  private async sendPageStickerViaBrowser(threadId: string, keyword: string, index: number): Promise<FBSendResult> {
     const { getPageBrowserSender } = require('./pagePlaywrightDriver');
     const sender = await getPageBrowserSender(this.accountId, {
       getCookie: () => this.cookie, delegatePageId: this._delegatePageId || '',
     });
-    const result = await this.trackPageSend(threadId, '', () => sender.sendSticker(threadId, keyword, index));
-    if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
-    return result;
+    return this.trackPageSend(threadId, '', () => sender.sendSticker(threadId, keyword, index));
+  }
+
+  /**
+   * Thả cảm xúc đứng tên Page lên một tin qua hộp thư Page (`emoji` rỗng = gỡ). Chỉ đường này tới được hội thoại của Page;
+   * hộp thư không sống hoặc Facebook không xác nhận thì trả lỗi.
+   */
+  public async sendPageReaction(messageId: string, emoji: string): Promise<{ success: boolean; error?: string }> {
+    const inbox = this.pageInbox;
+    if (!inbox?.isAlive()) return { success: false, error: 'Hộp thư Page chưa kết nối, chưa thả được cảm xúc. Hãy thử lại sau ít phút.' };
+    // Tin gửi qua trình duyệt còn mang mã tạm cho tới khi hộp thư dội lại: Facebook không biết mã đó.
+    if (messageId.startsWith('page:')) return { success: false, error: 'Tin này vừa gửi, chưa thả được cảm xúc. Hãy thử lại sau vài giây.' };
+    const row = DatabaseService.getInstance().queryOne<{ thread_id: string }>(
+      'SELECT thread_id FROM fb_messages WHERE id = ? AND account_id = ?', [messageId, this.accountId]);
+    if (!row?.thread_id) return { success: false, error: 'Không tìm thấy tin để thả cảm xúc.' };
+    try {
+      await inbox.sendReaction({ threadId: String(row.thread_id).replace(/@.*$/, ''), messageId, emoji: emoji || '' });
+      return { success: true };
+    } catch (err: any) {
+      Logger.warn(`[FacebookService:${this.accountId}] Page inbox reaction failed: ${err?.message}`);
+      return { success: false, error: `Không thả được cảm xúc qua hộp thư Page: ${err?.message}` };
+    }
   }
 
   public async getThreadList(): Promise<FBThread[]> {
