@@ -32,7 +32,8 @@ import { e2eeReconnectDelayMs } from './facebookBridgeBackoff';
 import { FacebookE2EESender } from './FacebookE2EESender';
 import { FacebookE2EEDeviceStore } from './FacebookE2EEDeviceStore';
 import { parseE2EECookies, resolveE2EEBinaryPath, normalizeChatJid } from './FacebookUtils';
-import { isPageBridgeProbeEnabled, runPageBridgeProbe } from './pageBridgeProbe';
+import { FacebookPageInbox } from './FacebookPageInbox';
+import type { InboxContact, InboxThread } from './pageInboxTables';
 import EventBroadcaster from '../event/EventBroadcaster';
 import { recordFacebookReceipt } from '../receipts/peerReceipts';
 import DatabaseService from '../database/DatabaseService';
@@ -53,6 +54,11 @@ function fbCookieKey(accountId: string): string {
   return `fb_cookie_${accountId}`;
 }
 
+/** Thông báo Page qua tài khoản cha chờ chừng này cho tin thật về qua hộp thư Page trước khi tự lưu bản chỉ có chữ. */
+const PAGE_INBOX_GRACE_MS = 10_000;
+/** Tin dội của một tin Page gửi từ MaiHub được khớp với dòng mã tạm trong khoảng lệch thời gian này. */
+const PAGE_SEND_ECHO_WINDOW_MS = 120_000;
+
 export class FacebookService {
   private static instances = new Map<string, FacebookService>();
 
@@ -69,8 +75,13 @@ export class FacebookService {
   private _facebookId: string | null = null;
   /** Dòng này là Page con (có parent_facebook_id): không E2EE bridge, gửi qua trình duyệt Business Suite */
   private _isPage = false;
-  /** THỬ NGHIỆM (sẽ gỡ): thử nối thẳng vào hộp thư Page, xem pageBridgeProbe.ts. */
-  private pageBridgeProbe: Promise<{ close: () => Promise<void> } | null> | null = null;
+  /** Kết nối trực tiếp tới hộp thư Page (chỉ tài khoản Page có delegate_page_id); đóng vai cầu nối của Page. */
+  private pageInbox: FacebookPageInbox | null = null;
+  private pageInboxPipeline: FacebookEventPipeline | null = null;
+  /** Mã các tin mà hộp thư Page đã giao gần đây (kể cả tin còn đang lưu dở), để thông báo qua tài khoản cha biết là bản trùng. */
+  private _pageInboxDeliveredIds = new Set<string>();
+  /** Lượt gửi qua trình duyệt đang chạy, theo hội thoại, kèm các tin dội của chính Page về trong lúc đó (chờ lượt gửi nhận). */
+  private _pageSendsInFlight = new Map<string, { count: number; echoes: any[] }>();
   /** Một bộ giới hạn tốc độ + một bộ tải lịch sử cho mỗi service (mỗi tài khoản). */
   private historyLimiter: FacebookHistoryLimiter;
   private historyFetcher: FacebookHistoryFetcher;
@@ -126,9 +137,10 @@ export class FacebookService {
     this.historyFetcher = new FacebookHistoryFetcher({
       accountId,
       facebookId: () => this.getFacebookId(),
-      bridge: () => this.e2eeBridge,
+      bridge: () => this.pageInbox ?? this.e2eeBridge,
       fetchGraphQLPage: (id, limit) => this.fetchThreadMessages(id, limit),
       limiter: this.historyLimiter,
+      isOwnSender: (senderId) => isOwnSender(senderId, this.getFacebookId(), this._delegatePageId),
     });
     try {
       const acc = DatabaseService.getInstance().getFBAccount(accountId);
@@ -242,6 +254,8 @@ export class FacebookService {
 
   private setStatus(status: FBAccountStatus): void {
     this.status = status;
+    // Cookie hết hạn: kết nối hộp thư Page không thể nối lại được, dừng hẳn thay vì thử tải trang mãi. Kết nối lại sẽ dựng lại.
+    if (status === 'cookie_expired') this.stopPageInbox();
     EventBroadcaster.emit('fb:onConnectionStatus', {
       fbAccountId: this.getFacebookId(),
       status,
@@ -487,8 +501,7 @@ export class FacebookService {
 
       // 4. Start E2EE bridge (cho 1:1 encrypted messages)
       await this.startE2EEBridge(fbId);
-      // THỬ NGHIỆM (sẽ gỡ, xem pageBridgeProbe.ts): chỉ khi mở app với cờ thử; không chặn việc kết nối.
-      if (this._isPage && isPageBridgeProbeEnabled()) this.pageBridgeProbe = runPageBridgeProbe(this.accountId, this.cookie, this._delegatePageId, { agent: this.httpsAgent }).catch(() => null);
+      this.startPageInbox();
     } catch (err: any) {
       Logger.error(`[FacebookService:${this.accountId}] Connect error: ${err.message}`);
       if (this.status !== 'cookie_expired') {
@@ -579,6 +592,20 @@ export class FacebookService {
       [n.pageId, this.getFacebookId()]
     );
     if (!page?.id) return; // Không phải Page của tài khoản này, hoặc Page đang tắt
+    // Page đang nhận tin trực tiếp qua hộp thư của nó: thông báo này là bản trùng chỉ có chữ. Lưu nó trước sẽ chiếm mã tin
+    // và làm mất ảnh / nhãn dán của tin thật.
+    // Vì vậy chờ một nhịp cho tin thật về; hết nhịp mà vẫn chưa có thì kết nối kia đã bỏ sót: lưu thông báo như cũ để không
+    // mất tin của khách, và bảo kết nối lấy lại con trỏ.
+    const pageService = FacebookService.instances.get(FacebookService.resolveInstanceKey(page.id));
+    if (pageService?.isPageInboxLive()) {
+      this.updatePageSenderContact(page.facebook_id, n.senderId, parsePageSenderName(n.title, n.pageName), n.senderAvatarUrl);
+      await new Promise<void>(resolve => setTimeout(resolve, PAGE_INBOX_GRACE_MS));
+      if (db.hasMessage(page.facebook_id, n.messageId) || pageService.pageInboxDelivered(n.messageId)) return;
+      if (pageService.isPageInboxLive()) {
+        Logger.warn(`[FacebookService:${this.accountId}] Page inbox missed a message that the parent notification carried; resyncing it`);
+        pageService.resyncPageInbox();
+      }
+    }
 
     const ts = Date.now();
     const senderName = parsePageSenderName(n.title, n.pageName);
@@ -614,15 +641,7 @@ export class FacebookService {
     }
 
     // Tên + avatar người gửi cho danh sách hội thoại (saveFBMessage không đặt tên cho hội thoại mới)
-    try {
-      db.run?.(
-        `UPDATE contacts
-            SET display_name = CASE WHEN (display_name = '' OR display_name IS NULL) AND ? != '' THEN ? ELSE display_name END,
-                avatar_url   = CASE WHEN ? != '' THEN ? ELSE avatar_url END
-          WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'`,
-        [senderName, senderName, n.senderAvatarUrl, n.senderAvatarUrl, page.facebook_id, n.senderId]
-      );
-    } catch {}
+    this.updatePageSenderContact(page.facebook_id, n.senderId, senderName, n.senderAvatarUrl);
 
     EventBroadcaster.emit('fb:onMessage', {
       fbAccountId: page.facebook_id,
@@ -634,6 +653,19 @@ export class FacebookService {
       ...(n.senderAvatarUrl ? { contactAvatar: n.senderAvatarUrl } : {}),
     });
     Logger.log(`[FacebookService:${this.accountId}] Page message → page=${page.facebook_id} from=${n.senderId} "${body.slice(0, 50)}"`);
+  }
+
+  /** Điền tên còn trống và cập nhật ảnh của một người gửi tin vào Page (dòng contacts đã có; không tạo mới). */
+  private updatePageSenderContact(pageFacebookId: string, senderId: string, senderName: string, avatarUrl: string): void {
+    try {
+      DatabaseService.getInstance().run?.(
+        `UPDATE contacts
+            SET display_name = CASE WHEN (display_name = '' OR display_name IS NULL) AND ? != '' THEN ? ELSE display_name END,
+                avatar_url   = CASE WHEN ? != '' THEN ? ELSE avatar_url END
+          WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'`,
+        [senderName, senderName, avatarUrl, avatarUrl, pageFacebookId, senderId]
+      );
+    } catch {}
   }
 
   /**
@@ -1257,12 +1289,163 @@ export class FacebookService {
     this.e2eeDeviceStore?.flush();
   }
 
-  private async stopE2EEBridge(): Promise<void> {
-    if (this.pageBridgeProbe) {
-      const probe = this.pageBridgeProbe;
-      this.pageBridgeProbe = null;
-      await probe.then(p => p?.close()).catch(() => {});
+  /**
+   * Page: mở kết nối trực tiếp tới hộp thư (giao thức của Business Suite). Không chờ và không chặn việc kết nối;
+   * kết nối tự nối lại. Tắt bằng MAIHUB_FB_PAGE_INBOX=0, khi đó Page chỉ còn luồng thông báo qua tài khoản cha.
+   * Gọi lại khi đã có kết nối thì không làm gì.
+   */
+  private startPageInbox(): void {
+    if (!this._isPage || !this._delegatePageId || process.env.MAIHUB_FB_PAGE_INBOX === '0') { this.stopPageInbox(); return; }
+    // connect() được gọi lại mỗi khi listener chính chập chờn: kết nối hộp thư đang chạy thì giữ nguyên (nó tự nối lại);
+    // dựng lại sẽ mất con trỏ trong bộ nhớ và các tin đến trong lúc đó. Chỉ disconnect() / cookie hết hạn mới dừng nó.
+    if (this.pageInbox) return;
+    const inbox = new FacebookPageInbox({
+      accountId: this.accountId, pageId: this._delegatePageId, getCookie: () => this.cookie, getAgent: () => this.httpsAgent,
+    });
+    const pipeline = new FacebookEventPipeline(this.accountId);
+    this.pageInbox = inbox;
+    this.pageInboxPipeline = pipeline;
+    // Cùng hàng đợi tuần tự + chống trùng như sự kiện của cầu nối, rồi vào chung handleBridgeEvent.
+    // Kết nối đã bị thay thì hàng đợi của nó đã dừng (stopPageInbox) nên sự kiện đến muộn tự bị bỏ.
+    inbox.on('event', (evt: any) => {
+      if (evt?.type === 'message' && evt.data?.id) {
+        this._pageInboxDeliveredIds.add(evt.data.id);
+        if (this._pageInboxDeliveredIds.size > 300) this._pageInboxDeliveredIds.delete(this._pageInboxDeliveredIds.values().next().value as string);
+      }
+      pipeline.enqueue(bridgeEventKey(evt), this.getEventPriority(evt?.type), 0, async () => this.handleBridgeEvent(evt));
+    });
+    inbox.on('threads', (threads: InboxThread[], contacts: InboxContact[]) => {
+      if (this.pageInbox !== inbox) return;
+      try { this.savePageInboxThreads(threads, contacts); } catch (err: any) {
+        Logger.warn(`[FacebookService:${this.accountId}] Page inbox threads save error: ${err.message}`);
+      }
+    });
+    inbox.start().catch(err => Logger.warn(`[FacebookService:${this.accountId}] Page inbox start error: ${err?.message}`));
+  }
+
+  private stopPageInbox(): void {
+    this.pageInbox?.stop();
+    this.pageInbox = null;
+    void this.pageInboxPipeline?.stop(true);
+    this.pageInboxPipeline = null;
+  }
+
+  /** Kết nối hộp thư Page đang nhận tin trực tiếp (khi đó thông báo qua tài khoản cha là bản trùng, chỉ có chữ). */
+  public isPageInboxLive(): boolean {
+    return this.pageInbox?.isAlive() === true;
+  }
+
+  /** Hộp thư Page đã giao tin này (có thể còn đang lưu dở: tin của khách mới phải tải tên người gửi trước khi lưu). */
+  public pageInboxDelivered(messageId: string): boolean {
+    return this._pageInboxDeliveredIds.has(messageId);
+  }
+
+  /**
+   * Bọc một lượt gửi của Page qua trình duyệt. Trình duyệt chỉ trả mã tạm `page:<ms>` và mất vài giây mới xác nhận, trong khi
+   * hộp thư thường dội lại tin thật ngay lúc gửi. Tin dội của chính Page về trong lúc lượt gửi đang chạy được giữ lại
+   * (holdPageSendEcho): lượt gửi nhận tin có cùng nội dung chữ và trả về mã thật của nó, để mọi nơi lưu tin dùng mã thật.
+   * Tin dội không được nhận (gõ từ máy khác trong lúc đó, hoặc lượt gửi báo lỗi) được xử lý như tin thường khi lượt gửi xong.
+   */
+  private async trackPageSend(threadId: string, text: string, send: () => Promise<FBSendResult>): Promise<FBSendResult> {
+    const entry = this._pageSendsInFlight.get(threadId) ?? { count: 0, echoes: [] };
+    entry.count++;
+    this._pageSendsInFlight.set(threadId, entry);
+    try {
+      const result = await send();
+      if (result.success && result.messageId?.startsWith('page:')) {
+        const i = entry.echoes.findIndex(e => (e.text || '') === text);
+        if (i >= 0) return { ...result, messageId: entry.echoes.splice(i, 1)[0].id };
+      }
+      return result;
+    } finally {
+      if (--entry.count <= 0) {
+        this._pageSendsInFlight.delete(threadId);
+        for (const echo of entry.echoes) this.handleBridgeGroupMessage(echo);
+      }
     }
+  }
+
+  /** true = tin mới của chính Page về trong lúc một lượt gửi qua trình duyệt đang chạy ở hội thoại đó: giữ lại cho lượt gửi. */
+  private holdPageSendEcho(data: any): boolean {
+    if (data?.isHistory) return false;
+    const entry = this._pageSendsInFlight.get(String(data?.threadId ?? '').replace(/@.*$/, ''));
+    if (!entry || !isOwnSender(data?.senderId != null ? String(data.senderId) : '', this.getFacebookId(), this._delegatePageId)) return false;
+    entry.echoes.push(data);
+    return true;
+  }
+
+  /** Hộp thư Page báo còn sống nhưng đã bỏ sót một tin (thấy qua thông báo của tài khoản cha): cho nó lấy lại con trỏ. */
+  public resyncPageInbox(): void {
+    this.pageInbox?.resync();
+  }
+
+  /**
+   * Tin Page gửi từ MaiHub qua trình duyệt Business Suite được lưu với mã tạm `page:<ms>` (trình duyệt không cho mã thật).
+   * Khi hộp thư dội lại chính tin đó: đổi mã tạm thành mã thật, để tin không hiện hai lần bây giờ lẫn khi tải tin cũ sau này.
+   * Khớp theo hội thoại, cùng nội dung chữ và lệch thời gian dưới 2 phút; true = đã nhận là tin dội, không xử lý tiếp.
+   */
+  private adoptPageSendEcho(data: any): boolean {
+    const senderId = data?.senderId != null ? String(data.senderId) : '';
+    if (!isOwnSender(senderId, this.getFacebookId(), this._delegatePageId)) return false;
+    try {
+      const db = DatabaseService.getInstance();
+      const ownerId = this.getFacebookId();
+      if (db.hasMessage(ownerId, data.id)) return false; // đã có dòng mang mã thật: để đường thường coi là bản trùng
+      const threadId = String(data.threadId ?? '').replace(/@.*$/, '');
+      const ts = Number(data.timestampMs) || Date.now();
+      const local = db.queryOne<{ id: string }>(
+        `SELECT id FROM fb_messages
+          WHERE account_id = ? AND thread_id = ? AND is_self = 1 AND id LIKE 'page:%' AND COALESCE(body, '') = ?
+            AND timestamp BETWEEN ? AND ?
+          ORDER BY ABS(timestamp - ?) LIMIT 1`,
+        [this.accountId, threadId, data.text || '', ts - PAGE_SEND_ECHO_WINDOW_MS, ts + PAGE_SEND_ECHO_WINDOW_MS, ts]);
+      if (!local?.id) return false;
+      db.run('UPDATE OR IGNORE fb_messages SET id = ? WHERE id = ? AND account_id = ?', [data.id, local.id, this.accountId]);
+      db.run(`UPDATE OR IGNORE messages SET msg_id = ? WHERE owner_zalo_id = ? AND msg_id = ? AND channel = 'facebook'`, [data.id, ownerId, local.id]);
+      Logger.log(`[FacebookService:${this.accountId}] Page send echo adopted: temp id replaced by …${String(data.id).slice(-6)}`);
+      return true;
+    } catch (err: any) {
+      Logger.warn(`[FacebookService:${this.accountId}] Page send echo check error: ${err.message}`);
+      return false;
+    }
+  }
+
+  /** Lưu hội thoại và tên/ảnh người liên hệ mà hộp thư Page gửi về. Hội thoại 1-1 không có tên riêng: lấy của người liên hệ cùng id. */
+  private savePageInboxThreads(threads: InboxThread[], contacts: InboxContact[]): void {
+    const db = DatabaseService.getInstance();
+    const byId = new Map(contacts.map(c => [c.id, c]));
+    const rows = threads.map(t => {
+      // Bản cập nhật về sau thường không kèm tên / tin cuối, mà saveFBThread ghi đè các cột đó: giữ lại giá trị đang lưu.
+      const stored = db.queryOne<{ name: string | null; last_message_preview: string | null; last_message_at: number | null }>(
+        'SELECT name, last_message_preview, last_message_at FROM fb_threads WHERE id = ? AND account_id = ?', [t.id, this.accountId]);
+      return {
+        id: t.id, name: t.name || byId.get(t.id)?.name || stored?.name || '', type: 'user',
+        last_message_preview: t.snippet || stored?.last_message_preview || '', last_message_at: t.lastActivityMs || stored?.last_message_at || 0,
+        unread_count: t.unreadCount,
+        metadata: { avatar_url: t.pictureUrl || byId.get(t.id)?.pictureUrl || '' },
+      };
+    });
+    if (rows.length) db.saveFBThreads(this.accountId, rows);
+    const fbAccountId = this.getFacebookId();
+    const threadIds = new Set(threads.map(t => t.id));
+    for (const c of contacts) {
+      if (c.id === this._delegatePageId || (!c.name && !c.pictureUrl)) continue;
+      if (!threadIds.has(c.id)) {
+        // Người liên hệ đã có trong máy: điền tên còn trống, cập nhật ảnh nếu chưa có bản lưu cục bộ. Không tạo hội thoại mới.
+        db.run(
+          `UPDATE contacts
+              SET display_name = CASE WHEN (display_name = '' OR display_name IS NULL) AND ? != '' THEN ? ELSE display_name END,
+                  avatar_url   = CASE WHEN ? != '' AND (avatar_url IS NULL OR avatar_url = '' OR avatar_url NOT LIKE 'media/%') THEN ? ELSE avatar_url END
+            WHERE owner_zalo_id = ? AND contact_id = ? AND channel = 'facebook'`,
+          [c.name, c.name, c.pictureUrl, c.pictureUrl, fbAccountId, c.id],
+        );
+      }
+      EventBroadcaster.emit('fb:onContactUpdate', { fbAccountId, contactId: c.id, name: c.name, avatarUrl: c.pictureUrl });
+    }
+  }
+
+  private async stopE2EEBridge(): Promise<void> {
+    this.stopPageInbox();
     // Dừng chủ động (tắt, ngắt, thử lại tay): huỷ hẹn nối lại và vô hiệu hoá listener/'closed' của bridge cũ.
     this._clearE2EEReconnect();
     this.e2eeBridgeGen++;
@@ -1684,6 +1867,7 @@ export class FacebookService {
    */
   private handleBridgeGroupMessage(data: any): void {
     if (!data?.id) return;
+    if (this._isPage && (this.holdPageSendEcho(data) || this.adoptPageSendEcho(data))) return;
 
     // Handle admin messages (pin, poll, group info changes) as system notifications.
     // The bridge processes the raw delta internally (e.g. deltaUpdatePinnedMessagesV2)
@@ -1716,7 +1900,7 @@ export class FacebookService {
       messageID: data.id,
       replyToID: threadId,
       replyToMessageId: data.replyTo?.messageId,
-      type: 'group',
+      type: this._isPage ? 'user' : 'group', // hộp thư Page chỉ có hội thoại 1-1
       attachments: { id: 0, url: null },
     };
 
@@ -2543,7 +2727,7 @@ export class FacebookService {
       getCookie: () => this.cookie,
       delegatePageId: this._delegatePageId || '',
     });
-    return sender.send(threadId, input);
+    return this.trackPageSend(threadId, input.text || '', () => sender.send(threadId, input));
   }
 
   /**
@@ -2579,7 +2763,7 @@ export class FacebookService {
     const sender = await getPageBrowserSender(this.accountId, {
       getCookie: () => this.cookie, delegatePageId: this._delegatePageId || '',
     });
-    const result = await sender.sendSticker(threadId, keyword, index);
+    const result = await this.trackPageSend(threadId, '', () => sender.sendSticker(threadId, keyword, index));
     if (result.success && result.messageId) this.markMessageLocallySent(result.messageId);
     return result;
   }

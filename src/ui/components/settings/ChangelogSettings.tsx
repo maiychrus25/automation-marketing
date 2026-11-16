@@ -15,6 +15,32 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.38.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '💬 Hộp thư Page Facebook nhận tin trực tiếp: ảnh, nhãn dán, video, tệp và ghi âm của khách hiện đúng loại, không còn chỉ là dòng chữ thông báo',
+      '🕘 Mở app là có danh sách hội thoại của Page; cuộn lên trong một hội thoại để tải tin cũ',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Page Facebook kết nối thẳng tới hộp thư của Page, không cần trình duyệt: tin khách gửi về trong vài giây và đủ loại (chữ, ảnh, nhãn dán, video, tệp, ghi âm)',
+          'Danh sách hội thoại của Page kèm tin cuối được tải khi kết nối; cuộn lên trong hội thoại để tải tin cũ',
+          'Mất mạng ngắn thì tự nối lại và nhận bù các tin đến trong lúc rớt',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Khi kết nối trực tiếp chưa sẵn sàng, tin chữ vẫn về qua tài khoản cá nhân như trước',
+          'Gửi tin từ Page vẫn dùng cách cũ ở bản này; gửi qua kết nối mới sẽ có ở bản sau',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.37.13',
     date: '11/2026',
     type: 'patch',

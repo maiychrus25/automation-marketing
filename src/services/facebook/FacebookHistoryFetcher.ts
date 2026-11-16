@@ -34,6 +34,8 @@ export interface FacebookHistoryDeps {
   limiter: FacebookHistoryLimiter;
   sleep?: (ms: number) => Promise<void>;     // injectable for tests
   now?: () => number;                        // default Date.now
+  /** Tin do chính tài khoản gửi; mặc định so với facebookId(). Page gửi dưới id Page cổ điển nên cần hàm riêng. */
+  isOwnSender?: (senderId: string) => boolean;
   /** Mọi truy cập DB chạy trên DB chính của chủ tài khoản, kể cả khi đang mở workspace khác. */
   runOnBossDb?: (fn: (db: DatabaseService) => void) => void;
 }
@@ -325,6 +327,7 @@ export class FacebookHistoryFetcher {
 
   private saveRows(rows: Array<HistoryRow & { threadId: string }>, range?: FbHistoryRange): { stored: number; fresh: number; received: number } {
     const ownerId = this.deps.facebookId();
+    const isOwn = this.deps.isOwnSender ?? ((senderId: string) => senderId === ownerId);
     const liveAfter = this.now() - HISTORY_LIVE_WINDOW_MS;
     return this.onBossDb(db => {
       let stored = 0, fresh = 0, received = 0;
@@ -337,7 +340,7 @@ export class FacebookHistoryFetcher {
           id: r.id, account_id: this.deps.accountId, thread_id: r.threadId, sender_id: r.senderId,
           sender_name: r.senderName || '', body: r.body || undefined, timestamp: r.timestampMs, type: r.type,
           attachments: r.attachments?.length ? JSON.stringify(r.attachments) : '[]',
-          reply_to_id: r.replyToId || '', is_self: r.senderId === ownerId ? 1 : 0, is_unsent: r.isUnsent ? 1 : 0,
+          reply_to_id: r.replyToId || '', is_self: isOwn(r.senderId) ? 1 : 0, is_unsent: r.isUnsent ? 1 : 0,
           reactions: r.reactions?.length ? JSON.stringify(r.reactions) : '{}',
           is_history: true,
         });

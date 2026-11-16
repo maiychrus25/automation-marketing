@@ -160,6 +160,13 @@ khoản Facebook thật.
   chứa mã sao chép từ https://github.com/yumi-team/meta-messenger.js, © 2026
   Yumi Team, **AGPL-3.0**; `main.go` và lớp bọc Python là mã gốc. Các tệp `.go`
   trong `bridge/` không mang tiêu đề giấy phép riêng.
+- Hộp thư Page nối trực tiếp (26.38.0): `src/services/facebook/lightspeedDecoder.ts`,
+  `pageInboxTables.ts`, `pageInboxProtocol.ts` và `FacebookPageInbox.ts` là mã viết
+  mới bằng TypeScript từ giao thức quan sát được trong một bản ghi mạng của Meta
+  Business Suite và các bản thử 26.37.9–26.37.13. Số thứ tự trường của các thủ tục
+  lightspeed và mã loại đính kèm được đối chiếu với `pkg/messagix/table` của
+  `mautrix/meta` `e012f9f`, và cách xử lý nhánh điều kiện ("kiểm tra rồi chèn" luôn
+  chạy nhánh chèn) theo cùng cách thư viện đó làm; không chép mã nguồn của thư viện.
 
 ## Thư mục dữ liệu và chuyển dữ liệu
 
