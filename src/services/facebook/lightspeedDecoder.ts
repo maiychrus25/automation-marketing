@@ -11,8 +11,8 @@ export type LsValue = string | number | boolean | null;
 export interface LsCall { name: string; args: LsValue[] }
 
 const BLOCK = 1, LOAD = 2, STORE = 3, STORE_ARRAY = 4, CALL = 5, UNDEFINED = 9, I64_FROM_STRING = 19, IF = 23, NOT = 26;
-// Phép tạo mảng / map / cộng số: chỉ dùng để dựng tham số phụ mà app không đọc, coi như trống và không báo.
-const IGNORED_VALUE_STEPS = new Set([50, 51, 52, 53, 54, 55, 69]);
+// Phép tạo mảng / map / cộng số / đổi sang chuỗi JSON: chỉ dùng để dựng tham số phụ mà app không đọc, coi như trống và không báo.
+const IGNORED_VALUE_STEPS = new Set([50, 51, 52, 53, 54, 55, 61, 69]);
 
 const isTruthy = (v: LsValue): boolean =>
   v === true || (typeof v === 'number' && v > 0) || (typeof v === 'string' && /^\d+$/.test(v) && !/^0+$/.test(v));

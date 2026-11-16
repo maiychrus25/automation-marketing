@@ -2,6 +2,7 @@ import { ipcMain } from 'electron';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import Logger from '../../src/utils/Logger';
 import { createProxyAgent } from '../../src/utils/ProxyHelper';
+import { applyFacebookProxyChange } from '../../src/services/facebook/facebookProxyChange';
 
 export function registerProxyIpc() {
     // ─── Lấy danh sách proxies ─────────────────────────────────────────────────
@@ -65,9 +66,26 @@ export function registerProxyIpc() {
     // ─── Gắn/gỡ proxy cho tài khoản ────────────────────────────────────────────
     ipcMain.handle('proxy:setAccount', async (_event, { zaloId, proxyId }) => {
         try {
-            if (!zaloId) return { success: false, error: 'Thiếu zaloId' };
-            DatabaseService.getInstance().setAccountProxy(zaloId, proxyId ?? null);
-            return { success: true };
+            if (!zaloId || typeof zaloId !== 'string') return { success: false, error: 'Thiếu zaloId' };
+            const db = DatabaseService.getInstance();
+            const account = db.queryOne<{ channel: string | null }>('SELECT channel FROM accounts WHERE zalo_id = ?', [zaloId]);
+            if (!account) return { success: false, error: 'Không tìm thấy tài khoản' };
+            const channel = account.channel || 'zalo';
+            if (channel !== 'zalo' && channel !== 'facebook') return { success: false, error: 'Kênh này chưa hỗ trợ proxy' };
+            const nextProxyId: number | null = proxyId ?? null;
+            if (nextProxyId !== null && (!Number.isInteger(nextProxyId) || !db.getProxyById(nextProxyId))) {
+                return { success: false, error: 'Proxy không tồn tại' };
+            }
+            if (channel === 'facebook') {
+                // Page đi cùng proxy với tài khoản cha (resolveFBProxyId): gán riêng cho Page không có tác dụng.
+                const fb = db.queryOne<{ parent_facebook_id: string | null }>('SELECT parent_facebook_id FROM fb_accounts WHERE facebook_id = ?', [zaloId]);
+                if (fb?.parent_facebook_id) return { success: false, error: 'Page dùng proxy của tài khoản Facebook chính' };
+            }
+            db.setAccountProxy(zaloId, nextProxyId);
+            // Facebook đang kết nối: nối lại ngay (cùng các Page con) qua proxy mới. Zalo đọc proxy lúc đăng nhập, và lần tự nối lại
+            // của phiên đang chạy vẫn giữ proxy cũ, nên proxy mới có hiệu lực sau khi mở lại app.
+            const applied = channel === 'facebook' ? (applyFacebookProxyChange(zaloId) ? 'reconnecting' : 'next_connect') : 'next_start';
+            return { success: true, applied };
         } catch (err: any) {
             Logger.error(`[proxyIpc] setAccount error: ${err.message}`);
             return { success: false, error: err.message };

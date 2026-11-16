@@ -5,6 +5,7 @@ import { useAccountStore } from '@/store/accountStore';
 import { showConfirm } from '../common/ConfirmDialog';
 import { Spinner } from '@/components/common/PageLoading';
 import { CheckIcon, CloseIcon, EditIcon, LockIcon, PluginIcon, PlusIcon } from '@/components/common/icons';
+import { proxyAppliedMessage, proxyAssignableAccounts } from '@/lib/proxyAccounts';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -272,7 +273,27 @@ export default function ProxySettings() {
   const [formMode, setFormMode] = useState<'none' | 'add' | 'edit'>('none');
   const [editTarget, setEditTarget] = useState<ProxyItem | null>(null);
   const { showNotification } = useAppStore();
-  const { accounts } = useAccountStore();
+  const { accounts, updateAccount } = useAccountStore();
+  const [assigningId, setAssigningId] = useState<string | null>(null);
+  const assignableAccounts = React.useMemo(() => proxyAssignableAccounts(accounts), [accounts]);
+
+  const handleAssign = async (zaloId: string, value: string) => {
+    const proxyId = value === '' ? null : Number(value);
+    setAssigningId(zaloId);
+    try {
+      const res = await ipc.proxy?.setAccount(zaloId, proxyId);
+      if (!res?.success) {
+        showNotification(res?.error || 'Gán proxy thất bại', 'error');
+        return;
+      }
+      updateAccount(zaloId, { proxy_id: proxyId });
+      showNotification(proxyAppliedMessage(res.applied), 'success');
+    } catch (err: any) {
+      showNotification(err?.message || 'Gán proxy thất bại', 'error');
+    } finally {
+      setAssigningId(null);
+    }
+  };
 
   // Accounts indexed by proxy_id
   const accountsByProxy = React.useMemo(() => {
@@ -409,7 +430,7 @@ export default function ProxySettings() {
         <div className="text-center py-12 text-gray-400">
           <div className="text-4xl mb-3 justify-self-center"><LockIcon className="w-4 h-4" /></div>
           <p className="text-sm font-medium text-gray-400">Chưa có proxy nào</p>
-          <p className="text-xs mt-1">Thêm proxy để gán cho từng tài khoản Zalo khi đăng nhập</p>
+          <p className="text-xs mt-1">Thêm proxy để gán cho từng tài khoản Zalo hoặc Facebook</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -481,32 +502,41 @@ export default function ProxySettings() {
         </div>
       )}
 
-      {/* Used accounts detail */}
-      {proxies.some((p) => (accountsByProxy[p.id]?.length || 0) > 0) && (
+      {/* Gán proxy cho từng tài khoản đã thêm */}
+      {assignableAccounts.length > 0 && (proxies.length > 0 || assignableAccounts.some((a) => a.proxy_id)) && (
         <div className="border-t border-gray-700 pt-4">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Tài khoản đang dùng proxy</h3>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Proxy của từng tài khoản</h3>
+          <p className="text-xs text-gray-400 mb-2">
+            Facebook kết nối lại ngay qua proxy mới; Zalo áp dụng sau khi mở lại MaiHub. Page Facebook dùng proxy của tài khoản chính.
+          </p>
           <div className="space-y-1.5">
-            {accounts
-              .filter((a) => a.proxy_id)
-              .map((acc) => {
-                const p = proxies.find((x) => x.id === acc.proxy_id);
-                return (
-                  <div key={acc.zalo_id} className="flex items-center gap-3 px-3 py-2 bg-gray-800 rounded-lg">
-                    <img
-                      src={acc.avatar_url || ''}
-                      alt=""
-                      className="w-7 h-7 rounded-full bg-gray-700 flex-shrink-0 object-cover"
-                      onError={(e) => { (e.target as HTMLImageElement).src = ''; }}
-                    />
-                    <span className="text-sm text-gray-200 flex-1 truncate">{acc.full_name || acc.zalo_id}</span>
-                    {p && (
-                      <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${TYPE_BADGE[p.type]?.bg} ${TYPE_BADGE[p.type]?.text}`}>
-                        {p.name}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+            {assignableAccounts.map((acc) => {
+              const label = acc.full_name || acc.zalo_id;
+              const missing = !!acc.proxy_id && !proxies.some((p) => p.id === acc.proxy_id);
+              return (
+                <div key={acc.zalo_id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2 bg-gray-800 rounded-lg">
+                  <img
+                    src={acc.avatar_url || ''}
+                    alt=""
+                    className="w-7 h-7 rounded-full bg-gray-700 flex-shrink-0 object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).src = ''; }}
+                  />
+                  <span className="text-sm text-gray-200 flex-1 min-w-[8rem] truncate">{label}</span>
+                  {assigningId === acc.zalo_id && <Spinner size={4} />}
+                  <select
+                    className="input-field text-xs w-auto max-w-full"
+                    aria-label={`Proxy của tài khoản ${label}`}
+                    value={acc.proxy_id ? String(acc.proxy_id) : ''}
+                    disabled={assigningId !== null}
+                    onChange={(e) => handleAssign(acc.zalo_id, e.target.value)}
+                  >
+                    <option value="">Không proxy</option>
+                    {missing && <option value={String(acc.proxy_id)}>Proxy đã xóa</option>}
+                    {proxies.map((p) => <option key={p.id} value={String(p.id)}>{p.name || `${p.host}:${p.port}`}</option>)}
+                  </select>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

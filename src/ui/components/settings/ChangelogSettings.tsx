@@ -15,6 +15,23 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.39.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🔒 Gán hoặc đổi proxy cho tài khoản đã thêm ngay trong Cài đặt → Proxy, không cần thêm lại tài khoản',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Cài đặt → Proxy có mục "Proxy của từng tài khoản": chọn proxy cho từng tài khoản Zalo và Facebook đã thêm, hoặc chọn "Không proxy" để bỏ',
+          'Tài khoản Facebook kết nối lại ngay qua proxy mới, kèm các Page của nó. Tài khoản Zalo áp dụng proxy mới sau khi bạn mở lại MaiHub',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.38.0',
     date: '11/2026',
     type: 'minor',

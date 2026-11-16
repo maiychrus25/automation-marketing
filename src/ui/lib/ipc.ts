@@ -684,7 +684,7 @@ declare global {
         save:          (proxy: any) => Promise<{ success: boolean; id?: number; proxy?: any; error?: string }>;
         update:        (id: number, proxy: any) => Promise<{ success: boolean; proxy?: any; error?: string }>;
         delete:        (id: number) => Promise<{ success: boolean; error?: string }>;
-        setAccount:    (zaloId: string, proxyId: number | null) => Promise<{ success: boolean; error?: string }>;
+        setAccount:    (zaloId: string, proxyId: number | null) => Promise<{ success: boolean; error?: string; applied?: 'reconnecting' | 'next_connect' | 'next_start' }>;
         getForAccount: (zaloId: string) => Promise<{ success: boolean; proxy?: any; error?: string }>;
         test:          (proxy: any) => Promise<{ success: boolean; ms?: number; status?: number; error?: string }>;
       };

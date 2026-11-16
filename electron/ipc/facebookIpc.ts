@@ -19,6 +19,7 @@ import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import FacebookService from "../../src/services/facebook/FacebookService";
 import { resolveFBCookie, resolveFBProxyId } from '../../src/services/facebook/FacebookAccountCookie';
+import { reconnectPageChildren } from '../../src/services/facebook/facebookProxyChange';
 import { fetchManagedPages, mergePageList, stripPageCookie, buildPageCookie } from '../../src/services/facebook/FacebookPages';
 
 // ─── Cookie secure storage helpers ───────────────────────────────────────────
@@ -106,22 +107,6 @@ function proxyAgentFor(proxyId: number | null | undefined): any {
     }
   } catch {}
   return undefined;
-}
-
-/** Kết nối lại các Page con đang bật sau khi cookie tài khoản cha đổi. */
-async function reconnectPageChildren(parentFacebookId: string): Promise<void> {
-  for (const child of DatabaseService.getInstance().getFBPageChildren(parentFacebookId)) {
-    if (child.enabled !== 1) continue;
-    try {
-      await FacebookConnectionManager.disconnect(child.id).catch(() => {});
-      FacebookService.removeInstance(child.id);
-      const cookie = resolveFBCookie(child);
-      if (!cookie) continue;
-      await FacebookConnectionManager.getOrCreate(child.id, cookie, resolveFBProxyId(child));
-    } catch (err: any) {
-      Logger.warn(`[facebookIpc] reconnect Page ${child.facebook_id} failed: ${err.message}`);
-    }
-  }
 }
 
 /**

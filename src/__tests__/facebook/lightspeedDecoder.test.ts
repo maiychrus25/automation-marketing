@@ -53,6 +53,13 @@ describe('decodeLightspeed', () => {
     expect(seen).toEqual([99, 99]);
   });
 
+  // Gặp trên hộp thư Page thật (26.38.0): bước 61 dựng một tham số phụ dạng chuỗi JSON. Không phải bước lạ cần báo.
+  test('valueOnlyStepsAreIgnoredWithoutAReport', () => {
+    const seen: number[] = [];
+    expect(decodeLightspeed([1, call('p', [61, [53]], 'x')], t => seen.push(t))).toEqual([{ name: 'p', args: [null, 'x'] }]);
+    expect(seen).toEqual([]);
+  });
+
   test.each([[null], ['text'], [{}], [[]], [[5]], [[5, 42]]])('malformedInputGivesNoCalls_%#', (input) => {
     expect(decodeLightspeed(input)).toEqual([]);
   });
