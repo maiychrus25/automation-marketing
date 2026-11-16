@@ -15,7 +15,7 @@ const COOKIE = `c_user=${USER}; xs=tok; datr=d; fr=f; sb=s; wd=1x1; i_user=10000
 const logged = () => (Logger.log as jest.Mock).mock.calls.map(c => String(c[0])).join('\n');
 
 const i64 = (v: string | number) => [19, String(v)];
-const syncBlock = (database: number, nextCursor: string) => [5, 'executeFirstBlockForSyncTransactionV4', i64(database), i64('7000000000000000001'), 'CUR0', nextCursor, i64(1)];
+const syncBlock = (database: number, nextCursor: string) => [5, 'executeFirstBlockForSyncTransactionV4', i64(database), i64('7000000000000000001'), 'CUR0', nextCursor, i64(1), i64(2)];
 const messageCall = (name: string, text: string, id: string, stickerId?: string) =>
   [5, name, text, [9], i64(0), i64(PEER), i64(0), i64(1700000000000), i64(1), [9], id, 'otid', i64(PEER), stickerId ? i64(stickerId) : [9]];
 const lsResp = (calls: unknown[], requestId?: number) =>
@@ -32,7 +32,8 @@ class FakeMqtt extends EventEmitter {
 
 // Trang hộp thư Business Suite nhúng sẵn kết quả đồng bộ đầu tiên của hộp thư Page (JSON lồng trong JSON nên dấu nháy bị thoát).
 const BLOKS = 'ab'.repeat(32);
-const INBOX_HTML = `<script>{"variables":{"requestPayload":"{\\"database\\":205,\\"epoch_id\\":0,\\"last_applied_cursor\\":null,`
+const DEVICE = '11111111-2222-3333-4444-555555555555';
+const INBOX_HTML = `<script>["MqttWebDeviceID",[],{"clientID":"${DEVICE}"},5003]{"variables":{"requestPayload":"{\\"database\\":205,\\"epoch_id\\":0,\\"last_applied_cursor\\":null,`
   + `\\"sync_params\\":\\"{\\\\\\"locale\\\\\\":\\\\\\"vi_VN\\\\\\",\\\\\\"bloks_version\\\\\\":\\\\\\"${BLOKS}\\\\\\"}\\",\\"version\\":29437738132519999}","requestType":1}}`
   + `{"payload":"{\\"step\\":[1,[5,\\"executeFirstBlockForSyncTransactionV4\\",[19,\\"2\\"],[19,\\"1\\"],[9],\\"CONTACTS\\"],`
   + `[5,\\"executeFirstBlockForSyncTransactionV4\\",[19,\\"205\\"],[19,\\"7000000000000000001\\"],[9],\\"PAGECUR\\",[19,\\"1\\"]],[5,\\"upsertMessage\\",\\"SECRET TEXT\\"]]}"}</script>`;
@@ -76,8 +77,8 @@ describe('pageBridgeProbe', () => {
   });
 
   test('inboxPageGivesTheMailboxCursorAndVersionsWithoutContent', () => {
-    expect(readInboxPage(INBOX_HTML)).toEqual({ cursor: 'PAGECUR', version: '29437738132519999', bloksVersion: BLOKS });
-    expect(readInboxPage('<html>login</html>')).toEqual({ cursor: null, version: null, bloksVersion: null });
+    expect(readInboxPage(INBOX_HTML)).toEqual({ cursor: 'PAGECUR', version: '29437738132519999', bloksVersion: BLOKS, deviceId: DEVICE });
+    expect(readInboxPage('<html>login</html>')).toEqual({ cursor: null, version: null, bloksVersion: null, deviceId: null });
   });
 
   test('threadListAndHistoryAreTasksOnThePageMailbox', () => {
@@ -102,12 +103,13 @@ describe('pageBridgeProbe', () => {
     ], 7));
     expect(resp.requestId).toBe(7);
     expect(resp.cursor).toBe('CUR2');
+    expect(resp.syncStatus).toBe('2');
     expect(resp.messages).toEqual([
       { threadKey: PEER, senderId: PEER, messageId: 'mid.$abcdef123456', timestampMs: '1700000000000', hasText: true, sticker: false, live: true },
       { threadKey: PEER, senderId: PEER, messageId: 'mid.$sticker000001', timestampMs: '1700000000000', hasText: false, sticker: true, live: false },
     ]);
     const line = describeLsResponse(resp);
-    expect(line).toBe('resp request=7 cursor=yes calls=executeFirstBlockForSyncTransactionV4×1,insertMessage×1,upsertMessage×1,insertStickerAttachment×1'
+    expect(line).toBe('resp request=7 cursor=yes sync=2 calls=executeFirstBlockForSyncTransactionV4×1,insertMessage×1,upsertMessage×1,insertStickerAttachment×1'
       + ' messages=[live thread=…5141 sender=…5141 id=…123456 text=true sticker=false; old thread=…5141 sender=…5141 id=…000001 text=false sticker=true]');
     expect(line).not.toContain('SECRET');
   });
@@ -124,8 +126,9 @@ describe('pageBridgeProbe', () => {
     const probe = await runPageBridgeProbe('acc-page-1', COOKIE, PAGE, { connect, fetchPage, agent: 'AGENT' });
     expect(fetchPage).toHaveBeenCalledWith(PAGE, `c_user=${USER}; xs=tok; datr=d; fr=f; sb=s`, 'AGENT');
     const [url, username, cookieHeader, agent] = connect.mock.calls[0];
-    expect(url).toMatch(/^wss:\/\/edge-chat\.facebook\.com\/chat\?region=eag&sid=\d+&cid=[a-z0-9-]+$/);
-    expect(username).toMatchObject({ u: USER, p: PAGE });
+    // Con trỏ của trang gắn với mã thiết bị trang cấp: phải nối bằng đúng mã đó (26.37.12 dùng mã ngẫu nhiên thì tin không được đẩy về).
+    expect(url).toMatch(new RegExp(`^wss://edge-chat\\.facebook\\.com/chat\\?region=eag&sid=\\d+&cid=${DEVICE}$`));
+    expect(username).toMatchObject({ u: USER, p: PAGE, d: DEVICE });
     expect(cookieHeader).not.toContain('i_user');
     expect(agent).toBe('AGENT');
 
@@ -144,11 +147,12 @@ describe('pageBridgeProbe', () => {
     expect(client.labels()).toEqual(['sync2', '313', '228']);
     expect(client.requests()[2].payload).toContain('CUR2');
     expect(client.requests().map(r => r.request_id)).toEqual([1, 2, 3]);
-    expect(logged()).toContain('[PageBridgeProbe:acc-page] inbox page status=200 len=' + INBOX_HTML.length + ' cursor=yes version=page bloks=yes');
+    expect(logged()).toContain('[PageBridgeProbe:acc-page] inbox page status=200 len=' + INBOX_HTML.length + ' cursor=yes version=page bloks=yes device=page');
     expect(logged()).toContain('[PageBridgeProbe:acc-page] connected page=…3955 user=…8724');
     expect(logged()).toContain('asking history thread=…5141');
     expect(logged()).not.toContain('SECRET');
     expect(logged()).not.toContain('PAGECUR');
+    expect(logged()).not.toContain(DEVICE);
 
     await probe!.close();
     expect(client.end).toHaveBeenCalledWith(true);
@@ -156,7 +160,9 @@ describe('pageBridgeProbe', () => {
 
   test('withoutAPageCursorTheFirstSyncSendsParamsAndThreadsWaitForTheAnswer', async () => {
     const client = new FakeMqtt();
-    await runPageBridgeProbe('acc-page-1', COOKIE, PAGE, { connect: () => client, fetchPage: jest.fn().mockRejectedValue(new Error('timeout')) });
+    const connect = jest.fn().mockReturnValue(client);
+    await runPageBridgeProbe('acc-page-1', COOKIE, PAGE, { connect, fetchPage: jest.fn().mockRejectedValue(new Error('timeout')) });
+    expect(connect.mock.calls[0][0]).toMatch(/&cid=[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$/); // không có trang: mã tự sinh
     client.emit('connect');
     expect(client.publish).toHaveBeenCalledWith('/ls_app_settings', '{"ls_fdid":"","ls_sv":"29437738132510565"}', { qos: 1 });
     expect(client.labels()).toEqual(['sync1']);

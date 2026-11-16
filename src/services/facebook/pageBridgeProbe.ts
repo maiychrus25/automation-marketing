@@ -84,17 +84,19 @@ export function historyRequest(requestId: number, taskId: number, from: Pick<LsM
  * Trang hộp thư Business Suite nhúng sẵn lần đồng bộ đầu của hộp thư Page: lấy con trỏ tiếp theo, phiên bản lược đồ và
  * bloks_version. JSON trong trang lồng nhiều lớp nên dấu nháy có thể đi kèm một hay nhiều dấu gạch chéo ngược.
  */
-export function readInboxPage(html: string): { cursor: string | null; version: string | null; bloksVersion: string | null } {
+export function readInboxPage(html: string): { cursor: string | null; version: string | null; bloksVersion: string | null; deviceId: string | null } {
   const q = String.raw`\\*"`;
   const i64 = String.raw`\[19,\s*${q}-?\d+${q}\]`;
   const cursor = new RegExp(String.raw`executeFirstBlockForSyncTransaction\w*${q},\s*\[19,\s*${q}${PAGE_MAILBOX}${q}\],\s*${i64},\s*(?:\[9\]|${q}[^"\\]*${q}),\s*${q}([^"\\]+)${q}`).exec(html);
   const version = new RegExp(String.raw`${q}database${q}:${PAGE_MAILBOX},.{0,600}?${q}version${q}:(\d+)`).exec(html);
   const bloks = new RegExp(String.raw`bloks_version${q}:${q}([0-9a-f]{64})`).exec(html);
-  return { cursor: cursor?.[1] ?? null, version: version?.[1] ?? null, bloksVersion: bloks?.[1] ?? null };
+  // Con trỏ trên là của lần đồng bộ máy chủ đã làm cho đúng mã thiết bị này: kết nối MQTT phải dùng lại nó.
+  const device = /"MqttWebDeviceID",\[\],\{"clientID":"([0-9a-zA-Z-]{8,64})"/.exec(html);
+  return { cursor: cursor?.[1] ?? null, version: version?.[1] ?? null, bloksVersion: bloks?.[1] ?? null, deviceId: device?.[1] ?? null };
 }
 
 export interface LsMessage { threadKey: string; senderId: string; messageId: string; timestampMs: string; hasText: boolean; sticker: boolean; live: boolean }
-export interface LsResponse { requestId: number | null; cursor: string | null; calls: Record<string, number>; messages: LsMessage[] }
+export interface LsResponse { requestId: number | null; cursor: string | null; syncStatus: string | null; calls: Record<string, number>; messages: LsMessage[] }
 
 // Giá trị trong lời gọi thủ tục: chuỗi/số để nguyên, [19, "số"] là số 64 bit, còn lại ([9] = không có, phép tính) coi như trống.
 const argValue = (arg: unknown): string | null => {
@@ -108,14 +110,17 @@ const argValue = (arg: unknown): string | null => {
  * tính năng thật phải dùng bộ giải mã đầy đủ.
  */
 export function readLsResponse(body: any): LsResponse {
-  const out: LsResponse = { requestId: typeof body?.request_id === 'number' ? body.request_id : null, cursor: null, calls: {}, messages: [] };
+  const out: LsResponse = { requestId: typeof body?.request_id === 'number' ? body.request_id : null, cursor: null, syncStatus: null, calls: {}, messages: [] };
   const walk = (node: unknown): void => {
     if (!Array.isArray(node)) return;
     if (node[0] === 5 && typeof node[1] === 'string') {
       const name: string = node[1];
       const args = node.slice(2);
       out.calls[name] = (out.calls[name] || 0) + 1;
-      if (name.startsWith('executeFirstBlockForSyncTransaction') && argValue(args[0]) === String(PAGE_MAILBOX)) out.cursor = argValue(args[3]);
+      if (name.startsWith('executeFirstBlockForSyncTransaction') && argValue(args[0]) === String(PAGE_MAILBOX)) {
+        out.cursor = argValue(args[3]);
+        out.syncStatus = argValue(args[name.endsWith('V4') ? 5 : 4]);
+      }
       if (MESSAGE_CALLS.includes(name)) {
         const stickerId = argValue(args[11]);
         out.messages.push({
@@ -136,7 +141,7 @@ export function describeLsResponse(resp: LsResponse): string {
   const messages = resp.messages.slice(0, 5).map(m =>
     `${m.live ? 'live' : 'old'} thread=${tail(m.threadKey)} sender=${tail(m.senderId)} id=${tail(m.messageId, 6)} text=${m.hasText} sticker=${m.sticker}`).join('; ');
   const more = resp.messages.length > 5 ? ` (+${resp.messages.length - 5})` : '';
-  return `resp request=${resp.requestId ?? '-'} cursor=${resp.cursor ? 'yes' : 'no'} calls=${calls}${messages ? ` messages=[${messages}]${more}` : ''}`;
+  return `resp request=${resp.requestId ?? '-'} cursor=${resp.cursor ? `yes sync=${resp.syncStatus ?? '-'}` : 'no'} calls=${calls}${messages ? ` messages=[${messages}]${more}` : ''}`;
 }
 
 type InboxClient = {
@@ -178,12 +183,12 @@ export async function runPageBridgeProbe(
     .then(p => ({ status: p.status, length: p.html.length, ...readInboxPage(p.html) }))
     .catch((err: Error) => { Logger.log(`${tag} inbox page failed: ${err?.message}`); return null; });
   if (page) {
-    Logger.log(`${tag} inbox page status=${page.status} len=${page.length} cursor=${page.cursor ? 'yes' : 'no'} version=${page.version ? 'page' : 'builtin'} bloks=${page.bloksVersion ? 'yes' : 'no'}`);
+    Logger.log(`${tag} inbox page status=${page.status} len=${page.length} cursor=${page.cursor ? 'yes' : 'no'} version=${page.version ? 'page' : 'builtin'} bloks=${page.bloksVersion ? 'yes' : 'no'} device=${page.deviceId ? 'page' : 'random'}`);
   }
   const version = page?.version ?? LS_VERSION;
   const syncParams = JSON.stringify({ locale: 'vi_VN', ...(page?.bloksVersion ? { bloks_version: page.bloksVersion } : {}) });
   const sessionId = generateSessionId();
-  const deviceId = generateClientId();
+  const deviceId = page?.deviceId ?? generateClientId();
   const client = (deps.connect ?? connectInbox)(
     `${ENDPOINT}?region=eag&sid=${sessionId}&cid=${deviceId}`, pageInboxUsername(login.userId, pageId, sessionId, deviceId), login.cookieHeader, deps.agent,
   );
@@ -210,11 +215,11 @@ export async function runPageBridgeProbe(
       send(syncRequest(++requestId, PAGE_MAILBOX, null, syncParams, version));
     }, SYNC_RETRY_MS);
   });
-  client.on('message', (topic: string, payload: Buffer) => {
-    if (topic !== '/ls_resp') return;
+  client.on('message', (topic: string, payload: Buffer, packet?: { qos?: number }) => {
+    if (topic !== '/ls_resp') { Logger.log(`${tag} other topic ${topic} len=${payload.length}`); return; }
     let resp: LsResponse;
     try { resp = readLsResponse(JSON.parse(payload.toString('utf8'))); } catch { Logger.log(`${tag} unreadable response len=${payload.length}`); return; }
-    Logger.log(`${tag} ${describeLsResponse(resp)}`);
+    Logger.log(`${tag} qos=${packet?.qos ?? '-'} ${describeLsResponse(resp)}`);
     if (resp.cursor) { cursor = resp.cursor; synced = true; }
     if (!cursor) return;
     if (!threadsAsked) askThreads(cursor);
