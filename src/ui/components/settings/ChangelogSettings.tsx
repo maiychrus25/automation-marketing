@@ -15,6 +15,23 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.44.1',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🧩 Mở bảng thông tin bên phải không còn che tin nhắn',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Mở bảng bên phải của một hội thoại (thông tin hội thoại, bảng tin nhóm, tích hợp, AI) không còn che mất tin nhắn: khi cửa sổ đủ rộng, bảng đứng thành một cột riêng và vùng tin nhắn thu hẹp lại cạnh nó. Bạn vẫn đọc và trả lời tin trong lúc bảng đang mở',
+          'Cửa sổ hẹp thì bảng vẫn nổi lên trên như trước; bấm vào vùng tin nhắn để đóng bảng',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.44.0',
     date: '11/2026',
     type: 'minor',

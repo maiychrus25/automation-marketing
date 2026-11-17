@@ -32,6 +32,8 @@ import { useCRMStore } from './store/crmStore';
 import { useZaloEvents } from './hooks/useZaloEvents';
 import { useChatEvents } from './hooks/useChatEvents';
 import useIsMobile from './hooks/useIsMobile';
+import useElementWidth from './hooks/useElementWidth';
+import { rightPanelClassName, shouldDockRightPanel } from './lib/chat/rightPanelLayout';
 import ipc, { buildZaloAuth } from './lib/ipc';
 import { sendSeenForThread } from './lib/sendSeenHelper';
 import { getFilteredUnreadCount } from './lib/badgeUtils';
@@ -1421,6 +1423,10 @@ export default function App() {
   const rightInfoOverlayOpen =
       showGroupBoard || showConversationInfo || showIntegrationQuickPanel || showAIQuickPanel;
 
+  // Đủ rộng thì bảng bên phải đứng thành cột riêng, không che tin nhắn; hẹp thì nổi đè như trước.
+  const [chatAreaRef, chatAreaWidth] = useElementWidth<HTMLDivElement>();
+  const rightPanelDocked = shouldDockRightPanel(chatAreaWidth);
+
   const closeRightInfoOverlay = () => {
     if (showGroupBoard) setShowGroupBoard(false);
     if (showConversationInfo) toggleConversationInfo();
@@ -1468,11 +1474,11 @@ export default function App() {
                 <div className="flex flex-col flex-1 overflow-hidden">
                   {/* Chat header with title + info toggle */}
                   <ChatHeader />
-                  <div className="flex flex-1 overflow-hidden relative">
+                  <div ref={chatAreaRef} className="flex flex-1 overflow-hidden relative">
                     {/* Chat content */}
-                    <div className="flex flex-col flex-1 overflow-hidden"
+                    <div className="flex flex-col flex-1 min-w-0 overflow-hidden"
                          onClick={() => {
-                           if (rightInfoOverlayOpen) closeRightInfoOverlay();
+                           if (rightInfoOverlayOpen && !rightPanelDocked) closeRightInfoOverlay();
                          }}>
                       <ChatWindow />
                       <MessageInput />
@@ -1483,7 +1489,9 @@ export default function App() {
                       const contact = contactList.find(c => c.contact_id === activeThreadId);
                       const isGroupThread = activeThreadType === 1 || contact?.contact_type === 'group';
                       return isGroupThread ? (
-                        <div className="absolute inset-y-0 right-0 z-50 w-80 max-w-[92vw] border-l border-gray-700 bg-gray-800 flex flex-col overflow-hidden shadow-2xl"
+                        <div className={rightPanelDocked
+                                ? 'relative h-full flex-shrink-0 w-80 border-l border-gray-700 bg-gray-800 flex flex-col overflow-hidden'
+                                : 'absolute inset-y-0 right-0 z-50 w-80 max-w-[92vw] border-l border-gray-700 bg-gray-800 flex flex-col overflow-hidden shadow-2xl'}
                               onClick={(e) => e.stopPropagation()}>
                           <GroupBoardPanel
                             zaloId={activeAccountId}
@@ -1511,7 +1519,7 @@ export default function App() {
                     })()}
                     {/* Right panel: conversation info */}
                     {showConversationInfo && activeThreadId && (
-                        <div className="absolute inset-y-0 right-0 z-40 max-w-[92vw] overflow-hidden"
+                        <div className={rightPanelClassName(rightPanelDocked)}
                             onClick={(e) => e.stopPropagation()}>
                           <ConversationInfo />
                         </div>
@@ -1519,7 +1527,7 @@ export default function App() {
                     {/* Right panel: integration quick panel */}
                     {showIntegrationQuickPanel && (
                         <div
-                            className="absolute inset-y-0 right-0 z-40 max-w-[92vw] overflow-hidden"
+                            className={rightPanelClassName(rightPanelDocked)}
                             onClick={(e) => e.stopPropagation()}
                         >
                           <IntegrationQuickPanel
@@ -1544,7 +1552,7 @@ export default function App() {
                     {/* Right panel: AI quick panel */}
                     {showAIQuickPanel && (
                         <div
-                            className="absolute inset-y-0 right-0 z-40 max-w-[92vw] overflow-hidden"
+                            className={rightPanelClassName(rightPanelDocked)}
                             onClick={(e) => e.stopPropagation()}
                         >
                           <AIQuickPanel onClose={toggleAIQuickPanel} />
