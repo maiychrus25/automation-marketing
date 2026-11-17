@@ -247,7 +247,9 @@ class LibraryService {
     values.push(uuid);
 
     db.run(`UPDATE media_library_items SET ${sets.join(', ')} WHERE uuid = ?`, values);
-    EventBroadcaster.emit('library:itemUpdated', { uuid, ...params });
+    // Chủ sở hữu đi kèm để relay chỉ gửi cho nhân viên dùng tài khoản đó.
+    const zaloId = this.getItem(uuid)?.owner_zalo_id;
+    EventBroadcaster.emit('library:itemUpdated', { uuid, ...params, ...(zaloId ? { zaloId } : {}) });
     return true;
   }
 

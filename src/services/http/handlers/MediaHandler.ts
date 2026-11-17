@@ -13,6 +13,7 @@ import * as path from 'path';
 import * as http from 'http';
 import Logger from '../../../utils/Logger';
 import FileStorageService from '../../file/FileStorageService';
+import { isInside, mediaAccountOf } from '../bossFileAccess';
 
 const MIME_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -46,8 +47,10 @@ function detectMime(filePath: string): string {
 export function handleMediaRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  mediaBasePath: string
-): void {
+  mediaBasePath: string,
+  allowedAccounts?: readonly string[],
+  allowErpTasks = false
+): 'PATH_FORBIDDEN' | 'ACCOUNT_FORBIDDEN' | void {
   const url = req.url || '';
 
   try {
@@ -84,10 +87,21 @@ export function handleMediaRequest(
     }
 
     const safeBase = fs.realpathSync(path.resolve(mediaBasePath));
-    if (!resolved.startsWith(safeBase)) {
+    if (!isInside(safeBase, resolved)) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
-      return;
+      return 'PATH_FORBIDDEN';
+    }
+    // Employee request: the file must sit in the folder of an account they may use ("external/..." has none),
+    // or in erp/tasks/ (task attachments) for an employee who holds the erp module.
+    if (allowedAccounts) {
+      const account = mediaAccountOf(safeBase, resolved);
+      const isTaskFile = allowErpTasks && isInside(path.join(safeBase, 'erp', 'tasks'), resolved);
+      if (!isTaskFile && (!account || !allowedAccounts.includes(account))) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
+        return 'ACCOUNT_FORBIDDEN';
+      }
     }
 
     if (!fs.existsSync(resolved)) {
@@ -114,7 +128,7 @@ export function handleMediaRequest(
         'Accept-Ranges': 'bytes',
         'Content-Length': chunkSize,
         'Content-Type': mime,
-        'Cache-Control': `public, max-age=${maxAge}`,
+        'Cache-Control': `private, max-age=${maxAge}`,
       });
 
       const stream = fs.createReadStream(resolved, { start, end });
@@ -126,7 +140,7 @@ export function handleMediaRequest(
     res.writeHead(200, {
       'Content-Type': mime,
       'Content-Length': stat.size,
-      'Cache-Control': `public, max-age=${maxAge}`,
+      'Cache-Control': `private, max-age=${maxAge}`,
       'ETag': `"${stat.mtimeMs}"`,
       'Accept-Ranges': 'bytes',
     });

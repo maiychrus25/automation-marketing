@@ -1,4 +1,16 @@
-import { isEmployeeChannelAllowed } from '../../services/http/relayChannelPolicy';
+import * as fs from 'fs';
+import * as path from 'path';
+import { isEmployeeChannelAllowed, employeeChannelRule, EMPLOYEE_PROXY_CHANNELS } from '../../services/http/relayChannelPolicy';
+
+const ROOT = path.join(__dirname, '../../..');
+function sourceFiles(dir: string, exts: RegExp, out: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) { if (entry.name !== 'node_modules') sourceFiles(full, exts, out); }
+    else if (exts.test(entry.name)) out.push(full);
+  }
+  return out;
+}
 
 describe('isEmployeeChannelAllowed', () => {
   // Every channel the employee app sends to the boss today (proxyToBoss / proxyAction call sites).
@@ -9,8 +21,6 @@ describe('isEmployeeChannelAllowed', () => {
     'ai:saveAssistant', 'ai:deleteAssistant', 'ai:uploadFile', 'ai:removeFile', 'ai:setAccountAssistant',
     'integration:save', 'integration:delete', 'integration:toggle',
     'db:markAsRead', 'db:deleteMessages', 'db:saveFriends', 'db:pinMessage', 'db:upsertLocalLabel',
-    // the boss handlers for the bare-named mirror writes are db:-prefixed
-    'db:saveStickers', 'db:upsertGroupMember', 'db:saveFriendRequests', 'db:upsertBankCard',
   ];
   test.each(usedByEmployees)('allows %s', (channel) => {
     expect(isEmployeeChannelAllowed(channel)).toBe(true);
@@ -42,6 +52,10 @@ describe('isEmployeeChannelAllowed', () => {
     'lockScreen:setPin', 'login:loginQR', 'login:removeAccount',
     'telegram:sendMessage', 'fb:sendMessage',
     'shell:openExternal', 'util:fetchUrl',
+    'db:setStoragePath', 'db:saveAccount', 'db:selectStorageFolder', 'db:getSetting', 'db:setSetting',
+    'ai:chat', 'ai:generateImage', 'zalo:', 'db:',
+    // names the employee app never sends and the old prefix rule let through
+    'db:saveStickers', 'db:upsertGroupMember', 'db:saveFriendRequests', 'db:upsertBankCard', 'zalo:notARealHandler',
   ];
   test.each(bossOnly)('denies %s', (channel) => {
     expect(isEmployeeChannelAllowed(channel)).toBe(false);
@@ -57,5 +71,42 @@ describe('isEmployeeChannelAllowed', () => {
   test('denies empty, non-string and look-alike channels', () => {
     for (const c of ['', 'zalo', 'zalox:send', ' zalo:send', 'db', 'saveStickersX', 'login:connectX', undefined, null, 42])
       expect(isEmployeeChannelAllowed(c as any)).toBe(false);
+  });
+
+  test('every channel the employee app proxies is in the closed list (source scan)', () => {
+    const files = [
+      ...sourceFiles(path.join(ROOT, 'electron'), /\.ts$/),
+      ...sourceFiles(path.join(ROOT, 'src/ui'), /\.(ts|tsx)$/),
+    ];
+    const call = /(?:proxyToBoss|proxyToBossWithResult|proxyAction)\(\s*(?:[\w.]+\s*,\s*)?(["'`])([^"'`]+)\1/g;
+    const found = new Set<string>();
+    for (const file of files) for (const m of fs.readFileSync(file, 'utf8').matchAll(call)) found.add(m[2]);
+    // Bare names (no "prefix:") never worked on the boss; `zalo:${method}` is covered by the zalo handler test.
+    const channels = [...found].filter((c) => /^[a-z]+:[A-Za-z]+$/.test(c));
+    expect(channels.length).toBeGreaterThan(40); // the scan itself must keep finding call sites
+    expect(channels.filter((c) => !EMPLOYEE_PROXY_CHANNELS.includes(c))).toEqual([]);
+  });
+
+  test('the zalo: channels equal the handlers registered in zaloIpc.ts (source scan)', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'electron/ipc/zaloIpc.ts'), 'utf8');
+    const handlers = new Set([...src.matchAll(/['"](zalo:\w+)['"]/g)].map((m) => m[1]));
+    expect(handlers.size).toBeGreaterThan(80);
+    const listed = new Set(EMPLOYEE_PROXY_CHANNELS.filter((c) => c.startsWith('zalo:')));
+    expect([...handlers].filter((c) => !listed.has(c))).toEqual([]);
+    expect([...listed].filter((c) => !handlers.has(c))).toEqual([]);
+  });
+
+  test('every channel carries its module and account rule', () => {
+    expect(employeeChannelRule('login:connect')).toEqual({ modules: [], account: 'default' });
+    expect(employeeChannelRule('zalo:sendMessage')).toEqual({ modules: ['chat'], account: 'default' });
+    expect(employeeChannelRule('zalo:sendFriendRequest')).toEqual({ modules: ['friends', 'chat'], account: 'default' });
+    expect(employeeChannelRule('crm:saveNote')).toEqual({ modules: ['crm'], account: 'default' });
+    expect(employeeChannelRule('ai:saveAssistant')).toEqual({ modules: ['ai_assistant'], account: 'none' });
+    expect(employeeChannelRule('ai:setAccountAssistant')).toEqual({ modules: ['ai_assistant'], account: 'default' });
+    expect(employeeChannelRule('integration:toggle')).toEqual({ modules: ['integration'], account: 'none' });
+    expect(employeeChannelRule('db:markAsRead')).toEqual({ modules: ['chat'], account: 'default' });
+    expect(employeeChannelRule('db:saveFriends')).toEqual({ modules: ['friends', 'chat'], account: 'default' });
+    expect(employeeChannelRule('db:setStoragePath')).toBeNull();
+    expect(employeeChannelRule(42)).toBeNull();
   });
 });

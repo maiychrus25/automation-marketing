@@ -7,12 +7,13 @@
  * - Reconnect → gửi lastSeqId → Boss replay buffer từ seqId đó
  * - Buffer giới hạn 2000 event gần nhất (đủ cho ~10-15 phút ở cường độ cao)
  */
-import Logger from '../../utils/Logger';
+import type { RelayAudience } from './relayAudience';
 
 export interface BufferedEvent {
   seqId: number;
   channel: string;
   data: any;
+  audience: RelayAudience;
   ts: number;
 }
 
@@ -31,9 +32,9 @@ class EventBuffer {
   /**
    * Thêm event vào buffer, trả về seqId
    */
-  push(channel: string, data: any): number {
+  push(channel: string, data: any, audience: RelayAudience): number {
     const seqId = this.nextSeqId++;
-    const event: BufferedEvent = { seqId, channel, data, ts: Date.now() };
+    const event: BufferedEvent = { seqId, channel, data, audience, ts: Date.now() };
     this.buffer.push(event);
 
     // Giới hạn kích thước - shift cũ nhất

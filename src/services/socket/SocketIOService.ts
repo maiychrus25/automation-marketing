@@ -19,6 +19,7 @@
 import * as http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import EventBuffer from './EventBuffer';
+import { RelayAudience, canReceiveRelayEvent } from './relayAudience';
 import Logger from '../../utils/Logger';
 import EmployeeService from '../employee/EmployeeService';
 import WorkspaceManager from '../../utils/WorkspaceManager';
@@ -39,6 +40,28 @@ class SocketIOService {
 
   /** Track online employees (Socket.IO connection) */
   private onlineEmployees = new Set<string>();
+
+  /** Tài khoản nhân viên được dùng, hỏi lại mỗi lần phát/nhận bù. Mặc định đóng: không tài khoản nào. */
+  private allowedAccountsResolver: (employeeId: string) => string[] = () => [];
+
+  public setAllowedAccountsResolver(fn: (employeeId: string) => string[]): void {
+    this.allowedAccountsResolver = fn;
+  }
+
+  /** Quyền module của nhân viên, hỏi lại mỗi lần phát/nhận bù. Mặc định đóng. */
+  private modulePermissionResolver: (employeeId: string, module: string) => boolean = () => false;
+
+  public setModulePermissionResolver(fn: (employeeId: string, module: string) => boolean): void {
+    this.modulePermissionResolver = fn;
+  }
+
+  private hasModuleFor(employeeId: string): (module: string) => boolean {
+    return (module) => { try { return this.modulePermissionResolver(employeeId, module) === true; } catch { return false; } };
+  }
+
+  private allowedFor(employeeId: string): string[] {
+    try { return this.allowedAccountsResolver(employeeId) || []; } catch { return []; }
+  }
 
   public static getInstance(): SocketIOService {
     if (!SocketIOService.instance) {
@@ -84,7 +107,7 @@ class SocketIOService {
         const empService = EmployeeService.getInstance();
         const payload = empService.validateToken(token);
 
-        if (!payload || !payload.employee_id) {
+        if (!payload || !payload.valid || !payload.employee_id) {
           return next(new Error('Invalid token'));
         }
 
@@ -120,7 +143,10 @@ class SocketIOService {
         const since = lastSeqId || 0;
         const events = this.eventBuffer.getSince(since);
         let sent = 0;
+        const allowed = this.allowedFor(employeeId); // một ảnh chụp nhất quán cho cả lượt nhận bù
+        const hasModule = this.hasModuleFor(employeeId);
         for (const ev of events) {
+          if (!canReceiveRelayEvent(ev.audience, employeeId, allowed, hasModule)) continue;
           socket.emit('event', {
             seqId: ev.seqId,
             channel: ev.channel,
@@ -166,7 +192,7 @@ class SocketIOService {
     if (!this.io || !this.running) return;
 
     // 1. Buffer trước → đảm bảo không miss dù offline
-    const seqId = this.eventBuffer.push(channel, data);
+    const seqId = this.eventBuffer.push(channel, data, { kind: 'employees', ids: [employeeId] });
 
     // 2. Emit vào room của employee
     //    Nếu room rỗng (offline) → no-op, event vẫn ở buffer
@@ -179,6 +205,31 @@ class SocketIOService {
     } catch (err: any) {
       Logger.warn(`[SocketIOService] emitToEmployee error: ${err.message}`);
     }
+  }
+
+  /**
+   * Phát một sự kiện cho mọi nhân viên đang nối mà audience cho phép.
+   * Buffer đúng một lần kèm audience; catch-up lọc lại bằng cùng quy tắc.
+   */
+  public publish(channel: string, data: unknown, audience: RelayAudience): void {
+    if (!this.io || !this.running) return;
+    const seqId = this.eventBuffer.push(channel, data, audience);
+    try {
+      for (const [roomId, sockets] of this.io.sockets.adapter.rooms) {
+        if (!roomId.startsWith('emp:') || sockets.size === 0) continue;
+        const employeeId = roomId.slice(4);
+        if (!canReceiveRelayEvent(audience, employeeId, this.allowedFor(employeeId), this.hasModuleFor(employeeId))) continue;
+        this.io.to(roomId).emit('event', { seqId, channel, data });
+      }
+    } catch (err: any) {
+      Logger.warn(`[SocketIOService] publish error: ${err.message}`);
+    }
+  }
+
+  /** Ngắt mọi socket của employee (khi token bị thu hồi). */
+  public disconnectEmployee(employeeId: string): void {
+    if (!this.io) return;
+    this.io.in(`emp:${employeeId}`).disconnectSockets(true);
   }
 
   /**

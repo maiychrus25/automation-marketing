@@ -15,6 +15,35 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.45.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🔒 Nhân viên chỉ dùng được tài khoản được gán cho mình; vô hiệu hoá nhân viên có hiệu lực ngay',
+      '🔁 Sau khi cập nhật, nhân viên đăng nhập lại một lần; máy boss và máy nhân viên đều cần bản mới',
+    ],
+    changes: [
+      {
+        category: 'improved',
+        items: [
+          'Sau khi cập nhật, mỗi nhân viên phải đăng nhập lại một lần. Máy boss và máy nhân viên đều cần cập nhật lên bản này; máy nhân viên bản cũ sẽ không tải được ảnh từ máy boss đã cập nhật',
+          'Nhân viên không còn dùng được tài khoản Facebook cá nhân, kể cả khi tài khoản đó đang được tích chọn trong phần gán. Các Page không bị ảnh hưởng',
+          'Tắt, xoá hoặc đăng xuất nhân viên, hay đổi mật khẩu của họ, có hiệu lực ngay: nhân viên bị ngắt khỏi máy boss tức thì',
+          'Nhãn áp dụng cho nhiều tài khoản chỉ được xoá, sắp xếp lại hoặc bật/tắt bởi người được dùng tất cả các tài khoản đó',
+          'Nhân viên chỉ thấy tin nhắn nhanh và sự kiện thư viện của tài khoản mình được dùng',
+          'Nhân viên đổi địa chỉ máy chủ của trợ lý AI thì phải nhập lại khoá API (khoá đã lưu trên máy boss không được gửi tới địa chỉ mới)',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Nhân viên bật/tắt nhãn hoặc sắp xếp lại nhãn nay hoạt động (trước đây máy boss bỏ qua lệnh)',
+          'Cài đặt thông báo theo từng tài khoản của nhân viên nay được lưu',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.44.1',
     date: '11/2026',
     type: 'patch',

@@ -84,7 +84,7 @@ async function mainHarness(options: { platform?: string } = {}) {
     const genericModule = new Proxy({ __esModule: true, default: singleton }, { get: (target: any, key) => key in target ? target[key] : () => {} });
     const image = { isEmpty: () => true, resize() { return this; } };
     class Window extends EventEmitter {
-        webContents = Object.assign(new EventEmitter(), { send: jest.fn(), session: { webRequest: { onHeadersReceived: () => {} } } });
+        webContents = Object.assign(new EventEmitter(), { send: jest.fn(), session: { webRequest: { onHeadersReceived: () => {}, onBeforeSendHeaders: () => {} } } });
         hide = jest.fn(); show = jest.fn(); focus = jest.fn(); loadURL = jest.fn(); loadFile = jest.fn();
         isDestroyed = () => false; isVisible = () => windowVisible; isMaximized = () => false; isMinimized = () => windowMinimized; restore = jest.fn();
         constructor(..._args: any[]) { super(); window = this; }

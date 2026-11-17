@@ -454,6 +454,8 @@ export const handlers = {
 
   getLabels(employee: RegisteredEmployee, params: any): JsonResponse {
     const zaloId = params.zaloId || employee.assigned_accounts[0];
+    // Không có tài khoản thì getLocalLabels trả nhãn của mọi tài khoản.
+    if (!zaloId) return error('Missing zaloId');
     const labels = db().getLocalLabels(zaloId) || [];
     return success({ items: labels });
   },
@@ -710,7 +712,9 @@ export const handlers = {
   // ═══════════════════════════════════════════════════════════════
 
   getAllQuickMessagesHandler(employee: RegisteredEmployee, _params: any): JsonResponse {
-    const items = db().getAllLocalQuickMessages() || [];
+    // Chỉ trả tin nhắn nhanh của tài khoản nhân viên được dùng (assigned_accounts đã được lọc).
+    const allowed = new Set(employee.assigned_accounts);
+    const items = (db().getAllLocalQuickMessages() || []).filter((q: any) => allowed.has(q.owner_zalo_id));
     return success({ items });
   },
 
@@ -881,7 +885,8 @@ export const handlers = {
 
   getIntegrations(employee: RegisteredEmployee, _params: any): JsonResponse {
     const integrations = db().query<any>('SELECT * FROM integrations ORDER BY name ASC') || [];
-    return success({ items: integrations });
+    // Thông tin xác thực đã mã hoá chỉ dùng ở máy Boss, nhân viên không cần.
+    return success({ items: integrations.map(({ credentials_encrypted: _credentials, ...row }: any) => row) });
   },
 
   // ═══════════════════════════════════════════════════════════════

@@ -51,7 +51,10 @@ export function registerEmployeeIpc(): void {
         employeeId: string; updates: { display_name?: string; avatar_url?: string; password?: string; is_active?: number; role?: string; group_id?: string | null };
     }) => {
         try {
-            return svc().updateEmployee(employeeId, updates);
+            const result = svc().updateEmployee(employeeId, updates);
+            // Vô hiệu hoá hoặc đổi mật khẩu: ngắt phiên đang chạy (kickEmployee cũng thu hồi token).
+            if (result.success && (updates.is_active === 0 || updates.password)) HttpRelayService.getInstance().kickEmployee(employeeId);
+            return result;
         } catch (err: any) {
             return { success: false, error: err.message };
         }
@@ -59,7 +62,9 @@ export function registerEmployeeIpc(): void {
 
     ipcMain.handle('employee:delete', async (_e, { employeeId }: { employeeId: string }) => {
         try {
-            return svc().deleteEmployee(employeeId);
+            const result = svc().deleteEmployee(employeeId);
+            if (result.success) HttpRelayService.getInstance().kickEmployee(employeeId);
+            return result;
         } catch (err: any) {
             return { success: false, error: err.message };
         }

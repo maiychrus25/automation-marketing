@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import LibraryService from '../../library/LibraryService';
 import DatabaseService from '../../database/DatabaseService';
 import Logger from '../../../utils/Logger';
+import { checkEmployeeAccess } from '../employeeAccess';
 
 const lib = () => LibraryService.getInstance();
 
@@ -28,6 +29,21 @@ function success(data: any, pagination?: JsonResponse['pagination']): JsonRespon
 
 function error(msg: string): JsonResponse {
   return { success: false, error: msg };
+}
+
+// Id tài khoản nằm trong thân yêu cầu (đọc sau khi HttpRelayService đã kiểm tra tham số cấp trên): cùng một quy tắc, trả 403 nếu không được dùng.
+function refuseForeignAccount(req: http.IncomingMessage, res: http.ServerResponse, employee: any, zaloId: unknown): boolean {
+  const denied = checkEmployeeAccess({
+    allowed: employee.assigned_accounts || [],
+    pathname: (req.url || '').split('?')[0],
+    params: { zaloIds: zaloId },
+    hasPermission: () => true, // /api/library/* không gắn module
+  });
+  if (!denied) return false;
+  Logger.warn(`[LibraryHandler] Denied employee=${employee.employee_id} path=${(req.url || '').split('?')[0]} code=${denied.code}`);
+  res.writeHead(403, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ success: false, error: denied.error, code: denied.code }));
+  return true;
 }
 
 export const libraryHandlers = {
@@ -65,6 +81,7 @@ export const libraryHandlers = {
           return;
         }
 
+        if (refuseForeignAccount(req, res, employee, parsed.fields?.zaloId)) return;
         const zaloId = parsed.fields?.zaloId || employee.assigned_accounts?.[0] || '';
         const employeeId = employee.employee_id || '';
         const tags = parsed.fields?.tags || '';
@@ -129,6 +146,7 @@ export const libraryHandlers = {
           return;
         }
 
+        if (refuseForeignAccount(req, res, employee, zaloId)) return;
         const empZaloId = zaloId || employee.assigned_accounts?.[0] || '';
         // ⚠️ Dùng withDbPathAsync vì lib().upload() là async (có await sharp bên trong).
         // withDbPath (sync) sẽ restore db BEFORE async ops complete → INSERT vào sai DB!

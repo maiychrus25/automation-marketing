@@ -39,6 +39,7 @@ import { registerErpHrmIpc } from './ipc/erpHrmIpc';
 import { registerLockScreenIpc } from './ipc/lockScreenIpc';
 import { registerLibraryIpc } from './ipc/libraryIpc';
 import WorkspaceManager from '../src/utils/WorkspaceManager';
+import { bossAuthHeaderFor } from '../src/services/http/bossRequestAuth';
 import { whenSecretStoreReady } from '../src/services/secure/secretStore';
 import HttpConnectionManager from '../src/services/http/HttpConnectionManager';
 import WorkflowEngineService from '../src/services/workflow/WorkflowEngineService';
@@ -499,6 +500,20 @@ function createWindow() {
       });
     });
   }
+
+  // Employee app: <img>/<video> to the boss's /api/media and /api/library cannot send headers, so the session
+  // is attached here (token only in a header, only to the boss's own origin). Electron keeps one listener per session.
+  mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
+    { urls: ['*://*/api/media/*', '*://*/api/library/*'] },
+    (details, callback) => {
+      let authorization: string | null = null;
+      try {
+        const ws = WorkspaceManager.getInstance().getActiveWorkspace();
+        authorization = ws?.type === 'remote' ? bossAuthHeaderFor(details.url, ws) : null;
+      } catch { /* no workspace yet: send the request unchanged */ }
+      callback(authorization ? { requestHeaders: { ...details.requestHeaders, Authorization: authorization } } : {});
+    }
+  );
 
   // Nút X của OS frame (không dùng vì frame=false) - vẫn handle để an toàn
   mainWindow.on('close', (event) => {

@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import Logger from '../../utils/Logger';
 import FileStorageService from '../file/FileStorageService';
+import { bossAuthHeaderFor } from '../http/bossRequestAuth';
 
 interface CacheEntry {
   key: string;
@@ -194,7 +195,15 @@ class MediaCacheService {
 
       Logger.log(`[MediaCacheService] Downloading: ${bossUrl.slice(0, 80)}...`);
 
+      // The boss now requires login for /api/media and /api/library: send the employee session (header only).
+      let authorization: string | null = null;
+      try {
+        const { default: WorkspaceManager } = require('../../utils/WorkspaceManager');
+        const ws = WorkspaceManager.getInstance().getActiveWorkspace();
+        authorization = ws?.type === 'remote' ? bossAuthHeaderFor(bossUrl, ws) : null;
+      } catch { /* no workspace: unauthenticated request, as before */ }
       const response = await fetch(bossUrl, {
+        headers: authorization ? { Authorization: authorization } : undefined,
         signal: AbortSignal.timeout(30000),
       });
 

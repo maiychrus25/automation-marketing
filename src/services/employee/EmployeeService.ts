@@ -3,6 +3,7 @@ import * as jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import DatabaseService from '../database/DatabaseService';
 import Logger from '../../utils/Logger';
+import { JWT_SECRET_VERSION, planJwtSecretInit, tokenIssuedAtMs, evaluateEmployeeToken, nextRevocationMark } from './employeeTokenPolicy';
 import type { Employee, EmployeePermission, EmployeeWithDetails, EmployeeModule } from '../../models';
 
 const BCRYPT_ROUNDS = 12;
@@ -27,13 +28,19 @@ class EmployeeService {
 
     private initJwtSecret(): void {
         this.runOnDb((db) => {
-            const existing = db.getSetting?.('employee_jwt_secret');
-            if (existing) {
-                this.jwtSecret = existing;
-            } else {
-                this.jwtSecret = uuidv4() + '-' + uuidv4();
-                db.setSetting?.('employee_jwt_secret', this.jwtSecret);
+            const existing = db.getSetting?.('employee_jwt_secret') || null;
+            const rawVersion = db.getSetting?.('employee_jwt_secret_version');
+            const version = rawVersion ? Number(rawVersion) : null;
+            const plan = planJwtSecretInit(existing, version !== null && Number.isFinite(version) ? version : null);
+            if (plan === 'keep') {
+                this.jwtSecret = existing as string;
+                return;
             }
+            // Khoá cũ từng đọc được qua relay nên coi là đã lộ: đổi đúng một lần cho mỗi cơ sở dữ liệu.
+            this.jwtSecret = uuidv4() + '-' + uuidv4();
+            db.setSetting?.('employee_jwt_secret', this.jwtSecret);
+            db.setSetting?.('employee_jwt_secret_version', String(JWT_SECRET_VERSION));
+            if (plan === 'rotate') Logger.warn('[EmployeeService] Employee signing key rotated (reason=legacy_key)');
         });
     }
 
@@ -159,6 +166,7 @@ class EmployeeService {
                 }
 
                 db.updateEmployee(employeeId, dbUpdates);
+                if (updates.is_active === 0 || updates.password) this.revokeEmployeeTokens(employeeId);
                 return { success: true };
             });
         } catch (err: any) {
@@ -171,6 +179,7 @@ class EmployeeService {
         try {
             return this.runOnDb((db) => {
                 db.deleteEmployee(employeeId);
+                this.revokeEmployeeTokens(employeeId);
                 return { success: true };
             });
         } catch (err: any) {
@@ -279,8 +288,13 @@ class EmployeeService {
             return this.runOnDb((db) => {
                 db.updateEmployeeLastLogin(emp.employee_id);
 
+                // ts lớn hơn mốc thu hồi và không nhỏ hơn lần phát hành trước, để đồng hồ lùi không làm lệch mốc.
+                const validAfter = this.readNumberSetting(db, `employee_tokens_valid_after_${emp.employee_id}`);
+                const lastIssued = this.readNumberSetting(db, `employee_tokens_last_issued_${emp.employee_id}`);
+                const ts = Math.max(Date.now(), validAfter + 1, lastIssued);
+                db.setSetting?.(`employee_tokens_last_issued_${emp.employee_id}`, String(Math.max(lastIssued, ts)));
                 const token = jwt.sign(
-                    { employee_id: emp.employee_id, username: emp.username, role: emp.role },
+                    { employee_id: emp.employee_id, username: emp.username, role: emp.role, ts },
                     this.jwtSecret,
                     { expiresIn: JWT_EXPIRES_IN }
                 );
@@ -296,12 +310,42 @@ class EmployeeService {
         }
     }
 
-    public validateToken(token: string): { valid: boolean; employee_id?: string; username?: string; role?: string } {
+    private readNumberSetting(db: DatabaseService, key: string): number {
+        const n = Number(db.getSetting?.(key));
+        return Number.isFinite(n) ? n : 0;
+    }
+
+    /** Thu hồi mọi token đã phát hành cho nhân viên (đăng nhập lại sau đó vẫn hợp lệ). */
+    public revokeEmployeeTokens(employeeId: string): void {
+        this.runOnDb((db) => {
+            const mark = nextRevocationMark(
+                Date.now(),
+                this.readNumberSetting(db, `employee_tokens_valid_after_${employeeId}`),
+                this.readNumberSetting(db, `employee_tokens_last_issued_${employeeId}`),
+            );
+            db.setSetting?.(`employee_tokens_valid_after_${employeeId}`, String(mark));
+        });
+    }
+
+    /** Callers MUST check `valid`: `employee_id` is also returned (for logging) when valid is false. */
+    public validateToken(token: string): { valid: boolean; reason?: 'invalid' | 'unavailable' | 'inactive' | 'revoked'; employee_id?: string; username?: string; role?: string } {
+        let decoded: any;
         try {
-            const decoded = jwt.verify(token, this.jwtSecret) as any;
+            decoded = jwt.verify(token, this.jwtSecret, { algorithms: ['HS256'] });
+        } catch {
+            return { valid: false, reason: 'invalid' };
+        }
+        if (!decoded || typeof decoded.employee_id !== 'string') return { valid: false, reason: 'invalid' };
+        try {
+            const reason = this.runOnDb((db) => evaluateEmployeeToken({
+                issuedAtMs: tokenIssuedAtMs(decoded),
+                employee: db.getEmployeeById(decoded.employee_id) ?? null,
+                validAfterMs: this.readNumberSetting(db, `employee_tokens_valid_after_${decoded.employee_id}`),
+            }));
+            if (reason !== 'ok') return { valid: false, reason, employee_id: decoded.employee_id };
             return { valid: true, employee_id: decoded.employee_id, username: decoded.username, role: decoded.role };
         } catch {
-            return { valid: false };
+            return { valid: false, reason: 'unavailable', employee_id: decoded.employee_id };
         }
     }
 

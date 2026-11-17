@@ -28,6 +28,7 @@ Bản quyền của tác giả gốc được giữ nguyên theo đúng điều 
 | 13 | **Rút gọn `UpdateNotification` thành component rỗng** | Hộp thoại chứa 6 liên kết tải thẳng từ kho phát hành của tác giả; bấm vào sẽ cài đè bản nội bộ |
 | 14 | **Đổi thông tin sản phẩm nhúng vào bản dựng** | `CompanyName`/`LegalCopyright` (Windows exe), maintainer gói `.deb`, tên bot mặc định trong workflow, nhãn nguồn đơn gửi sang POS (`deplaoapp` → `ahvconnect`) |
 | 15 | **Thay `README.md`, xoá `README.en.md`** | README gốc là trang quảng bá sản phẩm thượng nguồn (badge kho, link website, hướng dẫn tải bản phát hành của họ) |
+| 16 | **Viết lại quy tắc kiểm soát truy cập của nhân viên trên relay máy boss** (26.45.0) | Thiết kế theo bản gốc Deplao 26.11.1 (commit `515f1dc`), tự cài đặt lại bằng tay; không sao chép tệp nào của bản gốc. Chi tiết ở `docs/specs/2026-11-17-employee-shared-inbox.md` |
 
 Hai thay đổi 6–7 do phía trung tâm thực hiện trước; cách tắt telemetry cũng
 lấy theo bản của trung tâm (trả về kết quả rỗng có thông báo, phủ đủ 7 hàm)
