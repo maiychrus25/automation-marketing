@@ -1,13 +1,18 @@
 import React, { useState } from 'react';
 import ipc from '@/lib/ipc';
-import { toLocalMediaUrl } from '@/lib/localMedia';
+import { toDiskMediaUrl, toLocalMediaUrl } from '@/lib/localMedia';
 import { useAppStore } from '@/store/appStore';
+import { formatFileSize } from '../../lib/employeePoster';
 import { MAX_IMAGES, isVideo, validateMediaSelection, acceptDroppedMedia, type MediaItem } from '../../../services/facebookPoster/mediaRules';
 
 interface Props {
   items: MediaItem[];
   onChange: (items: MediaItem[]) => void;
   disabled?: boolean;
+  /** Tệp của bản nháp lưu ở máy Boss (nhân viên): không có trên đĩa này nên chỉ hiện tên và dung lượng, không xem trước. */
+  storedPaths?: ReadonlySet<string>;
+  /** Nhân viên: mọi tệp còn lại vừa chọn trên máy này, xem trước bằng local-media:// (không phải URL của Boss). */
+  localFiles?: boolean;
 }
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -20,7 +25,7 @@ function summary(items: MediaItem[]): string {
   return `${items.length}/${MAX_IMAGES} ảnh · ${mb.toFixed(1)} MB`;
 }
 
-export default function MediaPicker({ items, onChange, disabled }: Props) {
+export default function MediaPicker({ items, onChange, disabled, storedPaths, localFiles }: Props) {
   const showNotification = useAppStore((s) => s.showNotification);
   const [dragOver, setDragOver] = useState(false);
   const [pickError, setPickError] = useState('');
@@ -89,9 +94,11 @@ export default function MediaPicker({ items, onChange, disabled }: Props) {
             return (
               <li key={item.path} className="w-[88px] min-w-0 space-y-1">
                 <div className="relative w-[72px] h-[72px] rounded-lg border border-gray-700 overflow-hidden bg-gray-800 flex items-center justify-center">
-                  {isVideo(item.path)
+                  {storedPaths?.has(item.path)
+                    ? <span className="text-[11px] text-gray-300 px-1 min-w-0 max-w-full" title={fileName(item.path)}><span className="block break-all line-clamp-3">{fileName(item.path)}</span>{formatFileSize(item.size) && <span className="block">{formatFileSize(item.size)}</span>}</span>
+                    : isVideo(item.path)
                     ? <span className="text-[11px] text-gray-300 px-1 break-all line-clamp-4" title={item.path}>{fileName(item.path)}</span>
-                    : <img src={toLocalMediaUrl(item.path)} alt={fileName(item.path)} title={item.path} className="w-full h-full object-cover" />}
+                    : <img src={localFiles ? toDiskMediaUrl(item.path) : toLocalMediaUrl(item.path)} alt={fileName(item.path)} title={item.path} className="w-full h-full object-cover" />}
                   <span className="absolute top-0 left-0 px-1 text-[11px] bg-black/70 text-white rounded-br">{k}</span>
                 </div>
                 <div className="flex flex-wrap gap-1">

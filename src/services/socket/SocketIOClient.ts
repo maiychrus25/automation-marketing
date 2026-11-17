@@ -14,6 +14,8 @@
  */
 import { io as socketIOClient, Socket } from 'socket.io-client';
 import Logger from '../../utils/Logger';
+import type { CatchUpAck } from './catchUpProtocol';
+import { CATCH_UP_ACK_TIMEOUT_MS, StreamPosition, resyncReasonForAck, type ResyncReason } from '../http/employeeConnection';
 
 class SocketIOClient {
   private socket: Socket | null = null;
@@ -21,8 +23,19 @@ class SocketIOClient {
   private token = '';
   private workspaceId = '';
 
-  /** SeqId của event cuối cùng đã nhận (dùng cho catch-up khi reconnect) */
-  private lastSeqId = 0;
+  /** Vị trí trong luồng của boss (dùng cho catch-up khi reconnect) */
+  private position = new StreamPosition();
+
+  constructor(private readonly ackTimeoutMs: number = CATCH_UP_ACK_TIMEOUT_MS) {}
+
+  private ackTimer: ReturnType<typeof setTimeout> | null = null;
+  private clearAckTimer(): void {
+    if (this.ackTimer) clearTimeout(this.ackTimer);
+    this.ackTimer = null;
+  }
+
+  /** Callback khi phát hiện có thể đã lỡ sự kiện → giao diện cần tải lại */
+  private onResync: ((reason: ResyncReason) => void) | null = null;
 
   /** Callback khi nhận event từ Boss */
   private onEvent: ((channel: string, data: any) => void) | null = null;
@@ -41,7 +54,7 @@ class SocketIOClient {
     this.disconnect();
     this.bossUrl = bossUrl;
     this.token = token;
-    this.lastSeqId = 0;
+    this.position = new StreamPosition();
 
     Logger.log(`[SocketIOClient] Connecting to ${bossUrl}...`);
 
@@ -65,19 +78,43 @@ class SocketIOClient {
       Logger.log(`[SocketIOClient] 🟢 Connected to ${this.bossUrl} (id=${this.socket?.id})`);
       this.onStatusChange?.(true);
 
-      // Catch-up: xin lại event đã miss khi offline
-      // lastSeqId có thể = 0 (lần đầu) → Boss gửi toàn bộ buffer
-      this.socket?.emit('catch-up', { lastSeqId: this.lastSeqId });
+      // Catch-up sau MỌI lần connect (boss chỉ cho vào phòng nhận trực tiếp sau lượt này).
+      // Boss bản cũ không gọi ack → hết hạn thì coi là chưa kiểm chứng.
+      // Hạn chờ tự đặt (không dùng socket.timeout()): socket.io gọi ack với Error cả khi socket đóng, và chỉ phân biệt
+      // với hết giờ bằng chuỗi thông báo. Ở đây đóng socket chỉ huỷ hạn chờ → không có kết luận, không resync.
+      const sock = this.socket;
+      if (!sock) return;
+      this.clearAckTimer();
+      let answered = false; // đã nhận ack thật
+      let timedOut = false; // hạn chờ đã hết và đã báo catchup-unverified
+      const current = () => this.socket === sock; // socket đã bị đóng/thay thì mọi kết quả muộn bị bỏ
+      this.ackTimer = setTimeout(() => {
+        if (answered || timedOut || !current()) return;
+        timedOut = true;
+        Logger.log('[SocketIOClient] Resync needed (reason=catchup-unverified)');
+        this.onResync?.('catchup-unverified');
+      }, this.ackTimeoutMs);
+      const onAck = (ack: CatchUpAck) => {
+        if (answered || !current()) return;
+        answered = true;
+        this.clearAckTimer();
+        this.position.adopt(ack.bootId, ack.lastSeqId); // ack muộn vẫn cho biết vị trí thật của boss
+        if (timedOut) return; // đã tải lại vì catchup-unverified, không báo lần hai
+        const reason = resyncReasonForAck(ack);
+        if (reason) {
+          Logger.log(`[SocketIOClient] Resync needed (reason=${reason})`);
+          this.onResync?.(reason);
+        }
+      };
+      sock.emit('catch-up', this.position.request(), (ack?: CatchUpAck) => { if (ack) onAck(ack); });
     });
 
     // ─── Event từ Boss ──────────────────────────────────────────
-    this.socket.on('event', (payload: { seqId: number; channel: string; data: any }) => {
+    this.socket.on('event', (payload: { seqId?: number; bootId?: string; channel: string; data: any }) => {
       if (!payload || !payload.channel) return;
 
-      // Track seqId
-      if (payload.seqId > this.lastSeqId) {
-        this.lastSeqId = payload.seqId;
-      }
+      // Sự kiện tức thời không có seqId → track bỏ qua, không dịch vị trí
+      this.position.track(payload);
 
       // Forward đến handler (handlePushedEvent trong HttpClientService)
       this.onEvent?.(payload.channel, payload.data);
@@ -86,6 +123,7 @@ class SocketIOClient {
     // ─── Disconnected ───────────────────────────────────────────
     this.socket.on('disconnect', (reason) => {
       Logger.log(`[SocketIOClient] 🔴 Disconnected from ${this.bossUrl}: ${reason}`);
+      this.clearAckTimer(); // lần nối lại sẽ gửi catch-up mới
       this.onStatusChange?.(false);
     });
 
@@ -105,12 +143,13 @@ class SocketIOClient {
    * Ngắt kết nối
    */
   public disconnect(): void {
+    this.clearAckTimer();
     if (this.socket) {
       this.socket.removeAllListeners();
       this.socket.close();
       this.socket = null;
     }
-    this.lastSeqId = 0;
+    this.position = new StreamPosition();
   }
 
   /**
@@ -130,13 +169,12 @@ class SocketIOClient {
     this.onStatusChange = cb;
   }
 
-  public setWorkspaceId(id: string): void {
-    this.workspaceId = id;
+  public setOnResync(cb: (reason: ResyncReason) => void): void {
+    this.onResync = cb;
   }
 
-  /** Reset seqId (dùng khi reconnect toàn bộ) */
-  public resetSeqId(): void {
-    this.lastSeqId = 0;
+  public setWorkspaceId(id: string): void {
+    this.workspaceId = id;
   }
 }
 

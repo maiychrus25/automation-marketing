@@ -410,6 +410,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPermissions:     (employeeId: string) => ipcRenderer.invoke('employee:getPermissions', { employeeId }),
     assignAccounts:     (employeeId: string, zaloIds: string[]) => ipcRenderer.invoke('employee:assignAccounts', { employeeId, zaloIds }),
     getAssignedAccounts:(employeeId: string) => ipcRenderer.invoke('employee:getAssignedAccounts', { employeeId }),
+    assignProfiles:     (employeeId: string, profileIds: string[]) => ipcRenderer.invoke('employee:assignProfiles', { employeeId, profileIds }),
+    getAssignedProfiles:(employeeId: string) => ipcRenderer.invoke('employee:getAssignedProfiles', { employeeId }),
     getStats:           (employeeId: string, sinceTs?: number, untilTs?: number) => ipcRenderer.invoke('employee:getStats', { employeeId, sinceTs, untilTs }),
     getSessions:        (employeeId: string, limit?: number) => ipcRenderer.invoke('employee:getSessions', { employeeId, limit }),
     login:              (username: string, password: string) => ipcRenderer.invoke('employee:login', { username, password }),
@@ -749,6 +751,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   on: (channel: string, callback: (...args: any[]) => void) => {
     const validChannels = [
+      'employee:resync',
       'event:message',
       'event:connected',
       'event:disconnected',

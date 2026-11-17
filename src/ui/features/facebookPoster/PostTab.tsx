@@ -8,6 +8,8 @@ import PostPreview from './PostPreview';
 import { matchesKeywords } from './matchKeywords';
 import CampaignSelect from './CampaignSelect';
 import { gradeChip } from './trackingFormat';
+import { useEmployeePoster } from './useEmployeePoster';
+import { keepAssigned } from '../../lib/employeePoster';
 import { CAPACITY_REASON } from './runState';
 import { hydrateTargets, targetsToSave, hydrateVariants, validateVariantTabs, buildVariantParams } from './draftForm';
 import { VARIANT_LABELS, MAX_VARIANTS } from '../../../services/facebookPoster/variants';
@@ -38,6 +40,9 @@ const splitLines = (value: string): string[] => value.split('\n').map((l) => l.t
 export default function PostTab({ atCapacity, profileNames, onStarted, open, onClose, initialProfileIds, initialRunAt, initialMediaPaths, draft }: Props) {
   const dp = draft?.schedule.params as Record<string, any> | undefined;
   const showNotification = useAppStore((s) => s.showNotification);
+  const { isEmployee, noProfiles, assignedKey, assigned } = useEmployeePoster();
+  // Nhân viên: tệp của nháp là đường dẫn trên máy Boss, không xem trước được ở đây (giữ nguyên trong danh sách để lưu lại).
+  const storedPaths = useMemo(() => (isEmployee ? new Set((draft?.media ?? []).map((m) => m.path)) : undefined), [isEmployee, draft]);
   const [mode, setMode] = useState<FbPosterMode>(dp?.mode === 'page' ? 'page' : 'group');
   const [text, setText] = useState<string>(typeof dp?.text === 'string' ? dp.text : '');
   const [variantTabs, setVariantTabs] = useState<string[]>(hydrateVariants(dp));
@@ -48,6 +53,12 @@ export default function PostTab({ atCapacity, profileNames, onStarted, open, onC
   const [commentDelayMin, setCommentDelayMin] = useState<number>(Number.isInteger(dp?.commentDelayMin) ? dp!.commentDelayMin : 0);
   const [profileIds, setProfileIds] = useState<string[]>(
     dp ? ((dp.profiles ?? []) as { profileId: string }[]).map((p) => p.profileId) : initialProfileIds);
+  // Employee: profiles the boss unassigned mid-session leave the selection (the boss refuses a whole request that names one); no profile left closes the composer.
+  useEffect(() => {
+    if (isEmployee) setProfileIds((prev) => keepAssigned(prev, assigned));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEmployee, assignedKey]);
+  useEffect(() => { if (noProfiles && open) onClose(); }, [noProfiles, open]); // eslint-disable-line react-hooks/exhaustive-deps
   const [keyword, setKeyword] = useState('');
   const [groupsByProfile, setGroupsByProfile] = useState<Record<string, FbPosterGroup[]>>({});
   const [groupsLoading, setGroupsLoading] = useState(false);
@@ -289,7 +300,7 @@ export default function PostTab({ atCapacity, profileNames, onStarted, open, onC
         <span className="block text-right mt-0.5">{activeText.length}/{MAX_TEXT}</span>
       </label>
 
-      <MediaPicker items={media} onChange={setMedia} />
+      <MediaPicker items={media} onChange={setMedia} storedPaths={storedPaths} localFiles={isEmployee} />
 
       <label className="block text-xs text-gray-400">
         Bình luận đầu tiên (tuỳ chọn)
@@ -411,7 +422,7 @@ export default function PostTab({ atCapacity, profileNames, onStarted, open, onC
       </div>
       </div>
       <aside className="poster-composer-preview"><div className="flex items-center justify-between mb-5"><h3 className="font-semibold">Xem trước</h3><span className="poster-muted text-xs">Facebook</span></div>
-        <PostPreview text={activeText} comment={comment} mediaPaths={media.map(item => item.path)} mode={mode} names={profileIds.map(id => profileNames.get(id) || id)}
+        <PostPreview text={activeText} comment={comment} mediaPaths={media.map(item => item.path).filter(path => !storedPaths?.has(path))} mode={mode} localFiles={isEmployee} names={profileIds.map(id => profileNames.get(id) || id)}
           targetName={filteredGroups(profileIds[0]).find(group => isChecked(profileIds[0], group))?.name} />
       </aside>
       </div>

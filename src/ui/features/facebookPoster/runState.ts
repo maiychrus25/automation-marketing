@@ -1,5 +1,5 @@
 import type { RunSnapshot, ProgressSnapshot } from '../../../services/facebookPoster/FacebookPosterService';
-import type { FbPosterRun } from '../../../models/facebookPoster';
+import { RUN_NOT_FOUND_ERROR, type FbPosterRun } from '../../../models/facebookPoster';
 
 export type { RunSnapshot, ProgressSnapshot };
 export interface PosterLog { runId: string; profileId: string; level: string; message: string; at: number }
@@ -9,7 +9,9 @@ export type PosterRunAction =
   | { type: 'select'; runId: string }
   | { type: 'log'; entry: PosterLog }
   | { type: 'progress'; progress: ProgressSnapshot }
-  | { type: 'finished'; runId: string; status: FbPosterRun['status'] };
+  | { type: 'finished'; runId: string; status: FbPosterRun['status'] }
+  /** Employee only: a run the boss no longer reports and whose record the boss refuses to give (runFinished was lost, the profile was unassigned). */
+  | { type: 'settle'; runId: string; error: string; at: number };
 
 export const MAX_LOGS_PER_RUN = 500;
 /** Mirrors MAX_ACTIVE_POSTER_RUNS (the coordinator imports node crypto, so the renderer cannot import it). */
@@ -46,6 +48,19 @@ function reconcile(state: PosterRunState, snapshots: RunSnapshot[]): PosterRunSt
   return { ...state, runs, selectedRunId: state.selectedRunId ?? snapshots[0]?.run.id ?? null };
 }
 
+/** Employee reconnect: ids of runs held as running that the fresh active() answer does not contain. */
+export function runsToSettle(runs: Record<string, RunSnapshot>, activeIds: readonly string[]): string[] {
+  return Object.values(runs).filter((s) => s.run.status === 'running' && !activeIds.includes(s.run.id)).map((s) => s.run.id);
+}
+
+/** Answers that mean "this run is no longer yours or no longer exists". Anything else (no answer, a timeout, 401/500 without a code) says nothing about the run. */
+const SETTLE_CODES: ReadonlySet<string> = new Set(['RECORD_FORBIDDEN', 'PROFILE_FORBIDDEN', 'MODULE_FORBIDDEN']);
+
+/** Employee reconnect: a missing run is ended locally only when the boss definitely refuses its record or says it does not exist; otherwise it stays live and the next resync asks again. */
+export function shouldSettleRun(res: { success?: boolean; code?: string; error?: string } | null | undefined): boolean {
+  return !!res && res.success === false && (SETTLE_CODES.has(res.code ?? '') || res.error === RUN_NOT_FOUND_ERROR);
+}
+
 export function reduceRunState(state: PosterRunState, action: PosterRunAction): PosterRunState {
   switch (action.type) {
     case 'reconcile': return prune(reconcile(state, action.runs));
@@ -64,6 +79,13 @@ export function reduceRunState(state: PosterRunState, action: PosterRunAction): 
       const known = state.runs[action.runId];
       if (!known) return state;
       return prune({ ...state, runs: { ...state.runs, [action.runId]: { ...known, run: { ...known.run, status: action.status } } } });
+    }
+    case 'settle': {
+      const known = state.runs[action.runId];
+      if (!known || known.run.status !== 'running') return state;
+      // The live panel shows log lines, not run.error: the note goes into the run's log too.
+      const logs = [...(state.logs[action.runId] ?? []), { runId: action.runId, profileId: '', level: 'error', message: action.error, at: action.at }].slice(-MAX_LOGS_PER_RUN);
+      return prune({ ...state, logs: { ...state.logs, [action.runId]: logs }, runs: { ...state.runs, [action.runId]: { ...known, run: { ...known.run, status: 'failed', error: action.error } } } });
     }
   }
 }

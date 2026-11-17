@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
+import { useEmployeePoster } from './useEmployeePoster';
 import { formatMinutesList, minutesLabel, parseMinutesList, REPORT_CADENCE_OPTIONS, WEEKDAY_OPTIONS, LEAD_DIGEST_OPTIONS } from './trackingFormat';
 import type { PostTrackingConfig } from '../../../services/facebookPoster/postTracking';
 import type { NotificationConfig } from '../../../services/facebookPoster/notificationRules';
@@ -8,6 +9,7 @@ const FOCUS = 'focus-visible:ring-2 focus-visible:ring-blue-500';
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, '0')}:00` }));
 
 export default function TrackConfigPopover() {
+  const { isEmployee } = useEmployeePoster();
   const [open, setOpen] = useState(false);
   const [config, setConfig] = useState<PostTrackingConfig | null>(null);
   const [linkText, setLinkText] = useState('');
@@ -41,13 +43,15 @@ export default function TrackConfigPopover() {
 
   // Cài đặt thông báo là phần phụ: tải lỗi thì thay hai khối bằng một dòng báo lỗi, không chặn mốc theo dõi.
   useEffect(() => {
+    // Cấu hình thông báo là việc của Boss (boss_only): nhân viên không tải.
+    if (isEmployee) return;
     let cancelled = false;
     ipc.facebookPoster?.getNotificationConfig().then((res) => {
       if (cancelled) return;
       if (res?.success && res.config) setNotif(res.config); else setNotifLoadFailed(true);
     }).catch(() => { if (!cancelled) setNotifLoadFailed(true); });
     return () => { cancelled = true; };
-  }, []);
+  }, [isEmployee]);
 
   useEffect(() => {
     if (!open) return;
@@ -130,8 +134,8 @@ export default function TrackConfigPopover() {
               <button type="submit" disabled={saving} className={`px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-200 hover:border-gray-400 disabled:opacity-50 ${FOCUS}`}>{saving ? 'Đang lưu…' : 'Lưu mốc thời gian'}</button>
             </form>
           ) : <p className="text-xs text-gray-400">{loadFailed ? 'Không tải được cài đặt' : 'Đang tải…'}</p>}
-          {!notif && notifLoadFailed && <p className="text-xs text-gray-400 border-t border-gray-700 pt-2">Không tải được cài đặt báo cáo</p>}
-          {notif && (
+          {!isEmployee && !notif && notifLoadFailed && <p className="text-xs text-gray-400 border-t border-gray-700 pt-2">Không tải được cài đặt báo cáo</p>}
+          {!isEmployee && notif && (
             <div className="space-y-2 border-t border-gray-700 pt-2">
               <div className="space-y-1">
                 <label className="block text-xs text-gray-400">

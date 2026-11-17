@@ -1,7 +1,24 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { checkProxyFilePaths, checkServiceAccountPaths, isInside, mediaAccountOf, PROXY_FILE_PATH_FIELDS, safeUploadName, serviceAccountPathsOf } from '../../services/http/bossFileAccess';
+import { checkProxyFilePaths, checkServiceAccountPaths, EMPLOYEE_UPLOAD_PATH_FIELDS, isInside, mediaAccountOf, PROXY_FILE_PATH_FIELDS, safeUploadName, serviceAccountPathsOf } from '../../services/http/bossFileAccess';
+
+describe('maxMediaPaths (poster commands)', () => {
+  const list = (n: number) => Array.from({ length: n }, (_, i) => `/m/media/_uploads/${i}.png`);
+  const make = (realpath: (p: string) => string, maxMediaPaths?: number) => ({ mediaRoots: ['/m/media'], uploadsRoot: '/m/media/_uploads', allowed: [] as string[], realpath, ...(maxMediaPaths === undefined ? {} : { maxMediaPaths }) });
+  test('aLongerListIsRefusedBeforeAnyRealpath', () => {
+    const realpath = jest.fn((p: string) => p);
+    expect(checkProxyFilePaths({ params: { mediaPaths: list(11) } }, make(realpath, 10))).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+    expect(realpath).not.toHaveBeenCalled();
+  });
+  test('theLimitItselfAndNoLimitAreAllowed', () => {
+    expect(checkProxyFilePaths({ mediaPaths: list(10) }, make((p) => p, 10))).toEqual({ ok: true });
+    expect(checkProxyFilePaths({ mediaPaths: list(11) }, make((p) => p))).toEqual({ ok: true });
+  });
+  test('otherListFieldsAreNotLimited', () => {
+    expect(checkProxyFilePaths({ filePaths: list(11) }, make((p) => p, 10))).toEqual({ ok: true });
+  });
+});
 
 describe('safeUploadName', () => {
   test.each([
@@ -142,7 +159,7 @@ describe('the path field list matches what the boss handlers read', () => {
   test('everyPathParamNameIsListedOrExplainedHere', () => {
     const names = new Set(['zaloIpc.ts', 'proxyHelper.ts'].flatMap((f) =>
       fs.readFileSync(path.join(__dirname, '../../../electron/ipc', f), 'utf8').match(/\b\w*[Pp]aths?\b/g) || []));
-    const unknown = [...names].filter((n) => !PROXY_FILE_PATH_FIELDS.includes(n) && n !== 'filePaths' && !NOT_FILE_PATH_NAMES.includes(n));
+    const unknown = [...names].filter((n) => !PROXY_FILE_PATH_FIELDS.includes(n) && n !== 'filePaths' && n !== 'mediaPaths' /* poster post media, uploaded with X-Upload-Area: poster and checked as a list field */ && !NOT_FILE_PATH_NAMES.includes(n));
     expect(unknown).toEqual([]);
   });
 });
@@ -152,10 +169,10 @@ describe('every employee-side upload site is matched by a boss-side check', () =
   // until someone decides how the boss checks the field it uploads.
   const COVERED_SITES: Record<string, string> = {
     'electron/ipc/proxyHelper.ts: uploadEmployeeMedia(filePaths: string[], zaloId?: string': 'definition, no field',
-    'electron/ipc/proxyHelper.ts: prepareLocalFilesForProxy(params: any, accountId?: string': 'definition, no field',
+    'electron/ipc/proxyHelper.ts: prepareLocalFilesForProxy(params: any, accountId?: string, channel?: string': 'definition, no field',
     'electron/ipc/proxyHelper.ts: uploadEmployeeMedia([result[field]], accountId': 'PROXY_FILE_PATH_FIELDS (filePath, videoPath, thumbPath, voicePath, avatarPath, mediaPath)',
     'electron/ipc/proxyHelper.ts: uploadEmployeeMedia(result.filePaths, accountId': 'filePaths',
-    'electron/ipc/proxyHelper.ts: prepareLocalFilesForProxy(params, params?.accountId': 'fb: proxy channels, same fields as above; boss checks via the proxy route',
+    'electron/ipc/proxyHelper.ts: prepareLocalFilesForProxy(params, params?.accountId, channel': 'fb: proxy channels, same fields as above, plus poster mediaPaths (uploads checked by the boss: X-Upload-Area poster, and mediaPaths in PROXY_FILE_PATH_LIST_FIELDS); boss checks via the proxy route',
     'electron/ipc/zaloIpc.ts: prepareLocalFilesForProxy(params': 'same fields as the sites above',
     'electron/ipc/crmIpc.ts: uploadEmployeeMedia(block.images, zaloId': 'images (template_message.blocks[].images, object or JSON text)',
   };
@@ -204,5 +221,65 @@ describe('service-account key path of a workflow', () => {
   test('aRemovedPathIsAllowed', () => {
     expect(checkServiceAccountPaths(wf(undefined), wf('/k/a.json'))).toEqual({ ok: true });
     expect(checkServiceAccountPaths(wf(''), wf('/k/a.json'))).toEqual({ ok: true });
+  });
+});
+
+describe('Telegram file path params', () => {
+  test.each(['photoPath', 'audioPath', 'stickerPath', 'animPath'])('%s is a checked path field', (field) => {
+    expect(PROXY_FILE_PATH_FIELDS).toContain(field);
+    expect(checkProxyFilePaths({ accountId: 'acc-a', [field]: '/etc/passwd' }, {
+      mediaRoots: ['/m/media'], uploadsRoot: '/m/uploads', allowed: ['acc-a'], realpath: (p: string) => p,
+    })).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+  });
+  test('uploadFieldsAreTheCheckedFieldsWithoutTheErpFilePath', () => {
+    expect(PROXY_FILE_PATH_FIELDS.filter((f) => !EMPLOYEE_UPLOAD_PATH_FIELDS.includes(f))).toEqual(['file_path']);
+    expect(EMPLOYEE_UPLOAD_PATH_FIELDS).not.toContain('file_path');
+  });
+  test('everyPathParamOfTheTelegramIpcFilesIsACheckedField', () => {
+    const names = new Set(['telegramIpc.ts', 'telegramUserIpc.ts'].flatMap((f) =>
+      fs.readFileSync(path.join(__dirname, '../../../electron/ipc', f), 'utf8').match(/\b\w+Paths?\b/g) || []));
+    expect([...names].filter((n) => !PROXY_FILE_PATH_FIELDS.includes(n) && n !== 'filePaths')).toEqual([]);
+  });
+});
+
+describe('Facebook poster media in the params of a proxied poster command', () => {
+  const POSTER_ROOT = '/m/poster';
+  const ctx = (allowedSchedules: string[] = ['s-mine'], realpath: (p: string) => string = (p) => p) => ({
+    mediaRoots: ['/m/media'], uploadsRoot: '/m/media/_uploads', allowed: [] as string[], realpath,
+    posterMediaRoot: POSTER_ROOT, posterScheduleAllowed: (id: string) => allowedSchedules.includes(id),
+  });
+
+  test('mediaPathsIsCheckedAtTheTopLevelAndInsideParamsParams', () => {
+    expect(checkProxyFilePaths({ mediaPaths: ['/etc/passwd'] }, ctx())).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+    expect(checkProxyFilePaths({ params: { mediaPaths: ['/m/media/_uploads/a.png', '/etc/passwd'] } }, ctx())).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+    expect(checkProxyFilePaths({ params: { mediaPaths: ['/m/media/_uploads/a.png', '/m/media/_uploads/h/b.mp4'] } }, ctx())).toEqual({ ok: true });
+    expect(checkProxyFilePaths({ params: { mediaPaths: '/etc/passwd' } }, ctx())).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+  });
+
+  test('aFileInTheMediaFolderOfAnAllowedScheduleIsAccepted', () => {
+    expect(checkProxyFilePaths({ params: { mediaPaths: ['/m/poster/s-mine/01-a.png'] } }, ctx())).toEqual({ ok: true });
+    expect(checkProxyFilePaths({ params: { mediaPaths: ['/m/poster/s-mine/revision-2-abc-def/01-a.png'] } }, ctx())).toEqual({ ok: true });
+  });
+
+  test('aFileOfAScheduleOutsideTheScopeIsRefused', () => {
+    expect(checkProxyFilePaths({ params: { mediaPaths: ['/m/poster/s-other/01-a.png'] } }, ctx())).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+    expect(checkProxyFilePaths({ params: { mediaPaths: ['/m/poster/s-mine/01-a.png', '/m/poster/s-other/01-a.png'] } }, ctx())).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+    expect(checkProxyFilePaths({ mediaPath: '/m/poster/s-other/01-a.png' }, ctx())).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+  });
+
+  test('dotDotAndSymlinksAreJudgedByTheRealPath', () => {
+    const real = (p: string) => (p === '/m/poster/s-mine/link' ? '/m/poster/s-other/x.png' : p);
+    expect(checkProxyFilePaths({ mediaPaths: ['/m/poster/s-mine/../s-other/01-a.png'] }, ctx(['s-mine']))).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+    expect(checkProxyFilePaths({ mediaPaths: ['/m/poster/s-mine/link'] }, ctx(['s-mine'], real))).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+    expect(checkProxyFilePaths({ mediaPaths: ['/m/poster-evil/s-mine/a.png'] }, ctx())).toEqual({ ok: false, code: 'PATH_FORBIDDEN' }); // a sibling sharing the prefix
+  });
+
+  test('theRootItselfAndAFileDirectlyUnderItAreRefused', () => {
+    expect(checkProxyFilePaths({ mediaPaths: ['/m/poster'] }, ctx())).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
+  });
+
+  test('withoutAPosterRootTheFolderIsNeverAccepted', () => {
+    const plain = { mediaRoots: ['/m/media'], uploadsRoot: '/m/media/_uploads', allowed: ['acc-a'], realpath: (p: string) => p };
+    expect(checkProxyFilePaths({ mediaPaths: ['/m/poster/s-mine/01-a.png'] }, plain)).toEqual({ ok: false, code: 'PATH_FORBIDDEN' });
   });
 });

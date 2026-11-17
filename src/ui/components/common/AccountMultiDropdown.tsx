@@ -4,6 +4,7 @@
  */
 import React, { useState, useEffect, useRef } from 'react';
 import { AccountInfo } from '@/store/accountStore';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 
 interface Props {
   accounts: AccountInfo[];
@@ -21,7 +22,7 @@ function AvatarThumb({ acc, size = 'sm' }: { acc: AccountInfo; size?: 'sm' | 'md
   const dim = size === 'sm' ? 'w-5 h-5 text-[7px]' : 'w-7 h-7 text-xs';
   const initial = (acc.full_name || acc.zalo_id || '?').charAt(0).toUpperCase();
   return acc.avatar_url ? (
-    <img src={acc.avatar_url} alt="" className={`${dim} rounded-full object-cover border border-gray-600 shrink-0`} />
+    <img src={toLocalMediaUrl(acc.avatar_url)} alt="" className={`${dim} rounded-full object-cover border border-gray-600 shrink-0`} />
   ) : (
     <div className={`${dim} rounded-full bg-gradient-to-br from-blue-500 to-purple-600 border border-gray-700 flex items-center justify-center text-white font-bold shrink-0`}>
       {initial}

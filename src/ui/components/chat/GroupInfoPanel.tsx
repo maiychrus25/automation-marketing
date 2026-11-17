@@ -20,6 +20,7 @@ import { CHANNEL, isZalo as isZaloCh, isTelegram as isTelegramCh, isFacebook as 
 import { Spinner } from '@/components/common/PageLoading';
 import * as channelIpc from '@/lib/channelIpc';
 import { getAdapter } from '@/lib/adapters/registry';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 import { usePremiumMemberSync } from '@/hooks/usePremiumMemberSync';
 import { ArrowDownIcon, ArrowUpIcon, BellIcon, BellOffIcon, CloseIcon, MapPinIcon, PinIcon, SettingsIcon, TrashIcon, UserIcon, UsersIcon } from '@/components/common/icons';
 
@@ -1179,7 +1180,7 @@ function MembersPanel({ groupInfo, groupId, onBack, onRefresh, myAccountId, chan
               className="flex-shrink-0 focus:outline-none hover:opacity-80 transition-opacity"
             >
               {m.avatar ? (
-                <img src={m.avatar} alt="" className="w-9 h-9 rounded-full object-cover"
+                <img src={toLocalMediaUrl(m.avatar)} alt="" className="w-9 h-9 rounded-full object-cover"
                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               ) : (
                 <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold">
@@ -1436,7 +1437,7 @@ function PendingPanel({ groupId, myAccountId, onBack, onCountChange }: {
                 <div className="relative flex-shrink-0 w-10 h-10">
                   {member.avatar ? (
                     <img
-                      src={member.avatar}
+                      src={toLocalMediaUrl(member.avatar)}
                       alt=""
                       className="w-10 h-10 rounded-full object-cover"
                       onError={(e) => {
@@ -1687,7 +1688,7 @@ function PendingMembersSection({ groupId, isAdmin, channel }: { groupId: string;
                 {/* Avatar */}
                 <div className="relative flex-shrink-0 w-9 h-9">
                   {member.avatar ? (
-                    <img src={member.avatar} alt="" className="w-9 h-9 rounded-full object-cover"
+                    <img src={toLocalMediaUrl(member.avatar)} alt="" className="w-9 h-9 rounded-full object-cover"
                       onError={(e) => {
                         const img = e.target as HTMLImageElement;
                         img.style.display = 'none';

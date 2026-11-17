@@ -12,8 +12,12 @@ import LeadsTab from './LeadsTab';
 import ResearchTab from './ResearchTab';
 import EngagementTab from './EngagementTab';
 import RunPanel from './RunPanel';
+import { useEmployeePoster } from './useEmployeePoster';
+import { shouldIgnoreResyncSignal } from '@/lib/employeeResync';
+import { useWorkspaceStore } from '@/store/workspaceStore';
+import { keepSelectedChannels, posterSectionFor, POSTER_EMPLOYEE_NOTICE, POSTER_NO_PROFILE_NOTICE } from '../../lib/employeePoster';
 import ChannelsPanel, { type PosterChannel } from './ChannelsPanel';
-import { initialRunState, reduceRunState, MAX_LIVE_RUNS, type PosterLog, type PosterRunAction, type ProgressSnapshot, type RunSnapshot } from './runState';
+import { initialRunState, reduceRunState, runsToSettle, shouldSettleRun, MAX_LIVE_RUNS, type PosterLog, type PosterRunAction, type ProgressSnapshot, type RunSnapshot } from './runState';
 import type { FbPosterRun, FbPosterSchedule } from '../../../models/facebookPoster';
 
 const SECTIONS: Record<FacebookPosterSection, { label: string; description?: string }> = {
@@ -30,7 +34,9 @@ const SECTIONS: Record<FacebookPosterSection, { label: string; description?: str
 const FACEBOOK_PROVIDER = { id: 'facebook', name: 'Facebook', badge: 'f' };
 
 export default function FacebookPosterView() {
-  const section = useAppStore(s => s.facebookPosterSection);
+  const { isEmployee, noProfiles, assignedKey, assigned } = useEmployeePoster();
+  // Mục đã lưu bị ẩn với nhân viên (video, nghiên cứu, chờ duyệt) rơi về Lịch đăng; mục ẩn không mount nên không tải dữ liệu.
+  const section = useAppStore(s => posterSectionFor(s.facebookPosterSection, isEmployee)) as FacebookPosterSection;
   const openFacebookPoster = useAppStore(s => s.openFacebookPoster);
   // Per-run cache (bounded in runState); unmounting the view frees it.
   const [runState, setRunState] = useState(initialRunState);
@@ -62,6 +68,8 @@ export default function FacebookPosterView() {
   const setView = useAppStore(s => s.setView);
 
   const loadChannels = useCallback(async () => {
+    // Chưa được gán hồ sơ: không gửi yêu cầu nào tới máy Boss, màn hình chỉ hiện lời nhắc.
+    if (noProfiles) { setChannels([]); setProfileNames(new Map()); setChannelsError(''); setChannelsLoading(false); return; }
     setChannelsLoading(true);
     try {
       const res = await ipc.browserProfile?.list();
@@ -73,9 +81,11 @@ export default function FacebookPosterView() {
     } catch (error) {
       setChannelsError(error instanceof Error ? error.message : 'Không tải được kênh');
     } finally { setChannelsLoading(false); }
-  }, []);
+    // assignedKey: boss gán/bỏ hồ sơ giữa phiên thì tải lại danh sách kênh (so theo nội dung).
+  }, [noProfiles, assignedKey]);
 
   const compose = (at?: number, mediaPaths: string[] = []) => {
+    if (noProfiles) return;
     setEditingDraft(null);
     // Chỉ khi có tệp gắn sẵn mới dựng lại composer; mở thường vẫn giữ nội dung đang soạn dở.
     // Gán luôn (rỗng khi mở thường) để tệp gắn sẵn cũ không bao giờ bám sang bài mới khác.
@@ -87,6 +97,7 @@ export default function FacebookPosterView() {
     setComposerOpen(true);
   };
   const editDraft = async (id: string) => {
+    if (noProfiles) return;
     const res = await ipc.facebookPoster?.draftGet(id);
     if (!res?.success || !res.draft) { showNotification(res?.error || 'Không mở được bản nháp', 'error'); return; }
     setChannelsOpen(false);
@@ -114,6 +125,34 @@ export default function FacebookPosterView() {
   useEffect(() => {
     loadChannels();
   }, [loadChannels]);
+
+  // Employee: a run absent from the fresh active() answer is ended from its stored record (getRun). Only a definite refusal of the boss ends it as
+  // "failed" with a neutral note; no answer or a transient failure leaves it live for the next resync. `isAlive` drops answers of an older bootstrap.
+  const settleMissingRuns = useCallback((activeIds: string[], isAlive: () => boolean) => {
+    for (const runId of runsToSettle(stateRef.current.runs, activeIds)) {
+      Promise.resolve(ipc.facebookPoster?.getRun(runId)).then((res) => {
+        if (!isAlive()) return;
+        // The record still says running (a run started while active() was in flight): leave it alone.
+        if (res?.success && res.run) { if (res.run.status !== 'running') dispatch({ type: 'reconcile', runs: [{ run: res.run, progress: { runId, done: 0, total: 0, profiles: [] } }] }); }
+        else if (shouldSettleRun(res)) dispatch({ type: 'settle', runId, error: 'Không rõ kết quả, xem Lịch sử', at: Date.now() });
+      }).catch(() => undefined);
+    }
+  }, [dispatch]);
+
+  // Employee: after a reconnect or boss restart (employee:resync) read the live runs again, like on mount.
+  useEffect(() => {
+    if (!isEmployee) return;
+    return ipc.on?.('employee:resync', (payload: { workspaceId?: string } | null) => {
+      if (shouldIgnoreResyncSignal(payload?.workspaceId, useWorkspaceStore.getState().activeWorkspaceId)) return;
+      setBootstrapSeq((n) => n + 1);
+    });
+  }, [isEmployee]);
+
+  // Boss unassigned profiles mid-session: the channel filter drops them (an emptied selection goes back to "all").
+  useEffect(() => {
+    if (isEmployee) setSelectedChannels((prev) => keepSelectedChannels(prev, assigned));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEmployee, assignedKey]);
 
   // Subscribe before reading active(): events that land during the request are buffered, then replayed after the snapshot.
   useEffect(() => {
@@ -149,7 +188,8 @@ export default function FacebookPosterView() {
     });
     const offFinished = ipc.on?.('facebookPoster:runFinished', (data: { runId: string; status: FbPosterRun['status'] }) => push({ type: 'finished', runId: data.runId, status: data.status }));
     setRunsLoad({ loading: true, error: '' });
-    Promise.resolve(ipc.facebookPoster?.active()).then((res) => {
+    // Không có hồ sơ được gán: boss từ chối mọi lệnh, không hỏi lượt đang chạy.
+    Promise.resolve(noProfiles ? { success: true, runs: [] as RunSnapshot[], error: undefined as string | undefined } : ipc.facebookPoster?.active()).then((res) => {
       if (!res?.success) throw new Error(res?.error || 'Không tải được lượt đang chạy');
       return { runs: res.runs ?? [], error: '' };
     }).catch((error: unknown) => ({ runs: [] as RunSnapshot[], error: error instanceof Error && error.message ? error.message : 'Không tải được lượt đang chạy' }))
@@ -160,9 +200,11 @@ export default function FacebookPosterView() {
         setRunState((s) => [{ type: 'reconcile', runs } as PosterRunAction, ...replay].reduce(reduceRunState, s));
         setRunsLoad({ loading: false, error });
         if (runs.length) setShowProgress(true);
+        // Employee: runFinished can be lost while the network was down. A run held as live that the boss no longer lists is settled from its stored record.
+        if (isEmployee && !error) settleMissingRuns(runs.map((r) => r.run.id), () => alive);
       });
     return () => { alive = false; offLog?.(); offProgress?.(); offFinished?.(); };
-  }, [bootstrapSeq, dispatch]);
+  }, [bootstrapSeq, dispatch, noProfiles, isEmployee]);
 
   // A run known only by its logs or selection (started elsewhere, or just started here) gets its metadata by ID.
   useEffect(() => {
@@ -188,19 +230,22 @@ export default function FacebookPosterView() {
     <div className="poster-workspace">
       <div className="poster-main">
         <header className="poster-topbar">
-          <h1>{SECTIONS[section].label}</h1>
+          {isEmployee
+            ? <div className="min-w-0"><h1>{SECTIONS[section].label}</h1><p className="poster-muted text-xs mt-0.5">{POSTER_EMPLOYEE_NOTICE}</p></div>
+            : <h1>{SECTIONS[section].label}</h1>}
           <div className="flex items-center gap-2 min-w-0">
             <button type="button" className="poster-button poster-mobile-channels" aria-expanded={channelsOpen} onClick={() => setChannelsOpen(value => !value)}>Kênh</button>
             <button type="button" className="poster-button" aria-expanded={showProgress} onClick={() => setShowProgress(value => !value)}><span className={`poster-status-dot ${busy ? 'is-running' : ''}`} />Tiến độ</button>
-            <button type="button" className="poster-primary poster-top-compose" onClick={() => compose()}>＋ Soạn bài</button>
+            <button type="button" className="poster-primary poster-top-compose" disabled={noProfiles} onClick={() => compose()}>＋ Soạn bài</button>
           </div>
         </header>
         <div className={`poster-body ${channelsOpen ? 'channels-open' : ''}`}>
           <ChannelsPanel channels={channels} selected={selectedChannels} onChange={setSelectedChannels} onCompose={() => compose()}
-            onAdd={() => setView('browser')} loading={channelsLoading} error={channelsError} onRetry={loadChannels} />
+            onAdd={isEmployee ? undefined : () => setView('browser')} noProfiles={noProfiles} loading={channelsLoading} error={channelsError} onRetry={loadChannels} />
           <main className="poster-content" aria-label={SECTIONS[section].label}>
-            {section === 'schedule' && <ScheduleTab selectedChannels={selectedChannels} profileNames={profileNames} onCompose={compose} onEditDraft={editDraft} onOpenHistory={() => openFacebookPoster('history')} />}
-            {section !== 'schedule' && <div className="poster-task-page">
+            {noProfiles && <p className="poster-muted text-sm text-center p-8">{POSTER_NO_PROFILE_NOTICE}</p>}
+            {!noProfiles && section === 'schedule' && <ScheduleTab selectedChannels={selectedChannels} profileNames={profileNames} onCompose={compose} onEditDraft={editDraft} onOpenHistory={() => openFacebookPoster('history')} />}
+            {!noProfiles && section !== 'schedule' && <div className="poster-task-page">
               <p className="poster-muted mb-6">{SECTIONS[section].description}</p>
               {section === 'campaigns' && <CampaignsTab />}
               {section === 'video' && <VideoTab />}

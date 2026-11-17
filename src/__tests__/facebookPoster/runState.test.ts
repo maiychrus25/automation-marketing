@@ -1,4 +1,5 @@
-import { initialRunState, reduceRunState, type PosterLog, type PosterRunAction, type PosterRunState } from '../../ui/features/facebookPoster/runState';
+import { RUN_NOT_FOUND_ERROR } from '../../models/facebookPoster';
+import { initialRunState, reduceRunState, runsToSettle, shouldSettleRun, MAX_LIVE_RUNS, type PosterLog, type PosterRunAction, type PosterRunState } from '../../ui/features/facebookPoster/runState';
 import type { RunSnapshot } from '../../services/facebookPoster/FacebookPosterService';
 import type { FbPosterRun } from '../../models/facebookPoster';
 
@@ -101,5 +102,52 @@ describe('poster run state', () => {
     ], before);
     expect(after.runs['run-x']).toBeUndefined();
     expect(JSON.stringify(before)).toBe(frozen);
+  });
+
+  describe('settling runs the boss no longer reports (employee reconnect)', () => {
+    const live = () => reduceAll([{ type: 'reconcile', runs: [snapshot('run-a'), snapshot('run-b'), snapshot('run-c', { status: 'done' })] }]);
+
+    it('lists a live run that is missing from active(), not a present or terminal one', () => {
+      const state = live();
+      expect(runsToSettle(state.runs, ['run-b'])).toEqual(['run-a']);
+      expect(runsToSettle(state.runs, ['run-a', 'run-b'])).toEqual([]);
+      expect(runsToSettle(state.runs, [])).toEqual(['run-a', 'run-b']);
+    });
+
+    it('settle ends the run as failed with the note and frees a live slot', () => {
+      const before = live();
+      const liveCount = (s: PosterRunState) => Object.values(s.runs).filter((r) => r.run.status === 'running').length;
+      expect(liveCount(before)).toBe(MAX_LIVE_RUNS);
+      const after = reduceAll([{ type: 'settle', runId: 'run-a', error: 'Không rõ kết quả, xem Lịch sử', at: 42 }], before);
+      expect(after.runs['run-a'].run.status).toBe('failed');
+      expect(after.runs['run-a'].run.error).toBe('Không rõ kết quả, xem Lịch sử');
+      // The live panel shows log lines, not run.error: the note must be the last log line of that run.
+      expect(after.logs['run-a'].at(-1)).toEqual({ runId: 'run-a', profileId: '', level: 'error', message: 'Không rõ kết quả, xem Lịch sử', at: 42 });
+      expect(liveCount(after)).toBe(MAX_LIVE_RUNS - 1);
+    });
+
+    it('settle never revives or overwrites a run that is already terminal or unknown', () => {
+      const done = reduceAll([{ type: 'reconcile', runs: [snapshot('run-c', { status: 'done' })] }]);
+      expect(reduceAll([{ type: 'settle', runId: 'run-c', error: 'x', at: 1 }], done)).toBe(done);
+      expect(reduceAll([{ type: 'settle', runId: 'nope', error: 'x', at: 1 }], done)).toBe(done);
+    });
+
+    it('a lost run is settled only on a definite refusal, never on a transient or unexplained failure', () => {
+      for (const code of ['RECORD_FORBIDDEN', 'PROFILE_FORBIDDEN', 'MODULE_FORBIDDEN']) expect(shouldSettleRun({ success: false, code })).toBe(true);
+      // The handler's own "run not found" has no code: it is recognised by its exact text.
+      expect(shouldSettleRun({ success: false, error: RUN_NOT_FOUND_ERROR })).toBe(true);
+      for (const code of ['TIMEOUT', 'NOT_CONNECTED', 'BAD_RESPONSE', 'WORKSPACE_MISMATCH', 'BODY_TOO_LARGE']) expect(shouldSettleRun({ success: false, code })).toBe(false);
+      // A failure without a code (401 Unauthorized, 500, a tunnel interstitial) says nothing about the run.
+      expect(shouldSettleRun({ success: false, error: 'Unauthorized' })).toBe(false);
+      expect(shouldSettleRun({ success: false })).toBe(false);
+      expect(shouldSettleRun(undefined)).toBe(false);
+      expect(shouldSettleRun(null)).toBe(false);
+      expect(shouldSettleRun({ success: true })).toBe(false);
+    });
+
+    it('without a settle action the reducer keeps a missing live run live (boss path unchanged)', () => {
+      const after = reduceAll([{ type: 'reconcile', runs: [snapshot('run-b')] }], live());
+      expect(after.runs['run-a'].run.status).toBe('running');
+    });
   });
 });

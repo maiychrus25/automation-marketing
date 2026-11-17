@@ -5,6 +5,8 @@ import { Spinner } from '@/components/common/PageLoading';
 import PerformancePanel from './PerformancePanel';
 import { formatStatsLine, linkChip, missingStatsReason } from './trackingFormat';
 import type { FbPosterRun, FbPosterResult, PostStatsSnapshot, PostTrackingRow } from '../../../models/facebookPoster';
+import { useEmployeePoster, useEmployeeReload } from './useEmployeePoster';
+import { POSTER_HISTORY_EMPLOYEE_NOTICE, redactPaths } from '../../lib/employeePoster';
 
 const PAGE_SIZE = 50;
 const TRACKING_LIMIT = 500;
@@ -58,6 +60,7 @@ const countOutcomes = (results: FbPosterResult[]): string => {
 };
 
 export default function HistoryTab() {
+  const { isEmployee } = useEmployeePoster();
   const showNotification = useAppStore((s) => s.showNotification);
   const [runs, setRuns] = useState<FbPosterRun[]>([]);
   const [total, setTotal] = useState(0);
@@ -70,14 +73,16 @@ export default function HistoryTab() {
   // Trạng thái link và số đo theo từng kết quả; lấy khi mở một lượt chạy, tối đa TRACKING_LIMIT dòng.
   const [tracking, setTracking] = useState<Record<string, Record<number, TrackInfo>>>({});
 
+  const reloadRuns = useEmployeeReload(() => {
+    setDetails({}); // counts of a finished run must be refetched
+    setReloadTick((n) => n + 1);
+  }, isEmployee);
+  const reloadTracking = useEmployeeReload(() => setTracking({}), isEmployee);
   useEffect(() => {
-    const off = ipc.on?.('facebookPoster:runFinished', () => {
-      setDetails({}); // counts of a finished run must be refetched
-      setReloadTick((n) => n + 1);
-    });
-    const offTrack = ipc.on?.('facebookPoster:trackFinished', () => setTracking({}));
+    const off = ipc.on?.('facebookPoster:runFinished', reloadRuns);
+    const offTrack = ipc.on?.('facebookPoster:trackFinished', reloadTracking);
     return () => { off?.(); offTrack?.(); };
-  }, []);
+  }, [reloadRuns, reloadTracking]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,11 +137,13 @@ export default function HistoryTab() {
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  if (loading && runs.length === 0) return <div className="space-y-3 min-w-0"><PerformancePanel /><div className="flex justify-center py-10"><Spinner size={5} /></div></div>;
-  if (runs.length === 0) return <div className="space-y-3 min-w-0"><PerformancePanel /><p className="text-sm text-gray-400 text-center py-10">Chưa có lịch sử.</p></div>;
+  const employeeNotice = isEmployee ? <p className="poster-muted text-xs">{POSTER_HISTORY_EMPLOYEE_NOTICE}</p> : null;
+  if (loading && runs.length === 0) return <div className="space-y-3 min-w-0">{employeeNotice}<PerformancePanel /><div className="flex justify-center py-10"><Spinner size={5} /></div></div>;
+  if (runs.length === 0) return <div className="space-y-3 min-w-0">{employeeNotice}<PerformancePanel /><p className="text-sm text-gray-400 text-center py-10">Chưa có lịch sử.</p></div>;
 
   return (
     <div className="space-y-3 min-w-0">
+      {employeeNotice}
       <PerformancePanel />
       <ul className="space-y-2" aria-label="Lịch sử chạy">
         {runs.map((run) => {
@@ -157,11 +164,11 @@ export default function HistoryTab() {
                   </span>
                 )}
                 <Chip map={STATUS_LABEL} value={run.status} />
-                <button type="button" onClick={() => exportCsv(run.id)} className="px-2.5 py-1 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400">Xuất CSV</button>
+                {!isEmployee && <button type="button" onClick={() => exportCsv(run.id)} className="px-2.5 py-1 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400">Xuất CSV</button>}
               </div>
               {open && (
                 <div className="px-3 pb-3 pt-2 border-t border-gray-700 space-y-3 min-w-0">
-                  {run.error && <p className="text-xs text-red-400 break-words">{run.error}</p>}
+                  {run.error && <p className="text-xs text-red-400 break-words">{isEmployee ? redactPaths(run.error) : run.error}</p>}
                   {!results ? (detailLoading ? <div className="flex justify-center py-3"><Spinner size={5} /></div> : null) : (
                     <>
                       <p className="text-xs text-gray-400">{countOutcomes(results)}</p>
@@ -175,8 +182,8 @@ export default function HistoryTab() {
                                 <Chip map={OUTCOME_LABEL} value={r.outcome} />
                                 {r.variant && <span aria-label={`Biến thể ${r.variant}`} className="shrink-0 whitespace-nowrap rounded border border-gray-600 px-1.5 text-xs text-gray-400">Biến thể {r.variant}</span>}
                                 {r.attempts > 1 && <span aria-label={`Đã thử ${r.attempts} lần`} className="shrink-0 whitespace-nowrap rounded border border-gray-600 px-1.5 text-xs text-gray-400">Thử {r.attempts} lần</span>}
-                                {r.errorCode === 'uncertain_after_submit' && <span aria-label="Chưa chắc bài đã đăng" title={r.error} className="shrink-0 whitespace-nowrap rounded border border-yellow-500/30 px-1.5 text-xs text-orange-400">Chưa chắc</span>}
-                                {r.error && <span className="text-red-400 break-words min-w-0">{r.error}</span>}
+                                {r.errorCode === 'uncertain_after_submit' && <span aria-label="Chưa chắc bài đã đăng" title={isEmployee ? redactPaths(r.error ?? '') : r.error} className="shrink-0 whitespace-nowrap rounded border border-yellow-500/30 px-1.5 text-xs text-orange-400">Chưa chắc</span>}
+                                {r.error && <span className="text-red-400 break-words min-w-0">{isEmployee ? redactPaths(r.error) : r.error}</span>}
                                 {(() => {
                                   const t = tracking[run.id]?.[r.id];
                                   const chip = t ? linkChip(t.linkStatus, t.removedSuspected, t.targetKind) : null;

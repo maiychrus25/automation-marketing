@@ -64,6 +64,18 @@ describe('REST routes of the boss relay check accounts and modules', () => {
   });
   afterAll(() => relay.close());
 
+  test('anAccessCheckThatThrowsAnswers500WithoutDetails', async () => {
+    relay.db.getWorkflowById.mockImplementation(() => { throw new Error('secret: cannot open /boss/db'); });
+    try {
+      const res = await fetch(`${relay.restApiUrl}/api/command/workflows?id=w1`, { headers: { Authorization: `Bearer ${relay.tokenFor('emp-1')}` } }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) as any }));
+      expect(res.status).toBe(500);
+      expect(JSON.stringify(res.body)).not.toContain('secret');
+      expect(res.body.success).toBe(false);
+    } finally {
+      relay.db.getWorkflowById.mockImplementation(() => undefined);
+    }
+  });
+
   test('theRouteTableIsReadFromTheSourceAndIsLargeEnough', () => {
     // Lần quét đầu tìm được 168 đường (89 đọc, 79 lệnh); dưới 60 nghĩa là bộ quét hỏng âm thầm.
     expect(ALL_ROUTES.length).toBeGreaterThanOrEqual(60);
@@ -216,6 +228,31 @@ describe('REST routes of the boss relay check accounts and modules', () => {
       expect((await call('emp-1', 'POST', '/api/library/upload/json', { zaloId: 'acc-a', base64: 'eA==' })).status).toBe(200);
       expect((await call('emp-1', 'POST', '/api/library/upload/json', { base64: 'eA==' })).status).toBe(200);
       expect(relay.libraryUpload.mock.calls.map((c: any[]) => c[0].zaloId)).toEqual(['acc-a', 'acc-a']);
+    });
+
+    test('anUploadIntoAFolderOfAnotherAccountOrAMissingOneIsRefusedAndNothingIsStored', async () => {
+      const owners: Record<number, string> = { 1: 'acc-a', 2: 'acc-b' };
+      relay.db.queryOneStrict.mockImplementation((sql: string, params: any[]) => /FROM media_library_folders WHERE id = \?/.test(sql) && owners[params[0]] ? { owner: owners[params[0]] } : undefined);
+      try {
+        relay.libraryUpload.mockClear();
+        for (const folderId of [2, 99, 'abc']) {
+          const json = await call('emp-1', 'POST', '/api/library/upload/json', { zaloId: 'acc-a', base64: 'eA==', folderId });
+          expect(json.status).toBe(403);
+          expect(json.body.code).toBe('ACCOUNT_FORBIDDEN');
+          const multi = await (async () => {
+            const form = new FormData();
+            form.append('zaloId', 'acc-a'); form.append('folderId', String(folderId)); form.append('file', new Blob(['x']), 'a.txt');
+            const res = await fetch(`${relay.url}/api/library/upload`, { method: 'POST', headers: { Authorization: `Bearer ${relay.tokenFor('emp-1')}` }, body: form });
+            return { status: res.status, body: await res.json() as any };
+          })();
+          expect(multi.status).toBe(403);
+        }
+        expect(relay.libraryUpload).not.toHaveBeenCalled();
+        expect((await call('emp-1', 'POST', '/api/library/upload/json', { zaloId: 'acc-a', base64: 'eA==', folderId: 1 })).status).toBe(200);
+        expect(relay.libraryUpload.mock.calls.map((c: any[]) => c[0].folderId)).toEqual([1]);
+      } finally {
+        relay.db.queryOneStrict.mockImplementation(() => undefined);
+      }
     });
 
     test('aFolderBodyNamingAnotherAccountIsRefusedBeforeTheHandlerRuns', async () => {

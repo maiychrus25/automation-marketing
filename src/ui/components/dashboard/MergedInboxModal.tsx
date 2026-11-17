@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAccountStore } from '@/store/accountStore';
 import { useAppStore } from '@/store/appStore';
 import { FolderIcon } from '@/components/common/icons';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 
 
 interface Props {
@@ -90,7 +91,7 @@ export default function MergedInboxModal({ onClose }: Props) {
                   />
                   <div className="relative flex-shrink-0">
                     {acc.avatar_url
-                      ? <img src={acc.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover" />
+                      ? <img src={toLocalMediaUrl(acc.avatar_url)} alt="" className="w-9 h-9 rounded-full object-cover" />
                       : <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-sm">
                           {(acc.full_name || acc.zalo_id).charAt(0).toUpperCase()}
                         </div>

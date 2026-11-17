@@ -6,6 +6,8 @@ import { stripAccents } from './leadRules';
 import type { GroupScoreInput } from './groupScores';
 import type { LeadCursor } from './notificationRules';
 import { VARIANT_LABELS, variantText } from './variants';
+import { isWithinScope, profileIdsOfStoredParams } from './profileScope';
+import { isPageManagedRun, pageManagedCampaignIds, pageManagedScheduleIds, type StrictReader } from './pageManaged';
 import type {
     FbPosterComment, FbPosterLead, LeadStatus, FbPosterGroup, FbPosterKind, FbPosterMode, FbPosterResult, FbPosterRun, FbPosterRunStatus,
     CampaignStatus, FbPosterCampaign, FbPosterSchedule, FbPosterScheduleView, LoginState, ProfileLoginState,
@@ -25,6 +27,9 @@ export interface SqlDatabase {
     transaction<T>(fn: () => T): T;
     query<T>(sql: string, params?: any[]): T[];
     queryOne<T>(sql: string, params?: any[]): T | undefined;
+    /** Throwing variants (DatabaseService): access decisions must not read a swallowed error as "no rows". Absent in test adapters, whose own query already throws. */
+    queryStrict?<T>(sql: string, params?: any[]): T[];
+    queryOneStrict?<T>(sql: string, params?: any[]): T | undefined;
 }
 
 type ScheduleFields = Partial<Pick<FbPosterSchedule, 'name' | 'enabled' | 'runAt' | 'days' | 'time' | 'nextRunAt' | 'lastRunId' | 'kind' | 'draft' | 'params' | 'campaignId' | 'origin'>>;
@@ -184,6 +189,14 @@ const TRACKING_PATCH_COLUMNS: Record<string, string> = {
 };
 
 const IN_CHUNK = 500;
+
+/** Newest runs an employee-scoped `listRuns` reads before filtering by profile (runs carry the profile only inside `params_json`). */
+export const RUN_SCOPE_WINDOW = 1000;
+
+/** `column IN (?, ...)` with bound ids for a profile scope; an empty scope matches nothing (only `undefined` means no filter). */
+function inScope(column: string, ids: readonly string[]): { sql: string; params: string[] } {
+    return ids.length === 0 ? { sql: '0 = 1', params: [] } : { sql: `${column} IN (${ids.map(() => '?').join(',')})`, params: [...ids] };
+}
 function chunk<T>(items: T[], size: number): T[][] {
     const out: T[][] = [];
     for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -279,7 +292,9 @@ export class FacebookPosterStore {
         );
     }
 
-    listRuns(opts: { limit: number; offset: number; kind?: FbPosterKind }): { runs: FbPosterRun[]; total: number } {
+    /** `profileIds` (employee scope): the newest RUN_SCOPE_WINDOW runs of `kind`, kept when every profile of the run (params + results) is in scope, then paged. */
+    listRuns(opts: { limit: number; offset: number; kind?: FbPosterKind; profileIds?: readonly string[] }): { runs: FbPosterRun[]; total: number } {
+        if (opts.profileIds !== undefined) return this.listRunsInScope({ ...opts, profileIds: opts.profileIds });
         const where = opts.kind ? 'WHERE kind = ?' : '';
         const filter = opts.kind ? [opts.kind] : [];
         const rows = this.db.query<any>(
@@ -290,6 +305,33 @@ export class FacebookPosterStore {
         return { runs: rows.map(mapRun), total: this.count(`SELECT COUNT(*) AS n FROM fb_poster_runs ${where}`, filter) };
     }
 
+    /** Throwing reads for access decisions (see SqlDatabase.queryStrict). */
+    private strict(): StrictReader {
+        const db = this.db;
+        return { query: (sql, params) => (db.queryStrict ?? db.query).call(db, sql, params) };
+    }
+
+    private listRunsInScope(opts: { limit: number; offset: number; kind?: FbPosterKind; profileIds: readonly string[] }): { runs: FbPosterRun[]; total: number } {
+        if (opts.profileIds.length === 0) return { runs: [], total: 0 };
+        const rows = this.db.query<any>(
+            `SELECT r.*, s.name AS schedule_name FROM fb_poster_runs r LEFT JOIN fb_poster_schedules s ON s.id = r.schedule_id
+             ${opts.kind ? 'WHERE r.kind = ?' : ''} ORDER BY r.started_at DESC, r.rowid DESC LIMIT ?`,
+            [...(opts.kind ? [opts.kind] : []), RUN_SCOPE_WINDOW],
+        );
+        const resultProfiles = new Map<string, string[]>();
+        for (const ids of chunk(rows.map((r) => r.id as string), IN_CHUNK)) {
+            for (const row of (this.db.queryStrict ?? this.db.query).call(this.db, // strict: a read error must fail the listing, not shrink the scope decision
+                `SELECT DISTINCT run_id, profile_id FROM fb_poster_results WHERE run_id IN (${ids.map(() => '?').join(',')})`, ids,
+            ) as { run_id: string; profile_id: string }[]) resultProfiles.set(row.run_id, [...(resultProfiles.get(row.run_id) ?? []), row.profile_id]);
+        }
+        // Runs of Page-managed work stay with the boss (the one predicate of pageManaged.ts).
+        const managedSchedules = pageManagedScheduleIds(this.strict());
+        const managedCampaigns = pageManagedCampaignIds(this.strict());
+        const kept = rows.filter((r) => !isPageManagedRun(r, managedSchedules, managedCampaigns)
+            && isWithinScope([...profileIdsOfStoredParams(r.params_json), ...(resultProfiles.get(r.id) ?? [])], opts.profileIds));
+        return { runs: kept.slice(opts.offset, opts.offset + opts.limit).map(mapRun), total: kept.length };
+    }
+
     getRun(id: string): { run: FbPosterRun; results: FbPosterResult[] } | null {
         const row = this.db.queryOne<any>('SELECT r.*, s.name AS schedule_name FROM fb_poster_runs r LEFT JOIN fb_poster_schedules s ON s.id = r.schedule_id WHERE r.id = ?', [id]);
         if (!row) return null;
@@ -298,13 +340,14 @@ export class FacebookPosterStore {
     }
 
     /** Dòng mới nhất của mỗi post_url (bare column đi theo MAX() trong SQLite), mới nhất trước. */
-    listPostedUrls(limit: number): { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number }[] {
+    listPostedUrls(limit: number, profileIds?: readonly string[]): { postUrl: string; profileId: string; profileName: string; targetUrl: string; createdAt: number }[] {
+        const scope = profileIds === undefined ? null : inScope('r.profile_id', profileIds);
         return this.db.query<any>(
             `SELECT r.post_url, r.profile_id, r.profile_name, r.target_url, MAX(r.created_at) AS created_at
              FROM fb_poster_results r JOIN fb_poster_runs u ON u.id = r.run_id
-             WHERE r.post_url IS NOT NULL
+             WHERE r.post_url IS NOT NULL${scope ? ` AND ${scope.sql}` : ''}
              GROUP BY r.post_url ORDER BY created_at DESC LIMIT ?`,
-            [limit],
+            [...(scope?.params ?? []), limit],
         ).map((row) => ({
             postUrl: row.post_url,
             profileId: row.profile_id,
@@ -331,7 +374,7 @@ export class FacebookPosterStore {
     }
 
     /** filter.campaignId: id = lịch của chiến dịch đó, '' = lịch không thuộc chiến dịch nào. */
-    listSchedules(filter: { campaignId?: string } = {}): FbPosterScheduleView[] {
+    listSchedules(filter: { campaignId?: string; profileIds?: readonly string[] } = {}): FbPosterScheduleView[] {
         const where = filter.campaignId === undefined ? '' : filter.campaignId === '' ? 'WHERE s.campaign_id IS NULL' : 'WHERE s.campaign_id = ?';
         const rows = this.db.query<any>(
             `SELECT s.*, r.status AS lr_status, r.started_at AS lr_started_at, r.error AS lr_error
@@ -340,7 +383,10 @@ export class FacebookPosterStore {
              ORDER BY s.enabled DESC, s.next_run_at IS NULL, s.next_run_at, s.created_at`,
             filter.campaignId ? [filter.campaignId] : [],
         );
-        return rows.map((row) => ({
+        // The profile lives only inside params_json, so an employee scope filters here (listSchedules has no paging).
+        const scope = filter.profileIds;
+        const managed = scope === undefined ? new Set<string>() : pageManagedScheduleIds(this.strict());
+        return rows.filter((row) => scope === undefined || (!managed.has(row.id) && isWithinScope(profileIdsOfStoredParams(row.params_json), scope))).map((row) => ({
             ...mapSchedule(row),
             lastRun: row.lr_status == null ? null : { status: row.lr_status, startedAt: row.lr_started_at, error: row.lr_error },
         }));
@@ -561,9 +607,10 @@ export class FacebookPosterStore {
     }
 
     /** `since` (ms): chỉ bình luận thu từ mốc đó (collected_at >= since). */
-    listComments(opts: { postUrl?: string; since?: number; limit: number; offset: number }): { comments: FbPosterComment[]; total: number } {
+    listComments(opts: { postUrl?: string; since?: number; limit: number; offset: number; profileIds?: readonly string[] }): { comments: FbPosterComment[]; total: number } {
         const conditions: string[] = [];
         const filter: any[] = [];
+        if (opts.profileIds !== undefined) { const scope = inScope('profile_id', opts.profileIds); conditions.push(scope.sql); filter.push(...scope.params); }
         if (opts.postUrl !== undefined) { conditions.push('post_url = ?'); filter.push(opts.postUrl); }
         if (opts.since !== undefined) { conditions.push('collected_at >= ?'); filter.push(opts.since); }
         const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
@@ -574,8 +621,9 @@ export class FacebookPosterStore {
         return { comments: rows.map(mapComment), total: this.count(`SELECT COUNT(*) AS n FROM fb_poster_comments ${where}`, filter) };
     }
 
-    listLoginStates(): ProfileLoginState[] {
-        return this.db.query<any>('SELECT * FROM fb_poster_login_state ORDER BY profile_id').map((row) => ({
+    listLoginStates(profileIds?: readonly string[]): ProfileLoginState[] {
+        const scope = profileIds === undefined ? null : inScope('profile_id', profileIds);
+        return this.db.query<any>(`SELECT * FROM fb_poster_login_state ${scope ? `WHERE ${scope.sql} ` : ''}ORDER BY profile_id`, scope?.params ?? []).map((row) => ({
             profileId: row.profile_id,
             state: row.state,
             checkedAt: row.checked_at ?? null,
@@ -616,9 +664,10 @@ export class FacebookPosterStore {
         );
     }
 
-    listTracking(filter: { linkStatus?: LinkStatus; profileId?: string; groupUrl?: string; campaignId?: string; scheduleId?: string; sinceMs?: number; untilMs?: number; limit?: number; targetKind?: TrackTargetKind; pageId?: string }): PostTrackingRow[] {
+    listTracking(filter: { linkStatus?: LinkStatus; profileId?: string; groupUrl?: string; campaignId?: string; scheduleId?: string; sinceMs?: number; untilMs?: number; limit?: number; targetKind?: TrackTargetKind; pageId?: string; profileIds?: readonly string[] }): PostTrackingRow[] {
         const where: string[] = [];
         const params: any[] = [];
+        if (filter.profileIds !== undefined) { const scope = inScope('profile_id', filter.profileIds); where.push(scope.sql); params.push(...scope.params); }
         if (filter.targetKind !== undefined) { where.push('target_kind = ?'); params.push(filter.targetKind); }
         if (filter.pageId !== undefined) { where.push('page_id = ?'); params.push(filter.pageId); }
         if (filter.linkStatus !== undefined) { where.push('link_status = ?'); params.push(filter.linkStatus); }
@@ -703,9 +752,10 @@ export class FacebookPosterStore {
         return this.db.query<any>(`SELECT 1 FROM fb_poster_page_followers WHERE page_id = ? AND captured_on = ?`, [pageId, capturedOn]).length > 0;
     }
 
-    listPageFollowers(filter: { pageId?: string; sinceDay: string }): PageFollowerRow[] {
+    listPageFollowers(filter: { pageId?: string; sinceDay: string; profileIds?: readonly string[] }): PageFollowerRow[] {
         const where = filter.pageId === undefined ? ['captured_on >= ?'] : ['captured_on >= ?', 'page_id = ?'];
-        const params = filter.pageId === undefined ? [filter.sinceDay] : [filter.sinceDay, filter.pageId];
+        const params: any[] = filter.pageId === undefined ? [filter.sinceDay] : [filter.sinceDay, filter.pageId];
+        if (filter.profileIds !== undefined) { const scope = inScope('profile_id', filter.profileIds); where.push(scope.sql); params.push(...scope.params); }
         return this.db.query<any>(
             `SELECT * FROM fb_poster_page_followers WHERE ${where.join(' AND ')} ORDER BY page_id, captured_on`, params,
         ).map((r) => ({ pageId: r.page_id, profileId: r.profile_id, capturedOn: r.captured_on, capturedAt: r.captured_at, followers: r.followers, followersText: r.followers_text ?? '', approximate: r.approximate === 1 }));
@@ -752,9 +802,10 @@ export class FacebookPosterStore {
     }
 
     /** Lọc theo trạng thái / chiến dịch / khoảng detected_at ở SQL; tìm chữ không dấu, không phân biệt hoa thường ở JS rồi mới phân trang. */
-    listLeads(filter: { status?: LeadStatus; campaignId?: string; from?: number; to?: number; search?: string; limit: number; offset: number }): { leads: FbPosterLead[]; total: number } {
+    listLeads(filter: { status?: LeadStatus; campaignId?: string; from?: number; to?: number; search?: string; limit: number; offset: number; profileIds?: readonly string[] }): { leads: FbPosterLead[]; total: number } {
         const where: string[] = [];
         const params: any[] = [];
+        if (filter.profileIds !== undefined) { const scope = inScope('profile_id', filter.profileIds); where.push(scope.sql); params.push(...scope.params); }
         if (filter.status !== undefined) { where.push('status = ?'); params.push(filter.status); }
         if (filter.campaignId === '') where.push('campaign_id IS NULL');
         else if (filter.campaignId !== undefined) { where.push('campaign_id = ?'); params.push(filter.campaignId); }
@@ -862,8 +913,9 @@ export class FacebookPosterStore {
         });
     }
 
-    listLeadReplies(limit: number, offset: number): FbPosterLeadReply[] {
-        return this.db.query<any>('SELECT * FROM fb_poster_lead_replies ORDER BY id DESC LIMIT ? OFFSET ?', [limit, offset]).map(mapLeadReply);
+    listLeadReplies(limit: number, offset: number, profileIds?: readonly string[]): FbPosterLeadReply[] {
+        const scope = profileIds === undefined ? null : inScope('profile_id', profileIds);
+        return this.db.query<any>(`SELECT * FROM fb_poster_lead_replies ${scope ? `WHERE ${scope.sql} ` : ''}ORDER BY id DESC LIMIT ? OFFSET ?`, [...(scope?.params ?? []), limit, offset]).map(mapLeadReply);
     }
 
     /** Còn hiệu lực = chiếm chỗ của bài (pending/approved/posting/posted/failed/uncertain); rejected/expired/skipped thì nhả bài. */
@@ -1024,9 +1076,10 @@ export class FacebookPosterStore {
     }
 
     /** Báo cáo hiệu quả bài đã đăng (spec mục 5). Bài tính theo `posted_at` trong [from, to]. */
-    statsReport(opts: { from: number; to: number; groupBy: PostStatsGroupBy; limit: number; campaignId?: string; scheduleId?: string; groupUrl?: string }): PostStatsReportRow[] {
+    statsReport(opts: { from: number; to: number; groupBy: PostStatsGroupBy; limit: number; campaignId?: string; scheduleId?: string; groupUrl?: string; profileIds?: readonly string[] }): PostStatsReportRow[] {
         const where = ['t.posted_at >= ?', 't.posted_at <= ?'];
         const params: any[] = [opts.from, opts.to];
+        if (opts.profileIds !== undefined) { const scope = inScope('t.profile_id', opts.profileIds); where.push(scope.sql); params.push(...scope.params); }
         if (opts.campaignId === '') where.push('t.campaign_id IS NULL');
         else if (opts.campaignId !== undefined) { where.push('t.campaign_id = ?'); params.push(opts.campaignId); }
         if (opts.scheduleId !== undefined) { where.push('t.schedule_id = ?'); params.push(opts.scheduleId); }
@@ -1132,12 +1185,13 @@ export class FacebookPosterStore {
      * Số liệu đầu vào chấm điểm nhóm (spec 26.23 §2.1): lượt đăng từ kết quả chạy (bỏ lỗi do profile) ghép với số liệu theo dõi bài.
      * Nhóm chỉ có ở một phía vẫn có dòng; nhóm chỉ có theo dõi lấy `attempted` = số bài.
      */
-    groupScoreInputs(opts: { from: number; to: number; campaignId?: string }): GroupScoreInput[] {
+    groupScoreInputs(opts: { from: number; to: number; campaignId?: string; profileIds?: readonly string[] }): GroupScoreInput[] {
         const where = [
             "r.kind = 'post'", "r.mode = 'group'", 'x.created_at >= ?', 'x.created_at <= ?', "x.outcome IN ('posted', 'failed')",
             "NOT (x.outcome = 'failed' AND x.error_code IN ('not_logged_in', 'launch_failed', 'stopped'))",
         ];
         const params: any[] = [opts.from, opts.to];
+        if (opts.profileIds !== undefined) { const scope = inScope('x.profile_id', opts.profileIds); where.push(scope.sql); params.push(...scope.params); }
         if (opts.campaignId === '') where.push('r.campaign_id IS NULL');
         else if (opts.campaignId !== undefined) { where.push('r.campaign_id = ?'); params.push(opts.campaignId); }
         const attempts = this.db.query<any>(
@@ -1148,7 +1202,7 @@ export class FacebookPosterStore {
              WHERE ${where.join(' AND ')} GROUP BY x.target_url`,
             params,
         );
-        const tracked = new Map(this.statsReport({ from: opts.from, to: opts.to, groupBy: 'group', campaignId: opts.campaignId, limit: 100000 }).map((t) => [t.key, t]));
+        const tracked = new Map(this.statsReport({ from: opts.from, to: opts.to, groupBy: 'group', campaignId: opts.campaignId, profileIds: opts.profileIds, limit: 100000 }).map((t) => [t.key, t]));
         const out: GroupScoreInput[] = attempts.map((a) => {
             const t = tracked.get(a.url);
             tracked.delete(a.url);

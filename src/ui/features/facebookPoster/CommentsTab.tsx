@@ -3,6 +3,7 @@ import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import ProfilePicker from './ProfilePicker';
+import { useEmployeePoster, useEmployeeReload } from './useEmployeePoster';
 import { CAPACITY_REASON } from './runState';
 import type { FbPosterComment } from '../../../models/facebookPoster';
 
@@ -37,10 +38,12 @@ export default function CommentsTab({ atCapacity, onStarted }: Props) {
   const [commentsLoading, setCommentsLoading] = useState(true);
   const [reloadTick, setReloadTick] = useState(0);
 
+  const { isEmployee } = useEmployeePoster();
+  const reloadComments = useEmployeeReload(() => setReloadTick((n) => n + 1), isEmployee);
   useEffect(() => {
-    const off = ipc.on?.('facebookPoster:runFinished', () => setReloadTick((n) => n + 1));
+    const off = ipc.on?.('facebookPoster:runFinished', reloadComments);
     return () => off?.();
-  }, []);
+  }, [reloadComments]);
 
   useEffect(() => {
     let cancelled = false;

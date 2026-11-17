@@ -6,22 +6,31 @@ import { useEmployeeStore } from '@/store/employeeStore';
 import { showConfirm } from '../common/ConfirmDialog';
 import RelayStatusPanel from './RelayStatusPanel';
 import { toLocalMediaUrl } from '@/lib/localMedia';
+import { EMPLOYEE_MODULE_OPTIONS, permissionPatch } from '@/lib/employeeModules';
+import type { BrowserProfile, BrowserProfileGroup } from '../../../models/browserProfile';
 import { groupAssignableAccounts, assignableAccountIds } from '@/lib/employeeAssignableAccounts';
+import { firstSaveFailure } from '@/lib/employeeSaveSteps';
 import { BookIcon, BotIcon, ChartIcon, ChatIcon, CheckCircleIcon, CheckIcon, ClipboardListIcon, ClockIcon, EditIcon, FolderIcon, GlobeIcon, ImageIcon, KeyIcon, LightningIcon, LinkIcon, PlusIcon, RefreshIcon, SearchIcon, SettingsIcon, SmartphoneIcon, SunIcon, TrendingUpIcon, UserIcon, UsersIcon } from '@/components/common/icons';
 
-const ALL_MODULES = [
-    { key: 'chat', label: 'Chat', icon: <ChatIcon className="w-4 h-4" />, desc: 'Gửi/nhận tin nhắn', group: 'main' },
-    { key: 'friends', label: 'Bạn bè', icon: <UsersIcon className="w-4 h-4" />, desc: 'Danh sách bạn bè', group: 'main' },
-    { key: 'crm', label: 'CRM', icon: <ChartIcon className="w-4 h-4" />, desc: 'Quản lý khách hàng', group: 'main' },
-    { key: 'erp', label: 'ERP', icon: <ClipboardListIcon className="w-4 h-4" />, desc: 'Quản lý công việc & dự án', group: 'main' },
-    { key: 'workflow', label: 'Workflow', icon: <LightningIcon className="w-4 h-4" />, desc: 'Tự động hóa', group: 'main' },
-    { key: 'integration', label: 'Tích hợp', icon: <LinkIcon className="w-4 h-4" />, desc: 'Kết nối POS/Shipping', group: 'main' },
-    { key: 'analytics', label: 'Thống kê', icon: <TrendingUpIcon className="w-4 h-4" />, desc: 'Báo cáo phân tích', group: 'main' },
-    { key: 'ai_assistant', label: 'AI', icon: <BotIcon className="w-4 h-4" />, desc: 'Trợ lý AI', group: 'main' },
-    { key: 'facebook', label: 'Facebook', icon: <BookIcon className="w-4 h-4" />, desc: 'Facebook Messenger nhóm', group: 'main' },
-    { key: 'settings_accounts', label: 'Quản lý tài khoản', icon: <UserIcon className="w-4 h-4" />, desc: 'Xem/xóa tài khoản (boss)', group: 'settings', bossOnly: true },
-    { key: 'settings_employees', label: 'Quản lý nhân viên', icon: <UsersIcon className="w-4 h-4" />, desc: 'Thêm/sửa/xóa NV (boss)', group: 'settings', bossOnly: true },
-] as const;
+const MODULE_META: Record<string, { icon: React.ReactNode; desc: string }> = {
+    chat: { icon: <ChatIcon className="w-4 h-4" />, desc: 'Gửi/nhận tin nhắn' },
+    friends: { icon: <UsersIcon className="w-4 h-4" />, desc: 'Danh sách bạn bè' },
+    crm: { icon: <ChartIcon className="w-4 h-4" />, desc: 'Quản lý khách hàng' },
+    erp: { icon: <ClipboardListIcon className="w-4 h-4" />, desc: 'Quản lý công việc & dự án' },
+    workflow: { icon: <LightningIcon className="w-4 h-4" />, desc: 'Tự động hóa' },
+    integration: { icon: <LinkIcon className="w-4 h-4" />, desc: 'Kết nối POS/Shipping' },
+    analytics: { icon: <TrendingUpIcon className="w-4 h-4" />, desc: 'Báo cáo phân tích' },
+    ai_assistant: { icon: <BotIcon className="w-4 h-4" />, desc: 'Trợ lý AI' },
+    facebook: { icon: <BookIcon className="w-4 h-4" />, desc: 'Facebook Messenger nhóm' },
+    fb_poster: { icon: <GlobeIcon className="w-4 h-4" />, desc: 'Đăng bài bằng hồ sơ được gán' },
+    settings_accounts: { icon: <UserIcon className="w-4 h-4" />, desc: 'Xem/xóa tài khoản (boss)' },
+    settings_employees: { icon: <UsersIcon className="w-4 h-4" />, desc: 'Thêm/sửa/xóa NV (boss)' },
+};
+
+const ALL_MODULES = EMPLOYEE_MODULE_OPTIONS.map(o => {
+    const isSettings = o.key.startsWith('settings_');
+    return { ...o, ...MODULE_META[o.key], group: isSettings ? 'settings' : 'main', bossOnly: isSettings };
+});
 
 interface EmployeeGroup {
     group_id: string;
@@ -754,6 +763,7 @@ export default function EmployeeSettings() {
                     groups={groups}
                     onClose={() => { setShowForm(false); setEditingEmployee(null); }}
                     onSaved={() => { setShowForm(false); setEditingEmployee(null); loadEmployees(); }}
+                    onReload={loadEmployees}
                 />
             )}
         </div>
@@ -762,14 +772,18 @@ export default function EmployeeSettings() {
 
 // ─── Employee Form Modal ──────────────────────────────────────────────
 
-function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved }: {
+function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved, onReload }: {
     employee: EmployeeData | null;
     accounts: any[];
     groups: EmployeeGroup[];
     onClose: () => void;
     onSaved: () => void;
+    /** Tải lại danh sách mà không đóng hộp (nhân viên đã tạo nhưng bước sau lỗi). */
+    onReload: () => void;
 }) {
     const isEdit = !!employee;
+    // Nhân viên vừa tạo nhưng một bước lưu sau đó lỗi: bấm Lưu lần nữa chỉ làm lại các bước sau, không tạo lại.
+    const [createdId, setCreatedId] = useState<string | null>(null);
     const { showNotification } = useAppStore();
 
     const [username, setUsername] = useState(employee?.username || '');
@@ -799,6 +813,43 @@ function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved }: {
         const personalIds = new Set(accounts.map(a => a.zalo_id).filter(id => !assignable.has(id)));
         return new Set((employee?.assigned_accounts || []).filter((id: string) => !personalIds.has(id)));
     });
+
+    // Hồ sơ trình duyệt đăng Facebook: chỉ lưu khi đã tải xong, để lỗi tải không xoá nhầm danh sách đã gán.
+    const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([]);
+    const [profileGroups, setProfileGroups] = useState<BrowserProfileGroup[]>([]);
+    const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
+    const [profilesLoaded, setProfilesLoaded] = useState(false);
+    const [profilesFailed, setProfilesFailed] = useState(false);
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            const [list, assigned] = await Promise.all([
+                ipc.browserProfile?.list?.(),
+                isEdit ? ipc.employee?.getAssignedProfiles(employee!.employee_id) : Promise.resolve({ success: true, profileIds: [] as string[] }),
+            ]).catch(() => [null, null] as const);
+            if (cancelled) return;
+            if (!list?.success || !assigned?.success) { setProfilesFailed(true); return; }
+            setBrowserProfiles(list.profiles || []);
+            setProfileGroups(list.groups || []);
+            setSelectedProfiles(new Set(assigned.profileIds || []));
+            setProfilesLoaded(true);
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    const toggleProfile = (id: string) => {
+        setSelectedProfiles(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    const toggleAllProfiles = () => {
+        if (selectedProfiles.size === browserProfiles.length) setSelectedProfiles(new Set());
+        else setSelectedProfiles(new Set(browserProfiles.map(p => p.id)));
+    };
 
     const togglePermission = (key: string) => {
         setPermissions(prev => ({ ...prev, [key]: !prev[key] }));
@@ -852,27 +903,40 @@ function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved }: {
                 const res = await ipc.employee?.update(employee!.employee_id, updates);
                 if (!res?.success) { showNotification(res?.error || 'Cập nhật thất bại', 'error'); setSaving(false); return; }
 
-                // Update permissions
-                const permArray = ALL_MODULES.map(m => ({ module: m.key, can_access: !!permissions[m.key] }));
-                await ipc.employee?.setPermissions(employee!.employee_id, permArray);
-
-                // Update account access
-                await ipc.employee?.assignAccounts(employee!.employee_id, Array.from(selectedAccounts));
+                // Quyền, tài khoản, hồ sơ: bước lỗi đầu tiên dừng việc lưu và hiện lỗi của nó (không báo thành công).
+                const failure = await firstSaveFailure([
+                    { run: () => ipc.employee?.setPermissions(employee!.employee_id, permissionPatch(permissions)), fallback: 'Lưu quyền thất bại' },
+                    { run: () => ipc.employee?.assignAccounts(employee!.employee_id, Array.from(selectedAccounts)), fallback: 'Gán tài khoản thất bại' },
+                    ...(profilesLoaded ? [{ run: () => ipc.employee?.assignProfiles(employee!.employee_id, Array.from(selectedProfiles)), fallback: 'Gán hồ sơ thất bại' }] : []),
+                ]);
+                if (failure) { showNotification(failure, 'error'); setSaving(false); return; }
 
                 showNotification('Đã cập nhật nhân viên', 'success');
             } else {
-                // Create new
-                const res = await ipc.employee?.create({ username, password, display_name: displayName, avatar_url: avatarUrl || undefined, role });
-                if (!res?.success) { showNotification(res?.error || 'Tạo thất bại', 'error'); setSaving(false); return; }
+                // Create new (or, after a failed later step, continue with the employee that already exists)
+                let empId = createdId;
+                if (!empId) {
+                    const res = await ipc.employee?.create({ username, password, display_name: displayName, avatar_url: avatarUrl || undefined, role });
+                    if (!res?.success) { showNotification(res?.error || 'Tạo thất bại', 'error'); setSaving(false); return; }
+                    empId = res.employee?.employee_id ?? null;
+                }
 
-                const empId = res.employee?.employee_id;
                 if (empId) {
-                    const permArray = ALL_MODULES.map(m => ({ module: m.key, can_access: !!permissions[m.key] }));
-                    await ipc.employee?.setPermissions(empId, permArray);
-                    await ipc.employee?.assignAccounts(empId, Array.from(selectedAccounts));
-                    // Set group if selected
-                    if (groupId) {
-                        await ipc.employee?.update(empId, { group_id: groupId });
+                    const id = empId;
+                    const failure = await firstSaveFailure([
+                        // Lưu lại sau một bước lỗi: nhân viên đã tồn tại nên tên, vai trò, ảnh, mật khẩu vừa sửa được lưu bằng update (tên đăng nhập không đổi được nữa)
+                        ...(createdId ? [{ run: () => ipc.employee?.update(id, { display_name: displayName, role, avatar_url: avatarUrl, ...(password ? { password } : {}) }), fallback: 'Cập nhật thất bại' }] : []),
+                        { run: () => ipc.employee?.setPermissions(id, permissionPatch(permissions)), fallback: 'Lưu quyền thất bại' },
+                        { run: () => ipc.employee?.assignAccounts(id, Array.from(selectedAccounts)), fallback: 'Gán tài khoản thất bại' },
+                        ...(profilesLoaded ? [{ run: () => ipc.employee?.assignProfiles(id, Array.from(selectedProfiles)), fallback: 'Gán hồ sơ thất bại' }] : []),
+                        ...(groupId ? [{ run: () => ipc.employee?.update(id, { group_id: groupId }), fallback: 'Lưu nhóm thất bại' }] : []),
+                    ]);
+                    if (failure) {
+                        setCreatedId(id);
+                        onReload();
+                        showNotification(`Đã tạo nhân viên nhưng chưa lưu xong: ${failure}`, 'error');
+                        setSaving(false);
+                        return;
                     }
                 }
 
@@ -955,7 +1019,7 @@ function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved }: {
                                 <label className="text-xs text-gray-400 mb-1 block">Tên đăng nhập</label>
                                 <input
                                     value={username} onChange={e => setUsername(e.target.value)}
-                                    disabled={isEdit}
+                                    disabled={isEdit || !!createdId}
                                     placeholder="nhanvien01"
                                     className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-200 placeholder-gray-500 disabled:opacity-50"
                                 />
@@ -1145,6 +1209,48 @@ function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved }: {
                             </div>
                         )}
                     </div>
+                    {/* Browser profiles for the Facebook poster - only while fb_poster is ticked */}
+                    {permissions.fb_poster && (
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Hồ sơ đăng Facebook</p>
+                                {profilesLoaded && browserProfiles.length > 0 && (
+                                    <button onClick={toggleAllProfiles} className="text-[11px] text-blue-400 hover:text-blue-300">
+                                        {selectedProfiles.size === browserProfiles.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                                    </button>
+                                )}
+                            </div>
+                            {profilesFailed ? (
+                                <p className="text-xs text-gray-400 py-2">Không tải được danh sách hồ sơ. Đóng và mở lại bảng này để thử lại.</p>
+                            ) : !profilesLoaded ? (
+                                <p className="text-xs text-gray-400 py-2">Đang tải danh sách hồ sơ…</p>
+                            ) : browserProfiles.length === 0 ? (
+                                <p className="text-xs text-gray-400 py-2">Chưa có hồ sơ trình duyệt nào. Tạo hồ sơ ở mục Trình duyệt trước.</p>
+                            ) : (
+                                <div className="space-y-1 max-h-48 overflow-y-auto">
+                                    {browserProfiles.map(profile => (
+                                        <label
+                                            key={profile.id}
+                                            className={`flex items-center gap-2.5 p-2 rounded-lg transition-colors cursor-pointer ${selectedProfiles.has(profile.id) ? 'bg-green-600/15 border border-green-500/30' : 'bg-gray-700/50 border border-transparent hover:bg-gray-700'}`}
+                                        >
+                                            <input type="checkbox" checked={selectedProfiles.has(profile.id)} onChange={() => toggleProfile(profile.id)} className="sr-only" />
+                                            <span className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                                                selectedProfiles.has(profile.id) ? 'bg-green-600 border-green-500' : 'border-gray-500'
+                                            }`}>
+                                                {selectedProfiles.has(profile.id) && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><path d="M20 6L9 17l-5-5"/></svg>}
+                                            </span>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-xs text-gray-200 font-medium truncate">{profile.name}</p>
+                                                {profile.group_id != null && profileGroups.find(g => g.id === profile.group_id) && (
+                                                    <p className="text-[10px] text-gray-400 truncate">{profileGroups.find(g => g.id === profile.group_id)!.name}</p>
+                                                )}
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {/* Footer */}

@@ -1,4 +1,5 @@
 import { Spinner } from '@/components/common/PageLoading';
+import { mapReplyQuotes } from '@/lib/chat/mapReplyQuotes';
 import { toZaloJpgUrl, isJxlLocalPath } from '../../../utils/zaloImageUrl';
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MESSAGE_LOAD_LIMIT, MESSAGE_AROUND_LIMIT, GROUP_MEMBER_LIMIT, LOAD_MORE_TIMEOUT_MS, PAGE_SIZE, MAX_PAGES, GROUP_INFO_CACHE_TTL_MS } from '@/lib/chat/constants';
@@ -35,7 +36,7 @@ import ForwardMessageModal from './ForwardMessageModal';
 import PollBubble from './PollBubble';
 import FriendRequestBar from './FriendRequestBar';
 import { ReactionContextMenu, ReactionPopup, parseReactions, parseReactionsFull, displayReactionEmoji } from './ReactionComponents';
-import { withoutBossOnlyFbCaps } from '@/lib/employeeAccounts';
+import { withoutBossOnlyFbCaps, employeeSendFailure, isTelegramChannel, pinsFromResponse } from '@/lib/employeeAccounts';
 import { shouldFetchFbOlder, fbOlderAnchor, interpretFbOlderResult, rowsFromGetMessages } from '../../lib/chat/fbOlderMessages';
 import { lastOutgoingReceipt, receiptDisplay, receiptLabel } from '../../lib/chat/messageReceipt';
 import {
@@ -243,6 +244,8 @@ export default function ChatWindow() {
         });
         if (cancelled) return;
         if (!res?.success || !Array.isArray(res.messages)) {
+          const topicFailure = employeeSendFailure(isEmployeeMode, res);
+          if (topicFailure) showNotification(topicFailure.error, 'error'); // máy nhân viên: lệnh qua boss lỗi → báo một lần, không tự thử lại
           useChatStore.getState().setMessagesLoading(false);
           return;
         }
@@ -1670,25 +1673,8 @@ export default function ChatWindow() {
         });
       }
       if (res?.messages?.length > 0) {
-        // Build a lookup map of msg_id → content+type for all loaded messages
-        // (used to populate reply quote_data with actual original message content)
-        const msgLookup = new Map<string, { content: string; type: string }>();
-        for (const m of res.messages) {
-          msgLookup.set(m.msg_id, { content: m.content || '', type: m.msg_type || 'text' });
-        }
-        // Convert reply_to_id → quote_data for Facebook messages so reply previews render
-        const missingLookup: Array<{ msgId: string; replyToId: string }> = [];
-        const mapped = res.messages.map((m: any) => {
-          if (m.channel !== 'telegram_user' && m.reply_to_id && !m.quote_data) {
-            const orig = msgLookup.get(m.reply_to_id);
-            if (orig) {
-              return { ...m, quote_data: JSON.stringify({ msgId: m.reply_to_id, msg: orig.content || '', senderId: '', msgType: orig.type || 'text' }) };
-            }
-            missingLookup.push({ msgId: m.msg_id, replyToId: m.reply_to_id });
-            return m;
-          }
-          return m;
-        });
+        // reply_to_id → quote_data (cùng hàm với tải lại sau gián đoạn)
+        const { mapped, missingLookup } = mapReplyQuotes(res.messages);
         // Count messages BEFORE prepend to detect if any new messages were added
         const storeKey = getMessageCacheKey(activeAccountId, activeThreadId, activeTopicId);
         const countBefore = (useChatStore.getState().messages[storeKey] || []).length;
@@ -1767,6 +1753,8 @@ export default function ChatWindow() {
               limit: MESSAGE_LOAD_LIMIT,
               topicRootMessageId: activeTopicId || undefined,
             });
+            const olderFailure = employeeSendFailure(isEmployee, tgRes);
+            if (olderFailure) showNotification(olderFailure.error, 'error'); // báo một lần mỗi lần tải lỗi, không tự thử lại
             if (tgRes?.success && tgRes.messages?.length > 0) {
               // Re-read the updated oldest timestamp after Telegram API persisted messages
               const updatedMsgs = useChatStore.getState().messages[getMessageCacheKey(activeAccountId, activeThreadId, activeTopicId)] || [];
@@ -1862,11 +1850,14 @@ export default function ChatWindow() {
       const ch = msg.channel || contact?.channel || CHANNEL.ZALO;
 
       if (isNonZalo(ch)) {
-        await channelIpc.unsendMessage(ch, {
+        const unsendRes = await channelIpc.unsendMessage(ch, {
           accountId: activeAccountId || '',
           messageId: msg.msg_id,
           threadId: msg.thread_id,
         });
+        // Máy nhân viên: lệnh qua boss thất bại → dừng trước khi đánh dấu thu hồi / ghi DB
+        const unsendFailure = employeeSendFailure(isEmployeeMode, unsendRes);
+        if (unsendFailure) throw new Error(unsendFailure.error);
       } else if (isZalo(ch)) {
       const isMsgSent = !!msg.is_sent;
       const messagePayload = JSON.stringify({
@@ -1900,7 +1891,9 @@ export default function ChatWindow() {
       const contact = contactList.find(c => c.contact_id === msg.thread_id);
       const ch = msg.channel || contact?.channel || CHANNEL.ZALO;
       if (isNonZalo(ch)) {
-        await (channelIpc as any).unsendMessage(ch, { accountId: activeAccountId || '', messageId: msg.msg_id, threadId: msg.thread_id });
+        const deleteRes = await (channelIpc as any).unsendMessage(ch, { accountId: activeAccountId || '', messageId: msg.msg_id, threadId: msg.thread_id });
+        const deleteFailure = employeeSendFailure(isEmployeeMode, deleteRes);
+        if (deleteFailure) throw new Error(deleteFailure.error);
       } else {
       const messagePayload = JSON.stringify({
         data: { msgId: msg.msg_id, cliMsgId: msg.cli_msg_id || msg.msg_id, uidFrom: msg.sender_id },
@@ -1941,8 +1934,10 @@ export default function ChatWindow() {
       const accId = activeAccountId || '';
       useChatStore.getState().updateMessageReaction(accId, msg.thread_id, msg.msg_id, accId, emoji);
 
-      // Persist reaction to DB immediately (so it survives conversation switch)
-      DataAccessor.updateReaction?.({ zaloId: accId, msgId: msg.msg_id, userId: accId, emoji }).catch(() => {});
+      // Persist reaction to DB immediately (so it survives conversation switch).
+      // Máy nhân viên + Telegram: chờ kết quả lệnh rồi mới ghi vào DB của boss (lệnh lỗi thì không ghi).
+      const persistAfterResult = isEmployeeMode && isTelegramChannel(ch);
+      if (!persistAfterResult) DataAccessor.updateReaction?.({ zaloId: accId, msgId: msg.msg_id, userId: accId, emoji }).catch(() => {});
 
       if (isNonZalo(ch)) {
         const res = await channelIpc.addReaction(ch, {
@@ -1957,6 +1952,15 @@ export default function ChatWindow() {
           useChatStore.getState().updateMessageReaction(accId, msg.thread_id, msg.msg_id, accId, '');
           DataAccessor.updateReaction?.({ zaloId: accId, msgId: msg.msg_id, userId: accId, emoji: '' }).catch(() => {});
           showNotification(res.error, 'error');
+        }
+        if (persistAfterResult) {
+          const reactFailure = employeeSendFailure(true, res);
+          if (reactFailure) {
+            useChatStore.getState().updateMessageReaction(accId, msg.thread_id, msg.msg_id, accId, '');
+            showNotification(reactFailure.error, 'error');
+          } else {
+            DataAccessor.updateReaction?.({ zaloId: accId, msgId: msg.msg_id, userId: accId, emoji }).catch(() => {});
+          }
         }
       } else if (isZalo(ch)) {
         const auth = getAuth();
@@ -1993,6 +1997,8 @@ export default function ChatWindow() {
           action: 'remove',
         });
         if (ch === CHANNEL.FACEBOOK && res?.success === false && res.error) showNotification(res.error, 'error');
+        const cancelFailure = isTelegramChannel(ch) ? employeeSendFailure(isEmployeeMode, res) : null;
+        if (cancelFailure) showNotification(cancelFailure.error, 'error');
       } else if (isZalo(ch)) {
         const auth = getAuth();
         if (!auth) return;
@@ -2048,9 +2054,13 @@ export default function ChatWindow() {
       }
 
       await ipc.db?.pinMessage({ zaloId: activeAccountId, threadId: activeThreadId, pin });
-      // Reload pins
-      const res = await ipc.db?.getPinnedMessages({ zaloId: activeAccountId, threadId: activeThreadId });
-      if (res?.success) setPins(res.pins || []);
+      // Reload pins. Nhân viên + Telegram: ghim nằm ở boss (lệnh ghi chuyển tiếp không chờ) → đọc qua REST;
+      // usePinnedData đọc lại lần nữa khi nhận db:pinnedMessageChanged của boss. Phản hồi không có mảng pins → giữ nguyên thanh ghim.
+      const reloadRes = isEmployeeMode && isTelegramChannel(ch)
+        ? await DataAccessor.getPinnedMessages({ zaloId: activeAccountId, threadId: activeThreadId })
+        : await ipc.db?.getPinnedMessages({ zaloId: activeAccountId, threadId: activeThreadId });
+      const nextPins = reloadRes?.success ? pinsFromResponse<any>(reloadRes) : null;
+      if (nextPins) setPins(nextPins);
       if (overLimit) {
         // Zalo API chỉ hỗ trợ 3 tin ghim - ghim thành công trong ứng dụng nhưng không đồng bộ lên API
         showNotification('Đã ghim (chỉ áp dụng trong app - Zalo giới hạn 3 tin ghim)', 'success');
@@ -2763,7 +2773,7 @@ export default function ChatWindow() {
                     className="inline-flex items-center gap-1 align-middle font-medium text-gray-200 hover:text-white hover:underline transition-colors"
                   >
                     {m.avatar ? (
-                      <img src={m.avatar} alt={name} className="w-4 h-4 rounded-full object-cover inline-block flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
+                      <img src={toLocalMediaUrl(m.avatar)} alt={name} className="w-4 h-4 rounded-full object-cover inline-block flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
                     ) : (
                       <span className="w-4 h-4 rounded-full bg-purple-600 inline-flex items-center justify-center text-white flex-shrink-0" style={{fontSize:'0.5rem'}}>
                         {(name || '?').charAt(0).toUpperCase()}
@@ -3695,7 +3705,7 @@ export default function ChatWindow() {
               {shown.map((u) => (
                 <div key={u.userId} title={u.name} className="w-4 h-4 rounded-full ring-1 ring-gray-800 overflow-hidden flex-shrink-0">
                   {u.avatar ? (
-                    <img src={u.avatar} alt={u.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                    <img src={toLocalMediaUrl(u.avatar)} alt={u.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                   ) : (
                     <div className="w-full h-full bg-blue-500 flex items-center justify-center text-white" style={{ fontSize: '0.4375rem', fontWeight: 700 }}>
                       {(u.name).charAt(0).toUpperCase()}

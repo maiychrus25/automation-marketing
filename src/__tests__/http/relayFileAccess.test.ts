@@ -2,11 +2,16 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
+import { EMPLOYEE_UPLOAD_MAX_BYTES } from '../../services/http/bossFileAccess';
 import { startRelay, RelayHarness } from './relayHarness';
 
 // POST /api/command/erp/tasks calls the service directly (no recording handler): a fake that counts the saves.
 const mockCreateTask = jest.fn(() => ({ id: 't-new' }));
 jest.mock('../../services/erp/ErpTaskService', () => ({ __esModule: true, default: { getInstance: () => ({ createTask: mockCreateTask }) } }));
+
+// A 1 MB upload limit keeps the over-the-limit tests small; the real value is pinned in the first test of 'upload'.
+jest.mock('../../services/http/bossFileAccess', () => ({ ...jest.requireActual('../../services/http/bossFileAccess'), EMPLOYEE_UPLOAD_MAX_BYTES: 1024 * 1024 }));
+const REAL_UPLOAD_LIMIT = (jest.requireActual('../../services/http/bossFileAccess') as { EMPLOYEE_UPLOAD_MAX_BYTES: number }).EMPLOYEE_UPLOAD_MAX_BYTES;
 
 const ACCOUNTS: any[] = ['acc-a', 'acc-b'].map((id) => ({
   zalo_id: id, full_name: id, avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', cookies: 'S', imei: 'I', user_agent: 'UA',
@@ -65,7 +70,26 @@ describe('boss file access through the relay', () => {
   const get = (url: string, emp: string | null) =>
     fetch(`${relay.url}${url}`, { headers: emp ? { Authorization: `Bearer ${relay.tokenFor(emp)}` } : {} });
 
+  // Raw request so a test controls Content-Length (or omits it) and streams the body in pieces.
+  const rawUpload = (headers: Record<string, string>, chunks: Buffer[]) => new Promise<{ status: number; body: any }>((resolve, reject) => {
+    const req = http.request(`${relay.url}/api/media/upload`, { method: 'POST', agent: false, headers: { Authorization: `Bearer ${relay.tokenFor('emp-a')}`, ...headers } }, (res) => {
+      let text = '';
+      res.on('error', () => undefined);
+      res.on('data', (c) => {
+        text += c;
+        try { resolve({ status: res.statusCode ?? 0, body: JSON.parse(text) }); } catch { /* more of the body is coming */ }
+      });
+    });
+    req.on('error', (err: NodeJS.ErrnoException) => (err.code === 'EPIPE' || err.code === 'ECONNRESET' ? undefined : reject(err)));
+    for (const c of chunks) req.write(c);
+    req.end();
+  });
+
   describe('upload', () => {
+    test('theRealUploadLimitIs200Megabytes', () => {
+      expect(REAL_UPLOAD_LIMIT).toBe(200 * 1024 * 1024);
+    });
+
     test('aTraversalNameIsReducedToItsBaseNameInsideTheAccountFolder', async () => {
       const res = await upload('emp-a', { 'X-Filename': '../../evil.txt', 'X-Zalo-Id': 'acc-a' });
       expect(res.status).toBe(200);
@@ -74,6 +98,29 @@ describe('boss file access through the relay', () => {
       expect(bossPath.startsWith(path.join(mediaRoot, 'acc-a') + path.sep)).toBe(true);
       expect(fs.existsSync(path.join(tmp, 'evil.txt'))).toBe(false);
       expect(fs.existsSync(path.join(mediaRoot, 'evil.txt'))).toBe(false);
+    });
+
+    test('aPercentEncodedNameIsDecodedOnceBeforeItIsStored', async () => {
+      const res = await upload('emp-a', { 'X-Filename': '%E1%BA%A2nh%201.png', 'X-Zalo-Id': 'acc-a' });
+      expect(res.status).toBe(200);
+      const { bossPath } = (await res.json()) as any;
+      expect(path.basename(bossPath)).toBe('Ảnh 1.png');
+      expect(fs.readFileSync(bossPath, 'utf8')).toBe('hello');
+    });
+
+    test('anEncodedTraversalNameIsReducedLikeADottedOne', async () => {
+      const res = await upload('emp-a', { 'X-Filename': '..%2F..%2Fx', 'X-Zalo-Id': 'acc-a' });
+      expect(res.status).toBe(200);
+      const { bossPath } = (await res.json()) as any;
+      expect(path.basename(bossPath)).toBe('x');
+      expect(bossPath.startsWith(path.join(mediaRoot, 'acc-a') + path.sep)).toBe(true);
+      expect(fs.existsSync(path.join(mediaRoot, 'x'))).toBe(false);
+    });
+
+    test('aMalformedEscapeInTheNameIsStoredUnderItsRawName', async () => {
+      const res = await upload('emp-a', { 'X-Filename': 'sale 50%.jpg', 'X-Zalo-Id': 'acc-a' });
+      expect(res.status).toBe(200);
+      expect(path.basename(((await res.json()) as any).bossPath)).toBe('sale 50%.jpg');
     });
 
     test('aBackslashPathKeepsOnlyTheFileName', async () => {
@@ -92,7 +139,49 @@ describe('boss file access through the relay', () => {
       const res = await upload('emp-none', { 'X-Filename': '../../u.txt' });
       expect(res.status).toBe(200);
       const { bossPath } = (await res.json()) as any;
-      expect(bossPath).toBe(path.join(mediaRoot, '_uploads', 'u.txt'));
+      expect(path.dirname(path.dirname(bossPath))).toBe(path.join(mediaRoot, '_uploads'));
+      expect(path.basename(bossPath)).toBe('u.txt');
+      expect(fs.readFileSync(bossPath, 'utf8')).toBe('hello');
+    });
+
+    test('twoUploadsOfTheSameNameKeepTheirNameAndNeverOverwriteEachOther', async () => {
+      const send = (body: string) => fetch(`${relay.url}/api/media/upload`, {
+        method: 'POST', headers: { Authorization: `Bearer ${relay.tokenFor('emp-a')}`, 'X-Filename': 'image.png', 'X-Zalo-Id': 'acc-a' }, body,
+      });
+      const one = ((await (await send('FIRST')).json()) as any).bossPath as string;
+      const two = ((await (await send('SECOND')).json()) as any).bossPath as string;
+      expect(one).not.toBe(two);
+      expect([path.basename(one), path.basename(two)]).toEqual(['image.png', 'image.png']);
+      expect(fs.readFileSync(one, 'utf8')).toBe('FIRST');
+      expect(fs.readFileSync(two, 'utf8')).toBe('SECOND');
+      // Layout: <media>/<account>/<date>/<16 hex>/<name>
+      expect(path.basename(path.dirname(one))).toMatch(/^[0-9a-f]{16}$/);
+      expect(path.relative(mediaRoot, one).split(path.sep)[0]).toBe('acc-a');
+    });
+
+    test('anUploadedFileIsAcceptedAsAProxyPathAndReadableByItsUploaderOnly', async () => {
+      const { bossPath } = (await (await upload('emp-a', { 'X-Filename': 'readme.txt', 'X-Zalo-Id': 'acc-a' })).json()) as any;
+      const rel = path.relative(mediaRoot, bossPath).split(path.sep).map(encodeURIComponent).join('/');
+      expect((await get(`/api/media/${rel}`, 'emp-a')).status).toBe(200);
+      expect((await get(`/api/media/${rel}`, 'emp-b')).status).toBe(403);
+    });
+
+    test('aDeclaredLengthOverTheLimitIs413AndWritesNothing', async () => {
+      const before = listFiles(tmp).length;
+      const res = await rawUpload({ 'X-Filename': 'big.bin', 'X-Zalo-Id': 'acc-a', 'Content-Length': String(EMPLOYEE_UPLOAD_MAX_BYTES + 1) }, [Buffer.from('x')]);
+      expect(res.status).toBe(413);
+      expect(res.body).toMatchObject({ success: false, code: 'UPLOAD_TOO_LARGE', error: 'Tệp quá lớn (tối đa 200 MB)' });
+      expect(listFiles(tmp).length).toBe(before);
+    });
+
+    test('aStreamedBodyOverTheLimitWithNoLengthIs413AndWritesNothing', async () => {
+      const before = listFiles(tmp).length;
+      const chunk = Buffer.alloc(256 * 1024, 1);
+      const chunks = Array.from({ length: Math.ceil(EMPLOYEE_UPLOAD_MAX_BYTES / chunk.length) + 1 }, () => chunk);
+      const res = await rawUpload({ 'X-Filename': 'big.bin', 'X-Zalo-Id': 'acc-a', 'Transfer-Encoding': 'chunked' }, chunks);
+      expect(res.status).toBe(413);
+      expect(res.body.code).toBe('UPLOAD_TOO_LARGE');
+      expect(listFiles(tmp).length).toBe(before);
     });
 
     test.each([
@@ -165,6 +254,92 @@ describe('boss file access through the relay', () => {
       });
       expect(await raw('/api/media/acc-a/../acc-b/2026-01-01/b.png')).toBe(403);
       expect(await raw('/api/media/acc-a/../../secret.txt')).toBe(403);
+    });
+    describe('percent-escapes in the media path', () => {
+      const raw = (urlPath: string, emp = 'emp-a') => new Promise<{ status: number; text: string }>((resolve, reject) => {
+        const { port } = new URL(relay.url);
+        http.request({ host: '127.0.0.1', port, path: urlPath, headers: { Authorization: `Bearer ${relay.tokenFor(emp)}` } }, (r) => {
+          let text = '';
+          r.on('data', (c) => { text += c; });
+          r.on('end', () => resolve({ status: r.statusCode || 0, text }));
+        }).on('error', reject).end();
+      });
+
+      test('aNameWithASpaceHashAndPercentIsServedWhenItsSegmentsAreEncoded', async () => {
+        const name = 'my file #1 100%.txt';
+        fs.writeFileSync(path.join(mediaRoot, 'acc-a', '2026-01-01', name), 'ODD');
+        const res = await raw(`/api/media/acc-a/2026-01-01/${encodeURIComponent(name)}`);
+        expect(res.status).toBe(200);
+        expect(res.text).toBe('ODD');
+        expect((await raw(`/api/media/acc-a/2026-01-01/${encodeURIComponent(name)}`, 'emp-b')).status).toBe(403);
+      });
+
+      test.each([
+        ['%2e%2e%2f', '/api/media/acc-a/%2e%2e%2f%2e%2e%2fsecret.txt'],
+        ['..%2f', '/api/media/acc-a/..%2f..%2fsecret.txt'],
+        ['..%2f into another account', '/api/media/acc-a/..%2facc-b/2026-01-01/b.png'],
+        ['double-encoded', '/api/media/acc-a/%252e%252e/%252e%252e/secret.txt'],
+        ['an encoded backslash', '/api/media/acc-a/..%5c..%5csecret.txt'],
+      ])('encodedTraversalNeverServesAFileOutsideTheAccount: %s', async (_n, urlPath) => {
+        const res = await raw(urlPath);
+        expect([403, 404]).toContain(res.status);
+        expect(res.text).not.toContain('SECRET');
+        expect(res.text).not.toContain('BBB');
+      });
+
+      test('aNulByteIs400', async () => {
+        expect((await raw('/api/media/acc-a/2026-01-01/a.png%00.txt')).status).toBe(400);
+      });
+
+      test('aMalformedEscapeIsTriedAsTheLiteralNameSoAMissingFileIs404', async () => {
+        expect((await raw('/api/media/acc-a/2026-01-01/%E0%A4%A')).status).toBe(404);
+        expect((await raw('/api/media/acc-a/2026-01-01/100%')).status).toBe(404);
+      });
+
+      test('aLegacyRequestWithAnUnencodedPercentNameIsServedFromTheLiteralName', async () => {
+        fs.writeFileSync(path.join(mediaRoot, 'acc-a', '2026-01-01', 'sale 50%.jpg'), 'SALE');
+        // A request line cannot hold a space, so the legacy form is a malformed escape ("%.j") with no space in the name.
+        fs.writeFileSync(path.join(mediaRoot, 'acc-a', '2026-01-01', 'sale50%.jpg'), 'LEGACYSALE');
+        expect(await raw('/api/media/acc-a/2026-01-01/sale50%.jpg')).toMatchObject({ status: 200, text: 'LEGACYSALE' });
+        const res = await raw(`/api/media/acc-a/2026-01-01/${encodeURIComponent('sale 50%.jpg')}`);
+        expect(res).toMatchObject({ status: 200, text: 'SALE' });
+        expect(await raw(`/api/media/acc-a/2026-01-01/${encodeURIComponent('sale 50%.jpg')}`)).toMatchObject({ status: 200, text: 'SALE' });
+      });
+
+      test('aFileStoredUnderAPercentEncodedNameIsStillServedForItsLiteralName', async () => {
+        fs.writeFileSync(path.join(mediaRoot, 'acc-a', '2026-01-01', '%E1%BA%A2nh%201.png'), 'LEGACY');
+        // Literal name on disk is "%E1%BA%A2nh%201.png": the request escapes each '%' as %25.
+        expect(await raw('/api/media/acc-a/2026-01-01/%25E1%25BA%25A2nh%25201.png')).toMatchObject({ status: 200, text: 'LEGACY' });
+        // The un-doubled form decodes to "Ảnh 1.png" (absent) and falls back to the literal name.
+        expect(await raw('/api/media/acc-a/2026-01-01/%E1%BA%A2nh%201.png')).toMatchObject({ status: 200, text: 'LEGACY' });
+      });
+
+      // Both tests below use the same pair of names in the shared media folder: each writes what it needs and removes it.
+      afterEach(() => {
+        for (const name of ['Ảnh 1.png', '%E1%BA%A2nh%201.png']) fs.rmSync(path.join(mediaRoot, 'acc-a', '2026-01-01', name), { force: true });
+      });
+
+      test('aFileStoredWithTheDecodedNameIsServedAndWinsOverTheLiteralOne', async () => {
+        fs.writeFileSync(path.join(mediaRoot, 'acc-a', '2026-01-01', '%E1%BA%A2nh%201.png'), 'LEGACY');
+        fs.writeFileSync(path.join(mediaRoot, 'acc-a', '2026-01-01', 'Ảnh 1.png'), 'DECODED');
+        expect(await raw('/api/media/acc-a/2026-01-01/%E1%BA%A2nh%201.png')).toMatchObject({ status: 200, text: 'DECODED' });
+      });
+
+      test('aForbiddenDecodedCandidateEndsTheRequestWithoutTryingTheRawOne', async () => {
+        // Decoded: acc-a/../acc-b/... (another account, refused); raw: a real file under a literal "..%2facc-b" folder of acc-a.
+        const rawDir = path.join(mediaRoot, 'acc-a', '..%2facc-b', '2026-01-01');
+        fs.mkdirSync(rawDir, { recursive: true });
+        fs.writeFileSync(path.join(rawDir, 'b.png'), 'RAWWIN');
+        const res = await raw('/api/media/acc-a/..%2facc-b/2026-01-01/b.png');
+        expect(res.status).toBe(403);
+        expect(res.text).not.toContain('RAWWIN');
+        expect(res.text).not.toContain('BBB');
+      });
+
+      test('aDirectoryIs404NotAStream', async () => {
+        expect((await raw('/api/media/acc-a/2026-01-01')).status).toBe(404);
+        expect((await raw('/api/media/acc-a')).status).toBe(404);
+      });
     });
     test('aSymlinkOutOfTheMediaRootIsRefused', async () => {
       fs.symlinkSync(path.join(tmp, 'secret.txt'), path.join(mediaRoot, 'acc-a', 'link.txt'));

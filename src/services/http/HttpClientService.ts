@@ -1,8 +1,11 @@
 import * as http from 'http';
+import * as crypto from 'crypto';
 import Logger from '../../utils/Logger';
 import EventBroadcaster from '../event/EventBroadcaster';
 import SocketIOClient from '../socket/SocketIOClient';
-import { FACEBOOK_RELAY_CHANNELS } from '../socket/relayAudience';
+import { shouldResyncAfterHeartbeat, shouldResyncAfterResume, type ResyncReason } from './employeeConnection';
+import { RELAYED_EVENT_CHANNELS, EMPLOYEE_CONTROL_CHANNELS } from '../socket/relayChannels';
+import { isTelegramRelayPayload, telegramAccountIdsFrom } from './telegramRelayEvents';
 
 /**
  * HttpClientService - Employee side only.
@@ -24,8 +27,15 @@ class HttpClientService {
     private workspaceId = '';
 
     private consecutiveHeartbeatFailures = 0;
+    /** Đã disconnect(): không được phát employee:resync nữa */
+    private stopped = false;
+    /** Tăng ở mỗi connect()/disconnect(): connect() cũ đang chờ mạng nhận ra mình đã bị thay. */
+    private connectAttempt = 0;
     private static MAX_HEARTBEAT_FAILURES = 5;
     private callbackUrl = '';
+
+    /** Mã tài khoản Telegram của snapshot gần nhất: sự kiện của chúng không được ghi vào cơ sở dữ liệu tại máy. */
+    private telegramAccountIds: ReadonlySet<string> = new Set();
 
     private onStatusChange: ((connected: boolean, latency: number) => void) | null = null;
     private onInitialState: ((data: any) => void) | null = null;
@@ -36,67 +46,7 @@ class HttpClientService {
     private socketIOClient = new SocketIOClient();
 
     /** Channels to forward to local EventBroadcaster */
-    private static FORWARD_CHANNELS = [
-        'event:message',
-        'event:reaction',
-        'event:groupEvent',
-        'event:groupInfoUpdate',
-        'event:pollVote',
-        'event:pinsUpdated',
-        'event:connected',
-        'event:disconnected',
-        'event:friendRequest',
-        'event:friendAccepted',
-        'event:typing',
-        'event:seen',
-        'event:receipt',
-        'event:undo',
-        'event:delete',
-        'event:reminder',
-        'event:localPath',
-        'event:listenerDead',
-        ...FACEBOOK_RELAY_CHANNELS,
-        'relay:messageSentByEmployee',
-        'erp:event:taskCreated',
-        'erp:event:taskUpdated',
-        'erp:event:taskDeleted',
-        'erp:event:commentAdded',
-        'erp:event:projectCreated',
-        'erp:event:projectUpdated',
-        'erp:event:projectDeleted',
-        'erp:event:calendarEventCreated',
-        'erp:event:calendarEventUpdated',
-        'erp:event:calendarEventDeleted',
-        'erp:event:notification',
-        'erp:event:reminder',
-        'erp:event:noteCreated',
-        'erp:event:noteUpdated',
-        'erp:event:noteDeleted',
-        'erp:event:noteShared',
-        'erp:event:leaveCreated',
-        'erp:event:leaveDecided',
-        'erp:event:attendanceUpdated',
-        'erp:event:departmentUpdated',
-        'erp:event:employeeProfileUpdated',
-        // ─── CRM / Settings real-time sync ────────────────────────────
-        'db:localLabelChanged',
-        'db:localLabelThreadChanged',
-        'db:pinnedMessageChanged',
-        'db:localQuickMessageChanged',
-        'crm:campaignChanged',
-        'crm:noteChanged',
-        'db:pinnedConversationChanged',
-        'db:contactFlagsChanged',
-        'db:contactAliasChanged',
-        'event:friendRequestSent',
-        'event:friendRequestRemoved',
-        'crm:queueUpdate',
-        'crm:queueStatus',
-        'crm:campaignDone',
-        'workflow:executed',
-        'integration:payment',
-        'integration:webhook',
-    ];
+    private static FORWARD_CHANNELS: readonly string[] = [...RELAYED_EVENT_CHANNELS, ...EMPLOYEE_CONTROL_CHANNELS];
 
     public static getInstance(): HttpClientService {
         if (!HttpClientService.instance) {
@@ -113,6 +63,8 @@ class HttpClientService {
         }
 
         this.token = token;
+        this.stopped = false;
+        const attempt = ++this.connectAttempt;
 
         // Normalize URL
         let url = bossUrl;
@@ -159,28 +111,35 @@ class HttpClientService {
             this.onStatusChange?.(true, 0);
             this.startHeartbeat();
 
-            // 4. Start Socket.IO for real-time event delivery (primary transport)
-            this.socketIOClient.setWorkspaceId(this.workspaceId);
-            this.socketIOClient.setOnEvent((channel, eventData) => {
-                this.handlePushedEvent(channel, eventData);
-            });
-            this.socketIOClient.setOnStatusChange((connected) => {
-                Logger.log(`[HttpClientService] Socket.IO ${connected ? '🟢' : '🔴'} (workspace=${this.workspaceId})`);
-            });
-            this.socketIOClient.connect(this.bossUrl, this.token);
-
-            // 5. Fetch initial snapshot
+            // 4. Fetch initial snapshot first: the Telegram id set must be known before the first pushed event.
             try {
                 const snapshot = await this.httpGet(
                     `${this.bossUrl}/api/sync/snapshot`,
                     { Authorization: `Bearer ${token}` }
                 );
                 if (snapshot?.success && snapshot?.snapshot) {
+                    this.telegramAccountIds = telegramAccountIdsFrom(snapshot.snapshot.accountsData);
                     this.onInitialState?.(snapshot.snapshot);
                 }
             } catch (_) {
                 // Non-critical - snapshot comes via SSE push
             }
+
+            // disconnect() hoặc connect() mới chạy trong lúc chờ snapshot: không dựng socket cho dịch vụ đã bị gỡ
+            if (attempt !== this.connectAttempt) return { success: false, error: 'Disconnected' };
+
+            // 5. Start Socket.IO for real-time event delivery (primary transport)
+            this.socketIOClient.setWorkspaceId(this.workspaceId);
+            this.socketIOClient.setOnEvent((channel, eventData) => {
+                this.handlePushedEvent(channel, eventData);
+            });
+            this.socketIOClient.setOnStatusChange((connected) => {
+                Logger.log(`[HttpClientService] Socket.IO ${connected ? '🟢' : '🔴'} (workspace=${this.workspaceId})`);
+                // Đẩy lại trạng thái để giao diện thấy trường socketConnected mới
+                this.onStatusChange?.(this.connected, this.latencyMs);
+            });
+            this.socketIOClient.setOnResync((reason) => this.emitResync(reason));
+            this.socketIOClient.connect(this.bossUrl, this.token);
 
             return { success: true };
         } catch (err: any) {
@@ -191,12 +150,15 @@ class HttpClientService {
     }
 
     public disconnect(): void {
+        this.stopped = true;
+        this.connectAttempt++;
         this.stopHeartbeat();
         this.stopLocalServer();
         this.socketIOClient.disconnect();
         this.onStatusChange = null;
         this.onInitialState = null;
         this.onAccountAccessUpdate = null;
+        this.telegramAccountIds = new Set();
         this.connected = false;
         this.callbackUrl = '';
         Logger.log('[HttpClientService] Disconnected');
@@ -231,7 +193,7 @@ class HttpClientService {
      * Upload a media file from Employee to Boss storage.
      * Boss saves the file and returns its absolute path.
      */
-    public async uploadMedia(buffer: Buffer, filename: string, zaloId?: string): Promise<{ success: boolean; bossPath?: string; error?: string }> {
+    public async uploadMedia(buffer: Buffer, filename: string, zaloId?: string, area?: 'poster'): Promise<{ success: boolean; bossPath?: string; error?: string }> {
         if (!this.connected) {
             return { success: false, error: 'Not connected' };
         }
@@ -244,6 +206,7 @@ class HttpClientService {
                     'Authorization': `Bearer ${this.token}`,
                     'X-Filename': encodeURIComponent(filename),
                     ...(zaloId ? { 'X-Zalo-Id': zaloId } : {}),
+                    ...(area ? { 'X-Upload-Area': area } : {}),
                 },
                 120000
             );
@@ -286,6 +249,7 @@ class HttpClientService {
             if (!result?.success || !result?.snapshot) {
                 return { success: false, error: result?.error || 'Snapshot failed' };
             }
+            this.telegramAccountIds = telegramAccountIdsFrom(result.snapshot.accountsData);
             // Forward snapshot to renderer as initialState (refreshes account status)
             this.onInitialState?.(result.snapshot);
             Logger.log(`[HttpClientService] Snapshot refreshed: assigned=${result.snapshot.assignedAccounts?.length || 0}, online=${result.snapshot.onlineAccounts?.length || 0}`);
@@ -297,6 +261,13 @@ class HttpClientService {
 
     // ─── Local HTTP Server (legacy fallback - kept for backward compat) ──
 
+    private isBossToken(header: string | string[] | undefined): boolean {
+        if (typeof header !== 'string' || !header || !this.token) return false;
+        const a = Buffer.from(header);
+        const b = Buffer.from(this.token);
+        return a.length === b.length && crypto.timingSafeEqual(a, b);
+    }
+
     /** Local HTTP server for LAN callback fallback - boss can push events via POST when SSE is down. */
     private startLocalServer(): Promise<void> {
         return new Promise((resolve, reject) => {
@@ -307,6 +278,13 @@ class HttpClientService {
 
             this.localServer = http.createServer((req, res) => {
                 if (req.method === 'POST' && req.url === '/event') {
+                    // Chỉ boss (giữ token phiên của nhân viên này) được đẩy sự kiện; sai/thiếu token thì không đọc thân.
+                    if (!this.isBossToken(req.headers['x-boss-token'])) {
+                        res.writeHead(401, { 'Content-Type': 'application/json' });
+                        res.end('{"error":"unauthorized"}');
+                        req.resume();
+                        return;
+                    }
                     let body = '';
                     req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
                     req.on('end', () => {
@@ -366,6 +344,7 @@ class HttpClientService {
         // Special relay channels
         if (channel === 'relay:initialState') {
             Logger.log(`[HttpClientService] Received initial state push: assigned=${data?.assignedAccounts?.length || 0}`);
+            this.telegramAccountIds = telegramAccountIdsFrom(data?.accountsData);
             this.onInitialState?.(data);
             return;
         }
@@ -376,6 +355,7 @@ class HttpClientService {
         }
         if (channel === 'relay:accountAccessUpdate') {
             Logger.log(`[HttpClientService] Account access updated: assigned=${data?.assignedAccounts?.length || 0}`);
+            this.telegramAccountIds = telegramAccountIdsFrom(data?.accountsData);
             this.onAccountAccessUpdate?.(data);
             return;
         }
@@ -383,6 +363,13 @@ class HttpClientService {
             Logger.log(`[HttpClientService] Kicked by boss: ${data?.reason}`);
             this.disconnect();
             this.onStatusChange?.(false, 0);
+            return;
+        }
+
+        // Telegram: nhân viên đọc dữ liệu từ boss qua REST, không ghi gì vào cơ sở dữ liệu tại máy.
+        // Chuyển nguyên payload (giữ khoá channel ngoài cùng) cho giao diện; đứng trước mọi nhánh ghi bên dưới.
+        if (HttpClientService.FORWARD_CHANNELS.includes(channel) && isTelegramRelayPayload(data, this.telegramAccountIds)) {
+            EventBroadcaster.sendDirect(channel, data);
             return;
         }
 
@@ -852,54 +839,81 @@ class HttpClientService {
         }
     }
 
+    /** Báo giao diện tải lại: có thể đã lỡ sự kiện (chỉ ghi lý do, không ghi nội dung). */
+    private emitResync(reason: ResyncReason): void {
+        if (this.stopped) return;
+        Logger.log(`[HttpClientService] employee:resync reason=${reason} (workspace=${this.workspaceId})`);
+        EventBroadcaster.sendDirect('employee:resync', { reason, workspaceId: this.workspaceId });
+    }
+
+    public isSocketConnected(): boolean {
+        return this.socketIOClient.isConnected();
+    }
+
+    /** Máy vừa thức dậy: gửi heartbeat ngay để biết boss còn sống, và yêu cầu tải lại. */
+    public notifySystemResume(): void {
+        if (this.stopped || !this.bossUrl || !this.token) return;
+        // Chỉ tải lại khi mạng đã trở lại (heartbeat thành công); thất bại thì heartbeat-recovered sẽ báo khi nối lại.
+        this.beatOnce()
+            .then(({ ok, recovered }) => { if (shouldResyncAfterResume(ok, recovered)) this.emitResync('system-resume'); })
+            .catch(() => { /* heartbeat định kỳ sẽ thử lại */ });
+    }
+
     private startHeartbeat(): void {
         this.stopHeartbeat();
         this.consecutiveHeartbeatFailures = 0;
-        this.heartbeatTimer = setInterval(async () => {
-            // Kể cả khi đã disconnected → vẫn thử heartbeat để tự reconnect
-            const start = Date.now();
-            try {
-                const sioConnected = this.socketIOClient.isConnected();
-                const result = await this.httpPost(
-                    `${this.bossUrl}/api/auth/heartbeat`,
-                    { callbackUrl: this.callbackUrl, sioConnected },
-                    { Authorization: `Bearer ${this.token}` },
-                    10000
-                );
+        this.heartbeatTimer = setInterval(() => { void this.beatOnce(); }, 15_000);
+    }
 
-                if (result.success) {
-                    this.latencyMs = Date.now() - start;
-                    // Nếu trước đó đang disconnected mà heartbeat thành công → reconnect!
-                    if (!this.connected) {
-                        this.connected = true;
-                        Logger.log('[HttpClientService] ✅ Reconnected via heartbeat');
-                    }
-                    this.consecutiveHeartbeatFailures = 0;
-                    this.onStatusChange?.(true, this.latencyMs);
-                } else {
-                    this.consecutiveHeartbeatFailures++;
-                    if (this.connected) this.onStatusChange?.(false, 0);
-                    if (this.consecutiveHeartbeatFailures >= HttpClientService.MAX_HEARTBEAT_FAILURES) {
-                        if (this.connected) {
-                            Logger.warn(`[HttpClientService] ${this.consecutiveHeartbeatFailures} consecutive heartbeat failures - marking disconnected`);
-                            this.connected = false;
-                            this.onStatusChange?.(false, 0);
-                        }
-                    }
+    private async beatOnce(): Promise<{ ok: boolean; recovered: boolean }> {
+        // Kể cả khi đã disconnected → vẫn thử heartbeat để tự reconnect
+        const start = Date.now();
+        try {
+            const sioConnected = this.socketIOClient.isConnected();
+            const result = await this.httpPost(
+                `${this.bossUrl}/api/auth/heartbeat`,
+                { callbackUrl: this.callbackUrl, sioConnected },
+                { Authorization: `Bearer ${this.token}` },
+                10000
+            );
+
+            if (result.success) {
+                this.latencyMs = Date.now() - start;
+                // Nếu trước đó đang disconnected mà heartbeat thành công → reconnect!
+                if (!this.connected) {
+                    this.connected = true;
+                    Logger.log('[HttpClientService] ✅ Reconnected via heartbeat');
                 }
-            } catch (err) {
-                this.latencyMs = 0;
+                const wasFailing = this.consecutiveHeartbeatFailures > 0;
+                this.consecutiveHeartbeatFailures = 0;
+                this.onStatusChange?.(true, this.latencyMs);
+                const recovered = shouldResyncAfterHeartbeat(wasFailing, true);
+                if (recovered) this.emitResync('heartbeat-recovered');
+                return { ok: true, recovered };
+            } else {
                 this.consecutiveHeartbeatFailures++;
                 if (this.connected) this.onStatusChange?.(false, 0);
                 if (this.consecutiveHeartbeatFailures >= HttpClientService.MAX_HEARTBEAT_FAILURES) {
                     if (this.connected) {
-                        Logger.warn(`[HttpClientService] ${this.consecutiveHeartbeatFailures} consecutive heartbeat failures (error) - marking disconnected`);
+                        Logger.warn(`[HttpClientService] ${this.consecutiveHeartbeatFailures} consecutive heartbeat failures - marking disconnected`);
                         this.connected = false;
                         this.onStatusChange?.(false, 0);
                     }
                 }
             }
-        }, 15_000);
+        } catch (err) {
+            this.latencyMs = 0;
+            this.consecutiveHeartbeatFailures++;
+            if (this.connected) this.onStatusChange?.(false, 0);
+            if (this.consecutiveHeartbeatFailures >= HttpClientService.MAX_HEARTBEAT_FAILURES) {
+                if (this.connected) {
+                    Logger.warn(`[HttpClientService] ${this.consecutiveHeartbeatFailures} consecutive heartbeat failures (error) - marking disconnected`);
+                    this.connected = false;
+                    this.onStatusChange?.(false, 0);
+                }
+            }
+        }
+        return { ok: false, recovered: false };
     }
 
     private stopHeartbeat(): void {

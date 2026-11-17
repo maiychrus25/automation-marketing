@@ -6,6 +6,8 @@ import { useCRMStore } from '@/store/crmStore';
 import { useEmployeeStore } from '@/store/employeeStore';
 import ipc from '../lib/ipc'
 import DataAccessor from '../lib/data/DataAccessor';;
+import { unreadReloadDelayMs } from '@/lib/employeeAccounts';
+import { reloadEmployeeConversations } from '@/lib/employeeConversations';
 import { messageQueue } from '@/lib/MessageQueue';
 import { fetchAllAliases } from '../lib/zaloAliasUtils';
 import { channelSupports, type Channel } from '@/../configs/channelConfig';
@@ -1609,8 +1611,16 @@ export function useZaloEvents() {
 
       const pending = contactRefreshTimers.get(zaloId);
       if (pending) clearTimeout(pending);
+      const isEmployee = useEmployeeStore.getState().mode === 'employee';
       contactRefreshTimers.set(zaloId, setTimeout(() => {
         contactRefreshTimers.delete(zaloId);
+        if (isEmployee) {
+          // Nhân viên: trộn theo contact_id như lần tải lại sau gián đoạn, không thay cả danh sách
+          reloadEmployeeConversations(zaloId, 500)
+            .then(() => useAppStore.getState().loadFlags(zaloId).catch(() => {}))
+            .catch(() => {});
+          return;
+        }
         DataAccessor.getConversations(zaloId, 500, 0)
           .then((result) => {
             if (Array.isArray(result?.items)) {
@@ -1619,7 +1629,7 @@ export function useZaloEvents() {
             }
           })
           .catch(() => {});
-      }, 300));
+      }, unreadReloadDelayMs(isEmployee)));
     });
 
     const unsubLocalPath = ipc.on('event:localPath', (data: any) => {

@@ -10,6 +10,18 @@ import {
   UnsendParams, ForwardParams, EditParams, TypingParams, ReactionParams,
 } from './ChannelAdapter';
 import ipc from '../ipc';
+import { useEmployeeStore } from '../../store/employeeStore';
+import { useAccountStore } from '../../store/accountStore';
+import { telegramHealthForEmployee } from '../employeeAccounts';
+import { BOSS_ONLY_CHANNEL_CODE, BOSS_ONLY_CHANNEL_ERROR } from '../../../services/http/employeeChannelRoutes';
+
+const isEmployee = () => useEmployeeStore.getState().mode === 'employee';
+const BOSS_ONLY_RESULT: ActionResult = { success: false, error: BOSS_ONLY_CHANNEL_ERROR, code: BOSS_ONLY_CHANNEL_CODE };
+/** Nhân viên không gọi lệnh kết nối / kiểm tra của boss: trạng thái lấy từ ảnh chụp (listener_active). */
+const snapshotHealth = (accountId: string): HealthResult => ({
+  success: true,
+  alive: telegramHealthForEmployee(useAccountStore.getState().accounts.find((a) => a.zalo_id === accountId)).connected,
+});
 
 export class TelegramUserAdapter extends BaseChannelAdapter {
   readonly channel = 'telegram_user' as const;
@@ -31,13 +43,14 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
         mentions: params.mentions,
         replyToMsgId,
       });
-      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error };
+      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
   }
 
   async connectAccount(params: ConnectParams): Promise<ActionResult> {
+    if (isEmployee()) return BOSS_ONLY_RESULT;
     try {
       // Lấy stringSession từ auth params (đã decrypt từ AccountCard)
       // hoặc từ IPC getAccounts() nếu không có
@@ -58,13 +71,14 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
         phoneNumber: '',
         stringSession,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
   }
 
   async disconnectAccount(params: DisconnectParams): Promise<ActionResult> {
+    if (isEmployee()) return BOSS_ONLY_RESULT;
     try {
       await ipc.telegramUser?.stopListener(params.accountId);
       return { success: true };
@@ -74,6 +88,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   }
 
   async checkHealth(params: HealthParams): Promise<HealthResult> {
+    if (isEmployee()) return snapshotHealth(params.accountId);
     try {
       const res = await ipc.telegramUser?.isConnected(params.accountId);
       return { success: res?.success ?? false, alive: res?.connected ?? false };
@@ -87,7 +102,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async getGroupInfo(params: { accountId: string; threadId: string }): Promise<ActionResult & { info?: any }> {
     try {
       const res = await ipc.telegramUser?.getGroupInfo({ accountId: params.accountId, chatId: params.threadId });
-      return { success: res?.success ?? false, info: res?.info, error: res?.error };
+      return { success: res?.success ?? false, info: res?.info, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -96,7 +111,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async getGroupMembers(params: { accountId: string; threadId: string; limit?: number }): Promise<ActionResult & { members?: any[] }> {
     try {
       const res = await ipc.telegramUser?.getGroupMembers({ accountId: params.accountId, chatId: params.threadId, limit: params.limit });
-      return { success: res?.success ?? false, members: res?.members, error: res?.error };
+      return { success: res?.success ?? false, members: res?.members, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -105,7 +120,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async changeGroupName(params: { accountId: string; threadId: string; name: string }): Promise<ActionResult> {
     try {
       const res = await ipc.telegramUser?.editChatTitle({ accountId: params.accountId, chatId: params.threadId, title: params.name });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -114,7 +129,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async leaveGroup(params: { accountId: string; threadId: string }): Promise<ActionResult> {
     try {
       const res = await ipc.telegramUser?.leaveChat({ accountId: params.accountId, chatId: params.threadId });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -123,7 +138,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async blockUser(params: { accountId: string; userId: string }): Promise<ActionResult> {
     try {
       const res = await ipc.telegramUser?.blockUser({ accountId: params.accountId, userId: params.userId });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -132,7 +147,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async unblockUser(params: { accountId: string; userId: string }): Promise<ActionResult> {
     try {
       const res = await ipc.telegramUser?.unblockUser({ accountId: params.accountId, userId: params.userId });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -141,7 +156,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async addMember(params: { accountId: string; threadId: string; userId: string }): Promise<ActionResult> {
     try {
       const res = await ipc.telegramUser?.addChatUser({ accountId: params.accountId, chatId: params.threadId, userId: params.userId });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -150,7 +165,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async removeMember(params: { accountId: string; threadId: string; userId: string }): Promise<ActionResult> {
     try {
       const res = await ipc.telegramUser?.deleteChatUser({ accountId: params.accountId, chatId: params.threadId, userId: params.userId });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -159,7 +174,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async promoteMember(params: { accountId: string; threadId: string; userId: string; isAdmin: boolean }): Promise<ActionResult> {
     try {
       const res = await ipc.telegramUser?.editChatAdmin({ accountId: params.accountId, chatId: params.threadId, userId: params.userId, isAdmin: params.isAdmin });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -168,7 +183,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async exportInviteLink(params: { accountId: string; threadId: string }): Promise<ActionResult & { link?: string }> {
     try {
       const res = await ipc.telegramUser?.exportChatInvite({ accountId: params.accountId, chatId: params.threadId });
-      return { success: res?.success ?? false, link: res?.link, error: res?.error };
+      return { success: res?.success ?? false, link: res?.link, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -206,7 +221,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
         });
       }
       console.log(`[TG:adapter] sendAttachment result: success=${res?.success} msgId=${res?.messageId} error=${res?.error}`);
-      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error };
+      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       console.error(`[TG:adapter] sendAttachment FAILED: ${err.message}`);
       return { success: false, error: err.message };
@@ -232,7 +247,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
         chatId: params.threadId || '',
         messageIds: [String(params.messageId).replace(/^tg_/, '')],
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -251,7 +266,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
         toChatId,
         messageIds: [params.messageId],
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -269,7 +284,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
         messageId: params.messageId,
         text: params.text,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -285,7 +300,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
         messageId: String(params.messageId).replace(/^tg_/, ''),
         emoji: params.action === 'remove' ? undefined : params.emoji,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -295,7 +310,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
     try {
       if (!params.isTyping) return { success: true };
       const res = await ipc.telegramUser?.sendTyping({ accountId: params.accountId, chatId: params.threadId });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -312,7 +327,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
         chatId: params.threadId,
         photoPath: params.photoPath,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -321,7 +336,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async markAsRead(params: { accountId: string; threadId: string }): Promise<ActionResult> {
     try {
       const res = await ipc.telegramUser?.readChatHistory({ accountId: params.accountId, chatId: params.threadId });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -336,7 +351,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
         topMsgId: params.topicId,
         readMaxId: params.topMessageId,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -347,7 +362,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async isForum(params: { accountId: string; threadId: string; forceApi?: boolean }): Promise<ActionResult & { isForum?: boolean }> {
     try {
       const res = await ipc.telegramUser?.isForum({ accountId: params.accountId, chatId: params.threadId, forceApi: params.forceApi });
-      return { success: res?.success ?? false, isForum: res?.isForum, error: res?.error };
+      return { success: res?.success ?? false, isForum: res?.isForum, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -356,7 +371,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async getForumTopics(params: { accountId: string; threadId: string }): Promise<ActionResult & { topics?: any[] }> {
     try {
       const res = await ipc.telegramUser?.getForumTopics({ accountId: params.accountId, chatId: params.threadId });
-      return { success: res?.success ?? false, topics: res?.topics, error: res?.error };
+      return { success: res?.success ?? false, topics: res?.topics, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -365,7 +380,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async getForumTopicMessages(params: { accountId: string; threadId: string; topicId: string; limit?: number }): Promise<ActionResult & { messages?: any[] }> {
     try {
       const res = await ipc.telegramUser?.getForumTopicMessages({ accountId: params.accountId, chatId: params.threadId, topicRootMessageId: params.topicId, limit: params.limit });
-      return { success: res?.success ?? false, messages: res?.messages, error: res?.error };
+      return { success: res?.success ?? false, messages: res?.messages, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -374,7 +389,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async getUserProfile(params: { accountId: string; userId: string; threadId?: string }): Promise<ActionResult & { profile?: any }> {
     try {
       const res = await ipc.telegramUser?.getUserProfile({ accountId: params.accountId, userId: params.userId, chatId: params.threadId });
-      return { success: res?.success ?? false, profile: res?.profile, error: res?.error };
+      return { success: res?.success ?? false, profile: res?.profile, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -383,7 +398,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async createForumTopic(params: { accountId: string; threadId: string; title: string }): Promise<ActionResult & { topicId?: string }> {
     try {
       const res = await ipc.telegramUser?.createForumTopic({ accountId: params.accountId, chatId: params.threadId, title: params.title });
-      return { success: res?.success ?? false, topicId: res?.topicId, error: res?.error };
+      return { success: res?.success ?? false, topicId: res?.topicId, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -392,7 +407,7 @@ export class TelegramUserAdapter extends BaseChannelAdapter {
   async sendTopicMessage(params: { accountId: string; threadId: string; topicId: string; text: string }): Promise<ActionResult> {
     try {
       const res = await ipc.telegramUser?.sendTopicMessage({ accountId: params.accountId, chatId: params.threadId, topicRootMessageId: params.topicId, text: params.text });
-      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error };
+      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }

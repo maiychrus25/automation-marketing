@@ -9,6 +9,7 @@
 import ipc from './ipc';
 import { CHANNEL, isFacebook, isTelegram } from '@/lib/channelHelper';
 import { useAccountStore } from '@/store/accountStore';
+import { useEmployeeStore } from '@/store/employeeStore';
 
 // ─── Module-level debounce: tránh gọi refresh trùng lặp ─────────────────────
 const _pending = new Map<string, Promise<string | null>>();
@@ -62,7 +63,8 @@ async function _doRefresh(ownerId: string, contactId: string, channel: string): 
     } else if (isTelegram(channel)) {
       // Telegram: re-fetch avatar khi file bị xóa (404)
       if (contactId === ownerId) {
-        // Self avatar
+        // Self avatar: lệnh này chỉ chạy trên máy Boss, nhân viên không có phiên Telegram để tải lại
+        if (useEmployeeStore.getState().mode === 'employee') return null;
         try {
           const res = await (ipc as any).telegramUser?.fetchSelfAvatar?.(ownerId);
           if (res?.success && res.avatarUrl) {

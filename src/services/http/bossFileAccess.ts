@@ -5,11 +5,19 @@
 import * as path from 'path';
 
 /** Params of a proxied boss command that hold a local file path (plus the array field `filePaths`). */
-export const PROXY_FILE_PATH_FIELDS: readonly string[] = ['filePath', 'videoPath', 'thumbPath', 'voicePath', 'avatarPath', 'mediaPath', 'file_path'];
+export const PROXY_FILE_PATH_FIELDS: readonly string[] = [
+    'filePath', 'videoPath', 'thumbPath', 'voicePath', 'avatarPath', 'mediaPath', 'file_path',
+    'photoPath', 'audioPath', 'stickerPath', 'animPath', // Telegram
+];
+/** Fields the employee machine uploads before proxying: all of the above except `file_path` (an ERP attachment already stored on the boss). */
+export const EMPLOYEE_UPLOAD_PATH_FIELDS: readonly string[] = PROXY_FILE_PATH_FIELDS.filter((f) => f !== 'file_path');
 /** Fields whose value is an array of disk paths (`images` = campaign template blocks, the boss reads each file when it sends). */
-const PROXY_FILE_PATH_LIST_FIELDS: readonly string[] = ['filePaths', 'images'];
+const PROXY_FILE_PATH_LIST_FIELDS: readonly string[] = ['filePaths', 'images', 'mediaPaths']; // mediaPaths: Facebook poster posts and drafts
 /** Fields that hold JSON text whose content is scanned too (a campaign template saved as a string). */
 const JSON_TEXT_FIELDS: readonly string[] = ['template_message'];
+
+/** Largest file an employee machine may upload to the boss (one request body). */
+export const EMPLOYEE_UPLOAD_MAX_BYTES = 200 * 1024 * 1024;
 
 /** Last path segment of an employee-supplied file name (either slash style), or null when it is not a usable name. */
 export function safeUploadName(raw: unknown): string | null {
@@ -45,6 +53,12 @@ export interface ProxyFileContext {
     allowErpTaskFiles?: boolean;
     /** Turns a stored relative path ("media/erp/tasks/<id>/a.png") into an absolute one; without it a relative `file_path` is refused. */
     resolveStored?: (p: string) => string;
+    /** Facebook poster only: folder holding the media of every schedule and draft (`<root>/<scheduleId>/...`). */
+    posterMediaRoot?: string;
+    /** Facebook poster only: whether the schedule or draft named by the first folder under `posterMediaRoot` is the employee's. */
+    posterScheduleAllowed?: (scheduleId: string) => boolean;
+    /** Facebook poster only: a `mediaPaths` list longer than this is refused before any realpath or schedule lookup. */
+    maxMediaPaths?: number;
 }
 
 export type ProxyFileCheck = { ok: true } | { ok: false; code: 'PATH_FORBIDDEN' | 'ACCOUNT_FORBIDDEN' };
@@ -56,7 +70,7 @@ const STORED_ATTACHMENT_KEY = 'file_path';
 interface FilePathValue { value: unknown; stored: boolean }
 
 /** Every value under a file-path key at any depth; false when the params nest deeper than MAX_DEPTH (fail closed). */
-function collectFilePathValues(node: unknown, depth: number, out: FilePathValue[]): boolean {
+function collectFilePathValues(node: unknown, depth: number, out: FilePathValue[], maxMediaPaths?: number): boolean {
     const isPlain = (v: unknown) => !!v && typeof v === 'object' && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
     // Array elements come through Object.entries with numeric keys, so containers inside arrays are walked too.
     if (!Array.isArray(node) && !isPlain(node)) return true; // strings, numbers, class instances: nothing to look into
@@ -65,13 +79,14 @@ function collectFilePathValues(node: unknown, depth: number, out: FilePathValue[
         if (value === undefined || value === null) continue;
         if (PROXY_FILE_PATH_FIELDS.includes(key) || PROXY_FILE_PATH_LIST_FIELDS.includes(key)) {
             const stored = key === STORED_ATTACHMENT_KEY;
+            if (key === 'mediaPaths' && Array.isArray(value) && maxMediaPaths !== undefined && value.length > maxMediaPaths) return false;
             if (Array.isArray(value)) out.push(...value.map((v) => ({ value: v, stored })));
             else out.push({ value, stored });
         } else if (JSON_TEXT_FIELDS.includes(key) && typeof value === 'string') {
             let parsed: unknown;
             try { parsed = JSON.parse(value); } catch { continue; } // plain text is a message, not a template
-            if (!collectFilePathValues(parsed, depth + 1, out)) return false;
-        } else if (!collectFilePathValues(value, depth + 1, out)) {
+            if (!collectFilePathValues(parsed, depth + 1, out, maxMediaPaths)) return false;
+        } else if (!collectFilePathValues(value, depth + 1, out, maxMediaPaths)) {
             return false;
         }
     }
@@ -81,7 +96,7 @@ function collectFilePathValues(node: unknown, depth: number, out: FilePathValue[
 /** Every file path anywhere in the params must, after following symlinks, sit in the uploads folder or in a media folder of an allowed account. */
 export function checkProxyFilePaths(params: unknown, ctx: ProxyFileContext): ProxyFileCheck {
     const values: FilePathValue[] = [];
-    if (!collectFilePathValues(params, 0, values)) return { ok: false, code: 'PATH_FORBIDDEN' };
+    if (!collectFilePathValues(params, 0, values, ctx.maxMediaPaths)) return { ok: false, code: 'PATH_FORBIDDEN' };
     if (values.length === 0) return { ok: true };
 
     const rootOf = (p: string): string => {
@@ -89,6 +104,7 @@ export function checkProxyFilePaths(params: unknown, ctx: ProxyFileContext): Pro
     };
     const mediaRoots = ctx.mediaRoots.map(rootOf);
     const uploadsRoot = rootOf(ctx.uploadsRoot);
+    const posterRoot = ctx.posterMediaRoot ? rootOf(ctx.posterMediaRoot) : null;
     const erpTaskRoots = ctx.allowErpTaskFiles ? mediaRoots.map((r) => path.join(r, 'erp', 'tasks')) : [];
     for (const { value: raw, stored } of values) {
         if (typeof raw !== 'string' || !raw || raw.includes('\0')) return { ok: false, code: 'PATH_FORBIDDEN' };
@@ -101,6 +117,12 @@ export function checkProxyFilePaths(params: unknown, ctx: ProxyFileContext): Pro
             return { ok: false, code: 'PATH_FORBIDDEN' };
         }
         if (isInside(uploadsRoot, real)) continue;
+        if (posterRoot && isInside(posterRoot, real)) {
+            // A kept file of a stored draft: only inside the folder of a schedule the employee may use (a revision sub-folder included).
+            const scheduleId = real === posterRoot ? '' : real.slice(posterRoot.length + 1).split(path.sep)[0];
+            if (scheduleId && ctx.posterScheduleAllowed?.(scheduleId)) continue;
+            return { ok: false, code: 'PATH_FORBIDDEN' };
+        }
         if (stored && erpTaskRoots.some((r) => isInside(r, real))) continue;
         const root = mediaRoots.find((r) => isInside(r, real));
         if (!root) return { ok: false, code: 'PATH_FORBIDDEN' };

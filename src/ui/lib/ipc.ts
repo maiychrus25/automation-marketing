@@ -474,6 +474,8 @@ declare global {
         getPermissions: (employeeId: string) => Promise<{ success: boolean; permissions?: Record<string, boolean>; error?: string }>;
         assignAccounts: (employeeId: string, zaloIds: string[]) => Promise<{ success: boolean; error?: string }>;
         getAssignedAccounts: (employeeId: string) => Promise<{ success: boolean; accounts?: string[]; error?: string }>;
+        assignProfiles: (employeeId: string, profileIds: string[]) => Promise<{ success: boolean; error?: string }>;
+        getAssignedProfiles: (employeeId: string) => Promise<{ success: boolean; profileIds?: string[]; error?: string }>;
         getStats: (employeeId: string, sinceTs?: number, untilTs?: number) => Promise<{ success: boolean; stats?: any; error?: string }>;
         getSessions: (employeeId: string, limit?: number) => Promise<{ success: boolean; sessions?: any[]; error?: string }>;
         login: (username: string, password: string) => Promise<{ success: boolean; token?: string; employee?: any; error?: string }>;

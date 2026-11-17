@@ -23,6 +23,7 @@ import BrowserProfilesView from './features/browser/BrowserProfilesView';
 import UpdateNotice from './components/common/UpdateNotice';
 import FacebookPosterView from './features/facebookPoster/FacebookPosterView';
 import AccountInitPanel from './components/common/AccountInitPanel';
+import GroupSyncPanel from './components/common/GroupSyncPanel';
 import AccountSwitcherOverlay from './components/common/AccountSwitcherOverlay';
 import { UpdateNotification } from './components/common/UpdateNotification';
 import { useAppStore } from './store/appStore';
@@ -31,6 +32,7 @@ import { useChatStore } from './store/chatStore';
 import { useCRMStore } from './store/crmStore';
 import { useZaloEvents } from './hooks/useZaloEvents';
 import { useChatEvents } from './hooks/useChatEvents';
+import { useEmployeeResync } from './hooks/useEmployeeResync';
 import useIsMobile from './hooks/useIsMobile';
 import useElementWidth from './hooks/useElementWidth';
 import { rightPanelClassName, shouldDockRightPanel } from './lib/chat/rightPanelLayout';
@@ -40,6 +42,9 @@ import { getFilteredUnreadCount } from './lib/badgeUtils';
 import DataAccessor from './lib/data/DataAccessor';
 import { playNotificationSound, showDesktopNotification } from './utils/NotificationService';
 import { checkAccountInitNeeds } from './lib/zaloInitUtils';
+import { startEmployeeBootstrap } from './lib/employeeConversations';
+import { shouldRunZaloInit } from './lib/backgroundLoad';
+import { canOpenView } from './lib/employeePoster';
 import AddAccountModal from "@/components/auth/AddAccountModal";
 import EmployeeConnectionBanner from "@/components/common/EmployeeConnectionBanner";
 import { useWorkspaceStore } from './store/workspaceStore';
@@ -100,42 +105,6 @@ function ensureActiveAccount(accounts: Array<{ zalo_id: string }>) {
     && accounts.some((account) => account.zalo_id === accountStore.activeAccountId);
   if (!activeAccountStillVisible) {
     accountStore.setActiveAccount(accounts[0].zalo_id);
-  }
-}
-
-async function loadEmployeeConversationsForAccounts(accounts: Array<{ zalo_id: string }>, limit = 200) {
-  if (!accounts.length) return;
-  const chatStore = useChatStore.getState();
-  for (const account of accounts) {
-    chatStore.setConversationsLoading(account.zalo_id, true);
-  }
-  try {
-    for (const account of accounts) {
-      const existing = useChatStore.getState().contacts[account.zalo_id];
-      if ((existing?.length || 0) >= limit) continue;
-
-      try {
-        const result = await DataAccessor.getConversations(account.zalo_id, limit, 0);
-        const items = Array.isArray(result?.items) ? result.items : [];
-        if (items.length > 0) {
-          console.log(`[App] Loaded ${items.length} conversations from REST for ${account.zalo_id}`);
-          const current = useChatStore.getState().contacts[account.zalo_id] || [];
-          const seen = new Set(items.map((contact: any) => contact.contact_id));
-          useChatStore.getState().setContacts(account.zalo_id, [
-            ...items,
-            ...current.filter((contact: any) => !seen.has(contact.contact_id)),
-          ]);
-        } else {
-          console.warn(`[App] REST returned 0 conversations for ${account.zalo_id}`);
-        }
-      } catch (err) {
-        console.warn(`[App] Failed to load conversations from REST for ${account.zalo_id}:`, err);
-      }
-    }
-  } finally {
-    for (const account of accounts) {
-      useChatStore.getState().setConversationsLoading(account.zalo_id, false);
-    }
   }
 }
 
@@ -295,7 +264,7 @@ export default function App() {
 
   // ─── Employee permission guard: redirect to dashboard if current view is not allowed ──
   useEffect(() => {
-    return useEmployeeStore.subscribe((empState) => {
+    const guard = (empState: ReturnType<typeof useEmployeeStore.getState>) => {
       const { mode, permissions } = empState;
       if (mode !== 'employee') return;
       // Map view → required permission module (null = always allowed)
@@ -312,10 +281,18 @@ export default function App() {
       };
       const currentView = useAppStore.getState().view;
       const requiredPerm = VIEW_PERM_MAP[currentView];
-      if (requiredPerm !== undefined && requiredPerm !== null && !permissions[requiredPerm]) {
+      if (
+        (requiredPerm !== undefined && requiredPerm !== null && !permissions[requiredPerm])
+        // Đăng Facebook cần fb_poster; Trình duyệt không bao giờ mở ở máy nhân viên (kể cả khi vào bằng đường khác).
+        || !canOpenView(currentView, true, (m) => !!permissions[m])
+      ) {
         useAppStore.getState().setView('dashboard');
       }
-    });
+    };
+    const offEmployee = useEmployeeStore.subscribe(guard);
+    // Chỉ hai view có luật riêng: các view khác giữ hành vi cũ (chặn khi quyền đổi), tránh bật nhầm lúc quyền còn đang tải.
+    const offView = useAppStore.subscribe((state, prev) => { if (state.view !== prev.view && (state.view === 'browser' || state.view === 'facebookPoster')) guard(useEmployeeStore.getState()); });
+    return () => { offEmployee(); offView(); };
   }, []);
 
   // ─── Reset mobileShowChat when window grows back to desktop size ─────────
@@ -350,6 +327,7 @@ export default function App() {
 
   // Register unified multi-channel event listeners (FB → chatStore)
   useChatEvents();
+  useEmployeeResync();
 
   const reconnectAccountNow = useCallback(async (
     acc: { zalo_id: string; cookies: string; imei: string; user_agent: string },
@@ -529,6 +507,8 @@ export default function App() {
         }).catch(() => {});
       });
     } else {
+      // Nhân viên: bảng khởi tạo Zalo đọc CSDL cục bộ trống của máy nhân viên
+      if (!shouldRunZaloInit(useEmployeeStore.getState().mode === 'employee')) return;
       checkAccountInitNeeds(accountId).then(needs => {
         if (needs.any) {
           setAccountInitId(accountId);
@@ -538,7 +518,10 @@ export default function App() {
   }, [activeAccountId, view]);
 
   // ─── Facebook poster: missed scheduled runs (drained once on mount, then pushed as events) ──
+  // Nhân viên không nhận thông báo lịch lỡ (takeMissed là boss_only, sự kiện scheduleMissed không tới máy nhân viên).
+  const isEmployeeMode = useEmployeeStore(s => s.mode === 'employee');
   useEffect(() => {
+    if (isEmployeeMode) return;
     const show = (n: { name: string; reason: string; at: number }) => {
       const d = new Date(n.at);
       const p = (x: number) => String(x).padStart(2, '0');
@@ -550,7 +533,7 @@ export default function App() {
     Promise.resolve(ipc.facebookPoster?.takeMissed?.()).then((res) => { if (res?.success) (res.notices || []).forEach(show); }).catch(() => {});
     const off = ipc.on?.('facebookPoster:scheduleMissed', show);
     return () => { off?.(); };
-  }, []);
+  }, [isEmployeeMode]);
 
   // ─── Workspace switch: reload all data when workspace changes ─────────────
   useEffect(() => {
@@ -613,6 +596,7 @@ export default function App() {
         empStore.setBossConnected(!!ws._connected);
         if (snapshot) {
           if (snapshot.assignedAccounts?.length) empStore.setAssignedAccounts(snapshot.assignedAccounts);
+          empStore.setAssignedProfiles(snapshot.assigned_profiles || []);
           if (snapshot.permissions?.length) empStore.setPermissions(buildPermissionsMap(snapshot.permissions));
           if (snapshot.employeesData) empStore.setEmployees(snapshot.employeesData);
         }
@@ -641,6 +625,8 @@ export default function App() {
         if (nextAccounts.length > 0) {
           useAccountStore.getState().setActiveAccount(nextAccounts[0].zalo_id);
         }
+        // Remote: reset() ở trên đã tắt employeeInitialLoadDone; bộ nạp nền bật lại khi xong (kể cả 0 tài khoản)
+        if (ws.type === 'remote') startEmployeeBootstrap(nextAccounts);
 
         // Load contacts: local workspace → từ DB; remote workspace → từ REST (để DataAccessor/ConversationList tự load)
         if (ws.type !== 'remote') {
@@ -759,6 +745,7 @@ export default function App() {
       const permsMap = buildPermissionsMap(permissions);
       empStore.setPermissions(permsMap);
       empStore.setAssignedAccounts(assignedAccounts);
+      empStore.setAssignedProfiles(data.assigned_profiles || []);
       empStore.setBossConnected(true);
       empStore.setEmployees(employeesData);
       empStore.setCurrentEmployee(buildCurrentEmployeeFromWorkspace({
@@ -774,34 +761,11 @@ export default function App() {
         ensureActiveAccount(cachedAccounts);
         console.log(`[App] Accounts set from initialState: ${cachedAccounts.length} accounts`, cachedAccounts.map(a => ({ zalo_id: a.zalo_id, full_name: a.full_name })));
 
-        // Load conversations từ Boss qua REST API (chỉ khi chưa có)
-        const existingContacts = useChatStore.getState().contacts;
-        const needsLoad = cachedAccounts.some((acc: any) => !existingContacts[acc.zalo_id]?.length);
-        if (needsLoad) {
-          for (const acc of cachedAccounts) {
-            useChatStore.getState().setConversationsLoading(acc.zalo_id, true);
-          }
-          (async () => {
-            for (const acc of cachedAccounts) {
-              try {
-                const result = await DataAccessor.getConversations(acc.zalo_id, 200, 0);
-                if (result?.items && result.items.length > 0) {
-                  console.log(`[App] ✅ Loaded ${result.items.length} conversations from REST for ${acc.zalo_id}`);
-                  useChatStore.getState().setContacts(acc.zalo_id, result.items);
-                } else {
-                  console.warn(`[App] ⚠️ REST returned 0 conversations for ${acc.zalo_id}`);
-                }
-              } catch (err) {
-                console.warn(`[App] Failed to load conversations from REST for ${acc.zalo_id}:`, err);
-              }
-            }
-            for (const acc of cachedAccounts) {
-              useChatStore.getState().setConversationsLoading(acc.zalo_id, false);
-            }
-          })();
-        }
+        // Nạp hội thoại từ Boss ở nền qua bộ nạp chung (bỏ qua tài khoản đã đủ; cùng tập đang nạp thì nhập vào)
+        startEmployeeBootstrap(cachedAccounts, 200, true);
       } else {
         setAccounts([]);
+        startEmployeeBootstrap([], 200, true);
         console.log(`[App] No accountsData in initialState`);
       }
     });
@@ -856,7 +820,7 @@ export default function App() {
 
       setAccounts(nextAccounts as any);
       ensureActiveAccount(nextAccounts);
-      loadEmployeeConversationsForAccounts(nextAccounts);
+      startEmployeeBootstrap(nextAccounts);
     });
     return () => unsub?.();
   }, []);
@@ -891,6 +855,7 @@ export default function App() {
       const empStore = useEmployeeStore.getState();
       const permsMap = buildPermissionsMap(permissions);
       empStore.setPermissions(permsMap);
+      empStore.setAssignedProfiles(data.assigned_profiles || []);
       empStore.setEmployees(employeesData);
       empStore.setCurrentEmployee(buildCurrentEmployeeFromWorkspace({
         ...useWorkspaceStore.getState().activeWorkspace(),
@@ -936,6 +901,7 @@ export default function App() {
           useEmployeeStore.getState().setToken('');
           useEmployeeStore.getState().setPermissions({});
           useEmployeeStore.getState().setAssignedAccounts([]);
+          useEmployeeStore.getState().setAssignedProfiles([]);
         }
       }
     });
@@ -1291,7 +1257,10 @@ export default function App() {
               const cachedAccounts = normalizeWorkspaceAccounts(activeWs.cachedAccountsData);
               setAccounts(cachedAccounts as any);
               ensureActiveAccount(cachedAccounts);
-              loadEmployeeConversationsForAccounts(cachedAccounts);
+              startEmployeeBootstrap(cachedAccounts);
+            } else {
+              // reset() ở trên đã tắt cờ; tài khoản đã có sẵn hoặc không có bản lưu → vẫn phải bật lại cờ sau lượt nạp
+              startEmployeeBootstrap(useAccountStore.getState().accounts);
             }
 
           }
@@ -1756,6 +1725,9 @@ export default function App() {
           onClose={() => setAccountInitId(null)}
         />
       )}
+
+      {/* Group member sync - floating panel, survives tab/screen changes */}
+      <GroupSyncPanel besideInitPanel={!!accountInitId} />
 
       {/* Auto-update notification - bottom-right corner */}
       <UpdateNotification />

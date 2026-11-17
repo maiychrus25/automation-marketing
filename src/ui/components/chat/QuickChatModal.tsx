@@ -67,7 +67,7 @@ function AccountSelector({ accounts, selectedId, onSelect }: {
     return (
       <div className="flex items-center gap-1.5 min-w-0 max-w-[160px] flex-shrink-0">
         {sel.avatar_url
-          ? <img src={sel.avatar_url} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0"/>
+          ? <img src={toLocalMediaUrl(sel.avatar_url)} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0"/>
           : <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">{name.charAt(0)}</div>}
         <span className="text-xs text-gray-400 truncate">{name}{sub && sub !== name ? ` · ${sub}` : ''}</span>
       </div>
@@ -82,7 +82,7 @@ function AccountSelector({ accounts, selectedId, onSelect }: {
         {sel ? (
           <>
             {sel.avatar_url
-              ? <img src={sel.avatar_url} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0"/>
+              ? <img src={toLocalMediaUrl(sel.avatar_url)} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0"/>
               : <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">{info(sel).name.charAt(0)}</div>}
             <span className="text-gray-300 truncate max-w-[100px]">{info(sel).name}</span>
           </>
@@ -103,7 +103,7 @@ function AccountSelector({ accounts, selectedId, onSelect }: {
                 className={`w-full flex items-center gap-2.5 px-3 py-2 hover:bg-gray-700 transition-colors text-left ${selectedId === a.zalo_id ? 'bg-gray-700/50' : ''}`}>
                 <div className="relative flex-shrink-0">
                   {a.avatar_url
-                    ? <img src={a.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover"/>
+                    ? <img src={toLocalMediaUrl(a.avatar_url)} alt="" className="w-8 h-8 rounded-full object-cover"/>
                     : <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold">{name.charAt(0)}</div>}
                   <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-gray-800 ${a.isConnected ? 'bg-green-400' : 'bg-gray-500'}`}/>
                 </div>
@@ -258,7 +258,7 @@ function RecipientRow({ zaloId, contacts, accounts, onSelect }: {
             <button key={c.contact_id} onClick={() => { onSelect(c); setQuery(''); }}
               className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-gray-700 text-left transition-colors">
               {c.avatar_url
-                ? <img src={c.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0"/>
+                ? <img src={toLocalMediaUrl(c.avatar_url)} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0"/>
                 : <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0 ${c.contact_type==='group'?'bg-purple-600':'bg-blue-600'}`}>{(c.alias||c.display_name||'?').charAt(0).toUpperCase()}</div>}
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-gray-100 truncate">{c.alias||c.display_name||c.contact_id}</p>
@@ -595,7 +595,7 @@ export default function QuickChatModal() {
             {target ? (
               <>
                 {target.avatarUrl
-                  ? <img src={target.avatarUrl} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0"/>
+                  ? <img src={toLocalMediaUrl(target.avatarUrl)} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0"/>
                   : <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-xs flex-shrink-0 ${target.threadType===1?'bg-purple-600':'bg-blue-600'}`}>{target.displayName.charAt(0).toUpperCase()}</div>}
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-gray-100 truncate leading-tight">{target.displayName}</p>

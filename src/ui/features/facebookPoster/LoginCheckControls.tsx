@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
+import { useEmployeePoster } from './useEmployeePoster';
 
 const FOCUS = 'focus-visible:ring-2 focus-visible:ring-blue-500';
 type Config = { enabled: boolean; time: string };
 
 export default function LoginCheckControls({ selected }: { selected: string[] }) {
   const showNotification = useAppStore((s) => s.showNotification);
+  const { isEmployee } = useEmployeePoster();
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [starting, setStarting] = useState(false);
   const [open, setOpen] = useState(false);
@@ -19,12 +21,15 @@ export default function LoginCheckControls({ selected }: { selected: string[] })
   // Poster runs do not gate the check: the backend only enforces lifecycle admission and its own one-job limit.
   useEffect(() => {
     let cancelled = false;
-    ipc.facebookPoster?.getLoginCheckConfig().then((res) => {
+    // Cấu hình tự kiểm tra là việc của Boss (boss_only): nhân viên không tải.
+    if (!isEmployee) ipc.facebookPoster?.getLoginCheckConfig().then((res) => {
       if (!cancelled && res?.success && res.config) setConfig(res.config);
     }).catch(() => {});
     const offCheck = ipc.on?.('facebookPoster:loginCheckProgress', (data: { done: number; total: number } | null) => setProgress(data ?? null));
-    return () => { cancelled = true; offCheck?.(); };
-  }, []);
+    // Máy nhân viên vừa nối lại: tín hiệu kết thúc có thể đã mất, nên bỏ trạng thái đang kiểm tra; lượt còn chạy sẽ phát tiến độ tiếp và hiện lại.
+    const offResync = isEmployee ? ipc.on?.('employee:resync', () => setProgress(null)) : undefined;
+    return () => { cancelled = true; offCheck?.(); offResync?.(); };
+  }, [isEmployee]);
 
   useEffect(() => {
     if (!open) return;
@@ -77,9 +82,9 @@ export default function LoginCheckControls({ selected }: { selected: string[] })
         className={`px-3 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-50 whitespace-nowrap ${FOCUS}`}>
         {checking ? `Đang kiểm tra… (${progress?.done ?? 0}/${progress?.total ?? 0})` : 'Kiểm tra đăng nhập'}
       </button>
-      <button ref={gearRef} type="button" onClick={() => { if (open) gearRef.current?.focus(); setOpen((v) => !v); }} aria-expanded={open} aria-haspopup="dialog" aria-label="Cài đặt tự kiểm tra đăng nhập" title="Tự kiểm tra mỗi ngày"
-        className={`px-2 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 ${FOCUS}`}>⚙</button>
-      {open && (
+      {!isEmployee && <button ref={gearRef} type="button" onClick={() => { if (open) gearRef.current?.focus(); setOpen((v) => !v); }} aria-expanded={open} aria-haspopup="dialog" aria-label="Cài đặt tự kiểm tra đăng nhập" title="Tự kiểm tra mỗi ngày"
+        className={`px-2 py-1.5 rounded-lg text-xs border border-gray-600 text-gray-300 hover:border-gray-400 ${FOCUS}`}>⚙</button>}
+      {!isEmployee && open && (
         <div ref={popoverRef} tabIndex={-1} role="dialog" aria-label="Tự kiểm tra mỗi ngày" className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1 z-20 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-gray-700 bg-gray-900 p-3 focus:outline-none space-y-2 shadow-lg">
           <p className="text-sm text-gray-200">Tự kiểm tra mỗi ngày</p>
           {config ? (

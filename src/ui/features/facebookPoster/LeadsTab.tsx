@@ -5,6 +5,7 @@ import { Spinner } from '@/components/common/PageLoading';
 import LeadConfigPopover from './LeadConfigPopover';
 import { LEAD_STATUS_OPTIONS, formatLeadMatch, formatLeadTime, leadStatusChip } from './leadFormat';
 import type { FbPosterLead, LeadStatus } from '../../../models/facebookPoster';
+import { useEmployeePoster, useEmployeeReload } from './useEmployeePoster';
 
 const PAGE_SIZE = 100;
 const DAY_MS = 86_400_000;
@@ -19,6 +20,7 @@ const errorText = (err: unknown, fallback: string) => (err instanceof Error && e
 
 export default function LeadsTab() {
   const showNotification = useAppStore((s) => s.showNotification);
+  const { isEmployee, noProfiles } = useEmployeePoster();
   const [leads, setLeads] = useState<FbPosterLead[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -93,18 +95,21 @@ export default function LeadsTab() {
     }).finally(() => { if (seq === loadSeq.current && alive.current) setLoading(false); });
   }, [filter, page, reloadTick]);
 
+  const reloadLeads = useEmployeeReload(() => setReloadTick((n) => n + 1), isEmployee);
   useEffect(() => {
-    const reload = () => setReloadTick((n) => n + 1);
+    const reload = reloadLeads;
     const offFound = ipc.on?.('facebookPoster:leadsFound', reload);
-    const offProgress = ipc.on?.('facebookPoster:commentCollectProgress', (data: { done: number; total: number }) => {
+    const offProgress = ipc.on?.('facebookPoster:commentCollectProgress', (data: { done: number; total: number } | null) => {
       setRunning(true);
-      setProgress({ done: data.done, total: data.total });
+      setProgress({ done: data?.done ?? 0, total: data?.total ?? 0 });
     });
-    const offFinished = ipc.on?.('facebookPoster:commentCollectFinished', (data: { auto?: boolean; posts?: number; leads?: number }) => {
+    const offFinished = ipc.on?.('facebookPoster:commentCollectFinished', (data: { auto?: boolean; cancelled?: boolean; posts?: number; leads?: number }) => {
       setRunning(false);
       setProgress(null);
       reload();
-      if (data && !data.auto) showNotification(`Đã thu ${data.posts ?? 0} bài, có ${data.leads ?? 0} khách mới`, 'info');
+      // Nhân viên chỉ nhận { jobId, auto, cancelled } (không có số bài/khách): báo chung và tải lại danh sách.
+      if (isEmployee) { if (data && !data.auto && !data.cancelled) showNotification('Đã thu xong bình luận', 'info'); }
+      else if (data && !data.auto) showNotification(`Đã thu ${data.posts ?? 0} bài, có ${data.leads ?? 0} khách mới`, 'info');
     });
     let cancelled = false;
     ipc.facebookPoster?.commentCollectStatus().then((res) => {
@@ -113,7 +118,7 @@ export default function LeadsTab() {
       if (res.running && res.progress) setProgress(res.progress);
     }).catch(() => { /* sự kiện tiến độ sẽ cập nhật */ });
     return () => { cancelled = true; offFound?.(); offProgress?.(); offFinished?.(); };
-  }, [showNotification]);
+  }, [showNotification, isEmployee, reloadLeads]);
 
   const collectNow = async () => {
     setStarting(true);
@@ -214,9 +219,9 @@ export default function LeadsTab() {
             <button type="button" onClick={cancelCollect} className={BTN}>Huỷ</button>
           </>
         ) : (
-          <button type="button" onClick={collectNow} disabled={starting} className={BTN}>{starting ? 'Đang bắt đầu…' : 'Thu ngay'}</button>
+          <button type="button" onClick={collectNow} disabled={starting || noProfiles} className={BTN}>{starting ? 'Đang bắt đầu…' : 'Thu ngay'}</button>
         )}
-        <button type="button" onClick={exportXlsx} disabled={exporting || total === 0} className={BTN}>{exporting ? 'Đang xuất…' : 'Xuất Excel'}</button>
+        {!isEmployee && <button type="button" onClick={exportXlsx} disabled={exporting || total === 0} className={BTN}>{exporting ? 'Đang xuất…' : 'Xuất Excel'}</button>}
         <div className="ml-auto"><LeadConfigPopover /></div>
       </div>
       {loading ? <div className="flex justify-center py-10" role="status" aria-label="Đang tải khách"><Spinner size={5} /></div>

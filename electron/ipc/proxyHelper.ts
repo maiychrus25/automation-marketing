@@ -2,9 +2,11 @@ import AppModeManager from '../../src/utils/AppModeManager';
 import Logger from '../../src/utils/Logger';
 import * as fs from 'fs';
 import * as path from 'path';
+import { EMPLOYEE_UPLOAD_MAX_BYTES, EMPLOYEE_UPLOAD_PATH_FIELDS } from '../../src/services/http/bossFileAccess';
 import {
     BOSS_ONLY_CHANNEL_CODE,
     BOSS_ONLY_CHANNEL_ERROR,
+    POSTER_CHANNEL_ROUTES,
     employeeChannelSpec,
 } from '../../src/services/http/employeeChannelRoutes';
 
@@ -32,6 +34,59 @@ export function proxyToBoss(channel: string, params: any): void {
     } catch {}
 }
 
+function bossClient(): any {
+    const WsMgr = require('../../src/utils/WorkspaceManager').default;
+    const activeWs = WsMgr.getInstance().getActiveWorkspace();
+    if (!activeWs || activeWs.type !== 'remote') throw new Error('Không kết nối tới Boss');
+
+    const HCM = require('../../src/services/http/HttpConnectionManager').default;
+    const client = HCM.getInstance().getServiceForWorkspace(activeWs.id);
+    if (!client) throw new Error('Không kết nối tới Boss');
+    return client;
+}
+
+export const UPLOAD_TOO_LARGE_RESULT = { success: false, error: 'Tệp quá lớn (tối đa 200 MB)', code: 'UPLOAD_TOO_LARGE' };
+
+/** An upload that must come back to the renderer as this exact result (the boss refused it with a code, or the file is too large). Never names a path. */
+function uploadRefusal(result: { success: boolean; error: string; code: string }): Error & { uploadResult: typeof result } {
+    return Object.assign(new Error('upload refused'), { uploadResult: result });
+}
+
+/** The boss answered the upload with a JSON body carrying `code` and `error` (413, 403, ...): that answer, as a command result. */
+function bossUploadRefusal(result: any): { success: false; error: string; code: string } | null {
+    return result && result.success === false && typeof result.code === 'string' && result.code && typeof result.error === 'string' && result.error
+        ? { success: false, error: result.error, code: result.code }
+        : null;
+}
+
+/**
+ * Upload post media of the Facebook poster (X-Upload-Area: poster). A path that exists on this machine is replaced by its boss path;
+ * one that does not exist is kept (it is a boss path that draftGet returned). One at a time: a file can be 200 MB.
+ * Throws an error with code UPLOAD_TOO_LARGE before reading an oversized file; the message never names a path.
+ */
+export async function uploadPosterMedia(paths: unknown[]): Promise<unknown[]> {
+    const client = bossClient();
+    const out: unknown[] = [];
+    for (const fp of paths) {
+        if (typeof fp !== 'string' || !fp || !fs.existsSync(fp)) { out.push(fp); continue; }
+        if (fs.statSync(fp).size > EMPLOYEE_UPLOAD_MAX_BYTES) throw uploadRefusal({ ...UPLOAD_TOO_LARGE_RESULT });
+        const result = await client.uploadMedia(fs.readFileSync(fp), path.basename(fp), undefined, 'poster');
+        const refusal = bossUploadRefusal(result);
+        if (refusal) throw uploadRefusal(refusal);
+        if (!result?.success || !result.bossPath) throw new Error('upload failed');
+        out.push(result.bossPath);
+    }
+    return out;
+}
+
+/** `mediaPaths` (list) and the legacy single `mediaPath` of one params object, through the poster upload contract. */
+async function uploadPosterMediaFields(obj: any): Promise<any> {
+    const out = { ...obj };
+    if (Array.isArray(out.mediaPaths)) out.mediaPaths = await uploadPosterMedia(out.mediaPaths);
+    if (typeof out.mediaPath === 'string' && out.mediaPath) out.mediaPath = (await uploadPosterMedia([out.mediaPath]))[0];
+    return out;
+}
+
 /**
  * Upload media files from Employee machine to Boss machine.
  * Used when Employee's local file path is not valid on Boss (cross-platform paths).
@@ -45,13 +100,7 @@ export function proxyToBoss(channel: string, params: any): void {
 export async function uploadEmployeeMedia(filePaths: string[], zaloId?: string): Promise<string[]> {
     if (AppModeManager.getInstance().getMode() !== 'employee') return filePaths;
 
-    const WsMgr = require('../../src/utils/WorkspaceManager').default;
-    const activeWs = WsMgr.getInstance().getActiveWorkspace();
-    if (!activeWs || activeWs.type !== 'remote') throw new Error('Không kết nối tới Boss');
-
-    const HCM = require('../../src/services/http/HttpConnectionManager').default;
-    const client = HCM.getInstance().getServiceForWorkspace(activeWs.id);
-    if (!client) throw new Error('Không kết nối tới Boss');
+    const client = bossClient();
 
     const bossPaths: string[] = new Array(filePaths.length);
 
@@ -59,7 +108,7 @@ export async function uploadEmployeeMedia(filePaths: string[], zaloId?: string):
     const uploadTasks = filePaths.map(async (fp, index) => {
         if (!fp) { bossPaths[index] = fp; return; }
         if (!fs.existsSync(fp)) {
-            Logger.warn(`[uploadEmployeeMedia] File not found on Employee: ${fp}`);
+            Logger.warn('[uploadEmployeeMedia] File not found on Employee');
             bossPaths[index] = fp;
             return;
         }
@@ -67,13 +116,16 @@ export async function uploadEmployeeMedia(filePaths: string[], zaloId?: string):
         const filename = path.basename(fp);
         try {
             const result = await client.uploadMedia(buffer, filename, zaloId);
+            const refusal = bossUploadRefusal(result);
+            if (refusal) throw uploadRefusal(refusal);
             if (result.success && result.bossPath) {
                 bossPaths[index] = result.bossPath;
-                Logger.log(`[uploadEmployeeMedia] ✅ ${fp} → ${result.bossPath}`);
+                Logger.log('[uploadEmployeeMedia] uploaded');
             } else {
                 throw new Error(result.error || 'Upload thất bại');
             }
         } catch (err: any) {
+            if (err?.uploadResult) throw err;
             throw new Error(`Không thể upload file ${fp}: ${err.message}`);
         }
     });
@@ -88,11 +140,16 @@ export async function uploadEmployeeMedia(filePaths: string[], zaloId?: string):
  * Employee side, sends as base64 via uploadEmployeeMedia(), returns Boss-resolved paths.
  * In standalone/boss mode (no-op) returns original params unchanged.
  */
-export async function prepareLocalFilesForProxy(params: any, accountId?: string): Promise<any> {
-    const singleFields = ['filePath', 'videoPath', 'thumbPath', 'voicePath', 'avatarPath', 'mediaPath'];
+export async function prepareLocalFilesForProxy(params: any, accountId?: string, channel?: string): Promise<any> {
     let result = { ...params };
 
-    for (const field of singleFields) {
+    // Facebook poster: post media sits at the top level (draft/schedule helpers) or inside params.params (start, scheduleCreate, draftSave).
+    if (channel && POSTER_CHANNEL_ROUTES[channel]?.route === 'proxy') {
+        result = await uploadPosterMediaFields(result);
+        if (result.params && typeof result.params === 'object') result.params = await uploadPosterMediaFields(result.params);
+    }
+
+    for (const field of EMPLOYEE_UPLOAD_PATH_FIELDS) {
         if (result[field] && typeof result[field] === 'string' && result[field].length > 0) {
             const bossPaths = await uploadEmployeeMedia([result[field]], accountId);
             if (bossPaths && bossPaths[0]) {
@@ -111,6 +168,9 @@ export async function prepareLocalFilesForProxy(params: any, accountId?: string)
     return result;
 }
 
+const TIMEOUT_ERROR = 'Máy Boss chưa trả lời kịp (timeout). Lệnh có thể đã được thực hiện; hãy kiểm tra hội thoại trước khi thử lại.';
+/** The poster has no conversation to check: its results show in Progress and History. */
+const TIMEOUT_ERROR_POSTER = 'Máy Boss chưa trả lời kịp (timeout). Lệnh có thể đã được thực hiện; hãy xem Tiến độ hoặc Lịch sử trước khi bấm lại.';
 const NOTHING_SENT_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN']);
 // HttpClientService / HttpConnectionManager throw these when there is no live connection (nothing was sent).
 const NOT_CONNECTED_MESSAGE = /chưa kết nối tới BOSS/i;
@@ -142,7 +202,7 @@ export async function proxyToBossWithResult(channel: string, params: any, opts?:
         if (NOTHING_SENT_CODES.has(err?.code) || NOT_CONNECTED_MESSAGE.test(String(err?.message || ''))) return notConnected;
         return {
             success: false,
-            error: 'Máy Boss chưa trả lời kịp (timeout). Lệnh có thể đã được thực hiện; hãy kiểm tra hội thoại trước khi thử lại.',
+            error: Object.prototype.hasOwnProperty.call(POSTER_CHANNEL_ROUTES, channel) ? TIMEOUT_ERROR_POSTER : TIMEOUT_ERROR,
             code: 'TIMEOUT',
         };
     }
@@ -173,8 +233,9 @@ export function routeEmployeeChannel(channel: string, listener: (event: any, par
 
         let prepared: any;
         try {
-            prepared = await prepareLocalFilesForProxy(params, params?.accountId);
-        } catch {
+            prepared = await prepareLocalFilesForProxy(params, params?.accountId, channel);
+        } catch (err: any) {
+            if (err?.uploadResult) return { ...err.uploadResult };
             // The error text names a local file path: keep it out of the result and the log.
             Logger.warn(`[routeEmployeeChannel] ${channel} upload failed`);
             return { success: false, error: 'Không tải được tệp lên máy Boss', code: 'UPLOAD_FAILED' };

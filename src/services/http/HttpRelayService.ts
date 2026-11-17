@@ -2,6 +2,7 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import Logger from '../../utils/Logger';
 import EmployeeService from '../employee/EmployeeService';
 import DatabaseService from '../database/DatabaseService';
@@ -10,7 +11,8 @@ import ConnectionManager from '../../utils/ConnectionManager';
 import FacebookConnectionManager from '../../utils/FacebookConnectionManager';
 import TunnelService, { TunnelOptions, TunnelProvider } from '../tunnel/TunnelService';
 import SocketIOService from '../socket/SocketIOService';
-import { FACEBOOK_RELAY_CHANNELS, RelayAudience, classifyRelayEvent, moduleForRelayChannel } from '../socket/relayAudience';
+import { RELAYED_EVENT_CHANNELS } from '../socket/relayChannels';
+import { RelayAudience, classifyRelayEvent, moduleForRelayChannel } from '../socket/relayAudience';
 import { storedLabelScope, storedQuickMessageOwner } from './labelEventScope';
 import { LoginThrottle } from '../employee/employeeTokenPolicy';
 import { handlers as restHandlers } from './handlers/RestApiHandlers';
@@ -18,9 +20,16 @@ import { handleMediaRequest as handleMediaFileServe } from './handlers/MediaHand
 import { libraryHandlers } from './handlers/LibraryHandler';
 import FileStorageService from '../file/FileStorageService';
 import { employeeChannelRule } from './relayChannelPolicy';
-import { employeeSendInfo } from './employeeChannelRoutes';
+import { checkPosterRequest, filterBrowserProfileList, posterActionRef, type PosterLookup } from './posterAccess';
+import { createPosterLookup, strictReader, BOSS_ONLY_PROFILE } from '../facebookPoster/posterLookup';
+import { posterRelayEvent, posterEventRunId } from './posterRelayEvents';
+import { MAX_IMAGES } from '../facebookPoster/mediaRules';
+import { isWithinScope } from '../facebookPoster/profileScope';
+import { redactPaths } from '../facebookPoster/redactPaths';
+import { SCHEDULE_MEDIA_DIR } from '../facebookPoster/scheduleMedia';
+import { employeeSendInfo, POSTER_WRITE_CHANNELS } from './employeeChannelRoutes';
 import { findForeignRecord, recordRefsFor, RecordTarget } from './recordOwnership';
-import { checkProxyFilePaths, checkServiceAccountPaths, isInside, ProxyFileCheck, safeUploadName } from './bossFileAccess';
+import { EMPLOYEE_UPLOAD_MAX_BYTES, checkProxyFilePaths, checkServiceAccountPaths, isInside, ProxyFileCheck, safeUploadName } from './bossFileAccess';
 import { checkAssistantHostChange } from './assistantKeyGuard';
 import { isAccountOnline, withFacebookParents } from './accountRows';
 import { allowedAccounts, checkEmployeeAccess, paramsWithExtraAccountIds, hasMalformedAccountParam, requestedAccountIds, isEmployeeSettingReadable, isEmployeeSettingWritable } from './employeeAccess';
@@ -41,6 +50,7 @@ interface RegisteredEmployee {
 
 interface EmployeeSnapshot {
     assignedAccounts: string[];
+    assigned_profiles: string[];
     permissions: Array<{ module: string; can_access: boolean }>;
     erpRole?: string;
     erpExtraJson?: string;
@@ -64,6 +74,7 @@ interface EmployeeSnapshot {
         listener_active: number;
         channel?: string | null;
         parent_zalo_id?: string | null;
+        username?: string;
     }>;
     onlineAccounts: string[];
 }
@@ -75,6 +86,11 @@ interface EmployeeSnapshot {
  *
  * Replaces SocketRelayService - no persistent WebSocket connections.
  */
+/** Largest JSON body the relay buffers (files never travel in JSON: uploads are binary on /api/media/upload). */
+export const RELAY_JSON_BODY_MAX_BYTES = 16 * 1024 * 1024;
+/** Login and heartbeat bodies are read before the caller is known: a few fields only. */
+export const RELAY_AUTH_BODY_MAX_BYTES = 64 * 1024;
+
 class HttpRelayService {
     private static instance: HttpRelayService;
     private httpServer: http.Server | null = null;
@@ -206,78 +222,7 @@ class HttpRelayService {
     private static PUSH_TIMEOUT_MS = 3000;
 
     /** Channels to relay from EventBroadcaster → employees */
-    private static RELAY_CHANNELS = [
-        'event:message',
-        'event:reaction',
-        'event:groupEvent',
-        'event:groupInfoUpdate',
-        'event:pollVote',
-        'event:pinsUpdated',
-        'event:connected',
-        'event:disconnected',
-        'event:friendRequest',
-        'event:friendAccepted',
-        'event:typing',
-        'event:seen',
-        'event:receipt',
-        'event:undo',
-        'event:delete',
-        'event:reminder',
-        'event:localPath',
-        'event:listenerDead',
-        ...FACEBOOK_RELAY_CHANNELS,
-        // ─── ERP module events (Phase 1 MVP) ───────────────────────
-        'erp:event:projectCreated',
-        'erp:event:projectUpdated',
-        'erp:event:projectDeleted',
-        'erp:event:taskCreated',
-        'erp:event:taskUpdated',
-        'erp:event:taskDeleted',
-        'erp:event:commentAdded',
-        'erp:event:calendarEventCreated',
-        'erp:event:calendarEventUpdated',
-        'erp:event:calendarEventDeleted',
-        'erp:event:reminder',
-        'erp:event:noteCreated',
-        'erp:event:noteUpdated',
-        'erp:event:noteDeleted',
-        'erp:event:notification',
-        // ─── ERP Phase 2 events ────────────────────────────────────
-        'erp:event:leaveCreated',
-        'erp:event:leaveDecided',
-        'erp:event:attendanceUpdated',
-        'erp:event:noteShared',
-        'erp:event:departmentUpdated',
-        'erp:event:employeeProfileUpdated',
-        // ─── ERP Phase 2 missing events ──────────────────────────────────
-        'erp:event:employeeProfileDeleted',
-        // ─── CRM / Settings real-time sync ────────────────────────────
-        'db:localLabelChanged',
-        'db:localLabelThreadChanged',
-        'db:pinnedMessageChanged',
-        'db:localQuickMessageChanged',
-        'crm:campaignChanged',
-        'crm:noteChanged',
-        'db:pinnedConversationChanged',
-        'db:contactFlagsChanged',
-        'db:contactAliasChanged',
-        'db:unreadChanged',
-        'db:conversationDeleted',
-        'db:contactProfileUpdated',
-        'crm:tagChanged',
-        'event:friendRequestSent',
-        // ─── Library events ────────────────────────────────────────────
-        'library:itemAdded',
-        'library:itemUpdated',
-        'library:itemDeleted',
-        'event:friendRequestRemoved',
-        'crm:queueUpdate',
-        'crm:queueStatus',
-        'crm:campaignDone',
-        'workflow:executed',
-        'integration:payment',
-        'integration:webhook',
-    ];
+    private static RELAY_CHANNELS = RELAYED_EVENT_CHANNELS;
 
     public static getInstance(): HttpRelayService {
         if (!HttpRelayService.instance) {
@@ -309,9 +254,31 @@ class HttpRelayService {
         return accounts;
     }
 
+    /** Hồ sơ trình duyệt nhân viên được dùng để đăng Facebook: đã gán, còn tồn tại, và chỉ khi có quyền fb_poster. */
+    public allowedProfilesFor(employeeId: string): string[] {
+        const employeeService = EmployeeService.getInstance();
+        if (!employeeService.hasPermission(employeeId, 'fb_poster')) return [];
+        return this.runOnPinnedDb((db) => {
+            const existing = new Set(db.getBrowserProfileIds());
+            return employeeService.getAssignedProfiles(employeeId).filter((id) => existing.has(id));
+        });
+    }
+
+    /** Chỉ cho resolver của socket (mỗi sự kiện hồ sơ hỏi lại cho từng nhân viên đang nối). Kiểm tra lệnh vẫn gọi allowedProfilesFor, không qua bộ đệm này. */
+    private profileAudienceCache = new Map<string, { profiles: string[]; ts: number }>();
+    static PROFILE_AUDIENCE_TTL_MS = 2000;
+
+    private allowedProfilesForAudience(employeeId: string): string[] {
+        const cached = this.profileAudienceCache.get(employeeId);
+        if (cached && Date.now() - cached.ts < HttpRelayService.PROFILE_AUDIENCE_TTL_MS) return cached.profiles;
+        const profiles = this.allowedProfilesFor(employeeId);
+        this.profileAudienceCache.set(employeeId, { profiles, ts: Date.now() });
+        return profiles;
+    }
+
     public invalidateAllowedAccounts(employeeId?: string): void {
-        if (employeeId) this.allowedAccountsCache.delete(employeeId);
-        else this.allowedAccountsCache.clear();
+        if (employeeId) { this.allowedAccountsCache.delete(employeeId); this.profileAudienceCache.delete(employeeId); }
+        else { this.allowedAccountsCache.clear(); this.profileAudienceCache.clear(); }
     }
 
     private buildEmployeeSnapshot(employeeId: string): EmployeeSnapshot | null {
@@ -329,6 +296,10 @@ class HttpRelayService {
                     const fbUuid = db.getFBAccountByFacebookId(facebookId)?.id;
                     return !!(fbUuid && FacebookConnectionManager.get(fbUuid)?.isConnected());
                 },
+                // Lazy: the Telegram stack loads only when an account of that channel exists.
+                // A throwing lookup means "offline": it must not fail the whole snapshot.
+                telegramUserConnected: (id) => { try { return require('../telegram/TelegramUserListener').isConnected(id); } catch { return false; } },
+                telegramBotPolling: (id) => { try { return require('../telegram/TelegramBotChannelService').isBotPolling(id); } catch { return false; } },
             });
             const onlineAccounts = allAccounts.filter((a) => assignedAccounts.includes(a.zalo_id) && online(a)).map((a) => a.zalo_id);
             let profile = db.queryOne<{ erp_role?: string; extra_json?: string }>(
@@ -386,11 +357,13 @@ class HttpRelayService {
                     is_active: a.is_active,
                     listener_active: online(a) ? 1 : 0,
                     channel: a.channel,
+                    username: a.username || '',
                     parent_zalo_id: a.parent_zalo_id,
                 }));
 
             return {
                 assignedAccounts,
+                assigned_profiles: this.allowedProfilesFor(employeeId),
                 permissions: emp.permissions || [],
                 erpRole: profile?.erp_role || undefined,
                 erpExtraJson: profile?.extra_json || undefined,
@@ -421,6 +394,7 @@ class HttpRelayService {
             SocketIOService.getInstance().attach(this.httpServer);
             SocketIOService.getInstance().setAllowedAccountsResolver((id) => this.allowedAccountsFor(id));
             SocketIOService.getInstance().setModulePermissionResolver((id, module) => EmployeeService.getInstance().hasPermission(id, module));
+            SocketIOService.getInstance().setAllowedProfilesResolver((id) => this.allowedProfilesForAudience(id));
 
             this.hookEventBroadcaster();
             this.startOfflineCheck();
@@ -633,7 +607,7 @@ class HttpRelayService {
     // ─── Auth handlers ────────────────────────────────────────────────
 
     private handleLogin(req: http.IncomingMessage, res: http.ServerResponse): void {
-        this.readBody(req, async (body) => {
+        this.readBody(req, res, async (body) => {
             try {
                 const { username, password, callbackUrl } = JSON.parse(body);
                 if (!username || !password) {
@@ -704,11 +678,11 @@ class HttpRelayService {
                 Logger.error(`[HttpRelayService] Login error: ${err.message}`);
                 this.json(res, 400, { success: false, error: 'Request không hợp lệ' });
             }
-        });
+        }, RELAY_AUTH_BODY_MAX_BYTES);
     }
 
     private handleHeartbeat(req: http.IncomingMessage, res: http.ServerResponse): void {
-        this.readBody(req, (body) => {
+        this.readBody(req, res, (body) => {
             try {
                 const { callbackUrl, sseAlive } = JSON.parse(body);
                 const employee = this.authenticateRequest(req);
@@ -729,19 +703,22 @@ class HttpRelayService {
             } catch (err: any) {
                 this.json(res, 400, { success: false, error: err.message });
             }
-        });
+        }, RELAY_AUTH_BODY_MAX_BYTES);
     }
 
     // ─── Proxy action handler ─────────────────────────────────────────
 
     private handleProxyAction(req: http.IncomingMessage, res: http.ServerResponse): void {
-        this.readBody(req, async (body) => {
+        // Authenticate from the headers before reading anything: an unauthenticated caller never gets its body buffered or parsed.
+        let employee: RegisteredEmployee | null = null;
+        // A failure while authenticating must not escape the request listener (it would be an uncaught exception of the main process).
+        try { employee = this.authenticateRequest(req); } catch (err: any) { Logger.error(`[HttpRelayService] Proxy auth error: ${String(err?.message).slice(0, 300)}`); }
+        if (!employee) {
+            res.setHeader('Connection', 'close');
+            return this.json(res, 401, { success: false, error: 'Unauthorized' });
+        }
+        this.readBody(req, res, async (body) => {
             try {
-                const employee = this.authenticateRequest(req);
-                if (!employee) {
-                    return this.json(res, 401, { success: false, error: 'Unauthorized' });
-                }
-
                 employee.lastSeen = Date.now();
 
                 const { channel, params } = JSON.parse(body);
@@ -762,6 +739,10 @@ class HttpRelayService {
         // Closed list first: the boss must never run a boss-only/admin handler for an employee.
         const rule = employeeChannelRule(channel);
         if (!rule) return this.refuseProxy(employee, channel, 'CHANNEL_NOT_ALLOWED', 'Nhân viên không được dùng chức năng này qua máy Boss');
+        // A scope this relay does not enforce must never run unchecked: refuse (fail closed).
+        if (rule.scope !== undefined && rule.scope !== 'profiles') return this.refuseProxy(employee, channel, 'CHANNEL_NOT_ALLOWED', 'Nhân viên không được dùng chức năng này qua máy Boss');
+        const profileScoped = rule.scope === 'profiles';
+        let allowedProfiles: string[] = [];
 
         // Every account id the request names (any key, auth.zaloId, lists) must be one the employee may use.
         const scanned = paramsWithExtraAccountIds(channel, params);
@@ -787,18 +768,40 @@ class HttpRelayService {
         // Check permission: the employee needs ONE of the modules the channel lists.
         const empSvc = EmployeeService.getInstance();
         if (rule.modules.length > 0 && !rule.modules.some((m) => empSvc.hasPermission(employee.employee_id, m))) {
-            return this.refuseProxy(employee, channel, 'MODULE_FORBIDDEN', `Không có quyền truy cập module: ${rule.modules[0]}`);
+            const refused = this.refuseProxy(employee, channel, 'MODULE_FORBIDDEN', `Không có quyền truy cập module: ${rule.modules[0]}`);
+            return profileScoped ? { ...refused, code: 'MODULE_FORBIDDEN' } : refused;
         }
 
-        // File paths anywhere in the params must stay in the uploads folder or in the media folder of an allowed account.
-        const fileCheck = this.checkFilePaths(employee, params);
+        // Facebook poster: the browser profiles and records the command names must be the employee's; the checked params replace the raw ones.
+        if (profileScoped) {
+            // Fail closed: the relay must establish, on the database the handler will act on, which profiles the record belongs to.
+            try {
+                if (!this.activeDbIsPinned()) return this.refusePoster(employee, channel, 'WORKSPACE_MISMATCH');
+                allowedProfiles = this.allowedProfilesFor(employee.employee_id);
+                const checked = checkPosterRequest(channel, params, allowedProfiles, this.posterLookup());
+                if (checked.ok === false) return this.refusePoster(employee, channel, checked.code);
+                params = checked.params;
+            } catch {
+                return this.refusePoster(employee, channel, 'RECORD_FORBIDDEN'); // a lookup that cannot read the database is never "no such record"
+            }
+        }
+        // File paths anywhere in the params must stay in the uploads folder or in the media folder of an allowed account; poster media may also sit in a schedule/draft folder of the employee's profiles.
+        const fileCheck = this.checkFilePaths(employee, params, profileScoped ? allowedProfiles : undefined);
         if (fileCheck.ok === false) {
-            return this.refuseProxy(employee, channel, fileCheck.code, 'Không có quyền truy cập tệp này');
+            const refused = this.refuseProxy(employee, channel, fileCheck.code, 'Không có quyền truy cập tệp này');
+            return profileScoped ? { ...refused, code: fileCheck.code } : refused;
         }
 
         // Bản ghi gọi theo mã riêng (nhãn, chiến dịch, mục thư viện qua _libraryUuid(s)…) phải thuộc tài khoản được dùng, trước khi handler chạy hoặc uuid được đổi thành đường dẫn.
-        if (this.deniesRecord(employee, { kind: 'proxy', channel, params })) {
-            return this.refuseProxy(employee, channel, 'ACCOUNT_FORBIDDEN', 'Không có quyền truy cập bản ghi này');
+        // Poster records follow browser profiles (checkPosterRequest), not accounts: they do not go through the account-based ownership check.
+        if (!profileScoped) {
+            // The ownership lookup reads the pinned database but the handler acts on the active one: with record references and two different databases, nothing can be established.
+            if (recordRefsFor({ kind: 'proxy', channel, params }).length > 0 && !this.activeDbIsPinned()) {
+                return { ...this.refuseProxy(employee, channel, 'WORKSPACE_MISMATCH', 'Máy Boss đang mở workspace khác. Thao tác này tạm thời chưa dùng được.'), code: 'WORKSPACE_MISMATCH' };
+            }
+            if (this.deniesRecord(employee, { kind: 'proxy', channel, params })) {
+                return this.refuseProxy(employee, channel, 'ACCOUNT_FORBIDDEN', 'Không có quyền truy cập bản ghi này');
+            }
         }
 
         if (channel === 'ai:saveAssistant') {
@@ -810,7 +813,15 @@ class HttpRelayService {
             // Inject real auth
             // Employee-supplied credentials are never forwarded: the boss's own auth for the checked
             // account replaces them, or only the checked id is passed when that cannot be resolved.
-            if (params?.auth !== undefined) {
+            if (profileScoped) {
+                // The handler narrows itself by `_profileScope` (set by checkPosterRequest); no account auth is injected and none of the employee's is forwarded.
+                const { auth: _employeeAuth, ...rest } = params;
+                params = { ...rest, _fromRelay: true };
+            } else if (channel.startsWith('telegram')) {
+                // Telegram handlers take the account id only: the stored session or bot token is never loaded into a call for an employee.
+                const { auth: _dropped, ...rest } = params ?? {};
+                params = { ...rest, _fromRelay: true };
+            } else if (params?.auth !== undefined) {
                 const realAuth = zaloId ? this.resolveRealAuth(zaloId, {}) : null;
                 const { auth: _employeeAuth, ...rest } = params;
                 if (!realAuth && zaloId) {
@@ -850,7 +861,7 @@ class HttpRelayService {
 
             // Use handler registry
             const { ipcHandlerRegistry } = require('../../../electron/ipc/zaloIpc');
-            const handler = ipcHandlerRegistry?.get(channel);
+            const handler = profileScoped ? undefined : ipcHandlerRegistry?.get(channel);
 
             // ── Special: sendVideo from library → do full 3-step upload chain ──
             if (channel === 'zalo:sendVideo' && params._libraryUuid) {
@@ -1054,14 +1065,28 @@ class HttpRelayService {
             const internalHandlers: Map<string, Function> | undefined = (ipcMain as any)._invokeHandlers;
             if (internalHandlers && internalHandlers.has(channel)) {
                 const result = await internalHandlers.get(channel)!(null, params);
+                if (profileScoped) {
+                    // The profile list holds every browser profile's fingerprint and proxy: the employee gets only the assigned ones, reduced to id, name, group and note.
+                    if (result?.success === false && typeof result.error === 'string') {
+                        // An unexpected failure (ENOENT…) can name a file of the boss machine: the employee gets the file name only.
+                        return { ...result, error: redactPaths(result.error) };
+                    }
+                    // Traceability only: which employee ran each successful poster write (no text, paths or URLs).
+                    if (result?.success !== false && POSTER_WRITE_CHANNELS.has(channel)) {
+                        Logger.log(`[HttpRelayService] poster action employee=${employee.employee_id} channel=${channel} ref=${posterActionRef(params, result)}`);
+                    }
+                    return channel === 'browserProfile:list' && result?.success !== false ? filterBrowserProfileList(result, allowedProfiles) : result;
+                }
                 // Facebook: the sent row is already saved (no broadcastMessage later), so tag it right away.
                 const sent = employeeSendInfo(channel, params, result);
                 if (sent) {
                     try {
                         // Tag by id only: no id means the send is counted but no row is guessed by thread, and no sender event goes out.
                         const tagById = (messageId: string) => this.recordEmployeeSend(employee, channel, params, sent.accountId, sent.threadId, messageId,
-                            () => this.runOnPinnedDb((db) => db.setMessageHandledByEmployeeFlexible(sent.accountId, messageId, employee.employee_id)));
-                        if (sent.messageIds.length === 0) this.recordEmployeeSend(employee, channel, params, sent.accountId, sent.threadId, '', () => undefined, false);
+                            () => this.runOnPinnedDb((db) => db.setMessageHandledByEmployeeFlexible(sent.accountId, messageId, employee.employee_id, ...(channel.startsWith('telegram') ? [sent.threadId] : []))));
+                        // A Telegram send with no usable chat is counted but never tagged.
+                        const noChat = channel.startsWith('telegram') && !sent.threadId;
+                        if (sent.messageIds.length === 0 || noChat) this.recordEmployeeSend(employee, channel, params, sent.accountId, sent.threadId, '', () => undefined, false);
                         else sent.messageIds.forEach(tagById);
                     } catch {
                         Logger.warn(`[HttpRelayService] Could not record the sender of ${channel} for employee ${employee.employee_id}`);
@@ -1336,17 +1361,26 @@ class HttpRelayService {
         if (!rawName) {
             return this.json(res, 400, { success: false, error: 'Missing X-Filename header' });
         }
-        const filename = safeUploadName(rawName);
+        // The employee app sends encodeURIComponent(name); decode once BEFORE sanitising so every check sees the real name.
+        let decodedName = rawName;
+        try { decodedName = decodeURIComponent(rawName); } catch { /* malformed escape: keep the raw name */ }
+        const filename = safeUploadName(decodedName);
         if (!filename) {
             return this.json(res, 400, { success: false, error: 'Tên tệp không hợp lệ' });
         }
+        // Facebook poster media: `X-Upload-Area: poster` stores the file in `_uploads` (never served to employees), whatever accounts the employee has.
+        const posterArea = String(req.headers['x-upload-area'] ?? '').toLowerCase() === 'poster';
+        if (posterArea && !EmployeeService.getInstance().hasPermission(employee.employee_id, 'fb_poster')) {
+            Logger.warn(`[HttpRelayService] Refused upload from employee ${employee.employee_id}: MODULE_FORBIDDEN`);
+            return this.json(res, 403, { success: false, error: 'Không có quyền truy cập module: fb_poster', code: 'MODULE_FORBIDDEN' });
+        }
         // A header that is present (even empty) must name exactly one account the employee may use; absent = the first one.
-        const idHeader = req.headers['x-zalo-id'];
+        const idHeader = posterArea ? undefined : req.headers['x-zalo-id'];
         if (idHeader !== undefined && !employee.assigned_accounts.includes(idHeader as string)) {
             Logger.warn(`[HttpRelayService] Refused upload from employee ${employee.employee_id}: ACCOUNT_FORBIDDEN`);
             return this.json(res, 403, { success: false, error: 'Không có quyền truy cập tài khoản này', code: 'ACCOUNT_FORBIDDEN' });
         }
-        const zaloId = (idHeader as string | undefined) ?? employee.assigned_accounts[0] ?? '';
+        const zaloId = posterArea ? '' : (idHeader as string | undefined) ?? employee.assigned_accounts[0] ?? '';
 
         // Target folder: the account folder, or _uploads when the employee has no account. The final path must stay inside it.
         const baseDir = FileStorageService.getBaseDir();
@@ -1359,27 +1393,44 @@ class HttpRelayService {
             return this.json(res, 403, { success: false, error: 'Không có quyền ghi tệp này', code: 'PATH_FORBIDDEN' });
         }
 
-        const chunks: Buffer[] = [];
+        const tooLarge = () => {
+            if (res.headersSent) return;
+            this.json(res, 413, { success: false, error: 'Tệp quá lớn (tối đa 200 MB)', code: 'UPLOAD_TOO_LARGE' });
+            // Destroying at once can reset the connection before the client reads the 413: the rest of the body is ignored (never buffered), then the request is destroyed.
+            res.once('finish', () => setTimeout(() => req.destroy(), 5000).unref());
+        };
+        if (Number(req.headers['content-length']) > EMPLOYEE_UPLOAD_MAX_BYTES) return tooLarge();
 
-        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        const chunks: Buffer[] = [];
+        let received = 0;
+        let rejected = false;
+
+        req.on('data', (chunk: Buffer) => {
+            if (rejected) return;
+            received += chunk.length;
+            if (received > EMPLOYEE_UPLOAD_MAX_BYTES) { // a lying or absent content-length: stop buffering at once
+                rejected = true;
+                chunks.length = 0;
+                return tooLarge();
+            }
+            chunks.push(chunk);
+        });
         req.on('end', async () => {
+            if (rejected) return;
             try {
                 const buffer = Buffer.concat(chunks);
                 if (buffer.length === 0) {
                     return this.json(res, 400, { success: false, error: 'Empty file' });
                 }
 
-                // Save to Boss storage
-                let bossPath: string;
-                if (zaloId) {
-                    bossPath = await FileStorageService.saveBuffer(zaloId, buffer, filename);
-                } else {
-                    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-                    bossPath = target;
-                    fs.writeFileSync(bossPath, buffer);
-                }
+                // Every upload gets its own new folder: the file keeps its name and two uploads (or a received media file) never overwrite each other.
+                // Layout: <media>/<account>/<date>/<16 hex>/<name>; the first folder under the media root is still the account.
+                const uploadDir = path.join(targetDir, crypto.randomBytes(8).toString('hex'));
+                fs.mkdirSync(uploadDir, { recursive: true });
+                const bossPath = path.join(uploadDir, filename);
+                fs.writeFileSync(bossPath, buffer, { flag: 'wx' });
 
-                Logger.log(`[HttpRelayService] Binary upload: ${filename} (${(buffer.length / 1024).toFixed(1)}KB) → ${bossPath}`);
+                Logger.log(`[HttpRelayService] Binary upload saved (${(buffer.length / 1024).toFixed(1)}KB)`);
                 this.json(res, 200, { success: true, bossPath });
             } catch (err: any) {
                 Logger.error(`[HttpRelayService] Upload error: ${err.message}`);
@@ -1393,20 +1444,50 @@ class HttpRelayService {
     // ═════════════════════════════════════════════════════════════════
 
     /** File paths anywhere in `params` (proxy call or REST command body) must be in the uploads folder or an allowed account's media folder. */
-    private checkFilePaths(employee: RegisteredEmployee, params: any): ProxyFileCheck {
+    private checkFilePaths(employee: RegisteredEmployee, params: any, posterProfiles?: readonly string[]): ProxyFileCheck {
         const uploadBase = FileStorageService.getBaseDir();
         const mediaRoots = [...new Set([uploadBase, this.bossMediaRoot()].filter(Boolean))];
+        const lookup = posterProfiles ? this.posterLookup() : null;
         return checkProxyFilePaths(params, {
             mediaRoots, uploadsRoot: path.join(uploadBase, '_uploads'), allowed: employee.assigned_accounts, realpath: fs.realpathSync,
             allowErpTaskFiles: EmployeeService.getInstance().hasPermission(employee.employee_id, 'erp'),
             resolveStored: (p) => FileStorageService.resolveAbsolutePath(p),
+            // A poster draft keeps the media it already stored: its folder is `<workspace folder>/facebook-poster-media/<scheduleId>/`.
+            ...(lookup && posterProfiles ? {
+                maxMediaPaths: MAX_IMAGES, // a post carries up to MAX_IMAGES images or one video, so 10 is the largest legitimate list
+                posterMediaRoot: this.runOnPinnedDb((db) => path.join(path.dirname(db.getDbPath()), SCHEDULE_MEDIA_DIR)),
+                posterScheduleAllowed: (scheduleId: string) => {
+                    try { return isWithinScope(lookup.scheduleProfiles(scheduleId) ?? [], posterProfiles); } catch { return false; }
+                },
+            } : {}),
         });
+    }
+
+    /** Which browser profile owns each poster record, read from the boss database. */
+    private posterLookup(): PosterLookup {
+        // Strict reads: a SQL error throws instead of reading as "no rows".
+        return createPosterLookup(strictReader({
+            query: <T>(sql: string, params?: any[]) => this.runOnPinnedDb((db) => db.queryStrict<T>(sql, params)),
+            queryOne: <T>(sql: string, params?: any[]) => this.runOnPinnedDb((db) => db.queryOneStrict<T>(sql, params)),
+        }));
+    }
+
+    /** True when the database the relay is pinned to is the one the handlers act on (the active workspace). No pinned path = the relay already runs on the active database. */
+    private activeDbIsPinned(): boolean {
+        if (!this.pinnedDbPath) return true;
+        try {
+            const active = DatabaseService.getInstance().getDbPath();
+            return !!active && path.resolve(active) === path.resolve(this.pinnedDbPath);
+        } catch {
+            return false;
+        }
     }
 
     /** Một bản ghi gọi theo mã (nhãn, chiến dịch, mục thư viện…) phải thuộc tài khoản nhân viên được dùng. */
     private deniesRecord(employee: RegisteredEmployee, target: RecordTarget): boolean {
         const refs = recordRefsFor(target);
-        return refs.length > 0 && this.runOnPinnedDb((db) => findForeignRecord(db, refs, employee.assigned_accounts)) !== null;
+        // Strict reads: a SQL error must refuse (the plain queryOne would turn it into "record not found").
+        return refs.length > 0 && this.runOnPinnedDb((db) => findForeignRecord({ queryOne: (sql, params) => db.queryOneStrict(sql, params) }, refs, employee.assigned_accounts)) !== null;
     }
 
     /** Lưu trợ lý AI giữ nguyên khoá (khoá '***') mà đổi máy chủ gọi tới thì bị từ chối: khoá của Boss không được gửi tới địa chỉ do nhân viên chọn. */
@@ -1417,8 +1498,17 @@ class HttpRelayService {
         return check.ok === false ? { code: check.code, error: check.error } : null;
     }
 
-    /** Gửi 403 và trả true nếu yêu cầu dùng tài khoản/module/khoá cài đặt/bản ghi nhân viên không được phép. */
-    private denyRest(res: http.ServerResponse, employee: RegisteredEmployee, pathname: string, params: any, method = ''): boolean {
+    /**
+     * Gửi 403 và trả true nếu yêu cầu dùng tài khoản/module/khoá cài đặt/bản ghi nhân viên không được phép.
+     * `afterBody`: the route read its body first, so the handler runs after the pinned-database scope closed, on the ACTIVE database.
+     */
+    private denyRest(res: http.ServerResponse, employee: RegisteredEmployee, pathname: string, params: any, method = '', afterBody = false): boolean {
+        // The ownership lookup reads the pinned database; a handler outside that scope acts on the active one. Refs + different databases: nothing can be established.
+        if (afterBody && recordRefsFor({ kind: 'rest', method, pathname, params }).length > 0 && !this.activeDbIsPinned()) {
+            Logger.warn(`[HttpRelayService] Denied employee=${employee.employee_id} path=${pathname} code=WORKSPACE_MISMATCH`);
+            this.json(res, 403, { success: false, error: 'Máy Boss đang mở workspace khác. Thao tác này tạm thời chưa dùng được.', code: 'WORKSPACE_MISMATCH' });
+            return true;
+        }
         const settingKey = /^\/api\/(query|command)\/settings\/([^/]+)$/.exec(pathname);
         const scanned = paramsWithExtraAccountIds(pathname, params);
         const accessDenied = checkEmployeeAccess({
@@ -1529,7 +1619,14 @@ class HttpRelayService {
             }
         }
 
-        if (this.denyRest(res, employee, pathname, params, method)) return;
+        // A lookup that throws (e.g. the pinned database cannot be read) answers 500 without details, like the dispatch below.
+        try {
+            if (this.denyRest(res, employee, pathname, params, method)) return;
+        } catch {
+            Logger.error(`[HttpRelayService] Rest API access check failed employee=${employee.employee_id}`);
+            this.json(res, 500, { success: false, error: 'Lỗi máy chủ' });
+            return;
+        }
 
         // ── Điều phối dựa trên URL pattern (chạy trong pinned DB context) ──
         try {
@@ -1882,10 +1979,10 @@ class HttpRelayService {
 
             // ── AI Chat & Suggest (async — proxy LLM calls qua Boss) ──
             if (method === 'POST' && pathname === '/api/command/ai/chat') {
-                this.readBody(req, async (body) => {
+                this.readBody(req, res, async (body) => {
                     try {
                         const parsed = JSON.parse(body);
-                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed })) return;
+                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, '', true)) return;
                         const AIAssistantService = require('../ai/AIAssistantService').default;
                         const result = await AIAssistantService.getInstance().chat(
                             parsed.assistantId || parsed.params?.assistantId,
@@ -1902,10 +1999,10 @@ class HttpRelayService {
                 return;
             }
             if (method === 'POST' && pathname === '/api/command/ai/suggest') {
-                this.readBody(req, async (body) => {
+                this.readBody(req, res, async (body) => {
                     try {
                         const parsed = JSON.parse(body);
-                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed })) return;
+                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, '', true)) return;
                         const AIAssistantService = require('../ai/AIAssistantService').default;
                         const suggestions = await AIAssistantService.getInstance().getSuggestions(
                             parsed.assistantId || parsed.params?.assistantId,
@@ -1923,10 +2020,10 @@ class HttpRelayService {
             // ── COMMAND endpoints (WRITE) ──
             // Command handlers gọi trực tiếp DatabaseService
             if (method === 'POST' && pathname.startsWith('/api/command/')) {
-                this.readBody(req, (body) => {
+                this.readBody(req, res, (body) => {
                     try {
                         const parsed = JSON.parse(body);
-                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, method)) return;
+                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, method, true)) return;
                         const result = this.executeRestCommand(employee, pathname, { ...params, ...parsed }, 'POST');
                         return this.json(res, 200, result);
                     } catch (err: any) {
@@ -1936,10 +2033,10 @@ class HttpRelayService {
                 return;
             }
             if ((method === 'PUT' || method === 'PATCH' || method === 'DELETE') && pathname.startsWith('/api/command/')) {
-                this.readBody(req, (body) => {
+                this.readBody(req, res, (body) => {
                     try {
                         const parsed = body ? JSON.parse(body) : {};
-                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, method)) return;
+                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, method, true)) return;
                         const result = this.executeRestCommand(employee, pathname, { ...params, ...parsed }, method);
                         return this.json(res, 200, result);
                     } catch (err: any) {
@@ -1971,10 +2068,14 @@ class HttpRelayService {
                 return this.json(res, 200, libraryHandlers.getItem(employee, { ...params, uuid, _bossUrl: `${proto}://${host}` }));
             }
             if (method === 'PATCH' && pathname.match(/^\/api\/library\/item\/[a-f0-9-]+$/)) {
-                this.readBody(req, (body) => {
-                    const parsed = JSON.parse(body);
-                    if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, method)) return;
-                    return this.json(res, 200, libraryHandlers.updateItem(employee, { ...params, ...parsed }));
+                this.readBody(req, res, (body) => {
+                    try {
+                        const parsed = JSON.parse(body);
+                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, method, true)) return;
+                        return this.json(res, 200, libraryHandlers.updateItem(employee, { ...params, ...parsed }));
+                    } catch {
+                        return this.json(res, 500, { success: false, error: 'Internal error' });
+                    }
                 });
                 return;
             }
@@ -1987,10 +2088,14 @@ class HttpRelayService {
                 return this.json(res, 200, libraryHandlers.getFolders(employee, params));
             }
             if (method === 'POST' && pathname === '/api/library/folders') {
-                this.readBody(req, (body) => {
-                    const parsed = JSON.parse(body);
-                    if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, method)) return;
-                    return this.json(res, 200, libraryHandlers.createFolder(employee, { ...params, ...parsed }));
+                this.readBody(req, res, (body) => {
+                    try {
+                        const parsed = JSON.parse(body);
+                        if (this.denyRest(res, employee, pathname, { ...params, ...parsed }, method, true)) return;
+                        return this.json(res, 200, libraryHandlers.createFolder(employee, { ...params, ...parsed }));
+                    } catch {
+                        return this.json(res, 500, { success: false, error: 'Internal error' });
+                    }
                 });
                 return;
             }
@@ -2714,6 +2819,9 @@ class HttpRelayService {
     private relayEventToEmployees(channel: string, data: any): void {
         if (!this.running) return;
 
+        // Sự kiện Facebook Poster đi theo posterRelayEvents (payload rút gọn, đóng mặc định), không qua classifyRelayEvent.
+        if (channel.startsWith('facebookPoster:')) { this.relayPosterEvent(channel, data); return; }
+
         // Sự kiện ERP gửi đích danh nhân viên; còn lại theo tài khoản (đóng mặc định).
         const audience: RelayAudience = channel.startsWith('erp:')
             ? { kind: 'employees', ids: [...this.employees.keys()].filter((empId) => this.shouldRelayErpEventToEmployee(channel, data, empId)) }
@@ -2724,6 +2832,53 @@ class HttpRelayService {
         } catch {
             Logger.warn(`[HttpRelayService] publish failed for channel ${channel}`);
         }
+    }
+
+    /** Quyết định "lượt chạy này nhân viên được thấy" đã tra, theo mã lượt; tối đa POSTER_RUN_CACHE_MAX, bỏ cái cũ nhất. */
+    private posterRunVisible = new Map<string, boolean>();
+    /** Lượt không tra được (chưa có dòng, hoặc lỗi đọc): nhớ đến thời điểm này để không đọc cơ sở dữ liệu ở mỗi dòng nhật ký. */
+    private posterRunMisses = new Map<string, number>();
+    private static POSTER_RUN_CACHE_MAX = 200;
+    static RUN_VISIBILITY_NEGATIVE_TTL_MS = 5000;
+
+    private relayPosterEvent(channel: string, data: any): void {
+        const runId = posterEventRunId(channel, data);
+        const event = posterRelayEvent(channel, data);
+        // Nhật ký, tiến độ và kết thúc của lượt do Page tự chạy, hoặc của lượt không tra được, không ra khỏi máy boss.
+        const runScoped = channel === 'facebookPoster:log' || channel === 'facebookPoster:progress' || channel === 'facebookPoster:runFinished';
+        const relayable = !event || !runScoped || (!!runId && this.posterRunIsRelayable(runId));
+        if (channel === 'facebookPoster:runFinished' && runId) { this.posterRunVisible.delete(runId); this.posterRunMisses.delete(runId); }
+        if (!event || !relayable) return;
+        try {
+            SocketIOService.getInstance().publish(channel, event.data, event.audience);
+        } catch {
+            Logger.warn(`[HttpRelayService] publish failed for channel ${channel}`);
+        }
+    }
+
+    private static evictOldest(map: Map<string, unknown>): void {
+        if (map.size >= HttpRelayService.POSTER_RUN_CACHE_MAX) map.delete(map.keys().next().value as string);
+    }
+
+    /** Lượt chạy có thật và không mang dấu chỉ-boss. Quyết định dứt khoát vào bộ nhớ đệm; lỗi đọc hoặc lượt chưa có dòng thì đóng lại và chỉ hỏi lại sau RUN_VISIBILITY_NEGATIVE_TTL_MS. */
+    private posterRunIsRelayable(runId: string): boolean {
+        const cached = this.posterRunVisible.get(runId);
+        if (cached !== undefined) return cached;
+        const missUntil = this.posterRunMisses.get(runId);
+        if (missUntil !== undefined && Date.now() < missUntil) return false;
+        let profiles: string[] | null = null;
+        try { profiles = this.posterLookup().runProfiles(runId); } catch { /* đóng lại */ }
+        if (!profiles) {
+            this.posterRunMisses.delete(runId);
+            HttpRelayService.evictOldest(this.posterRunMisses);
+            this.posterRunMisses.set(runId, Date.now() + HttpRelayService.RUN_VISIBILITY_NEGATIVE_TTL_MS);
+            return false;
+        }
+        this.posterRunMisses.delete(runId);
+        const visible = !profiles.includes(BOSS_ONLY_PROFILE);
+        HttpRelayService.evictOldest(this.posterRunVisible);
+        this.posterRunVisible.set(runId, visible);
+        return visible;
     }
 
     /** Kênh thuộc một module: quyết định lúc phát/nhận bù theo quyền hiện tại, không chốt danh sách ở đây. */
@@ -2925,6 +3080,12 @@ class HttpRelayService {
         return null;
     }
 
+    /** A refused poster command: the code and its Vietnamese text go back to the employee app; the log has the employee, channel and code only. */
+    private refusePoster(employee: RegisteredEmployee, channel: string, code: 'PROFILE_FORBIDDEN' | 'RECORD_FORBIDDEN' | 'PARAMS_INVALID' | 'WORKSPACE_MISMATCH'): { success: false; error: string; code: string } {
+        const text = { PROFILE_FORBIDDEN: 'Bạn không được dùng hồ sơ này', RECORD_FORBIDDEN: 'Bạn không có quyền với mục này', PARAMS_INVALID: 'Yêu cầu không hợp lệ', WORKSPACE_MISMATCH: 'Máy Boss đang mở workspace khác. Đăng Facebook từ máy nhân viên tạm thời chưa dùng được.' }[code];
+        return { ...this.refuseProxy(employee, channel, code, text), code };
+    }
+
     // Log: employee id, channel and a reason code only (no params).
     private refuseProxy(employee: RegisteredEmployee, channel: string, code: string, error: string): { success: false; error: string } {
         Logger.warn(`[HttpRelayService] Refused proxy ${channel} from employee ${employee.employee_id}: ${code}`);
@@ -2990,8 +3151,10 @@ class HttpRelayService {
             }
             // Permission updates: send dedicated event that bypasses 60s throttle
             // on workspace:initialState in the renderer.
-            if (reason === 'permissions-updated') {
+            if (reason === 'permissions-updated' || reason === 'profiles-assigned') {
+                // The renderer handler REPLACES these fields: the payload must always be the FULL subset (permissions, ERP fields, employees, assigned_profiles).
                 const permPayload = {
+                    assigned_profiles: snapshot.assigned_profiles,
                     permissions: snapshot.permissions,
                     erpRole: snapshot.erpRole,
                     erpExtraJson: snapshot.erpExtraJson,
@@ -3007,10 +3170,27 @@ class HttpRelayService {
 
     // ─── Utility ──────────────────────────────────────────────────────
 
-    private readBody(req: http.IncomingMessage, cb: (body: string) => void): void {
-        let body = '';
-        req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-        req.on('end', () => cb(body));
+    /** Reads a JSON body of at most `maxBytes` (bytes, not characters). Over the cap: 413 once, reading stops, `cb` is never called. */
+    private readBody(req: http.IncomingMessage, res: http.ServerResponse, cb: (body: string) => void, maxBytes = RELAY_JSON_BODY_MAX_BYTES): void {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let refused = false;
+        const refuse = () => {
+            refused = true;
+            chunks.length = 0;
+            req.pause();
+            res.writeHead(413, { 'Content-Type': 'application/json', Connection: 'close' });
+            res.end(JSON.stringify({ success: false, error: 'Yêu cầu quá lớn', code: 'BODY_TOO_LARGE' }));
+        };
+        // A declared length over the cap is refused before a single byte is buffered.
+        if (Number(req.headers['content-length']) > maxBytes) return refuse();
+        req.on('data', (chunk: Buffer) => {
+            if (refused) return;
+            size += chunk.length;
+            if (size > maxBytes) return refuse();
+            chunks.push(chunk);
+        });
+        req.on('end', () => { if (!refused) cb(Buffer.concat(chunks).toString('utf8')); });
     }
 
     private json(res: http.ServerResponse, status: number, data: any): void {

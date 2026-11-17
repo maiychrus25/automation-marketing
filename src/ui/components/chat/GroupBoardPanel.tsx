@@ -7,6 +7,9 @@ import { useAppStore } from '@/store/appStore';
 import { PollDetailView as SharedPollDetailView } from './PollView';
 import { Spinner } from '@/components/common/PageLoading';
 import { toLocalMediaUrl } from '@/lib/localMedia';
+import { useAccountStore } from '@/store/accountStore';
+import { useEmployeeStore } from '@/store/employeeStore';
+import { isTelegramChannel } from '@/lib/employeeAccounts';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -107,8 +110,11 @@ export default function GroupBoardPanel({
     if (!zaloId || !threadId) return;
     setLoading(true);
     try {
+      // Nhân viên + Telegram: ghim nằm ở boss → đọc qua REST (db:getPinnedMessages cục bộ trả rỗng)
+      const channel = useAccountStore.getState().accounts.find(a => a.zalo_id === zaloId)?.channel;
+      const pinsFromBoss = isTelegramChannel(channel) && useEmployeeStore.getState().mode === 'employee';
       const [pinsRes, pollsRes] = await Promise.all([
-        ipc.db?.getPinnedMessages({ zaloId, threadId }),
+        pinsFromBoss ? DataAccessor.getPinnedMessages({ zaloId, threadId }) : ipc.db?.getPinnedMessages({ zaloId, threadId }),
         DataAccessor.getMessagesByType({ zaloId, threadId, msgType: 'group.poll', limit: 100 }),
       ]);
 

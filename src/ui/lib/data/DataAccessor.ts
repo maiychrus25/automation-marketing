@@ -67,7 +67,7 @@ export class DataAccessor {
     before?: number;
     offset?: number;
     topicId?: string;
-  }) {
+  }, options?: { throwOnError?: boolean }) {
     if (isEmployee()) {
       const query: any = {
         zaloId: params.zaloId,
@@ -78,6 +78,8 @@ export class DataAccessor {
       if (params.offset !== undefined) query.offset = params.offset;
       if (params.topicId !== undefined) query.topicId = params.topicId;
       const res = await rest().get('/api/query/messages', query);
+      // Opt-in: người gọi cần biết REST lỗi/timeout thay vì nhận danh sách rỗng "thành công"
+      if (options?.throwOnError && !res.success) throw new Error('REST messages failed');
       if (res.success && res.data) {
         const items = Array.isArray(res.data) ? res.data : (res.data.items || []);
         return { messages: items, items, pagination: res.pagination || { hasMore: false } };
@@ -194,9 +196,11 @@ export class DataAccessor {
   // CONVERSATIONS (Contacts)
   // ═════════════════════════════════════════════════════════════════
 
-  static async getConversations(zaloId: string, limit = 50, offset = 0) {
+  static async getConversations(zaloId: string, limit = 50, offset = 0, options?: { throwOnError?: boolean }) {
     if (isEmployee()) {
       const res = await rest().get('/api/query/conversations', { zaloId, limit, offset });
+      // Opt-in: người gọi cần biết REST lỗi/timeout thay vì nhận danh sách rỗng "thành công"
+      if (options?.throwOnError && !res.success) throw new Error('REST conversations failed');
       if (res.success && res.data) {
         const items = Array.isArray(res.data) ? res.data : (res.data.items || []);
         return {
@@ -526,6 +530,19 @@ export class DataAccessor {
     } catch {
       return { success: false };
     }
+  }
+
+  // ═════════════════════════════════════════════════════════════════
+  // PINNED MESSAGES (chỉ đọc: nhân viên đọc từ boss; ghim/bỏ ghim đi qua lệnh có sẵn)
+  // ═════════════════════════════════════════════════════════════════
+
+  /** Nhân viên: ghim của boss qua REST (db:getPinnedMessages cục bộ trả rỗng ở máy nhân viên). Boss: IPC như cũ. */
+  static async getPinnedMessages(params: { zaloId: string; threadId: string }) {
+    if (isEmployee()) {
+      const res = await rest().get('/api/query/pinned-messages', params);
+      return { success: !!res?.success, pins: res?.data?.items || [] };
+    }
+    return window.electronAPI.db.getPinnedMessages(params);
   }
 
   // ═════════════════════════════════════════════════════════════════

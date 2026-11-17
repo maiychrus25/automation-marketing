@@ -53,11 +53,22 @@ function error(msg: string, code?: string): JsonResponse {
 
 // Mọi dòng hội thoại / tin nhắn trả cho nhân viên đi qua hai hàm này để luôn mang `channel` (cột đã lưu, thiếu thì 'zalo').
 // Máy nhân viên chọn đường gửi theo channel và thay nguyên danh sách hội thoại (setContacts), nên thiếu channel là mất Page.
+// Telegram rows also carry the columns the Telegram UI reads, as stored; Zalo and Facebook rows keep exactly their keys.
+const TELEGRAM_CONVERSATION_COLUMNS = [
+  'telegram_folder_id', 'telegram_archived', 'telegram_can_send', 'telegram_send_reason', 'telegram_peer_type', 'telegram_members_count',
+  'telegram_online_count', 'telegram_state_updated_at', 'telegram_membership_state', 'telegram_join_action', 'is_cov_bot', 'menu_button',
+  'has_main_app', 'is_forum', 'is_in_others', 'has_mention', 'mute_until', 'peer_delivered_ts', 'peer_read_ts', 'last_message_type',
+] as const;
+const TELEGRAM_MESSAGE_COLUMNS = ['reply_to_id', 'inline_buttons', 'is_edited', 'edit_history', 'status', 'thread_type', 'deleted_by', 'recalled_content'] as const;
+function telegramColumns(stored: any, columns: readonly string[]): Record<string, unknown> {
+  if (!String(stored?.channel || '').startsWith('telegram')) return {};
+  return Object.fromEntries(columns.filter((c) => stored[c] !== undefined).map((c) => [c, stored[c]]));
+}
 export function conversationRow<T extends object>(stored: any, shaped: T = stored): T & { channel: string } {
-  return { ...shaped, channel: stored?.channel || 'zalo' };
+  return { ...shaped, ...telegramColumns(stored, TELEGRAM_CONVERSATION_COLUMNS), channel: stored?.channel || 'zalo' };
 }
 export function messageRow<T extends object>(stored: any, shaped: T = stored): T & { channel: string } {
-  return { ...shaped, channel: stored?.channel || 'zalo' };
+  return { ...shaped, ...telegramColumns(stored, TELEGRAM_MESSAGE_COLUMNS), channel: stored?.channel || 'zalo' };
 }
 
 export const handlers = {
@@ -79,7 +90,7 @@ export const handlers = {
     const conversations = (db().query<any>(
       `SELECT * FROM contacts WHERE owner_zalo_id = ? ORDER BY last_message_time DESC LIMIT 50`,
       [mainZaloId]
-    ) || []).map((c: any) => ({
+    ) || []).map((c: any) => conversationRow(c, {
       contact_id: c.contact_id,
       owner_zalo_id: c.owner_zalo_id || '',
       display_name: c.display_name || '',
@@ -126,7 +137,7 @@ export const handlers = {
     // Accounts info (safe columns only)
     const accountsData = zaloIds.map(zaloId => {
       try {
-        const rows = db().query<any>('SELECT zalo_id, full_name, avatar_url, phone, is_active, listener_active FROM accounts WHERE zalo_id=?', [zaloId]);
+        const rows = db().query<any>('SELECT zalo_id, full_name, avatar_url, phone, is_active, listener_active, channel FROM accounts WHERE zalo_id=?', [zaloId]);
         return rows[0] || { zalo_id: zaloId, full_name: '', avatar_url: '', phone: '', is_active: 1, listener_active: 0 };
       } catch { return { zalo_id: zaloId, full_name: '', avatar_url: '', phone: '', is_active: 1, listener_active: 0 }; }
     });
@@ -357,12 +368,14 @@ export const handlers = {
     const limit = Math.min(parseInt(params.limit) || 50, 100);
     const messages = db().searchMessages(zaloId, query);
 
-    const items = (messages || []).slice(0, limit).map((m: any) => messageRow(m, {
+    // Search hits keep their short shape (not the Telegram message columns of messageRow) plus the channel.
+    const items = (messages || []).slice(0, limit).map((m: any) => ({
       msg_id: m.msg_id,
       thread_id: m.thread_id,
       thread_name: m.thread_name || m.thread_id || '',
       snippet: extractSnippet(m.content, query),
       timestamp: m.timestamp,
+      channel: m?.channel || 'zalo',
     }));
 
     return success({ items, total: items.length });

@@ -41,10 +41,20 @@ interface EmployeeStore {
     // ─── Assigned accounts (when mode === 'employee') ─────────────
     assignedAccounts: string[];
     setAssignedAccounts: (ids: string[]) => void;
+    assignedProfiles: string[];
+    setAssignedProfiles: (ids: string[]) => void;
 
     // ─── Connection status (when mode === 'employee') ─────────────
     bossConnected: boolean;
     setBossConnected: (v: boolean) => void;
+    /** Máy nhân viên: dữ liệu ban đầu (hội thoại) đã nạp xong; resync chỉ chạy khi true. Reset khi đổi workspace / ngắt kết nối. */
+    employeeInitialLoadDone: boolean;
+    setEmployeeInitialLoadDone: (v: boolean) => void;
+    /** Tiến độ nạp hội thoại nền sau đăng nhập: đã xong / tổng / số tài khoản lỗi (chỉ số, không chứa dữ liệu). */
+    bootstrapDone: number;
+    bootstrapTotal: number;
+    bootstrapFailed: number;
+    setBootstrapProgress: (done: number, total: number, failed: number) => void;
     bossUrl: string;
     setBossUrl: (url: string) => void;
     latency: number;
@@ -93,10 +103,15 @@ const initialState = {
     currentEmployee: null as EmployeeInfo | null,
     permissions: {} as Record<string, boolean>,
     assignedAccounts: [] as string[],
+    assignedProfiles: [] as string[],
     bossConnected: false,
     bossUrl: '',
     latency: 0,
     token: '',
+    employeeInitialLoadDone: false,
+    bootstrapDone: 0,
+    bootstrapTotal: 0,
+    bootstrapFailed: 0,
     relayRunning: false,
     relayPort: 9900,
     connectedEmployees: [] as ConnectedEmployee[],
@@ -109,7 +124,9 @@ const initialState = {
 export const useEmployeeStore = create<EmployeeStore>((set, get) => ({
     ...initialState,
 
-    setMode: (mode) => set({ mode }),
+    setMode: (mode) => set(mode === 'employee' ? { mode } : { mode, employeeInitialLoadDone: false }),
+    setEmployeeInitialLoadDone: (v) => set({ employeeInitialLoadDone: v }),
+    setBootstrapProgress: (done, total, failed) => set({ bootstrapDone: done, bootstrapTotal: total, bootstrapFailed: failed }),
     setCurrentEmployee: (emp) => set({ currentEmployee: emp }),
     setPermissions: (perms) => set({ permissions: perms }),
     hasPermission: (module) => {
@@ -128,6 +145,7 @@ export const useEmployeeStore = create<EmployeeStore>((set, get) => ({
         return !!permissions[module];
     },
     setAssignedAccounts: (ids) => set({ assignedAccounts: ids }),
+    setAssignedProfiles: (ids) => set({ assignedProfiles: ids }),
     setBossConnected: (v) => set({ bossConnected: v }),
     setBossUrl: (url) => set({ bossUrl: url }),
     setLatency: (ms) => set({ latency: ms }),

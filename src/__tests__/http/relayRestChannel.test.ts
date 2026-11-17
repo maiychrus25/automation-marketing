@@ -67,4 +67,14 @@ describe('REST conversations and messages carry the channel of the stored row', 
     expect(rowsOf(zalo.body).length).toBeGreaterThan(0);
     expect(rowsOf(zalo.body).map((r: any) => r.channel)).toEqual(rowsOf(zalo.body).map(() => 'zalo'));
   });
+
+  test('searchResultsOfATelegramAccountKeepTheirEarlierShapePlusChannel', async () => {
+    relay.db.searchMessages.mockImplementationOnce(() => [{
+      msg_id: 'm9', thread_id: 'c1', owner_zalo_id: 'acc-a', content: 'hi', timestamp: 5, channel: 'telegram_user',
+      edit_history: '["old"]', inline_buttons: '[]', is_edited: 1, reply_to_id: '1',
+    }]);
+    const res = await call('/api/search/messages?zaloId=acc-a&q=hi');
+    expect(Object.keys(res.body.data.items[0]).sort()).toEqual(['channel', 'msg_id', 'snippet', 'thread_id', 'thread_name', 'timestamp']);
+    expect(res.body.data.items[0].channel).toBe('telegram_user');
+  });
 });

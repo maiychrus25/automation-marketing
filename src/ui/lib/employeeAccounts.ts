@@ -54,3 +54,39 @@ export function withoutBossOnlyFbCaps<T extends object>(cap: T, isEmployee: bool
   if (!isEmployee || channel !== 'facebook') return cap;
   return { ...cap, ...Object.fromEntries(BOSS_ONLY_FB_CAPS.map((key) => [key, false])) } as T;
 }
+
+/** Kênh Telegram (tài khoản cá nhân hoặc bot). */
+export function isTelegramChannel(channel?: string | null): boolean {
+  return channel === 'telegram_user' || channel === 'telegram_bot';
+}
+
+/** Nhân viên không gọi isConnected / isBotPolling của boss: trạng thái kết nối lấy từ listener_active trong ảnh chụp (store giữ dạng listenerActive). */
+export function telegramHealthForEmployee(account?: { listener_active?: number | boolean; listenerActive?: number | boolean } | null): { connected: boolean } {
+  return { connected: !!(account?.listener_active ?? account?.listenerActive) };
+}
+
+/** Chờ bao lâu rồi mới tải lại hội thoại Telegram sau db:unreadChanged: máy nhân viên tải qua mạng nên gộp các sự kiện dồn dập. */
+export function unreadReloadDelayMs(isEmployee: boolean): number {
+  return isEmployee ? 2000 : 300;
+}
+
+/** Máy nhân viên: một lệnh gửi trả success=false (TIMEOUT, NOT_CONNECTED, BOSS_ONLY, UPLOAD_FAILED...) phải hiện cho người dùng. Boss giữ nguyên hành vi cũ → null. */
+export function employeeSendFailure(isEmployee: boolean, result?: { success?: boolean; error?: string; code?: string } | null): { error: string; code?: string } | null {
+  if (!isEmployee || !result || result.success !== false) return null;
+  return { error: result.error || 'Gửi không thành công', code: result.code };
+}
+
+/** Bộ lọc hội thoại ở mức cơ sở dữ liệu chỉ chạy khi có bộ lọc VÀ không phải máy nhân viên (handler cục bộ của nhân viên luôn trả danh sách rỗng → danh sách trống). */
+export function shouldQueryDbFilter(isEmployee: boolean, hasFilter: boolean): boolean {
+  return !isEmployee && hasFilter;
+}
+
+/** Kết quả lưu pin từ phản hồi lệnh: chỉ khi có mảng `pins`; thiếu → null = "không có thông tin", giữ nguyên thanh ghim. */
+export function pinsFromResponse<T = unknown>(res: { pins?: unknown } | null | undefined): T[] | null {
+  return Array.isArray(res?.pins) ? (res!.pins as T[]) : null;
+}
+
+/** Đổi tìm kiếm / tab / kênh: boss chạy truy vấn DB mới nên phân trang tải thêm bắt đầu lại; nhân viên lọc trong bộ nhớ, phân trang (còn trang, hết, offset) mô tả những gì boss còn nên giữ nguyên. Đổi tài khoản luôn đặt lại. */
+export function shouldResetPagingOnFilterChange(isEmployee: boolean): boolean {
+  return !isEmployee;
+}

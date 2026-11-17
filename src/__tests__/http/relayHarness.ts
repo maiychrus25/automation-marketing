@@ -7,7 +7,8 @@ import type { FbAccountRef } from '../../services/http/accountRows';
 
 // Trạng thái dùng chung cho các bản giả (tên phải bắt đầu bằng "mock" để jest.mock cho phép tham chiếu).
 const mockState: {
-  employees: Array<{ id: string; assigned: string[]; modules: string[] }>;
+  employees: Array<{ id: string; assigned: string[]; modules: string[]; profiles?: string[] }>;
+  browserProfiles: string[];
   accounts: any[];
   fbAccounts: Array<FbAccountRef & { id: string }>;
   connectedFacebook: Set<string>;
@@ -24,7 +25,7 @@ const mockState: {
   owners: Map<string, unknown>;
   assistants: Map<string, { platform: string; baseUrl: string | null }>;
   savedAssistants: any[];
-} = { employees: [], accounts: [], fbAccounts: [], connectedFacebook: new Set<string>(), handlerCalls: [], lastEmployee: undefined, db: {}, libraryUpload: jest.fn(async () => ({ uuid: 'u1', thumb_path: null })), ipcHandlers: new Map(), mediaRoot: '', revoked: new Set(), inactive: new Set(), disconnected: [], published: [], owners: new Map(), assistants: new Map(), savedAssistants: [] };
+} = { employees: [], browserProfiles: [], accounts: [], fbAccounts: [], connectedFacebook: new Set<string>(), handlerCalls: [], lastEmployee: undefined, db: {}, libraryUpload: jest.fn(async () => ({ uuid: 'u1', thumb_path: null })), ipcHandlers: new Map(), mediaRoot: '', revoked: new Set(), inactive: new Set(), disconnected: [], published: [], owners: new Map(), assistants: new Map(), savedAssistants: [] };
 
 jest.mock('electron', () => ({
   app: { getPath: () => '/tmp', quit: jest.fn() }, ipcMain: { handle: jest.fn(), _invokeHandlers: mockState.ipcHandlers }, BrowserWindow: { getAllWindows: () => [] },
@@ -43,7 +44,7 @@ jest.mock('../../utils/FacebookConnectionManager', () => ({ __esModule: true, de
   return row && mockState.connectedFacebook.has(String(row.facebook_id)) ? { isConnected: () => true } : null;
 } } }));
 jest.mock('../../services/tunnel/TunnelService', () => ({ __esModule: true, default: { getInstance: () => ({}) } }));
-jest.mock('../../services/socket/SocketIOService', () => ({ __esModule: true, default: { getInstance: () => ({ attach: jest.fn(), disconnectEmployee: (id: string) => { mockState.disconnected.push(id); }, setAllowedAccountsResolver: jest.fn(), setModulePermissionResolver: jest.fn(), publish: (channel: string, data: any, audience: any) => { mockState.published.push({ channel, data, audience }); } }) } }));
+jest.mock('../../services/socket/SocketIOService', () => ({ __esModule: true, default: { getInstance: () => ({ attach: jest.fn(), disconnectEmployee: (id: string) => { mockState.disconnected.push(id); }, setAllowedAccountsResolver: jest.fn(), setModulePermissionResolver: jest.fn(), setAllowedProfilesResolver: jest.fn(), publish: (channel: string, data: any, audience: any) => { mockState.published.push({ channel, data, audience }); } }) } }));
 jest.mock('../../services/ai/AIAssistantService', () => ({ __esModule: true, default: { getInstance: () => ({ chat: async () => ({}), getSuggestions: async () => [], getAssistant: (id: string) => mockState.assistants.get(id) ?? null, saveAssistant: (a: any) => { mockState.savedAssistants.push(a); return a.id || 'new'; } }) } }));
 jest.mock('../../services/library/LibraryService', () => {
   return { __esModule: true, default: { getInstance: () => ({ upload: mockState.libraryUpload }) } };
@@ -76,22 +77,30 @@ jest.mock('../../utils/WorkspaceManager', () => ({ __esModule: true, default: { 
 
 jest.mock('../../services/database/DatabaseService', () => {
   // Mọi phương thức không khai báo đều là jest.fn() trả undefined.
+  const ownerLookup = (sql: string, params?: unknown[]) => {
+    const match = /^SELECT \w+ AS owner FROM (\w+) WHERE \w+ = \?$/.exec(sql);
+    const key = match ? `${match[1]}:${String(params?.[0])}` : '';
+    return match && mockState.owners.has(key) ? { owner: mockState.owners.get(key) } : undefined;
+  };
   const explicit: Record<string, any> = {
     getDbPath: () => '/tmp/relay-test.db',
     getAccounts: () => mockState.accounts.filter((a) => a.is_active === 1), // the real query: WHERE is_active = 1
     getFBAccounts: () => mockState.fbAccounts,
+    getBrowserProfiles: () => mockState.browserProfiles.map((id) => ({ id })),
+    getBrowserProfileIds: () => [...mockState.browserProfiles],
     getFBAccountByFacebookId: (facebookId: string) => mockState.fbAccounts.find((fb) => fb.facebook_id === facebookId),
     getSetting: jest.fn(() => null),
     getLocalLabels: jest.fn(() => []),
     getAllLocalQuickMessages: jest.fn(() => []),
     setSetting: jest.fn(),
     query: jest.fn(() => []),
+    // Strict reads (access decisions): same shape as query/queryOne; a test that needs rows implements them.
+    queryStrict: jest.fn(() => []),
+    // Ownership lookups go through the strict reader: answer them from the same fake as queryOne.
+    queryOneStrict: jest.fn((sql: string, params?: unknown[]) => ownerLookup(sql, params)),
+    withDbPath: (_path: string, fn: () => any) => fn(),
     // Ownership lookups of recordOwnership.ts ("SELECT <col> AS owner FROM <table> WHERE <col> = ?"): answered from mockState.owners.
-    queryOne: jest.fn((sql: string, params?: unknown[]) => {
-      const match = /^SELECT \w+ AS owner FROM (\w+) WHERE \w+ = \?$/.exec(sql);
-      const key = match ? `${match[1]}:${String(params?.[0])}` : '';
-      return match && mockState.owners.has(key) ? { owner: mockState.owners.get(key) } : undefined;
-    }),
+    queryOne: jest.fn((sql: string, params?: unknown[]) => ownerLookup(sql, params)),
     run: jest.fn(),
     withDbPathAsync: async (_path: string, fn: () => any) => fn(),
   };
@@ -121,6 +130,7 @@ jest.mock('../../services/employee/EmployeeService', () => {
     },
     revokeEmployeeTokens: (id: string) => { mockState.revoked.add(id); },
     getAssignedAccounts: (id: string) => row(id)?.assigned ?? [],
+    getAssignedProfiles: (id: string) => row(id)?.profiles ?? [],
     hasPermission: (id: string, module: string) => !!row(id)?.modules.includes(module),
     getEmployeeById: (id: string) => {
       const e = row(id);
@@ -138,7 +148,7 @@ jest.mock('../../services/employee/EmployeeService', () => {
 });
 
 // Handler giả: ghi tên, trả { success: true, data: {} }. getIntegrations dùng bản thật để kiểm tra việc bỏ thông tin xác thực.
-const REAL_REST_HANDLERS = new Set(['getIntegrations', 'getAllQuickMessagesHandler', 'getLabels', 'getConversations', 'getMessages', 'getConversationsUpdates', 'getConversationById', 'getMessagesAround', 'getFileMessages', 'getMediaMessages', 'getMessageById', 'searchMessages', 'getMessagesByTypeHandler']);
+const REAL_REST_HANDLERS = new Set(['getBoot', 'getIntegrations', 'getAllQuickMessagesHandler', 'getLabels', 'getConversations', 'getMessages', 'getConversationsUpdates', 'getConversationById', 'getMessagesAround', 'getFileMessages', 'getMediaMessages', 'getMessageById', 'searchMessages', 'getMessagesByTypeHandler']);
 const mockRecordingProxy = (realModule: () => any, realNames: ReadonlySet<string>) =>
   new Proxy({}, {
     get: (_t, name: string) => (...args: any[]) => {
@@ -165,7 +175,9 @@ jest.mock('../../services/http/handlers/LibraryHandler', () => ({
 }));
 
 export interface RelayOptions {
-  employees: Array<{ id: string; assigned: string[]; modules: string[] }>;
+  employees: Array<{ id: string; assigned: string[]; modules: string[]; profiles?: string[] }>;
+  /** Ids of the rows of `browser_profiles` that exist on the boss machine. */
+  browserProfiles?: string[];
   /** Rows of the `accounts` table: it has no parent_zalo_id column (a Page's parent lives in `fbAccounts`). */
   accounts: AccountRow[];
   /** Rows of `fb_accounts` (id is the internal UUID); a Page is an `accounts` row plus an fb_accounts row with parent_facebook_id. */
@@ -183,6 +195,8 @@ export interface RelayHarness {
   tokenFor(id: string): string;
   /** Marks the employee as disabled (validateToken then reports 'inactive'). */
   setInactive(id: string): void;
+  /** Replaces the browser profiles assigned to an employee in the fake store. */
+  setProfiles(id: string, profiles: string[]): void;
   /** Employee ids whose sockets were disconnected through SocketIOService.disconnectEmployee. */
   disconnected: string[];
   /** Events handed to SocketIOService.publish by the relay. */
@@ -203,6 +217,7 @@ export interface RelayHarness {
 
 export async function startRelay(opts: RelayOptions): Promise<RelayHarness> {
   mockState.employees = opts.employees;
+  mockState.browserProfiles = opts.browserProfiles ?? [];
   mockState.accounts = opts.accounts;
   mockState.fbAccounts = opts.fbAccounts ?? [];
   mockState.connectedFacebook = new Set(opts.connectedFacebook ?? []);
@@ -237,6 +252,7 @@ export async function startRelay(opts: RelayOptions): Promise<RelayHarness> {
     restApiUrl: `http://127.0.0.1:${restApiPort}`,
     tokenFor: (id) => `tok-${id}`,
     setInactive: (id) => { mockState.inactive.add(id); },
+    setProfiles: (id, profiles) => { const e = mockState.employees.find((x) => x.id === id); if (e) e.profiles = profiles; },
     disconnected: mockState.disconnected,
     published: mockState.published,
     handlerCalls: mockState.handlerCalls,

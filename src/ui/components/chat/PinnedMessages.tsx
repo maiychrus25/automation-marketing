@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import DataAccessor from '@/lib/data/DataAccessor';
+import { useEmployeeStore } from '@/store/employeeStore';
+import { isTelegramChannel } from '@/lib/employeeAccounts';
 import ipc from '@/lib/ipc';
 import { toLocalMediaUrl } from '@/lib/localMedia';
 import { useAppStore } from '@/store/appStore';
@@ -626,7 +629,11 @@ export function usePinnedData(zaloId: string | null, threadId: string | null, ch
         const remoteResult = await ipc.telegramUser?.syncPinnedMessages({ accountId: zaloId, chatId: threadId });
         remoteSyncedKeyRef.current = remoteResult?.success ? syncKey : '';
       }
-      const res = await ipc.db?.getPinnedMessages({ zaloId, threadId });
+      // Nhân viên + Telegram: ghim nằm ở boss (sự kiện ghim của Telegram không ghi vào DB máy nhân viên) → đọc qua REST
+      const fromBoss = isTelegramChannel(channel) && useEmployeeStore.getState().mode === 'employee';
+      const res = fromBoss
+        ? await DataAccessor.getPinnedMessages({ zaloId, threadId })
+        : await ipc.db?.getPinnedMessages({ zaloId, threadId });
       const { pins: p, notes: n } = parsePinsResponse(res);
       setPins(p);
       setPinnedNotes(n);

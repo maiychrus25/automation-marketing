@@ -3,6 +3,8 @@ import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { showConfirm } from '@/components/common/ConfirmDialog';
 import { KIND_LABEL, STATUS_LABEL } from './HistoryTab';
+import { useEmployeePoster } from './useEmployeePoster';
+import { redactPaths } from '../../lib/employeePoster';
 import type { PosterLog, ProgressSnapshot, RunSnapshot } from './runState';
 import type { FbPosterRun } from '../../../models/facebookPoster';
 
@@ -36,6 +38,9 @@ interface Props {
 }
 
 export default function RunPanel({ runs, run, progress, logs, profileNames, onSelect, loading, error, onRetry }: Props) {
+  const { isEmployee } = useEmployeePoster();
+  // Nhân viên không thấy đường dẫn trên máy Boss trong nhật ký/lý do chờ.
+  const shown = (text: string) => (isEmployee ? redactPaths(text) : text);
   const showNotification = useAppStore((s) => s.showNotification);
   const listRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -139,7 +144,7 @@ export default function RunPanel({ runs, run, progress, logs, profileNames, onSe
                   <span className={`whitespace-nowrap ${chip.cls}`}>{chip.label}</span>
                   <span className="text-gray-400 whitespace-nowrap">{p.done}/{p.total}</span>
                 </div>
-                {p.waitingReason && <p className="text-gray-400 break-words mt-0.5">{p.waitingReason}</p>}
+                {p.waitingReason && <p className="text-gray-400 break-words mt-0.5">{shown(p.waitingReason)}</p>}
               </li>
             );
           })}
@@ -150,7 +155,7 @@ export default function RunPanel({ runs, run, progress, logs, profileNames, onSe
         {logs.length === 0 ? <p className="text-xs text-gray-400">Chưa có nhật ký.</p> : logs.map((l, i) => (
           <p key={i} className={`text-xs break-words ${LEVEL_COLOR[l.level] || LEVEL_COLOR.info}`}>
             <span className="text-gray-500 mr-1.5">{formatClock(l.at)}</span>
-            {profileNames.get(l.profileId) ? `[${profileNames.get(l.profileId)}] ` : ''}{l.message}
+            {profileNames.get(l.profileId) ? `[${profileNames.get(l.profileId)}] ` : ''}{shown(l.message)}
           </p>
         ))}
       </div>

@@ -10,6 +10,7 @@ import { Spinner } from '@/components/common/PageLoading';
 import { AlertIcon, BookIcon, CheckIcon, ClockIcon, CloseIcon, KeyIcon, LockIcon, PinIcon, PluginIcon, RefreshIcon, SmartphoneIcon, StarIcon, SunIcon, WrenchIcon } from '@/components/common/icons';
 import TelegramBotLoginStep from './TelegramBotLoginStep';
 import PhoneLoginTab from './PhoneLoginTab';
+import { useEmployeeStore } from '@/store/employeeStore';
 import FacebookPagesPanel, { FacebookPageItem } from '../facebook/FacebookPagesPanel';
 
 interface AddAccountModalProps {
@@ -42,6 +43,8 @@ type Step = 'channel' | 'proxy' | 'detail' | 'telegram' | 'telegram_user' | 'pag
 
 export default function AddAccountModal({ onClose }: AddAccountModalProps) {
   const { addAccountInitialChannel } = useAppStore();
+  // Đăng nhập Telegram (SĐT, mã, bot token) chỉ làm được trên máy Boss: nhân viên không thấy hai nút này
+  const isEmployee = useEmployeeStore(s => s.mode === 'employee');
   const initialCh = addAccountInitialChannel as Channel | null;
 
   // Nếu có initialChannel (re-login) → skip channel selection
@@ -170,6 +173,8 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
                   <p className="text-gray-400 text-xs mt-0.5">Tài khoản hoặc Cookie</p>
                 </div>
               </button>
+              {!isEmployee && (
+              <>
               {/* Telegram User */}
               <button
                 onClick={() => handleSelectChannel('telegram_user')}
@@ -198,6 +203,8 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
                   <p className="text-gray-400 text-xs mt-0.5">Nhập Bot Token</p>
                 </div>
               </button>
+              </>
+              )}
             </div>
 
             <p className="text-gray-400 text-[11px] text-center pt-2">

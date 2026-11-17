@@ -101,3 +101,23 @@ describe('employee token revocation', () => {
     expect(mockSettings.get('employee_jwt_secret')).toBe(rotated);
   });
 });
+
+describe('employee update validates like create', () => {
+  beforeEach(() => { mockSettings.clear(); mockEmployees.clear(); mockUuid = 0; jest.restoreAllMocks(); });
+
+  it('refuses an empty display name and a password shorter than 4 characters, and writes nothing', async () => {
+    const { svc, id } = await setup();
+    const before = { ...mockEmployees.get(id) };
+    expect(svc.updateEmployee(id, { display_name: '   ' })).toEqual({ success: false, error: 'Tên hiển thị không được để trống' });
+    expect(svc.updateEmployee(id, { display_name: 'Tên mới', password: 'abc' })).toEqual({ success: false, error: 'Mật khẩu phải có ít nhất 4 ký tự' });
+    expect(mockEmployees.get(id)).toEqual(before);
+  });
+
+  it('still accepts an update without a name or with an empty password (password unchanged)', async () => {
+    const { svc, id } = await setup();
+    const hash = mockEmployees.get(id).password_hash;
+    expect(svc.updateEmployee(id, { is_active: 0 })).toMatchObject({ success: true });
+    expect(svc.updateEmployee(id, { display_name: ' Tên mới ', password: '' })).toMatchObject({ success: true });
+    expect(mockEmployees.get(id)).toMatchObject({ display_name: 'Tên mới', password_hash: hash });
+  });
+});

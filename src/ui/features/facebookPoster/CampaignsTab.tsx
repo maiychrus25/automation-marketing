@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import { showConfirm } from '@/components/common/ConfirmDialog';
 import CampaignDialog from './CampaignDialog';
+import { useEmployeePoster, useEmployeeReload } from './useEmployeePoster';
 import PerformancePanel from './PerformancePanel';
 import { formatShort } from './ScheduleDialog';
 import { formatCount } from './researchFormat';
@@ -71,12 +72,14 @@ export default function CampaignsTab() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  const { isEmployee } = useEmployeePoster();
+  const reloadAll = useEmployeeReload(() => { load(); if (detailId) loadDetail(detailId); }, isEmployee);
   useEffect(() => {
-    const reload = () => { load(); if (detailId) loadDetail(detailId); };
+    const reload = reloadAll;
     // Số bài và TB/bài đổi khi lượt đăng hoặc lượt theo dõi kết thúc, không chỉ khi lịch đổi.
     const offs = ['facebookPoster:schedulesChanged', 'facebookPoster:runFinished', 'facebookPoster:trackFinished'].map((channel) => ipc.on?.(channel, reload));
     return () => { offs.forEach((off) => off?.()); };
-  }, [load, loadDetail, detailId]);
+  }, [reloadAll]);
   useEffect(() => { if (detailId) { setDetail(null); loadDetail(detailId); } }, [detailId, loadDetail]);
 
   const refresh = () => { load(); if (detailId) loadDetail(detailId); };

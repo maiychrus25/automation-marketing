@@ -10,9 +10,13 @@
  * - telegram:getActiveBots  — Get danh sách bot đang active
  */
 
-import { ipcMain } from 'electron';
+import { ipcMain as electronIpcMain } from 'electron';
+import { employeeRoutedIpcMain } from './proxyHelper';
 import * as TelegramBotChannel from '../../src/services/telegram/TelegramBotChannelService';
 import Logger from '../../src/utils/Logger';
+
+// Employee machine: Telegram commands go to the Boss, which holds the sessions.
+const ipcMain = employeeRoutedIpcMain(electronIpcMain);
 
 export function registerTelegramIpc(): void {
   // ── Validate bot token ──────────────────────────────────────────────────
@@ -357,5 +361,5 @@ export function registerTelegramIpc(): void {
     catch (err: any) { return { success: false, error: err.message }; }
   });
 
-  Logger.log('[telegramIpc] Registered 37 Telegram IPC channels');
+  Logger.log('[telegramIpc] Registered Telegram IPC channels');
 }

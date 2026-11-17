@@ -8,6 +8,8 @@ import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import AppModeManager from '../../src/utils/AppModeManager';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import Logger from '../../src/utils/Logger';
+import { routeEmployeeChannel } from './proxyHelper';
+import { handlerMayRunHere } from '../../src/services/http/employeeChannelRoutes';
 import { ProfileJobQueue, type ProfileJobRequest, type ProfileTaskContext } from '../../src/services/browser/ProfileJobQueue';
 import { FacebookPosterCoordinator } from '../../src/services/facebookPoster/FacebookPosterCoordinator';
 import { FacebookPosterService, BUSY_ERROR, ENGINE_MISSING_ERROR, type RunStartOptions } from '../../src/services/facebookPoster/FacebookPosterService';
@@ -67,12 +69,15 @@ import { DailyBriefStore, systemClock } from '../../src/services/dailyBrief/Dail
 import { PageLearner } from '../../src/services/dailyBrief/PageLearner';
 import { readPageIdentity } from '../../src/services/dailyBrief/pageIdentity';
 import { isWorkspaceSwitchInProgress } from './workspaceIpc';
+import { RUN_NOT_FOUND_ERROR } from '../../src/models/facebookPoster';
 import type { FbPosterLead, FbPosterRun, LeadStatus, LinkStatus, LoginCheckSource, PageMetrics, PostStatsGroupBy, ProfileLoginState } from '../../src/models/facebookPoster';
 import { saveDraft, getDraft, approveDraft, type DraftDeps } from '../../src/services/facebookPoster/drafts';
 import { campaignBlockReason, readCampaignRef } from '../../src/services/facebookPoster/campaigns';
 import { scoreGroups } from '../../src/services/facebookPoster/groupScores';
 import { pickBestTimes } from '../../src/services/facebookPoster/bestTimes';
 import { createCampaignOperations } from '../../src/services/facebookPoster/campaignOperations';
+import { isWithinScope, profileIdsOfStoredParams, readProfileScope } from '../../src/services/facebookPoster/profileScope';
+import { createPosterLookup, strictReader } from '../../src/services/facebookPoster/posterLookup';
 import { AutonomyLimiter } from '../../src/services/autonomy/AutonomyLimiter';
 import { createAutonomyOperations, type AutonomyOperations } from '../../src/services/autonomy/autonomyOperations';
 import { createAutonomyBudget } from '../../src/services/autonomy/autonomyBudget';
@@ -821,8 +826,8 @@ function emitLoginStatesChanged(): void {
 }
 
 /** Saved login state of every profile that has one (profiles never checked are absent = unknown). */
-export function listFacebookLoginStates(): ProfileLoginState[] {
-    return store().listLoginStates();
+export function listFacebookLoginStates(profileIds?: readonly string[]): ProfileLoginState[] {
+    return store().listLoginStates(profileIds);
 }
 
 /** Starts a background login check (null = every profile). Throws BUSY_ERROR while a run or another check holds the slot. Shared by IPC and the control API. */
@@ -1291,6 +1296,14 @@ function offsetOf(value: any): number {
     return Number.isInteger(n) && n >= 0 ? n : 0;
 }
 
+/** A job status for an employee: state and progress only. The previous job's result (`last`) is boss-wide (every profile), so it is never shown. */
+export function scopedStatus(status: { running: boolean; jobId: string | null; progress: { done: number; total: number }; last?: unknown }) {
+    return { running: status.running, jobId: status.jobId, progress: { ...status.progress }, last: null };
+}
+
+/** Keys a post's own params use (validateStartParams / validateDraftParams); a relayed draft keeps nothing else. */
+const POST_PARAM_KEYS = ['mode', 'text', 'comment', 'commentDelayMin', 'mediaPaths', 'mediaPath', 'profiles', 'variants', 'campaignId', 'minDelaySec', 'maxDelaySec', 'concurrency', 'staggerMinSec', 'staggerMaxSec'];
+
 /** True when the Facebook Poster is unavailable because the app runs in employee mode. Shared by IPC and the control API. */
 export function isFacebookPosterEmployeeBlocked(): boolean {
     const blocked = AppModeManager.getInstance().isEmployeeMode();
@@ -1298,20 +1311,28 @@ export function isFacebookPosterEmployeeBlocked(): boolean {
     return blocked;
 }
 
-/** Same employee-mode guard and error envelope as browserProfileIpc. */
+/** Longest part of an error message written to the boss log. */
+const LOG_MESSAGE_MAX = 300;
+
+/**
+ * Same employee-mode guard and error envelope as browserProfileIpc. On an employee machine routeEmployeeChannel sends
+ * `proxy` commands to the boss and refuses `boss_only` ones before this listener runs; the guard then only lets a
+ * `local` command (pickMedia) through and still blocks everything unclassified.
+ */
 function handle(channel: string, handler: (params: any) => Promise<Record<string, any> | void> | Record<string, any> | void): void {
-    ipcMain.handle(channel, async (_event, params) => {
+    ipcMain.handle(channel, routeEmployeeChannel(channel, async (_event, params) => {
         try {
-            if (isFacebookPosterEmployeeBlocked()) {
+            if (!handlerMayRunHere(isFacebookPosterEmployeeBlocked(), channel)) {
                 return { success: false, error: 'Tính năng Đăng Facebook chỉ dùng được ở chế độ Boss/Standalone' };
             }
             const result = await handler(params || {});
             return { success: true, ...(result || {}) };
         } catch (err: any) {
-            Logger.error(`[facebookPosterIpc] ${channel} error: ${err.message}`);
+            // Validation errors echo the caller's input: log a bounded part only (the returned error is unchanged).
+            Logger.error(`[facebookPosterIpc] ${channel} error: ${String(err?.message).slice(0, LOG_MESSAGE_MAX)}`);
             return { success: false, error: err.message };
         }
-    });
+    }));
 }
 
 /** Handler bodies, shared verbatim by the IPC channels and the control API. Callers handle the employee-mode guard and envelope. */
@@ -1359,10 +1380,10 @@ export const posterOperations = {
 
     scheduleList: (params?: any) => {
         if (params?.campaignId !== undefined && typeof params.campaignId !== 'string') throw new Error('campaignId không hợp lệ');
-        return {
-            schedules: store().listSchedules(params?.campaignId === undefined ? {} : { campaignId: params.campaignId }),
-            queuedIds: scheduler?.queuedIds() ?? [],
-        };
+        const scope = readProfileScope(params);
+        const schedules = store().listSchedules({ ...(params?.campaignId === undefined ? {} : { campaignId: params.campaignId }), profileIds: scope });
+        const queued = scheduler?.queuedIds() ?? [];
+        return { schedules, queuedIds: scope === undefined ? queued : queued.filter((id) => schedules.some((s) => s.id === id)) };
     },
 
     // `origin` is 'api' only from the Control API port (controlApiIpc): enabling or re-timing hands the schedule to the bot's limits.
@@ -1395,7 +1416,11 @@ export const posterOperations = {
     },
 
     draftSave: (params: any) => {
-        const schedule = saveDraft(draftDeps(), params);
+        // validateDraftParams copies every key of the post params into the stored draft: the relay keys must not get in.
+        const inner = params?.params;
+        // A relayed draft keeps only the post's own keys (the validator would store any other key, `mediaIds` included); a boss call is unchanged.
+        const relayed = params?._fromRelay === true && inner && typeof inner === 'object' && !Array.isArray(inner);
+        const schedule = saveDraft(draftDeps(), relayed ? { ...params, params: Object.fromEntries(Object.entries(inner).filter(([key]) => POST_PARAM_KEYS.includes(key))) } : params);
         emitSchedulesChanged();
         return { schedule };
     },
@@ -1427,7 +1452,18 @@ export const posterOperations = {
         return { cancelled: getService().cancel(runId) };
     },
 
-    active: (_params?: any) => ({ runs: getService().active() }),
+    active: (params?: any) => {
+        const scope = readProfileScope(params);
+        const runs = getService().active();
+        if (scope === undefined) return { runs };
+        // A snapshot holds the run (its own params) and per-profile progress counters; no log text, so keeping or dropping whole runs is enough.
+        // The run's profiles come from the lookup (params, results and the Page-managed marker); an unknown run is not shown.
+        const lookup = createPosterLookup(strictReader(db()));
+        return { runs: runs.filter(({ run, progress }) => {
+            const known = lookup.runProfiles(run.id);
+            return known !== null && isWithinScope([...known, ...profileIdsOfStoredParams(run.params), ...progress.profiles.map((p) => p.profileId)], scope);
+        }) };
+    },
 
     current: (_params?: any) => {
         const current = getService().current();
@@ -1435,30 +1471,45 @@ export const posterOperations = {
     },
 
     listGroups: (params: any) => {
-        const ids = Array.isArray(params.profileIds) ? params.profileIds.filter((id: unknown) => typeof id === 'string') : [];
-        return { groups: store().listGroups(ids) };
+        const scope = readProfileScope(params);
+        const ids: string[] = Array.isArray(params.profileIds) ? params.profileIds.filter((id: unknown) => typeof id === 'string') : [];
+        return { groups: store().listGroups(scope === undefined ? ids : ids.filter((id) => scope.includes(id))) };
     },
 
     listRuns: (params: any) => {
         const kind = ['post', 'join', 'scan_groups', 'collect_comments'].includes(params.kind) ? params.kind : undefined;
-        return store().listRuns({ limit: clampLimit(params.limit, 50, 200), offset: offsetOf(params.offset), kind });
+        return store().listRuns({ limit: clampLimit(params.limit, 50, 200), offset: offsetOf(params.offset), kind, profileIds: readProfileScope(params) });
     },
 
     getRun: (params: any) => {
         const found = typeof params.runId === 'string' ? store().getRun(params.runId) : null;
-        if (!found) throw new Error('Không tìm thấy lần chạy');
+        if (!found) throw new Error(RUN_NOT_FOUND_ERROR);
         return found;
     },
 
     listComments: (params: any) => {
         const postUrl = typeof params.postUrl === 'string' && params.postUrl ? params.postUrl : undefined;
         const s = store();
-        const page = s.listComments({ postUrl, limit: clampLimit(params.limit, 100, 500), offset: offsetOf(params.offset) });
+        const page = s.listComments({ postUrl, limit: clampLimit(params.limit, 100, 500), offset: offsetOf(params.offset), profileIds: readProfileScope(params) });
         // Giao diện đánh dấu cột "Khách" cho bình luận đã thành khách.
         return { ...page, leadKeys: [...s.leadCommentKeys(page.comments.map((c) => c.key))] };
     },
 
-    listPostedUrls: (_params?: any) => ({ posts: store().listPostedUrls(200) }),
+    listPostedUrls: (params?: any) => ({ posts: store().listPostedUrls(200, readProfileScope(params)) }),
+
+    checkLogins: (params: any) => {
+        const scope = readProfileScope(params);
+        let ids: string[] | null = null;
+        // Under a scope a missing list means the scope, never every profile of the boss.
+        const wanted: unknown = scope !== undefined && !Array.isArray(params.profileIds) ? scope : params.profileIds;
+        if (Array.isArray(wanted)) {
+            ids = wanted.filter((id: unknown): id is string => typeof id === 'string' && (scope === undefined || scope.includes(id)));
+            if (ids!.length === 0) throw new Error('Chưa chọn profile nào để kiểm tra');
+        }
+        return checkFacebookLogins(ids, 'manual');
+    },
+
+    getLoginStates: (params?: any) => ({ states: listFacebookLoginStates(readProfileScope(params)) }),
 
     pickMedia: async (_params?: any) => {
         const result = await dialog.showOpenDialog({
@@ -1471,7 +1522,7 @@ export const posterOperations = {
 
     exportRunCsv: async (params: any) => {
         const found = typeof params.runId === 'string' ? store().getRun(params.runId) : null;
-        if (!found) throw new Error('Không tìm thấy lần chạy');
+        if (!found) throw new Error(RUN_NOT_FOUND_ERROR);
         const result = await dialog.showSaveDialog({
             defaultPath: `facebook-poster-${found.run.id}.csv`,
             filters: [{ name: 'CSV', extensions: ['csv'] }],
@@ -1496,7 +1547,7 @@ function readCampaignFilter(p: any): void {
 
 /** Campaign handler bodies, shared by the IPC channels and the control API. Changes make the scheduler re-evaluate its campaign gates. */
 export const campaignOperations = createCampaignOperations({
-    store, now: Date.now, newId: randomUUID, reschedule: () => {
+    store, campaignProfiles: (id) => createPosterLookup(strictReader(db())).campaignProfiles(id), now: Date.now, newId: randomUUID, reschedule: () => {
         scheduler?.reschedule();
         profileQueue?.notifyAvailability();
     },
@@ -1519,11 +1570,21 @@ export const trackingOperations = {
             }
             trackParams.groupUrls = p.groupUrls;
         }
-        trackParams.profileIds = checkProfileIds(p.profileIds, db().getBrowserProfiles().map((b) => b.id));
+        // A relayed call tracks only the employee's profiles: no list means all of them, never every profile of the boss.
+        const scope = readProfileScope(p);
+        let requested = p.profileIds;
+        if (scope !== undefined) {
+            requested = p.profileIds === undefined ? scope : p.profileIds;
+            if (!Array.isArray(requested) || requested.some((id: unknown) => typeof id !== 'string' || !scope.includes(id))) throw new Error('Hồ sơ không thuộc phạm vi của bạn');
+        }
+        trackParams.profileIds = checkProfileIds(requested, db().getBrowserProfiles().map((b) => b.id));
         return getTracker().track(trackParams);
     },
 
-    status: () => ({ ...getTracker().status() }),
+    status: (params?: any) => {
+        const status = getTracker().status();
+        return readProfileScope(params) === undefined ? { ...status } : scopedStatus(status);
+    },
 
     cancel: () => ({ cancelled: tracker?.cancel() ?? false }),
 
@@ -1540,6 +1601,7 @@ export const trackingOperations = {
         const s = store();
         const matched = s.listTracking({
             linkStatus: p.linkStatus, profileId: p.profileId, groupUrl: p.groupUrl, campaignId: p.campaignId, scheduleId: p.scheduleId, sinceMs: from, untilMs: to, limit: MAX_TRACK_LIST_SCAN,
+            profileIds: readProfileScope(p),
         });
         const page = matched.slice(offset, offset + limit);
         const latest = new Map(s.latestStats(page.map((r) => r.resultId)).map((x) => [x.resultId, x]));
@@ -1553,14 +1615,14 @@ export const trackingOperations = {
         if (p.scheduleId !== undefined && (typeof p.scheduleId !== 'string' || !p.scheduleId)) throw new Error('scheduleId không hợp lệ');
         readCampaignFilter(p);
         const limit = clampLimit(p.limit, 200, MAX_TRACK_LIST_LIMIT);
-        return { rows: store().statsReport({ from, to, groupBy: p.groupBy, limit, campaignId: p.campaignId, scheduleId: p.scheduleId }) };
+        return { rows: store().statsReport({ from, to, groupBy: p.groupBy, limit, campaignId: p.campaignId, scheduleId: p.scheduleId, profileIds: readProfileScope(p) }) };
     },
 
     groupScores: (params: any) => {
         const p = params ?? {};
         const { from, to } = parseTimeRange(p);
         readCampaignFilter(p);
-        return { groups: scoreGroups(store().groupScoreInputs({ from, to, campaignId: p.campaignId })) };
+        return { groups: scoreGroups(store().groupScoreInputs({ from, to, campaignId: p.campaignId, profileIds: readProfileScope(p) })) };
     },
 
     bestTimes: (params: any) => {
@@ -1569,19 +1631,20 @@ export const trackingOperations = {
         if (p.groupUrl !== undefined && (typeof p.groupUrl !== 'string' || !p.groupUrl)) throw new Error('groupUrl không hợp lệ');
         readCampaignFilter(p);
         const s = store();
-        const base = { from, to, limit: MAX_TIME_BUCKET_ROWS, campaignId: p.campaignId, groupUrl: p.groupUrl };
+        const base = { from, to, limit: MAX_TIME_BUCKET_ROWS, campaignId: p.campaignId, groupUrl: p.groupUrl, profileIds: readProfileScope(p) };
         return pickBestTimes(s.statsReport({ ...base, groupBy: 'hour' }), s.statsReport({ ...base, groupBy: 'weekday' }));
     },
 
     /** Bài Page đã biết Page (`pageId` khác '') đăng trong `days` ngày gần nhất, mọi lần đo theo mốc và chuỗi người theo dõi theo ngày. */
-    pageMetrics: (params: { pageId?: string; days?: number }): { pages: PageMetrics[] } => {
+    pageMetrics: (params: { pageId?: string; days?: number; [relayKey: string]: unknown }): { pages: PageMetrics[] } => {
         const p: any = params ?? {};
         const days = p.days === undefined ? DEFAULT_REPORT_DAYS : p.days;
         if (!Number.isInteger(days) || days < 1 || days > MAX_PAGE_METRICS_DAYS) throw new Error(`days phải là số nguyên từ 1 đến ${MAX_PAGE_METRICS_DAYS}`);
         if (p.pageId !== undefined && (typeof p.pageId !== 'string' || !p.pageId)) throw new Error('pageId không hợp lệ');
         const s = store();
+        const scope = readProfileScope(p);
         const since = Date.now() - days * DAY_MS;
-        const rows = s.listTracking({ targetKind: 'page', pageId: p.pageId, sinceMs: since, limit: MAX_TRACK_LIST_SCAN }).filter((r) => r.pageId !== '');
+        const rows = s.listTracking({ targetKind: 'page', pageId: p.pageId, sinceMs: since, limit: MAX_TRACK_LIST_SCAN, profileIds: scope }).filter((r) => r.pageId !== '');
         const history = s.statsHistory(rows.map((r) => r.resultId));
         const texts = s.postTexts(rows);
         const names = s.pageNames();
@@ -1594,14 +1657,14 @@ export const trackingOperations = {
         for (const r of rows) {
             pageOf(r.pageId).posts.push({ resultId: r.resultId, postId: r.postId, postUrl: r.postUrl, postedAt: r.postedAt, linkStatus: r.linkStatus, text: (texts.get(r.resultId) ?? r.textHead).slice(0, 200), snapshots: history.get(r.resultId) ?? [] });
         }
-        for (const f of s.listPageFollowers({ pageId: p.pageId, sinceDay: systemClock.date(since) })) if (f.pageId !== '') pageOf(f.pageId).followers.push(f);
+        for (const f of s.listPageFollowers({ pageId: p.pageId, sinceDay: systemClock.date(since), profileIds: scope })) if (f.pageId !== '') pageOf(f.pageId).followers.push(f);
         return { pages: [...pages.values()].sort((a, b) => (a.pageId < b.pageId ? -1 : a.pageId > b.pageId ? 1 : 0)) };
     },
 
     getConfig: () => ({ config: readTrackingConfig() }),
 
     setConfig: (params: any) => {
-        const config = validatePostTrackingConfig(params);
+        const config = validatePostTrackingConfig(params); // picks its own fields: the relay keys are never stored
         db().setSetting(POST_TRACKING_SETTING_KEY, JSON.stringify(config));
         return { config };
     },
@@ -1685,7 +1748,7 @@ export const leadOperations = {
     list: (params?: any) => {
         const p = params ?? {};
         const filter = readLeadFilter(p);
-        return store().listLeads({ ...filter, limit: clampLimit(p.limit, 100, MAX_LEAD_LIST_LIMIT), offset: offsetOf(p.offset) });
+        return store().listLeads({ ...filter, limit: clampLimit(p.limit, 100, MAX_LEAD_LIST_LIMIT), offset: offsetOf(p.offset), profileIds: readProfileScope(p) });
     },
 
     update: (params: any) => {
@@ -1734,6 +1797,8 @@ export const leadOperations = {
     collect: (params?: any) => {
         if (admissionPaused || isWorkspaceSwitchInProgress()) throw new Error(WORKSPACE_SWITCHING_ERROR);
         const p = params ?? {};
+        // A relayed call always names its posts (the relay fills them from the employee's tracked posts); none would mean every tracked post.
+        if (readProfileScope(p) !== undefined && p.postUrls === undefined) throw new Error('Yêu cầu không hợp lệ');
         if (p.postUrls !== undefined) {
             if (!Array.isArray(p.postUrls) || p.postUrls.length === 0 || p.postUrls.length > MAX_COLLECT_POST_URLS
                 || p.postUrls.some((u: unknown) => typeof u !== 'string' || !u)) {
@@ -1743,7 +1808,10 @@ export const leadOperations = {
         return getCollector().collect({ postUrls: p.postUrls, auto: false });
     },
 
-    collectStatus: () => ({ ...getCollector().status() }),
+    collectStatus: (params?: any) => {
+        const status = getCollector().status();
+        return readProfileScope(params) === undefined ? { ...status } : scopedStatus(status);
+    },
 
     collectCancel: () => ({ cancelled: collector?.cancel() ?? false }),
 
@@ -1757,7 +1825,7 @@ export const leadOperations = {
 
     listReplies: (params?: any) => {
         const p = params ?? {};
-        return { replies: store().listLeadReplies(clampLimit(p.limit, 100, MAX_LEAD_LIST_LIMIT), offsetOf(p.offset)) };
+        return { replies: store().listLeadReplies(clampLimit(p.limit, 100, MAX_LEAD_LIST_LIMIT), offsetOf(p.offset), readProfileScope(p)) };
     },
 
     /** Danh sách bình luận đã thu; `since` (ms) chỉ lấy bình luận thu từ mốc đó. */
@@ -1794,14 +1862,7 @@ export function registerFacebookPosterIpc(): void {
     handle('facebookPoster:listPostedUrls', posterOperations.listPostedUrls);
     handle('facebookPoster:pickMedia', posterOperations.pickMedia);
     handle('facebookPoster:exportRunCsv', posterOperations.exportRunCsv);
-    handle('facebookPoster:checkLogins', (params) => {
-        let ids: string[] | null = null;
-        if (Array.isArray(params.profileIds)) {
-            ids = params.profileIds.filter((id: unknown): id is string => typeof id === 'string');
-            if (ids.length === 0) throw new Error('Chưa chọn profile nào để kiểm tra');
-        }
-        return checkFacebookLogins(ids, 'manual');
-    });
+    handle('facebookPoster:checkLogins', posterOperations.checkLogins);
     handle('facebookPoster:trackPosts', (params) => trackingOperations.track(params));
     handle('facebookPoster:trackStatus', trackingOperations.status);
     handle('facebookPoster:trackCancel', trackingOperations.cancel);
@@ -1837,7 +1898,7 @@ export function registerFacebookPosterIpc(): void {
     handle('autonomy:resume', () => getAutonomyOperations().resume('app'));
     handle('autonomy:resumeProfile', (params) => getAutonomyOperations().resumeProfile(String(params.profileId ?? ''), 'app'));
     handle('autonomy:changes', (params) => getAutonomyOperations().changes(Number.isFinite(params.since) ? params.since : 0));
-    handle('facebookPoster:getLoginStates', () => ({ states: listFacebookLoginStates() }));
+    handle('facebookPoster:getLoginStates', posterOperations.getLoginStates);
     handle('facebookPoster:getLoginCheckConfig', () => ({ config: parseLoginCheckConfig(db().getSetting(LOGIN_CHECK_SETTING_KEY)) }));
     handle('facebookPoster:setLoginCheckConfig', (params) => {
         const config = validateLoginCheckConfig(params);

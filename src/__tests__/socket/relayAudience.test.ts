@@ -81,3 +81,19 @@ describe('module audience and key union', () => {
       .toEqual({ kind: 'accounts', ids: ['acc-a', 'acc-b'] });
   });
 });
+
+describe('profiles audience', () => {
+  const a: RelayAudience = { kind: 'profiles', ids: ['p1', 'p2'] };
+  it('needs every profile to be allowed', () => {
+    expect(canReceiveRelayEvent(a, 'e1', [], undefined, ['p1', 'p2', 'p3'])).toBe(true);
+    expect(canReceiveRelayEvent(a, 'e1', [], undefined, ['p1'])).toBe(false);
+    expect(canReceiveRelayEvent(a, 'e1', [], undefined, [])).toBe(false);
+  });
+  it('an empty id list, and no resolver, reach nobody', () => {
+    expect(canReceiveRelayEvent({ kind: 'profiles', ids: [] }, 'e1', ['x'], () => true, ['p1'])).toBe(false);
+    expect(canReceiveRelayEvent(a, 'e1', ['p1', 'p2'], () => true)).toBe(false);
+  });
+  it('accounts and modules do not stand in for profiles', () => {
+    expect(canReceiveRelayEvent({ kind: 'profiles', ids: ['p1'] }, 'e1', ['p1'], () => true)).toBe(false);
+  });
+});

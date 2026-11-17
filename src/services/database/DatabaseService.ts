@@ -478,6 +478,16 @@ class DatabaseService {
         }
     }
 
+    /** Like `query` but a SQL error is thrown, so a caller that must tell "no rows" from "failed" (access checks) never mistakes one for the other. */
+    public queryStrict<T>(sql: string, params: any[] = []): T[] {
+        return db!.prepare(sql).all(...params) as T[];
+    }
+
+    /** Like `queryOne` but a SQL error is thrown (see `queryStrict`). */
+    public queryOneStrict<T>(sql: string, params: any[] = []): T | undefined {
+        return db!.prepare(sql).get(...params) as T | undefined;
+    }
+
     queryOne<T>(sql: string, params: any[] = []): T | undefined {
         try {
             return db!.prepare(sql).get(...params) as T | undefined;
@@ -1164,6 +1174,12 @@ class DatabaseService {
                 updated_at       INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_browser_profiles_group ON browser_profiles(group_id);
+            CREATE TABLE IF NOT EXISTS employee_profile_access (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id TEXT NOT NULL,
+                profile_id  TEXT NOT NULL,
+                UNIQUE(employee_id, profile_id)
+            );
         `);
 
         // ─── Facebook poster ─────────────────────────────────────────────────────
@@ -3138,6 +3154,11 @@ class DatabaseService {
             .map((row) => this.mapBrowserProfileRow(row));
     }
 
+    /** Ids only: the poster access check needs no fingerprint, proxy or cookies. */
+    public getBrowserProfileIds(): string[] {
+        return this.query<{ id: string }>('SELECT id FROM browser_profiles').map((row) => row.id);
+    }
+
     public getBrowserProfileById(id: string): BrowserProfile | null {
         const row = this.queryOne<any>('SELECT * FROM browser_profiles WHERE id = ?', [id]);
         return row ? this.mapBrowserProfileRow(row) : null;
@@ -3173,6 +3194,7 @@ class DatabaseService {
     public deleteBrowserProfile(id: string): void {
         db!.prepare('DELETE FROM browser_profiles WHERE id = ?').run(id);
         db!.prepare('DELETE FROM fb_poster_groups WHERE profile_id = ?').run(id);
+        db!.prepare('DELETE FROM employee_profile_access WHERE profile_id = ?').run(id);
     }
 
     /** Gắn/gỡ proxy cho nhiều profile, trả về số profile đã cập nhật */
@@ -3541,12 +3563,13 @@ class DatabaseService {
     }
 
     /** Mark a message as handled by employee - matches by msg_id OR cli_msg_id (fallback for ID mismatch) */
-    public setMessageHandledByEmployeeFlexible(ownerZaloId: string, msgId: string, employeeId: string): void {
+    public setMessageHandledByEmployeeFlexible(ownerZaloId: string, msgId: string, employeeId: string, threadId?: string): void {
         if (!this.initialized || !msgId || !employeeId) return;
         try {
+            // Telegram message ids repeat across the chats of one account: the caller passes the chat to tag only that row.
             this.run(
-                `UPDATE messages SET handled_by_employee = ? WHERE owner_zalo_id = ? AND (msg_id = ? OR cli_msg_id = ?)`,
-                [employeeId, ownerZaloId, msgId, msgId]
+                `UPDATE messages SET handled_by_employee = ? WHERE owner_zalo_id = ? AND (msg_id = ? OR cli_msg_id = ?)${threadId ? ' AND thread_id = ? AND is_sent = 1' : ''}`,
+                threadId ? [employeeId, ownerZaloId, msgId, msgId, threadId] : [employeeId, ownerZaloId, msgId, msgId]
             );
         } catch (err: any) {
             Logger.warn(`[DatabaseService] setMessageHandledByEmployeeFlexible error: ${err.message}`);
@@ -7648,6 +7671,7 @@ class DatabaseService {
         try {
             this.run(`DELETE FROM employee_permissions WHERE employee_id = ?`, [employeeId]);
             this.run(`DELETE FROM employee_account_access WHERE employee_id = ?`, [employeeId]);
+            this.run(`DELETE FROM employee_profile_access WHERE employee_id = ?`, [employeeId]);
             this.run(`DELETE FROM employee_sessions WHERE employee_id = ?`, [employeeId]);
             this.run(`DELETE FROM employees WHERE employee_id = ?`, [employeeId]);
         } catch (err: any) {
@@ -7679,10 +7703,11 @@ class DatabaseService {
     public setEmployeePermissions(employeeId: string, permissions: Array<{ module: string; can_access: number }>): void {
         if (!this.initialized) return;
         try {
-            this.runNoSave(`DELETE FROM employee_permissions WHERE employee_id = ?`, [employeeId]);
+            // Ghi trộn: khoá không có trong lần lưu giữ nguyên giá trị (hai màn hình sửa quyền biết hai danh sách khác nhau).
             for (const perm of permissions) {
                 this.runNoSave(
-                    `INSERT INTO employee_permissions (employee_id, module, can_access) VALUES (?,?,?)`,
+                    `INSERT INTO employee_permissions (employee_id, module, can_access) VALUES (?,?,?)
+                     ON CONFLICT(employee_id, module) DO UPDATE SET can_access = excluded.can_access`,
                     [employeeId, perm.module, perm.can_access ? 1 : 0]
                 );
             }
@@ -7718,6 +7743,30 @@ class DatabaseService {
         } catch (err: any) {
             Logger.error(`[DB] setEmployeeAccountAccess error: ${err.message}`);
         }
+    }
+
+    // ─── Employee Browser Profile Access ──────────────────────────────
+
+    public getEmployeeProfileAccess(employeeId: string): string[] {
+        if (!this.initialized) return [];
+        try {
+            return this.query<{ profile_id: string }>(`SELECT profile_id FROM employee_profile_access WHERE employee_id = ?`, [employeeId]).map(r => r.profile_id);
+        } catch (err: any) {
+            Logger.error(`[DB] getEmployeeProfileAccess error: ${err.message}`);
+            return [];
+        }
+    }
+
+    public setEmployeeProfileAccess(employeeId: string, profileIds: string[]): void {
+        if (!this.initialized) return;
+        // Một giao dịch: lỗi giữa chừng hoàn tác về danh sách cũ và được ném ra cho nơi gọi báo thất bại.
+        this.transaction(() => {
+            this.runNoSave(`DELETE FROM employee_profile_access WHERE employee_id = ?`, [employeeId]);
+            for (const profileId of new Set(profileIds.filter((id) => typeof id === 'string' && id))) {
+                this.runNoSave(`INSERT INTO employee_profile_access (employee_id, profile_id) VALUES (?,?)`, [employeeId, profileId]);
+            }
+        });
+        this.save();
     }
 
     public getEmployeesForAccount(zaloId: string): any[] {

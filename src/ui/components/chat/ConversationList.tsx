@@ -16,6 +16,8 @@ import GroupAvatar from '../common/GroupAvatar';
 import { Spinner } from '@/components/common/PageLoading';
 import { BellIcon, BellOffIcon, BookmarkIcon, ChatIcon, CheckIcon, CircleIcon, ClipboardListIcon, CloseIcon, CloudIcon, FolderIcon, GlobeIcon, HardDriveIcon, ImageIcon, LinkIcon, MapPinIcon, MessageCircleIcon, PaperclipIcon, PinIcon, PluginIcon, TargetIcon, TrashIcon, UsersIcon } from '@/components/common/icons';
 import { toLocalMediaUrl } from '@/lib/localMedia';
+import { shouldQueryDbFilter, shouldResetPagingOnFilterChange } from '@/lib/employeeAccounts';
+import { filterConversationsInMemory } from '@/lib/conversationFilter';
 import GlobalSearchPanel from './GlobalSearchPanel';
 import useIsMobile from '@/hooks/useIsMobile';
 import { syncZaloGroups, MemberPlaceholder } from '@/lib/zaloGroupUtils';
@@ -94,6 +96,7 @@ export default function ConversationList() {
     }
   });
   const { activeAccountId, accounts: allAccountsList, setActiveAccount } = useAccountStore();
+  const conversationsLoadingNow = useChatStore((s) => !!s.conversationsLoading[activeAccountId || '']);
   const activeAccountObj = allAccountsList.find(a => a.zalo_id === activeAccountId);
   const channelCap = getCapability((activeAccountObj?.channel || CHANNEL.ZALO) as Channel);
   const { labels: allLabels, setLabels, showNotification, setMuted, clearMuted, isMuted: isMutedFn, groupInfoCache, setGroupInfo,
@@ -159,6 +162,9 @@ export default function ConversationList() {
 
   /** Loading state cho initial fetch - tránh hiển thị empty state khi chưa có data */
   const [initialLoading, setInitialLoading] = useState(true);
+  const ownLoadAttemptedRef = useRef<string | null>(null);
+  const ownLoadRunningRef = useRef(false);
+  const sawLoadingRef = useRef<string | null>(null);
 
   /** Proxy Zalo API calls qua Boss khi ở employee mode */
   const zaloApi = useCallback(async (method: string, params: any) => {
@@ -182,7 +188,8 @@ export default function ConversationList() {
   const [dbFilteredContacts, setDbFilteredContacts] = useState<any[] | null>(null);
   useEffect(() => {
     const hasFilter = channelFilter !== 'all' || !!search || filter === 'unread' || filter === 'others';
-    if (!hasFilter) { setDbFilteredContacts(null); return; }
+    // Máy nhân viên: handler cục bộ luôn trả [] → không gọi DB, giữ null để lọc trong bộ nhớ trên danh sách đã tải.
+    if (!shouldQueryDbFilter(isEmp, hasFilter)) { setDbFilteredContacts(null); return; }
 
     let cancelled = false;
     const ipc = (window as any).electronAPI?.db;
@@ -224,7 +231,7 @@ export default function ConversationList() {
     }
 
     return () => { cancelled = true; };
-  }, [activeAccountId, mergedInboxMode, mergedInboxAccounts.join(','), channelFilter, search, filter]);
+  }, [isEmp, activeAccountId, mergedInboxMode, mergedInboxAccounts.join(','), channelFilter, search, filter]);
   const [conversationNextOffset, setConversationNextOffset] = useState(PAGE_SIZE);
   const [conversationExhausted, setConversationExhausted] = useState(false);
   const listContainerRef = useRef<HTMLDivElement>(null);
@@ -232,11 +239,17 @@ export default function ConversationList() {
   const loadMoreConversationsRef = useRef<() => void>(() => {});
 
   // Reset displayCount khi đổi account hoặc filter
+  const pagingAccountRef = useRef(activeAccountId);
   useEffect(() => {
+    const accountChanged = pagingAccountRef.current !== activeAccountId;
+    pagingAccountRef.current = activeAccountId;
     setDisplayCount(PAGE_SIZE);
-    setConversationHasMore(false);
-    setConversationNextOffset(PAGE_SIZE);
-    setConversationExhausted(false);
+    // Nhân viên: đổi bộ lọc chỉ lọc trong bộ nhớ → giữ phân trang; đổi tài khoản vẫn đặt lại
+    if (accountChanged || shouldResetPagingOnFilterChange(isEmp)) {
+      setConversationHasMore(false);
+      setConversationNextOffset(PAGE_SIZE);
+      setConversationExhausted(false);
+    }
   }, [activeAccountId, filter, filterLabelIds, search, mergedInboxFilterAccount, channelFilter]);
 
   useEffect(() => {
@@ -252,10 +265,11 @@ export default function ConversationList() {
     if (!activeAccountId || mergedInboxMode || conversationLoadingMore || !conversationHasMore) return;
     setConversationLoadingMore(true);
     try {
-      const current = useChatStore.getState().contacts[activeAccountId] || [];
       const result = await DataAccessor.getConversations(activeAccountId, PAGE_SIZE, conversationNextOffset);
       const items = Array.isArray(result?.items) ? result.items : [];
       if (items.length > 0) {
+        // Đọc lại sau await: một lần tải lại ghi trong lúc chờ không bị ghi đè bởi danh sách cũ
+        const current = useChatStore.getState().contacts[activeAccountId] || [];
         const seen = new Set(current.map((contact) => contact.contact_id));
         const merged = [
           ...current,
@@ -379,9 +393,18 @@ export default function ConversationList() {
       setConversationHasMore(currentContacts.length >= PAGE_SIZE && !conversationExhausted);
       if (conversationExhausted || !isEmp || currentContacts.length >= PAGE_SIZE) return;
     }
-    if (useChatStore.getState().conversationsLoading[activeAccountId]) return;
+    if (useChatStore.getState().conversationsLoading[activeAccountId]) {
+      // Bộ nạp nền đang giữ cờ: lần nhả cờ sau (kể cả khi lượt nạp nền lỗi) cho phép tự nạp một lần
+      if (!ownLoadRunningRef.current) ownLoadAttemptedRef.current = null;
+      return;
+    }
+    // Tự nạp tối đa một lần cho mỗi lần cờ được nhả, ở mọi chế độ: cờ đang tải nằm trong deps nên
+    // thiếu chốt này thì tài khoản rỗng trên máy boss sẽ nạp lại vô hạn
+    if (ownLoadAttemptedRef.current === activeAccountId) return;
+    ownLoadAttemptedRef.current = activeAccountId;
 
     const loadContactsForAccount = async () => {
+      ownLoadRunningRef.current = true;
       useChatStore.getState().setConversationsLoading(activeAccountId, true);
       try {
         const result = await DataAccessor.getConversations(activeAccountId, PAGE_SIZE, 0);
@@ -406,11 +429,12 @@ export default function ConversationList() {
       } catch (err) {
         console.warn('[ConversationList] Failed to load contacts:', err);
       } finally {
+        ownLoadRunningRef.current = false;
         useChatStore.getState().setConversationsLoading(activeAccountId, false);
       }
     };
     loadContactsForAccount();
-  }, [activeAccountId, isEmp, conversationExhausted]);
+  }, [activeAccountId, isEmp, conversationExhausted, conversationsLoadingNow]);
 
   // ─── Clear initial loading khi contacts load lần đầu ───────────────────
   // Trong employee mode với high ping, tránh hiển thị empty state trước khi fetch xong
@@ -428,6 +452,13 @@ export default function ConversationList() {
     const timeout = setTimeout(() => setInitialLoading(false), INITIAL_LOADING_TIMEOUT_MS);
     return () => clearTimeout(timeout);
   }, [activeAccountId, contacts]);
+
+  // Tài khoản đã được đánh dấu "đang tải" rồi nhả cờ (kể cả xong với 0 hội thoại) → bỏ skeleton ngay, không chờ 8 giây
+  useEffect(() => {
+    if (!activeAccountId) return;
+    if (conversationsLoadingNow) sawLoadingRef.current = activeAccountId;
+    else if (sawLoadingRef.current === activeAccountId) setInitialLoading(false);
+  }, [activeAccountId, conversationsLoadingNow]);
 
   // Watch contacts cho account hiện tại - clear initial loading khi data về
   useEffect(() => {
@@ -966,7 +997,10 @@ export default function ConversationList() {
   // ── Filtered list: dùng DB result khi có filter, fallback memory filter ──
   const filtered = useMemo(() => {
     // Ưu tiên DB-filtered result (nhanh, đã filter channel/search/unread/others ở DB level)
-    const rawSource = dbFilteredContacts ?? accountContacts;
+    // Máy nhân viên: không có truy vấn DB → lọc search/chưa đọc/kênh trong bộ nhớ trên các hội thoại đã tải
+    const rawSource = isEmp
+      ? filterConversationsInMemory(accountContacts, { search, unreadOnly: filter === 'unread', channel: channelFilter })
+      : (dbFilteredContacts ?? accountContacts);
     // Safety: luôn loại bỏ hội thoại "Khác" khi không ở tab "Khác"
     const source = filter === 'others'
       ? rawSource.filter(c => othersConversations.has(c.contact_id))
@@ -1018,7 +1052,7 @@ export default function ConversationList() {
       }
       return (b.last_message_time || 0) - (a.last_message_time || 0);
     });
-  }, [dbFilteredContacts, accountContacts, filter, othersConversations, filterLabelIds, effectiveFilterLabelSource, filterLabelMode, labels, localLabelThreadMapByAccount, activeAccountId, localPinnedThreads, pinnedThreads, activeThreadId, drafts, draftTimestamps]);
+  }, [isEmp, search, channelFilter, dbFilteredContacts, accountContacts, filter, othersConversations, filterLabelIds, effectiveFilterLabelSource, filterLabelMode, labels, localLabelThreadMapByAccount, activeAccountId, localPinnedThreads, pinnedThreads, activeThreadId, drafts, draftTimestamps]);
 
   // ── Chế độ Gộp trang: gộp contacts từ tất cả tài khoản được chọn ──────────
   const mergedContacts = useMemo(() => {
@@ -1063,7 +1097,9 @@ export default function ConversationList() {
     if (!mergedContacts) return null;
     // Ưu tiên DB-filtered result khi có filter
     const hasFilter = channelFilter !== 'all' || !!search || filter === 'unread' || filter === 'others';
-    const rawSource = (hasFilter && dbFilteredContacts) ? dbFilteredContacts : mergedContacts;
+    const rawSource = isEmp
+      ? filterConversationsInMemory(mergedContacts, { search, unreadOnly: filter === 'unread', channel: channelFilter })
+      : (hasFilter && dbFilteredContacts) ? dbFilteredContacts : mergedContacts;
 
     // Account filter (from sidebar)
     const accountFiltered = mergedInboxFilterAccount
@@ -1120,7 +1156,7 @@ export default function ConversationList() {
     }
 
     return source;
-  }, [mergedContacts, dbFilteredContacts, mergedInboxFilterAccount, channelFilter, search, filter, filterLabelIds, allOthers, allLabels, mergedLabels, effectiveFilterLabelSource, filterLabelMode, localLabelThreadMapByAccount]);
+  }, [isEmp, mergedContacts, dbFilteredContacts, mergedInboxFilterAccount, channelFilter, search, filter, filterLabelIds, allOthers, allLabels, mergedLabels, effectiveFilterLabelSource, filterLabelMode, localLabelThreadMapByAccount]);
 
   const mergedUnreadCount = mergedContacts
     ? mergedContacts.reduce((s, c) => {
@@ -2382,7 +2418,7 @@ export default function ConversationList() {
                   className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-700 hover:bg-gray-600 text-xs text-gray-200 transition-colors"
                 >
                   {acc.avatar_url
-                    ? <img src={acc.avatar_url} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
+                    ? <img src={toLocalMediaUrl(acc.avatar_url)} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
                     : <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">{(acc.full_name || zaloId).charAt(0).toUpperCase()}</div>
                   }
                   <span className="truncate max-w-[80px]">{acc.full_name || acc.phone || zaloId}</span>
@@ -2438,7 +2474,7 @@ export default function ConversationList() {
         {initialLoading && activeAccountId && accountContacts.length === 0 ? (
           <PageLoading variant="skeleton" skeletonVariant="table" />
         ) : (mergedInboxMode ? (filteredMerged?.length ?? 0) : filtered.length) === 0 ? (
-          useChatStore.getState().conversationsLoading[activeAccountId || ''] ? (
+          conversationsLoadingNow ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-400 text-sm gap-2">
               <span className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
               <p>Đang tải hội thoại...</p>
@@ -2503,7 +2539,7 @@ export default function ConversationList() {
                 {mergedInboxMode && ownerAcc && (
                   <div className="absolute -bottom-1.5 -right-1.5 w-5 h-5 rounded-full border border-gray-800 overflow-hidden z-10 flex-shrink-0" title={ownerAcc.full_name || ownerAcc.zalo_id}>
                     {ownerAcc.avatar_url
-                      ? <img src={ownerAcc.avatar_url} alt="" className="w-full h-full object-cover" />
+                      ? <img src={toLocalMediaUrl(ownerAcc.avatar_url)} alt="" className="w-full h-full object-cover" />
                       : <div className="w-full h-full bg-purple-600 flex items-center justify-center text-white text-[6px] font-bold">{(ownerAcc.full_name || ownerAcc.zalo_id).charAt(0).toUpperCase()}</div>
                     }
                   </div>
@@ -2623,6 +2659,9 @@ export default function ConversationList() {
           || (!mergedInboxMode && conversationHasMore)) && (
           <div ref={sentinelRef} className="h-1 w-full" />
         )}
+        {isEmp && !!search && !mergedInboxMode && conversationHasMore && (
+          <p className="text-[11px] text-gray-400 px-3 py-2 break-words">Chỉ tìm trong các hội thoại đã tải. Cuộn xuống để tải thêm.</p>
+        )}
       </div>
       </>)} {/* end !searchPanelOpen */}
 
@@ -2710,7 +2749,7 @@ export default function ConversationList() {
                     className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-700 text-left transition-colors"
                   >
                     {acc?.avatar_url
-                      ? <img src={acc.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+                      ? <img src={toLocalMediaUrl(acc.avatar_url)} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
                       : <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">{(acc?.full_name || zaloId).charAt(0).toUpperCase()}</div>
                     }
                     <div className="flex-1 min-w-0">

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
@@ -7,6 +7,8 @@ import type { BrowserProfile, BrowserProfileGroup } from '../../../models/browse
 import type { ProfileLoginState } from '../../../models/facebookPoster';
 import LoginStateBadge from './LoginStateBadge';
 import LoginCheckControls from './LoginCheckControls';
+import { useEmployeePoster, useEmployeeReload } from './useEmployeePoster';
+import { POSTER_NO_PROFILE_NOTICE } from '../../lib/employeePoster';
 
 interface Props {
   mode: 'multi' | 'single';
@@ -17,6 +19,7 @@ interface Props {
 
 export default function ProfilePicker({ mode, selected, onChange, disabled }: Props) {
   const setView = useAppStore((s) => s.setView);
+  const { isEmployee, assignedKey } = useEmployeePoster();
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
   const [groups, setGroups] = useState<BrowserProfileGroup[]>([]);
   const [proxyNames, setProxyNames] = useState<Map<number, string>>(new Map());
@@ -29,7 +32,8 @@ export default function ProfilePicker({ mode, selected, onChange, disabled }: Pr
 
   const load = useCallback(async () => {
     try {
-      const [res, proxyRes] = await Promise.all([ipc.browserProfile?.list(), ipc.proxy?.list()]);
+      // Nhân viên không có proxy:list và hồ sơ được gán không kèm proxy_id.
+      const [res, proxyRes] = await Promise.all([ipc.browserProfile?.list(), isEmployee ? undefined : ipc.proxy?.list()]);
       if (!res?.success) {
         setLoadError(res?.error || 'Không tải được danh sách profile');
         return;
@@ -44,21 +48,29 @@ export default function ProfilePicker({ mode, selected, onChange, disabled }: Pr
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isEmployee]);
 
+  // Boss gán/bỏ hồ sơ giữa phiên: tải lại danh sách theo nội dung (assignedKey không đổi khi chỉ đổi identity mảng).
   useEffect(() => {
     load();
     const off = ipc.on?.('browserProfile:statusChanged', (data: { runningIds: string[] }) => setRunningIds(new Set(data?.runningIds || [])));
     return () => off?.();
-  }, [load]);
+  }, [load, assignedKey]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const apply = (states?: ProfileLoginState[]) => setLoginStates(new Map((states || []).map((s) => [s.profileId, s])));
-    ipc.facebookPoster?.getLoginStates().then((res) => { if (!cancelled && res?.success) apply(res.states); }).catch(() => {});
-    const off = ipc.on?.('facebookPoster:loginStateChanged', (states: ProfileLoginState[]) => apply(states));
-    return () => { cancelled = true; off?.(); };
+  const statesSeq = useRef(0);
+  const fetchStates = useCallback(() => {
+    // Chỉ phản hồi của lần gọi mới nhất được ghi: một phản hồi cũ đến muộn không đè kết quả mới.
+    const seq = ++statesSeq.current;
+    ipc.facebookPoster?.getLoginStates().then((res) => { if (seq === statesSeq.current && res?.success) setLoginStates(new Map((res.states || []).map((st: ProfileLoginState) => [st.profileId, st]))); }).catch(() => {});
   }, []);
+  const reloadStates = useEmployeeReload(fetchStates, isEmployee);
+  useEffect(() => {
+    const apply = (states?: ProfileLoginState[]) => setLoginStates(new Map((states || []).map((s) => [s.profileId, s])));
+    fetchStates();
+    // Nhân viên nhận payload rỗng ([]): tải lại từ máy Boss (gộp 250 ms) thay vì đọc payload.
+    const off = ipc.on?.('facebookPoster:loginStateChanged', (states: ProfileLoginState[]) => { if (isEmployee) reloadStates(); else apply(states); });
+    return () => { statesSeq.current++; off?.(); };
+  }, [isEmployee, fetchStates, reloadStates]);
 
   const filtered = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -88,6 +100,7 @@ export default function ProfilePicker({ mode, selected, onChange, disabled }: Pr
       </div>
     );
   }
+  if (profiles.length === 0 && isEmployee) return <p className="text-sm text-gray-400 text-center py-4">{POSTER_NO_PROFILE_NOTICE}</p>;
   if (profiles.length === 0) {
     return (
       <div className="text-center py-4 space-y-2">
@@ -125,9 +138,9 @@ export default function ProfilePicker({ mode, selected, onChange, disabled }: Pr
               <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-800/60 min-w-0">
                 <input type={mode === 'single' ? 'radio' : 'checkbox'} name="fb-poster-profile" checked={selected.includes(p.id)} onChange={() => toggle(p.id)} disabled={disabled} />
                 <span className="text-sm text-gray-200 truncate flex-1 min-w-0" title={p.name}>{p.name}</span>
-                <span className="text-xs text-gray-400 truncate max-w-[40%] hidden sm:inline">
+                {!isEmployee && <span className="text-xs text-gray-400 truncate max-w-[40%] hidden sm:inline">
                   {p.proxy_id !== null ? proxyNames.get(p.proxy_id) || 'Proxy đã xóa' : 'Không proxy'}
-                </span>
+                </span>}
                 {runningIds.has(p.id) && <span className="text-xs text-yellow-400 whitespace-nowrap">Đang mở</span>}
                 <LoginStateBadge state={loginStates.get(p.id)} />
               </label>

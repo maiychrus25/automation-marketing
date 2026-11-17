@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore, type FacebookPosterSection } from '@/store/appStore';
 import { useEmployeeStore } from '@/store/employeeStore';
+import { canOpenView, posterSectionFor, visiblePosterSections } from '@/lib/employeePoster';
 import SidebarAccounts from './SidebarAccounts';
 import useIsMobile from '@/hooks/useIsMobile';
 import { useUpdateStore } from '@/store/updateStore';
@@ -25,6 +26,8 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
   const empPermissions = useEmployeeStore(s => s.permissions);
   const employees = useEmployeeStore(s => s.employees);
   const isSimulating = empMode !== 'employee' && !!previewEmployeeId;
+  const isEmployee = empMode === 'employee';
+  const visiblePosterItems = visiblePosterSections(FACEBOOK_POSTER_ITEMS.map(i => ({ ...i, id: i.section })), isEmployee);
 
   const hasPerm = useCallback((module: string) => {
     if (module === 'dashboard') return true;
@@ -140,8 +143,11 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
         )}
         {/* Browser profiles - Boss/Standalone only; hidden while previewing an employee */}
         {empMode !== 'employee' && !isSimulating && (
-          <>
           <NavItem icon="browser" label="Trình duyệt" collapsed={collapsed} active={view === 'browser'} onClick={() => setView('browser')} />
+        )}
+        {/* Đăng Facebook: boss/standalone, hoặc nhân viên có quyền fb_poster (sáu mục); ẩn khi boss xem thử nhân viên (xem thử chưa dùng được các màn này) */}
+        {(isEmployee ? canOpenView('facebookPoster', true, hasPerm) : !isSimulating) && (
+          <>
           <NavItem
             icon="facebookPoster"
             label="Đăng Facebook"
@@ -150,9 +156,9 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
             expanded={posterOpen}
             onClick={() => setPosterOpen(v => !v)}
           />
-          {posterOpen && FACEBOOK_POSTER_ITEMS.map(item => (
+          {posterOpen && visiblePosterItems.map(item => (
             <NavItem key={item.section} icon={item.icon} label={item.label} collapsed={collapsed} sub count={item.section === 'engagement' ? engagementPending : undefined}
-              active={view === 'facebookPoster' && facebookPosterSection === item.section}
+              active={view === 'facebookPoster' && posterSectionFor(facebookPosterSection, isEmployee) === item.section}
               onClick={() => openFacebookPoster(item.section)} />
           ))}
           </>

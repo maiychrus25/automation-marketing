@@ -12,13 +12,16 @@ interface Props {
   selected: string[] | null;
   onChange: (ids: string[] | null) => void;
   onCompose: () => void;
-  onAdd: () => void;
+  /** Vắng mặt trên máy nhân viên: nhân viên không có màn hình Trình duyệt để thêm kênh. */
+  onAdd?: () => void;
+  /** Nhân viên chưa được gán hồ sơ nào: không soạn bài được, trạng thái rỗng hiện lời nhắc cố định. */
+  noProfiles?: boolean;
   loading: boolean;
   error: string;
   onRetry: () => void;
 }
 
-export default function ChannelsPanel({ channels, selected, onChange, onCompose, onAdd, loading, error, onRetry }: Props) {
+export default function ChannelsPanel({ channels, selected, onChange, onCompose, onAdd, noProfiles, loading, error, onRetry }: Props) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const groups = new Map<string, PosterChannel[]>();
@@ -32,8 +35,8 @@ export default function ChannelsPanel({ channels, selected, onChange, onCompose,
   return (
     <aside className="poster-channels" aria-label="Kênh đăng">
       <div className="poster-channel-tools">
-        <button type="button" onClick={onAdd} className="poster-button w-full"><span aria-hidden="true">＋</span> Thêm kênh</button>
-        <button type="button" onClick={onCompose} className="poster-primary w-full"><span aria-hidden="true">＋</span> Soạn bài</button>
+        {onAdd && <button type="button" onClick={onAdd} className="poster-button w-full"><span aria-hidden="true">＋</span> Thêm kênh</button>}
+        <button type="button" onClick={onCompose} disabled={noProfiles} className="poster-primary w-full"><span aria-hidden="true">＋</span> Soạn bài</button>
       </div>
       <div className="flex items-center justify-between gap-2 mb-4">
         <h2 className="font-semibold">Kênh <span className="poster-muted font-normal">({channels.length})</span></h2>
@@ -42,7 +45,7 @@ export default function ChannelsPanel({ channels, selected, onChange, onCompose,
       <input className="poster-input w-full mb-4" aria-label="Tìm kênh" placeholder="Tìm kênh…" value={search} onChange={e => setSearch(e.target.value)} />
       {loading && <p className="poster-muted text-sm" role="status">Đang tải kênh…</p>}
       {error && <div role="alert" className="space-y-2 text-sm"><p>{error}</p><button className="poster-button" onClick={onRetry}>Thử lại</button></div>}
-      {!loading && !error && groups.size === 0 && <p className="poster-muted text-sm">{channels.length ? 'Không có kênh khớp tìm kiếm.' : 'Thêm profile để bắt đầu đăng bài.'}</p>}
+      {!loading && !error && !noProfiles && groups.size === 0 && <p className="poster-muted text-sm">{channels.length ? 'Không có kênh khớp tìm kiếm.' : 'Thêm profile để bắt đầu đăng bài.'}</p>}
       <div className="poster-channel-list">
         {[...groups].map(([name, items]) => <section key={name} className="mb-5">
           <button type="button" className="flex items-center gap-2 w-full text-left poster-muted text-xs mb-2" aria-expanded={!collapsed.includes(name)} onClick={() => setCollapsed(prev => prev.includes(name) ? prev.filter(value => value !== name) : [...prev, name])}>

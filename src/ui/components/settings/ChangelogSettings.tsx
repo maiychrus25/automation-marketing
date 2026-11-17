@@ -15,6 +15,60 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.47.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🔄 Máy nhân viên tự tải lại hội thoại và tin đang mở sau khi mất mạng, máy ngủ hoặc máy boss khởi động lại',
+      '✈️ Nhân viên được gán tài khoản Telegram giờ dùng hộp thư Telegram ngay trên máy của mình',
+      '📝 Nhân viên được cấp quyền dùng Đăng Facebook với các hồ sơ trình duyệt boss gán cho',
+      '🔁 Máy boss và máy nhân viên đều cần cập nhật lên bản này',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Khi máy nhân viên mất kết nối, máy ngủ rồi thức dậy, hoặc máy boss khởi động lại, MaiHub tự tải lại hội thoại và tin của cuộc trò chuyện đang mở. Tin đang soạn và tin đang gửi được giữ nguyên. Màn hình Đăng Facebook cũng kiểm tra lại các lượt đang chạy. Thông báo ERP, nhắc hẹn và tiến độ gửi hàng loạt phát sinh trong lúc mất kết nối không được gửi bù; mở lại màn hình tương ứng để xem trạng thái hiện tại',
+          'Nhân viên được gán tài khoản Telegram (tài khoản người dùng hoặc bot) đọc, nhận và gửi tin, sửa, xoá, chuyển tiếp, ghim, thả cảm xúc, xem nhóm và chủ đề ngay trên máy của mình (với bot, ghim chỉ lưu trong MaiHub như trên máy boss). Việc đăng nhập, bật tắt kết nối và đồng bộ lại cả tài khoản vẫn làm trên máy boss',
+          'Quyền mới "Đăng Facebook" cho nhân viên. Trong Cài đặt nhân viên, bạn bật quyền này rồi chọn các hồ sơ trình duyệt nhân viên được dùng ở mục "Hồ sơ đăng Facebook". Nhân viên soạn bài, lên lịch, chạy, huỷ và xem Lịch đăng, Chiến dịch, Tham gia nhóm, Thu bình luận, Khách tiềm năng, Lịch sử của các hồ sơ đó',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Nhân viên vào ứng dụng ngay sau khi đăng nhập; hội thoại tải dần ở nền, tiến độ hiện ở thanh trên',
+          'Đồng bộ thành viên nhóm (CRM) chạy trong một bảng nhỏ thu gọn được, bạn vẫn dùng ứng dụng trong lúc chờ. Đừng đóng MaiHub cho tới khi đồng bộ xong',
+          'Bạn đổi quyền hoặc đổi hồ sơ được gán của nhân viên thì máy nhân viên nhận ngay, không cần đăng nhập lại',
+          'Đăng Facebook cho nhân viên, điều bạn cần biết: khi nhân viên bấm chạy, cửa sổ trình duyệt mở trên máy boss và dùng phiên Facebook của hồ sơ đó. Tối đa 2 lượt chạy cùng lúc, tính chung cho boss và mọi nhân viên',
+          'Đăng Facebook cho nhân viên: gỡ hồ sơ hoặc gỡ quyền của một nhân viên không dừng các lịch đăng người đó đã tạo. Bạn cần tự tắt hoặc xoá các lịch đó trong Lịch đăng; danh sách chưa hiện ai là người tạo',
+          'Đăng Facebook cho nhân viên: nhân viên sửa được cấu hình khách tiềm năng và theo dõi bài đăng (dùng chung với bạn), huỷ được việc theo dõi bài và thu bình luận đang chạy kể cả do bạn bấm, và sửa hay xoá được chiến dịch chưa có lịch đăng nào. Nhân viên chỉ thấy lịch sử trong 1000 lượt chạy gần nhất',
+          'Chưa mở cho nhân viên: Video, Nghiên cứu, Chờ duyệt, Trình duyệt, xuất tệp và các chiến dịch do Page tự vận hành',
+          'Với Telegram, tin gửi bằng nhãn dán, GIF, chuyển tiếp, bình chọn, danh thiếp và vị trí chưa hiện tên nhân viên đã gửi. Giới hạn tốc độ gửi của một tài khoản dùng chung cho boss và mọi nhân viên của tài khoản đó',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Trên máy nhân viên, bật tìm kiếm, lọc "chưa đọc" hoặc lọc theo kênh không còn làm danh sách hội thoại trống. Tìm kiếm chạy trên các hội thoại đã tải; cuộn xuống để tải thêm',
+          'Hai tệp cùng tên do nhân viên gửi trong một ngày không còn ghi đè nhau, nên không còn gửi nhầm tệp. Tên tệp có dấu hoặc khoảng trắng giữ nguyên khi gửi',
+          'Khi máy boss không thực hiện được lệnh thu hồi, xoá, thả cảm xúc, ghim hoặc sửa tin Telegram, máy nhân viên báo lỗi thay vì báo thành công',
+          'Lưu quyền ở màn hình Nhân sự không còn xoá các quyền chỉ có ở màn hình Cài đặt nhân viên',
+          'Màn hình sửa nhân viên báo lỗi khi lưu quyền, gán tài khoản hoặc gán hồ sơ thất bại, thay vì báo "Đã cập nhật"',
+        ],
+      },
+      {
+        category: 'security',
+        items: [
+          'Máy nhân viên chỉ nhận dữ liệu qua mạng nội bộ khi nơi gửi chứng minh được là máy boss đang kết nối. Trước đây máy khác trong cùng mạng nội bộ có thể gửi dữ liệu giả vào máy nhân viên',
+          'Khi bạn mở không gian làm việc (workspace) khác trong lúc nhân viên đang kết nối, Đăng Facebook của nhân viên và các lệnh nhắm vào một mục cụ thể (nhãn, tin nhắn nhanh, chiến dịch, mục thư viện) bị từ chối cho tới khi bạn quay lại không gian cũ. Trước đây nhân viên có thể sửa hoặc xoá nhầm mục của không gian bạn đang mở. Gửi tin và đánh dấu đã đọc chưa được chặn trong trường hợp này',
+          'Mỗi tệp nhân viên tải lên máy boss giới hạn 200 MB; mỗi yêu cầu khác gửi tới máy boss giới hạn 16 MB',
+          'Mỗi thao tác tạo, sửa, xoá, chạy của nhân viên ở Đăng Facebook được ghi một dòng vào nhật ký trên máy boss (nhân viên nào, lệnh gì, mục nào; không ghi nội dung bài)',
+          'Nhãn "nhân viên đã gửi" trên tin Telegram chỉ gắn vào đúng tin vừa gửi của đúng hội thoại',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.46.0',
     date: '11/2026',
     type: 'minor',

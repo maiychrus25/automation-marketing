@@ -6,6 +6,8 @@ import DatabaseService from '../../src/services/database/DatabaseService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import AppModeManager from '../../src/utils/AppModeManager';
 import Logger from '../../src/utils/Logger';
+import { routeEmployeeChannel } from './proxyHelper';
+import { handlerMayRunHere } from '../../src/services/http/employeeChannelRoutes';
 import { BrowserEngineManager } from '../../src/services/browser/BrowserEngineManager';
 import { BrowserProfileService } from '../../src/services/browser/BrowserProfileService';
 import { getSandboxSupport } from '../../src/services/browser/sandboxSupport';
@@ -180,9 +182,10 @@ function requireProfile(id: any) {
 
 /** Registers one handler with the shared employee-mode guard and error envelope. */
 function handle(channel: string, handler: (params: any) => Promise<Record<string, any> | void> | Record<string, any> | void): void {
-    ipcMain.handle(channel, async (_event, params) => {
+    // On an employee machine routeEmployeeChannel sends `proxy` commands (browserProfile:list) to the boss and refuses `boss_only` ones first.
+    ipcMain.handle(channel, routeEmployeeChannel(channel, async (_event, params) => {
         try {
-            if (AppModeManager.getInstance().isEmployeeMode()) {
+            if (!handlerMayRunHere(AppModeManager.getInstance().isEmployeeMode(), channel)) {
                 return { success: false, error: 'Tính năng Trình duyệt chỉ dùng được ở chế độ Boss/Standalone' };
             }
             const result = await handler(params || {});
@@ -191,7 +194,7 @@ function handle(channel: string, handler: (params: any) => Promise<Record<string
             Logger.error(`[browserProfileIpc] ${channel} error: ${err.message}`);
             return { success: false, error: err.message };
         }
-    });
+    }));
 }
 
 export function registerBrowserProfileIpc(): void {

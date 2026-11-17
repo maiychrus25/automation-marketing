@@ -154,6 +154,9 @@ class EmployeeService {
             return this.runOnDb((db) => {
                 const emp = db.getEmployeeById(employeeId);
                 if (!emp) return { success: false, error: 'Nhân viên không tồn tại' };
+                // Cùng luật với lúc tạo: tên hiển thị không rỗng, mật khẩu mới (nếu có) từ 4 ký tự
+                if (updates.display_name !== undefined && !updates.display_name.trim()) return { success: false, error: 'Tên hiển thị không được để trống' };
+                if (updates.password && updates.password.length < 4) return { success: false, error: 'Mật khẩu phải có ít nhất 4 ký tự' };
 
                 const dbUpdates: any = {};
                 if (updates.display_name !== undefined) dbUpdates.display_name = updates.display_name.trim();
@@ -266,6 +269,23 @@ class EmployeeService {
 
     public getAssignedAccounts(employeeId: string): string[] {
         return this.runOnDb((db) => db.getEmployeeAccountAccess(employeeId));
+    }
+
+    // ─── Browser Profile Access ──────────────────────────────────────
+
+    public assignProfiles(employeeId: string, profileIds: string[]): { success: boolean; error?: string } {
+        try {
+            return this.runOnDb((db) => {
+                db.setEmployeeProfileAccess(employeeId, profileIds);
+                return { success: true };
+            });
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    }
+
+    public getAssignedProfiles(employeeId: string): string[] {
+        return this.runOnDb((db) => db.getEmployeeProfileAccess(employeeId));
     }
 
     // ─── Auth ──────────────────────────────────────────────────────────

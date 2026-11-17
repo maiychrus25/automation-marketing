@@ -5,7 +5,8 @@ import { useEmployeeStore } from '@/store/employeeStore';
 import { useAppStore } from '@/store/appStore';
 import ipc from '@/lib/ipc';
 import { ConfirmDialog, ErpModalCard, ErpOverlay } from '../shared/ErpDialogs';
-import { BotIcon, ChartIcon, ChatIcon, EditIcon, LightningIcon, LinkIcon, LockIcon, SettingsIcon, TrashIcon, TrendingUpIcon, UserIcon } from '@/components/common/icons';
+import { EMPLOYEE_MODULE_OPTIONS, permissionPatch } from '@/lib/employeeModules';
+import { BookIcon, BotIcon, ChartIcon, ChatIcon, ClipboardListIcon, EditIcon, GlobeIcon, UsersIcon, LightningIcon, LinkIcon, LockIcon, SettingsIcon, TrashIcon, TrendingUpIcon, UserIcon } from '@/components/common/icons';
 
 import {
   ERP_DATE_FILTER_OPTIONS,
@@ -25,16 +26,22 @@ import {
   type ErpPermissionOverrides,
 } from '../../../../models/erp/Permission';
 
-const EMPLOYEE_MODULES = [
-  { key: 'chat', label: 'Chat', icon: <ChatIcon className="w-4 h-4" />, desc: 'Gửi / nhận tin nhắn' },
-  { key: 'crm', label: 'CRM', icon: <ChartIcon className="w-4 h-4" />, desc: 'Quản lý khách hàng' },
-  { key: 'workflow', label: 'Workflow', icon: <LightningIcon className="w-4 h-4" />, desc: 'Tự động hoá' },
-  { key: 'integration', label: 'Tích hợp', icon: <LinkIcon className="w-4 h-4" />, desc: 'POS / Shipping / dịch vụ ngoài' },
-  { key: 'analytics', label: 'Thống kê', icon: <TrendingUpIcon className="w-4 h-4" />, desc: 'Báo cáo phân tích' },
-  { key: 'ai_assistant', label: 'AI', icon: <BotIcon className="w-4 h-4" />, desc: 'Trợ lý AI' },
-  { key: 'settings_accounts', label: 'QL tài khoản Zalo', icon: <UserIcon className="w-4 h-4" />, desc: 'Phần cài đặt tài khoản' },
-  { key: 'settings_employees', label: 'QL nhân viên', icon: <UserIcon className="w-4 h-4" />, desc: 'Phần cài đặt nhân viên' },
-] as const;
+const MODULE_META: Record<string, { icon: React.ReactNode; desc: string }> = {
+  chat: { icon: <ChatIcon className="w-4 h-4" />, desc: 'Gửi / nhận tin nhắn' },
+  friends: { icon: <UsersIcon className="w-4 h-4" />, desc: 'Danh sách bạn bè' },
+  crm: { icon: <ChartIcon className="w-4 h-4" />, desc: 'Quản lý khách hàng' },
+  erp: { icon: <ClipboardListIcon className="w-4 h-4" />, desc: 'Quản lý công việc & dự án' },
+  workflow: { icon: <LightningIcon className="w-4 h-4" />, desc: 'Tự động hoá' },
+  integration: { icon: <LinkIcon className="w-4 h-4" />, desc: 'POS / Shipping / dịch vụ ngoài' },
+  analytics: { icon: <TrendingUpIcon className="w-4 h-4" />, desc: 'Báo cáo phân tích' },
+  ai_assistant: { icon: <BotIcon className="w-4 h-4" />, desc: 'Trợ lý AI' },
+  facebook: { icon: <BookIcon className="w-4 h-4" />, desc: 'Facebook Messenger nhóm' },
+  fb_poster: { icon: <GlobeIcon className="w-4 h-4" />, desc: 'Đăng bài bằng hồ sơ được gán' },
+  settings_accounts: { icon: <UserIcon className="w-4 h-4" />, desc: 'Phần cài đặt tài khoản' },
+  settings_employees: { icon: <UserIcon className="w-4 h-4" />, desc: 'Phần cài đặt nhân viên' },
+};
+
+const EMPLOYEE_MODULES = EMPLOYEE_MODULE_OPTIONS.map(option => ({ ...option, ...MODULE_META[option.key] }));
 
 const EMPLOYEE_MODULE_KEYS = new Set<string>(EMPLOYEE_MODULES.map(module => module.key));
 
@@ -668,7 +675,7 @@ function EmployeeEditorModal({ employee, profile, departments, positions, canMan
                 ? { username: accountForm.username, password: accountForm.password, display_name: accountForm.display_name, role: accountForm.role }
                 : undefined,
             modulePermissionsPatch: canConfigureModulePermissions
-              ? EMPLOYEE_MODULES.map(module => ({ module: module.key, can_access: !!modulePermissions[module.key] }))
+              ? permissionPatch(modulePermissions)
               : undefined,
             profilePatch: {
               ...profileForm,

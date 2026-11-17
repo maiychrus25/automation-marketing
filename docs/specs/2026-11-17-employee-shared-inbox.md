@@ -115,9 +115,9 @@ Một kiểm thử đọc `electron/ipc/facebookIpc.ts` và `fbHistoryIpc.ts`, b
 |---:|---|---|
 | 1 | Vá kiểm soát truy cập (mục 3.2) | 26.45.0 |
 | 2 | Hộp thư Page cho nhân viên (mục 3.3) | 26.46.0 |
-| 3 | Nhận bù khi nối lại có mã phiên của boss, tự tải lại khi boss khởi động lại; đồng bộ chạy nền kèm tiến độ | thiết kế riêng |
-| 4 | Telegram cho nhân viên | thiết kế riêng |
-| 5 | Quyền mới cho quản lý đăng Facebook và các trang cấu hình; vai trò quản trị từ xa | thiết kế riêng |
+| 3 | Nhận bù khi nối lại có mã phiên của boss, tự tải lại khi boss khởi động lại; đồng bộ chạy nền kèm tiến độ | 26.47.0 (`docs/specs/2026-11-17-employee-reconnect-telegram-poster.md`) |
+| 4 | Telegram cho nhân viên | 26.47.0 (cùng tài liệu) |
+| 5 | Quyền mới cho quản lý đăng Facebook và các trang cấu hình; vai trò quản trị từ xa | 26.47.0: quyền Đăng Facebook theo hồ sơ được gán (cùng tài liệu); các trang cấu hình khác và vai trò quản trị từ xa chưa làm (anh chọn "không mở thêm") |
 | 6 | Đặt boss lên máy chủ luôn bật | anh bảo bỏ qua (17/11/2026) |
 
 Facebook cá nhân cho nhân viên không nằm trong đợt nào; chỉ làm khi anh yêu cầu.

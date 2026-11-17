@@ -18,6 +18,8 @@
  * - Folder sidebar bên trái, file name editing khi hover
  */
 
+import { useEmployeeStore } from '@/store/employeeStore';
+import { employeeSendFailure } from '@/lib/employeeAccounts';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ipc from '../../../lib/ipc';
 import * as channelIpc from '../../../lib/channelIpc';
@@ -473,6 +475,9 @@ export default function LibraryPickerModal({
                 const fp = item._localPath || '';
                 if (!fp) continue;
                 const res = await channelIpc.sendAttachment(channel, { accountId: zaloId, threadId, threadType, filePath: fp, body: '' });
+                // Nhân viên: lỗi của boss (TIMEOUT, NOT_CONNECTED...) phải tới hàng đợi; boss giữ nguyên hành vi cũ
+                const failure = employeeSendFailure(useEmployeeStore.getState().mode === 'employee', res);
+                if (failure) return { success: false, error: failure.error, code: failure.code };
                 if (res?.messageId) lastMsgId = res.messageId;
               }
               return { success: true, msgId: lastMsgId };

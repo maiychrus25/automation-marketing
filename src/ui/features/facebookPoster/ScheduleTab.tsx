@@ -11,6 +11,8 @@ import { VARIANT_LABELS } from '../../../services/facebookPoster/variants';
 import { STATUS_LABEL } from './HistoryTab';
 import { buildMovePatch, canDragSchedule, getCalendarDays, getScheduleOccurrences, getNowLine, getUnscheduledDrafts, matchesChannels, type CalendarView, type ScheduleOccurrence } from './calendarModel';
 import type { FbPosterScheduleView } from '../../../models/facebookPoster';
+import { useEmployeePoster, useEmployeeReload } from './useEmployeePoster';
+import { joinFileNames } from '../../lib/employeePoster';
 
 interface Props {
   selectedChannels: string[] | null;
@@ -26,6 +28,7 @@ const LABELS: Record<string, string> = { draft: 'Nháp', scheduled: 'Đã hẹn'
 
 export default function ScheduleTab({ selectedChannels, profileNames, onCompose, onOpenHistory, onEditDraft }: Props) {
   const showNotification = useAppStore(s => s.showNotification);
+  const { isEmployee, noProfiles } = useEmployeePoster();
   const [schedules, setSchedules] = useState<FbPosterScheduleView[]>([]);
   const [queued, setQueued] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -64,13 +67,15 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
     finally { setLoading(false); }
   }, []);
 
+  // Nhân viên: các sự kiện "đã đổi" dồn dập gộp thành một lần tải (250 ms); boss tải ngay như cũ.
+  const reloadSchedules = useEmployeeReload(load, isEmployee);
   useEffect(() => {
     load();
-    const offChanged = ipc.on?.('facebookPoster:schedulesChanged', () => { load(); });
-    const offFinished = ipc.on?.('facebookPoster:runFinished', () => { load(); });
+    const offChanged = ipc.on?.('facebookPoster:schedulesChanged', () => { reloadSchedules(); });
+    const offFinished = ipc.on?.('facebookPoster:runFinished', () => { reloadSchedules(); });
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => { offChanged?.(); offFinished?.(); window.clearInterval(timer); };
-  }, [load]);
+  }, [load, reloadSchedules]);
   // Chỉ tải lại tên chiến dịch khi tập chiến dịch được lịch tham chiếu đổi (vd. vừa gắn lịch vào chiến dịch mới tạo).
   const campaignIdsKey = useMemo(() => [...new Set(schedules.map(s => s.campaignId).filter((id): id is string => !!id))].sort().join(','), [schedules]);
   useEffect(() => {
@@ -190,7 +195,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
     return <div key={key} className={`poster-calendar-slot ${hour === undefined ? 'is-month' : ''} ${date.getMonth() !== anchor.getMonth() && view === 'month' ? 'is-outside' : ''}`} data-hour={hour}
       onDragOver={event => { if (dragging.current) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={event => { event.preventDefault(); void move(date, hour); }}>
       {hour === undefined && <span className={`poster-month-date ${dayKey(date) === dayKey(new Date(now)) ? 'is-today' : ''}`}>{date.getDate()}</span>}
-      <button type="button" className="poster-slot-add" aria-label={`Soạn bài lúc ${hour ?? 9}:00 ${dateLabel(date)}`} disabled={!future || saving} onClick={() => onCompose(draftAt.getTime())}><span aria-hidden="true">＋</span></button>
+      <button type="button" className="poster-slot-add" aria-label={`Soạn bài lúc ${hour ?? 9}:00 ${dateLabel(date)}`} disabled={!future || saving || noProfiles} onClick={() => onCompose(draftAt.getTime())}><span aria-hidden="true">＋</span></button>
       <div className="poster-slot-posts">
         {(entriesBySlot.get(key) || []).map(entry => {
           const profiles = (entry.schedule.params.profiles || []) as { profileId: string; targets: string[] }[];
@@ -283,7 +288,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
             <p className="poster-muted text-xs">Biến thể</p>
             <ul className="space-y-1">{hydrateVariants(detail.schedule.params).map((text, i) => <li key={i} className="text-sm whitespace-pre-wrap break-words rounded border border-gray-700 px-2 py-1"><strong>{VARIANT_LABELS[i + 1]}</strong>: {text}</li>)}</ul>
           </div>}
-          {Array.isArray(detail.schedule.params.mediaPaths) && detail.schedule.params.mediaPaths.length > 0 && <p className="poster-muted text-xs break-words">Tệp đính kèm đã lưu: {detail.schedule.params.mediaPaths.join(', ')}</p>}
+          {Array.isArray(detail.schedule.params.mediaPaths) && detail.schedule.params.mediaPaths.length > 0 && <p className="poster-muted text-xs break-words">Tệp đính kèm đã lưu: {isEmployee ? joinFileNames(detail.schedule.params.mediaPaths) : detail.schedule.params.mediaPaths.join(', ')}</p>}
           {detail.schedule.draft ? <div className="flex flex-wrap gap-2">
             <button className="poster-button" onClick={() => { const id = detail.schedule.id; closeDetail(); onEditDraft(id); }}>Sửa</button>
             <button className="poster-primary" disabled={saving} onClick={() => { setApproving(detail.schedule); closeDetail(); }}>Duyệt & hẹn giờ</button>

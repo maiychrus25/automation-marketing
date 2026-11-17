@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, protocol, net, Notification, safeStorage, nativeTheme, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, shell, Tray, Menu, nativeImage, protocol, net, Notification, safeStorage, nativeTheme, dialog } from 'electron';
 import * as os from 'os';
 import { resolveWindowAppearance, windowChromeOptions, titleBarOverlayFor, solidBackgroundFor, type WindowTheme } from './windowAppearance';
 import * as path from 'path';
@@ -868,11 +868,17 @@ function handleDeepLink(url: string): void {
   }
 }
 
+function isRemoteWorkspaceActive(): boolean {
+  try { return WorkspaceManager.getInstance().getActiveWorkspace()?.type === 'remote'; } catch { return false; }
+}
+
 /**
  * Auto-reconnect tất cả Telegram accounts khi app khởi động.
  * Tương tự reconnectAllFBAccounts nhưng cho Telegram Bot + User.
  */
 async function reconnectAllTelegramAccounts(): Promise<void> {
+  // Máy nhân viên: Telegram chạy trên máy Boss, không có phiên hay token nào ở đây để nối lại.
+  if (isRemoteWorkspaceActive()) return;
   try {
     const db = DatabaseService.getInstance();
     if (!db) return;
@@ -939,6 +945,8 @@ async function reconnectAllTelegramAccounts(): Promise<void> {
  */
 function startTelegramBotHealthCheck(): void {
   setInterval(() => {
+    // Kiểm tra theo từng nhịp (không phải lúc đăng ký): workspace có thể chuyển từ remote sang local khi app đang chạy.
+    if (isRemoteWorkspaceActive()) return;
     try {
       const { isBotPolling, tryReconnectBot, getActiveBots } = require('../src/services/telegram/TelegramBotChannelService');
       const activeBots = getActiveBots();
@@ -1032,6 +1040,10 @@ async function startupAllWorkspaces(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  // Laptop thức dậy: kết nối cũ có thể đã chết im lặng → kiểm tra lại và yêu cầu giao diện tải lại
+  powerMonitor.on('resume', () => {
+    try { HttpConnectionManager.getInstance().notifySystemResume(); } catch (err: any) { Logger.warn(`[main] resume handler error: ${err.message}`); }
+  });
   // ── Register local-media:// protocol handler ───────────────────────────
   // Supports Range requests for video/audio streaming (seeking, partial load)
   protocol.handle('local-media', (request) => {

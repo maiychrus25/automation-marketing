@@ -3,9 +3,7 @@ import ipc from '@/lib/ipc';
 import { useEmployeeStore } from '@/store/employeeStore';
 import { useAppStore } from '@/store/appStore';
 import { useAccountStore } from '@/store/accountStore';
-import { useChatStore } from '@/store/chatStore';
-import DataAccessor from '@/lib/data/DataAccessor';
-import { normalizeEmployeeAccount } from '@/lib/employeeAccounts';
+import { bootstrapAccountsFromSnapshot } from '@/lib/employeeConversations';
 import RestQueryService from '../../../services/http/RestQueryService';
 import { AlertIcon, GlobeIcon, HomeIcon, PluginIcon, UserIcon } from '@/components/common/icons';
 
@@ -28,43 +26,6 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
     const [connecting, setConnecting] = useState(false);
     const [error, setError] = useState('');
 
-    const normalizeAccounts = (accounts: any[] = []) => accounts.map(normalizeEmployeeAccount);
-
-    const bootstrapAccountsFromSnapshot = async (snapshot: any) => {
-        const accounts = normalizeAccounts(snapshot?.accountsData || []);
-        if (accounts.length === 0) return;
-
-        useAccountStore.getState().setAccounts(accounts as any);
-        const activeAccountId = useAccountStore.getState().activeAccountId;
-        if (!activeAccountId || !accounts.some((account) => account.zalo_id === activeAccountId)) {
-            useAccountStore.getState().setActiveAccount(accounts[0].zalo_id);
-        }
-
-        for (const account of accounts) {
-            useChatStore.getState().setConversationsLoading(account.zalo_id, true);
-        }
-        try {
-            for (const account of accounts) {
-                const existing = useChatStore.getState().contacts[account.zalo_id];
-                if ((existing?.length || 0) >= 200) continue;
-                const result = await DataAccessor.getConversations(account.zalo_id, 200, 0);
-                const items = Array.isArray(result?.items) ? result.items : [];
-                if (items.length > 0) {
-                    const current = useChatStore.getState().contacts[account.zalo_id] || [];
-                    const seen = new Set(items.map((contact: any) => contact.contact_id));
-                    useChatStore.getState().setContacts(account.zalo_id, [
-                        ...items,
-                        ...current.filter((contact: any) => !seen.has(contact.contact_id)),
-                    ]);
-                }
-            }
-        } finally {
-            for (const account of accounts) {
-                useChatStore.getState().setConversationsLoading(account.zalo_id, false);
-            }
-        }
-    };
-
     // Load saved values from localStorage
     useEffect(() => {
         try {
@@ -83,6 +44,7 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
     };
 
     const handleEmployeeLogin = async () => {
+        if (connecting) return; // phím Enter không đi qua nút đã bị vô hiệu
         setError('');
         if (!bossAddress.trim()) { setError('Vui lòng nhập địa chỉ BOSS'); return; }
         if (!username.trim()) { setError('Vui lòng nhập tên đăng nhập'); return; }
@@ -150,11 +112,12 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
             setCurrentEmployee(employee);
             setPermissions(permsMap);
             setAssignedAccounts(employee.assigned_accounts || []);
+            useEmployeeStore.getState().setAssignedProfiles(snapshot?.assigned_profiles || []);
             setBossUrl(bossAddress.trim());
             setBossConnected(true);
             setToken(token);
             setMode('employee');
-            await bootstrapAccountsFromSnapshot(snapshot);
+            void bootstrapAccountsFromSnapshot(snapshot);
             setConnecting(false);
 
             showNotification(`Đăng nhập thành công! Xin chào ${employee.display_name}`, 'success');

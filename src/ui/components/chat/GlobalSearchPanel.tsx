@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 import ipc, { buildZaloAuth } from '@/lib/ipc'
 import DataAccessor from '@/lib/data/DataAccessor';
 import { useEmployeeStore } from '@/store/employeeStore';
@@ -188,7 +189,7 @@ function ContactResultItem({ contact, query, onClick, groupInfoCache }: {
           />
         ) : (
           contact.avatar_url && !avatarFailed
-            ? <img src={contact.avatar_url} alt={name} className="w-11 h-11 rounded-full object-cover" onError={() => {
+            ? <img src={toLocalMediaUrl(contact.avatar_url)} alt={name} className="w-11 h-11 rounded-full object-cover" onError={() => {
                 setAvatarFailed(true);
                 const ownerId = contact.owner_zalo_id;
                 if (ownerId && isFacebook(contact.channel)) {
@@ -243,7 +244,7 @@ function MessageResultItem({ msg, query, contacts, onClick, groupInfoCache }: {
         />
       ) : (
         contact?.avatar_url && !avatarFailed
-          ? <img src={contact.avatar_url} alt={convName} className="w-11 h-11 rounded-full object-cover flex-shrink-0" onError={() => {
+          ? <img src={toLocalMediaUrl(contact.avatar_url)} alt={convName} className="w-11 h-11 rounded-full object-cover flex-shrink-0" onError={() => {
               setAvatarFailed(true);
               const ownerId = msg.owner_zalo_id;
               if (ownerId) {
@@ -289,7 +290,7 @@ function PhoneResultCard({ result, searching, onOpen, onAddFriend }: {
   return (
     <div className="mx-3 my-2 p-3 bg-gray-800 rounded-xl border border-gray-700 flex items-center gap-3">
       {result.avatar
-        ? <img src={result.avatar} alt={name} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
+        ? <img src={toLocalMediaUrl(result.avatar)} alt={name} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
         : <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold flex-shrink-0">{(name || 'U').charAt(0).toUpperCase()}</div>}
       <div className="flex-1 min-w-0">
         <p className="text-sm text-gray-100 truncate font-medium">{name}</p>
@@ -329,7 +330,7 @@ function UsernameResultCard({ result, searching, onOpen }: {
   return (
     <div className="mx-3 my-2 p-3 bg-gray-800 rounded-xl border border-cyan-500/30 flex items-center gap-3">
       {result.avatar
-        ? <img src={result.avatar} alt={name} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
+        ? <img src={toLocalMediaUrl(result.avatar)} alt={name} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
         : <div className="w-10 h-10 rounded-full bg-cyan-600 flex items-center justify-center text-white font-bold flex-shrink-0">{(name || 'U').charAt(0).toUpperCase()}</div>}
       <div className="flex-1 min-w-0">
         <p className="text-sm text-gray-100 truncate font-medium">{name}</p>
@@ -731,7 +732,7 @@ export default function GlobalSearchPanel({
                     onClick={() => doPhoneSearch(acc, query)}
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-xs text-gray-200 transition-colors">
                     {acc.avatar_url
-                      ? <img src={acc.avatar_url} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
+                      ? <img src={toLocalMediaUrl(acc.avatar_url)} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
                       : <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">{(acc.full_name || zaloId).charAt(0).toUpperCase()}</div>}
                     <span className="truncate max-w-[90px]">{acc.full_name || acc.phone || zaloId}</span>
                   </button>
@@ -776,7 +777,7 @@ export default function GlobalSearchPanel({
                     onClick={() => doUsernameSearch(acc, query)}
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-xs text-gray-200 transition-colors">
                     {acc.avatar_url
-                      ? <img src={acc.avatar_url} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
+                      ? <img src={toLocalMediaUrl(acc.avatar_url)} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
                       : <div className="w-5 h-5 rounded-full bg-cyan-600 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">{(acc.full_name || acc.zalo_id).charAt(0).toUpperCase()}</div>}
                     <span className="truncate max-w-[90px]">{acc.full_name || acc.zalo_id}</span>
                   </button>

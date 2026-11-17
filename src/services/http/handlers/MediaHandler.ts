@@ -32,11 +32,55 @@ const MIME_TYPES: Record<string, string> = {
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.zip': 'application/zip',
   '.rar': 'application/vnd.rar',
+  '.webm': 'video/webm',
+  '.tgs': 'application/x-tgsticker',
+  '.oga': 'audio/ogg',
+  '.opus': 'audio/ogg',
+  '.m4a': 'audio/mp4',
 };
 
 function detectMime(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   return MIME_TYPES[ext] || 'application/octet-stream';
+}
+
+type Candidate =
+  | { kind: 'found'; resolved: string; stat: fs.Stats }
+  | { kind: 'notFound' }
+  | { kind: 'forbidden'; code: 'PATH_FORBIDDEN' | 'ACCOUNT_FORBIDDEN' };
+
+/** Full check sequence for one relative path: realpath, inside-base, Telegram-avatar exception, account, regular file. */
+function resolveCandidate(mediaPath: string, mediaBasePath: string, allowedAccounts: readonly string[] | undefined, allowErpTasks: boolean): Candidate {
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(path.resolve(mediaBasePath, mediaPath));
+  } catch {
+    // Direct resolve failed — resolveAbsolutePath handles base dir migration (file saved under an old media directory).
+    try {
+      const altPath = FileStorageService.resolveAbsolutePath(path.join('media', mediaPath));
+      if (!altPath) return { kind: 'notFound' };
+      resolved = fs.realpathSync(altPath);
+    } catch {
+      return { kind: 'notFound' };
+    }
+  }
+
+  const safeBase = fs.realpathSync(path.resolve(mediaBasePath));
+  if (!isInside(safeBase, resolved)) return { kind: 'forbidden', code: 'PATH_FORBIDDEN' };
+  // Employee request: the file must sit in the folder of an account they may use ("external/..." has none),
+  // or in erp/tasks/ (task attachments) for an employee who holds the erp module.
+  // Telegram avatars are shared by every account (<base>/_avatars/telegram/); the traversal check above already ran on the real path.
+  const isTelegramAvatar = isInside(path.join(safeBase, '_avatars', 'telegram'), resolved);
+  if (allowedAccounts && !isTelegramAvatar) {
+    const account = mediaAccountOf(safeBase, resolved);
+    const isTaskFile = allowErpTasks && isInside(path.join(safeBase, 'erp', 'tasks'), resolved);
+    if (!isTaskFile && (!account || !allowedAccounts.includes(account))) return { kind: 'forbidden', code: 'ACCOUNT_FORBIDDEN' };
+  }
+
+  if (!fs.existsSync(resolved)) return { kind: 'notFound' };
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) return { kind: 'notFound' }; // a directory (or anything that is not a file) is never streamed
+  return { kind: 'found', resolved, stat };
 }
 
 /**
@@ -57,60 +101,40 @@ export function handleMediaRequest(
     // Parse URL: /api/media/{zaloId}/{date}/{filename}
     //             /api/media/thumb/{zaloId}/{date}/{filename}
     //             /api/media/avatar/{zaloId}/{filename}
-    const mediaPath = url.replace('/api/media/', '');
-
-    // Security: resolve real path (follow symlinks, case-normalize on Windows)
-    let resolved: string;
+    // Candidates in order: the decoded path (when decoding works and differs), then the raw one (files stored under a
+    // percent-encoded name, apps that send unencoded names). A security refusal ends the request; only "not found" moves on.
+    const rawPath = url.replace('/api/media/', '');
+    const candidates = [rawPath];
     try {
-      resolved = fs.realpathSync(path.resolve(mediaBasePath, mediaPath));
-    } catch {
-      // Direct resolve failed — try resolveAbsolutePath which handles base dir
-      // migration (e.g. file was saved under old media directory but getBaseDir
-      // now returns a different path when accessed via REST / tunnel).
-      // This fixes employee-mode 404 when toBossMediaUrl extracts a relative
-      // path after /media/ from an absolute path that lives under a different
-      // configFolder than the current getBaseDir().
-      try {
-        const altPath = FileStorageService.resolveAbsolutePath(path.join('media', mediaPath));
-        if (altPath) {
-          resolved = fs.realpathSync(altPath);
-        } else {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: 'File not found' }));
-          return;
-        }
-      } catch {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'File not found' }));
+      const decoded = decodeURIComponent(rawPath);
+      if (decoded !== rawPath) candidates.unshift(decoded);
+    } catch { /* malformed escape: raw candidate only */ }
+
+    let resolved = '';
+    let stat: fs.Stats | undefined;
+    for (const mediaPath of candidates) {
+      if (mediaPath.includes('\0')) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Bad request' }));
         return;
       }
-    }
-
-    const safeBase = fs.realpathSync(path.resolve(mediaBasePath));
-    if (!isInside(safeBase, resolved)) {
-      res.writeHead(403, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
-      return 'PATH_FORBIDDEN';
-    }
-    // Employee request: the file must sit in the folder of an account they may use ("external/..." has none),
-    // or in erp/tasks/ (task attachments) for an employee who holds the erp module.
-    if (allowedAccounts) {
-      const account = mediaAccountOf(safeBase, resolved);
-      const isTaskFile = allowErpTasks && isInside(path.join(safeBase, 'erp', 'tasks'), resolved);
-      if (!isTaskFile && (!account || !allowedAccounts.includes(account))) {
+      const outcome = resolveCandidate(mediaPath, mediaBasePath, allowedAccounts, allowErpTasks);
+      if (outcome.kind === 'forbidden') {
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
-        return 'ACCOUNT_FORBIDDEN';
+        return outcome.code;
+      }
+      if (outcome.kind === 'found') {
+        resolved = outcome.resolved;
+        stat = outcome.stat;
+        break;
       }
     }
-
-    if (!fs.existsSync(resolved)) {
+    if (!stat) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: 'File not found' }));
       return;
     }
-
-    const stat = fs.statSync(resolved);
     const mime = detectMime(resolved);
     const isImage = mime.startsWith('image/');
     const maxAge = url.includes('/avatar/') ? 604800 : 86400; // Avatar: 7 ngày, còn lại: 1 ngày
@@ -132,6 +156,7 @@ export function handleMediaRequest(
       });
 
       const stream = fs.createReadStream(resolved, { start, end });
+      stream.on('error', () => res.destroy());
       stream.pipe(res);
       return;
     }
@@ -145,7 +170,9 @@ export function handleMediaRequest(
       'Accept-Ranges': 'bytes',
     });
 
-    fs.createReadStream(resolved).pipe(res);
+    const stream = fs.createReadStream(resolved);
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
   } catch (err: any) {
     Logger.error(`[MediaHandler] Error: ${err.message}`);
     if (!res.headersSent) {

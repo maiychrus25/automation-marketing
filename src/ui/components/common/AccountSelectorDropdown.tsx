@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import PhoneDisplay from "@/components/common/PhoneDisplay";
+import { toLocalMediaUrl } from '@/lib/localMedia';
 
 export interface AccountOption {
   id: string;
@@ -28,7 +29,7 @@ function Avatar({ option, size = 'sm' }: { option: AccountOption; size?: 'sm' | 
   const dim = size === 'sm' ? 'w-5 h-5 text-[9px]' : 'w-7 h-7 text-xs';
   const initial = (option.name || option.id || '?').charAt(0).toUpperCase();
   return option.avatarUrl ? (
-    <img src={option.avatarUrl} alt="" className={`${dim} rounded-full object-cover flex-shrink-0`} />
+    <img src={toLocalMediaUrl(option.avatarUrl)} alt="" className={`${dim} rounded-full object-cover flex-shrink-0`} />
   ) : (
     <div className={`${dim} rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold flex-shrink-0`}>
       {initial}

@@ -5,7 +5,8 @@
  * - Employee authenticates via token from handshake.auth
  * - Each employee joins their own room emp:{employeeId}
  * - All events are pushed to EventBuffer before emit (no miss guarantee)
- * - On reconnect, employee sends 'catch-up' { lastSeqId } → replay missed events
+ * - On connect, employee sends 'catch-up' { proto: 2, bootId, lastSeqId } → ack 'replayed' (missed events re-sent,
+ *   filtered by current access) or 'reset' (boss-restart | gap | fresh); clients without proto get the legacy filtered replay
  *
  * Room lifecycle (Socket.IO dynamic rooms):
  * - Room created automatically on first socket.join()
@@ -18,8 +19,9 @@
  */
 import * as http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
-import EventBuffer from './EventBuffer';
-import { RelayAudience, canReceiveRelayEvent } from './relayAudience';
+import EventBuffer, { BufferedEvent } from './EventBuffer';
+import { RelayAudience, canReceiveRelayEvent, EPHEMERAL_RELAY_CHANNELS } from './relayAudience';
+import { CATCH_UP_JOIN_FALLBACK_MS, CATCH_UP_PROTO, CatchUpAck, CatchUpRequest, planCatchUp } from './catchUpProtocol';
 import Logger from '../../utils/Logger';
 import EmployeeService from '../employee/EmployeeService';
 import WorkspaceManager from '../../utils/WorkspaceManager';
@@ -34,18 +36,27 @@ class SocketIOService {
   private static instance: SocketIOService;
   private io: SocketIOServer | null = null;
   private running = false;
+  private joinFallbackMs = CATCH_UP_JOIN_FALLBACK_MS;
 
   /** In-memory buffer cho catch-up (5000 event gần nhất) */
   private eventBuffer = new EventBuffer();
-
-  /** Track online employees (Socket.IO connection) */
-  private onlineEmployees = new Set<string>();
 
   /** Tài khoản nhân viên được dùng, hỏi lại mỗi lần phát/nhận bù. Mặc định đóng: không tài khoản nào. */
   private allowedAccountsResolver: (employeeId: string) => string[] = () => [];
 
   public setAllowedAccountsResolver(fn: (employeeId: string) => string[]): void {
     this.allowedAccountsResolver = fn;
+  }
+
+  /** Hồ sơ trình duyệt nhân viên được dùng (Facebook Poster); mặc định không ai. */
+  private allowedProfilesResolver: (employeeId: string) => string[] = () => [];
+
+  public setAllowedProfilesResolver(fn: (employeeId: string) => string[]): void {
+    this.allowedProfilesResolver = fn;
+  }
+
+  private allowedProfilesFor(employeeId: string): string[] {
+    try { return this.allowedProfilesResolver(employeeId) || []; } catch { return []; }
   }
 
   /** Quyền module của nhân viên, hỏi lại mỗi lần phát/nhận bù. Mặc định đóng. */
@@ -74,11 +85,14 @@ class SocketIOService {
    * Attach Socket.IO vào HTTP server hiện tại.
    * Gọi từ HttpRelayService.start() sau khi tạo httpServer.
    */
-  public attach(httpServer: http.Server): void {
+  public attach(httpServer: http.Server, joinFallbackMs: number = CATCH_UP_JOIN_FALLBACK_MS): void {
     if (this.running) {
       Logger.log('[SocketIOService] Already attached');
       return;
     }
+
+    this.joinFallbackMs = joinFallbackMs;
+    this.eventBuffer.reset(); // mỗi lần khởi động là một luồng mới
 
     this.io = new SocketIOServer(httpServer, {
       path: '/socket.io',
@@ -131,45 +145,75 @@ class SocketIOService {
       const employeeId: string = socket.data.employeeId;
       const displayName: string = socket.data.displayName || employeeId;
 
-      // Join room riêng - Socket.IO tự động tạo room nếu chưa tồn tại
-      socket.join(`emp:${employeeId}`);
+      // Room `conn:` theo dõi kết nối (online, ngắt). Room `emp:` (nhận trực tiếp) chỉ vào sau catch-up đầu
+      // tiên, để sự kiện phát giữa lúc nối và lúc nhận bù không bị gửi hai lần; quá hạn thì vào luôn.
+      socket.join(`conn:${employeeId}`);
+      let live = false;
+      // Số thứ tự mới nhất lúc vào phòng bằng đường dự phòng: sự kiện sau mốc này đã gửi trực tiếp, nhận bù muộn không gửi lại.
+      let fallbackCutoff: number | null = null;
+      const joinLive = () => {
+        if (live) return;
+        live = true;
+        clearTimeout(fallbackTimer);
+        socket.join(`emp:${employeeId}`);
+      };
+      const fallbackTimer = setTimeout(() => {
+        fallbackCutoff = this.eventBuffer.newestSeqId() ?? 0;
+        joinLive();
+      }, this.joinFallbackMs);
 
-      // Track online
-      this.onlineEmployees.add(employeeId);
       Logger.log(`[SocketIOService] 🟢 ${displayName} connected (socket=${socket.id})`);
 
       // ── Catch-up: employee gửi lastSeqId → replay buffer ────────
-      socket.on('catch-up', ({ lastSeqId }: { lastSeqId?: number }) => {
-        const since = lastSeqId || 0;
-        const events = this.eventBuffer.getSince(since);
-        let sent = 0;
-        const allowed = this.allowedFor(employeeId); // một ảnh chụp nhất quán cho cả lượt nhận bù
+      socket.on('catch-up', (req: CatchUpRequest | undefined, ack?: (a: CatchUpAck) => void) => {
+        const request: CatchUpRequest = req && typeof req === 'object' ? req : {};
+        const buf = this.eventBuffer;
+        // Một ảnh chụp quyền cho cả việc đếm (trần phát lại) lẫn vòng phát lại: "đếm" và "gửi" không thể lệch nhau.
+        const allowed = this.allowedFor(employeeId);
         const hasModule = this.hasModuleFor(employeeId);
-        for (const ev of events) {
-          if (!canReceiveRelayEvent(ev.audience, employeeId, allowed, hasModule)) continue;
-          socket.emit('event', {
-            seqId: ev.seqId,
-            channel: ev.channel,
-            data: ev.data,
-          });
-          sent++;
+        const profiles = this.allowedProfilesFor(employeeId);
+        const visible = (ev: BufferedEvent) => canReceiveRelayEvent(ev.audience, employeeId, allowed, hasModule, profiles);
+        const plan = planCatchUp(request, {
+          bootId: buf.bootId,
+          oldestSeqId: buf.oldestSeqId(),
+          newestSeqId: buf.newestSeqId(),
+          countAfter: (n) => buf.countAfter(n, visible),
+          evicted: buf.evicted,
+        });
+        let sent = 0;
+        if (plan.mode !== 'reset') {
+          for (const ev of buf.getSince(plan.sinceSeqId)) {
+            if (fallbackCutoff !== null && ev.seqId > fallbackCutoff) break; // đã nhận trực tiếp
+            if (!visible(ev)) continue;
+            socket.emit('event', {
+              seqId: ev.seqId,
+              bootId: buf.bootId,
+              channel: ev.channel,
+              data: ev.data,
+            });
+            sent++;
+          }
+          if (sent > 0) {
+            Logger.log(`[SocketIOService] Catch-up: sent ${sent}/${buf.size} events to ${displayName} (lastSeqId=${plan.sinceSeqId})`);
+          }
         }
-        if (sent > 0) {
-          Logger.log(`[SocketIOService] Catch-up: sent ${sent}/${this.eventBuffer.size} events to ${displayName} (lastSeqId=${since})`);
+        joinLive(); // đồng bộ với vòng phát lại: không có khoảng hở và không trùng
+        if (plan.mode !== 'legacy' && typeof ack === 'function') {
+          ack({
+            proto: CATCH_UP_PROTO,
+            bootId: buf.bootId,
+            status: plan.mode === 'reset' ? 'reset' : 'replayed',
+            ...(plan.mode === 'reset' ? { reason: plan.reason } : {}),
+            lastSeqId: buf.newestSeqId(),
+          });
         }
       });
 
       // ── Disconnect ──────────────────────────────────────────────
       socket.on('disconnect', (reason) => {
-        this.onlineEmployees.delete(employeeId);
-        // Socket.IO tự động rời room khi disconnect
+        clearTimeout(fallbackTimer);
+        // Socket.IO tự động rời room khi disconnect; online = room conn: còn socket (xem isOnline)
         Logger.log(`[SocketIOService] 🔴 ${displayName} disconnected (reason=${reason})`);
-
-        // Nếu còn socket khác cùng employeeId thì vẫn online
-        const remainingSockets = this.io?.sockets.adapter.rooms.get(`emp:${employeeId}`);
-        if (remainingSockets && remainingSockets.size > 0) {
-          this.onlineEmployees.add(employeeId); // vẫn còn socket khác
-        }
       });
 
       // ── Error ───────────────────────────────────────────────────
@@ -199,6 +243,7 @@ class SocketIOService {
     try {
       this.io.to(`emp:${employeeId}`).emit('event', {
         seqId,
+        bootId: this.eventBuffer.bootId,
         channel,
         data,
       });
@@ -213,13 +258,19 @@ class SocketIOService {
    */
   public publish(channel: string, data: unknown, audience: RelayAudience): void {
     if (!this.io || !this.running) return;
-    const seqId = this.eventBuffer.push(channel, data, audience);
+    // Kênh tức thời phát trực tiếp, không vào bộ đệm và không mang seqId (client không được dùng nó làm vị trí).
+    const bootId = this.eventBuffer.bootId;
+    const envelope = EPHEMERAL_RELAY_CHANNELS.has(channel)
+      ? { channel, data, bootId }
+      : { seqId: this.eventBuffer.push(channel, data, audience), bootId, channel, data };
     try {
       for (const [roomId, sockets] of this.io.sockets.adapter.rooms) {
         if (!roomId.startsWith('emp:') || sockets.size === 0) continue;
         const employeeId = roomId.slice(4);
-        if (!canReceiveRelayEvent(audience, employeeId, this.allowedFor(employeeId), this.hasModuleFor(employeeId))) continue;
-        this.io.to(roomId).emit('event', { seqId, channel, data });
+        // Hồ sơ chỉ tra khi sự kiện thuộc hồ sơ: nhật ký đăng bài dồn dập, không tốn thêm truy vấn cho mọi sự kiện khác.
+        const profiles = audience.kind === 'profiles' ? this.allowedProfilesFor(employeeId) : [];
+        if (!canReceiveRelayEvent(audience, employeeId, this.allowedFor(employeeId), this.hasModuleFor(employeeId), profiles)) continue;
+        this.io.to(roomId).emit('event', envelope);
       }
     } catch (err: any) {
       Logger.warn(`[SocketIOService] publish error: ${err.message}`);
@@ -229,7 +280,7 @@ class SocketIOService {
   /** Ngắt mọi socket của employee (khi token bị thu hồi). */
   public disconnectEmployee(employeeId: string): void {
     if (!this.io) return;
-    this.io.in(`emp:${employeeId}`).disconnectSockets(true);
+    this.io.in(`conn:${employeeId}`).disconnectSockets(true);
   }
 
   /**
@@ -237,25 +288,19 @@ class SocketIOService {
    */
   public isOnline(employeeId: string): boolean {
     if (!this.io) return false;
-    const room = this.io.sockets.adapter.rooms.get(`emp:${employeeId}`);
+    const room = this.io.sockets.adapter.rooms.get(`conn:${employeeId}`);
     return !!(room && room.size > 0);
   }
 
-  /**
-   * Employee đã từng connect Socket.IO (kể cả hiện tại đang offline).
-   * Nếu true → employee đã update app có SocketIOClient → skip SSE fallback
-   * (tránh half-open socket mất event).
-   * Nếu false → employee cũ chưa update → vẫn gửi SSE.
-   */
   /**
    * Đếm số employee đang online
    */
   public getOnlineCount(): number {
     if (!this.io) return 0;
     let count = 0;
-    // Duyệt rooms có prefix emp:
+    // Duyệt rooms có prefix conn:
     for (const [roomId, sockets] of this.io.sockets.adapter.rooms) {
-      if (roomId.startsWith('emp:') && sockets.size > 0) count++;
+      if (roomId.startsWith('conn:') && sockets.size > 0) count++;
     }
     return count;
   }
@@ -269,7 +314,7 @@ class SocketIOService {
       this.io = null;
     }
     this.running = false;
-    this.onlineEmployees.clear();
+    this.eventBuffer.reset();
     Logger.log('[SocketIOService] Stopped');
   }
 

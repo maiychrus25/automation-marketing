@@ -286,3 +286,6 @@ export interface FbPosterEngagementItem {
 }
 /** Khách + bài gốc để trả lời; `fromAppPost` chỉ đúng khi khách thuộc kết quả `posted` của một lượt `kind='post'`. */
 export interface LeadReplySource { leadId: number; postUrl: string; authorId: string; profileId: string; fromAppPost: boolean; postText: string }
+
+/** Lỗi của lệnh getRun khi không có lượt chạy: không mang mã, nên máy nhân viên nhận ra bằng đúng câu này. */
+export const RUN_NOT_FOUND_ERROR = 'Không tìm thấy lần chạy';

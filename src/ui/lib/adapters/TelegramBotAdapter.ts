@@ -10,6 +10,18 @@ import {
   ForwardParams, EditParams, PollParams, GroupNameParams, BlockParams,
 } from './ChannelAdapter';
 import ipc from '../ipc';
+import { useEmployeeStore } from '../../store/employeeStore';
+import { useAccountStore } from '../../store/accountStore';
+import { telegramHealthForEmployee } from '../employeeAccounts';
+import { BOSS_ONLY_CHANNEL_CODE, BOSS_ONLY_CHANNEL_ERROR } from '../../../services/http/employeeChannelRoutes';
+
+const isEmployee = () => useEmployeeStore.getState().mode === 'employee';
+const BOSS_ONLY_RESULT: ActionResult = { success: false, error: BOSS_ONLY_CHANNEL_ERROR, code: BOSS_ONLY_CHANNEL_CODE };
+/** Nhân viên không gọi lệnh kết nối / kiểm tra của boss: trạng thái lấy từ ảnh chụp (listener_active). */
+const snapshotHealth = (accountId: string): HealthResult => ({
+  success: true,
+  alive: telegramHealthForEmployee(useAccountStore.getState().accounts.find((a) => a.zalo_id === accountId)).connected,
+});
 
 export class TelegramBotAdapter extends BaseChannelAdapter {
   readonly channel = 'telegram_bot' as const;
@@ -21,7 +33,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         chatId: params.threadId,
         text: params.body,
       });
-      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error };
+      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -82,7 +94,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
           });
         }
       }
-      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error };
+      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -96,7 +108,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         videoPath: params.filePath,
         caption: params.body,
       });
-      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error };
+      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -109,7 +121,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         chatId: params.threadId || '',
         messageId: params.messageId,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -123,7 +135,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         messageId: params.messageId,
         emoji: params.emoji,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -140,7 +152,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         fromChatId: params.sourceThreadId,
         messageId: params.messageId,
       });
-      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error };
+      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -155,7 +167,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         messageId: params.messageId,
         text: params.text,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -169,7 +181,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         question: params.question,
         options: params.options,
       });
-      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error };
+      return { success: res?.success ?? false, msgId: res?.messageId, messageId: res?.messageId, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -183,7 +195,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         title: params.name,
       });
       // Fallback: setChatTitle may not be registered, use setChatDescription pattern
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -195,7 +207,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         accountId: params.accountId,
         chatId: params.threadId,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -208,7 +220,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         chatId: params.threadId,
         userId: params.userId,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -230,7 +242,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         userId: params.userId,
         perms,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -242,7 +254,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         accountId: params.accountId,
         chatId: params.threadId,
       });
-      return { success: res?.success ?? false, info: res?.chat, error: res?.error };
+      return { success: res?.success ?? false, info: res?.chat, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -254,7 +266,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         accountId: params.accountId,
         chatId: params.threadId,
       });
-      return { success: res?.success ?? false, members: res?.admins, error: res?.error };
+      return { success: res?.success ?? false, members: res?.admins, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -267,7 +279,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         chatId: params.threadId,
         photoPath: params.photoPath,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -279,13 +291,14 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         accountId: params.accountId,
         chatId: params.threadId,
       });
-      return { success: res?.success ?? false, link: res?.link, error: res?.error };
+      return { success: res?.success ?? false, link: res?.link, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
   }
 
   async connectAccount(params: ConnectParams): Promise<ActionResult> {
+    if (isEmployee()) return BOSS_ONLY_RESULT;
     try {
       // Lấy botToken từ accounts qua IPC (đã decrypt ở main process)
       let botToken = params.auth?.botToken || '';
@@ -307,13 +320,14 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
         botUsername: botName,
         botFirstName: botName,
       });
-      return { success: res?.success ?? false, error: res?.error };
+      return { success: res?.success ?? false, error: res?.error, code: (res as any)?.code };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
   }
 
   async disconnectAccount(params: { accountId: string }): Promise<ActionResult> {
+    if (isEmployee()) return BOSS_ONLY_RESULT;
     try {
       await ipc.telegram?.stopBot(params.accountId);
       return { success: true };
@@ -323,6 +337,7 @@ export class TelegramBotAdapter extends BaseChannelAdapter {
   }
 
   async checkHealth(params: HealthParams): Promise<HealthResult> {
+    if (isEmployee()) return snapshotHealth(params.accountId);
     try {
       const res = await ipc.telegram?.getActiveBots();
       const isActive = res?.bots?.some((b: any) => b.accountId === params.accountId) ?? false;

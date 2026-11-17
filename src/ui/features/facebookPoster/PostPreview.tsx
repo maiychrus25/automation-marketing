@@ -1,5 +1,5 @@
 import React from 'react';
-import { toLocalMediaUrl } from '@/lib/localMedia';
+import { toDiskMediaUrl, toLocalMediaUrl } from '@/lib/localMedia';
 import { isVideo } from '../../../services/facebookPoster/mediaRules';
 import type { FbPosterMode } from '../../../models/facebookPoster';
 
@@ -10,10 +10,13 @@ interface Props {
   names: string[];
   mode: FbPosterMode;
   targetName?: string;
+  /** Nhân viên: tệp ở máy này, xem trước bằng local-media://. */
+  localFiles?: boolean;
 }
 
-export default function PostPreview({ text, comment, mediaPaths, names, mode, targetName }: Props) {
-  const name = names[0] || 'Tên kênh của anh';
+export default function PostPreview({ text, comment, mediaPaths, names, mode, targetName, localFiles }: Props) {
+  const name = names[0] || 'Tên kênh của bạn';
+  const mediaUrl = localFiles ? toDiskMediaUrl : toLocalMediaUrl;
   return (
     <article className="poster-facebook-preview" aria-label="Xem trước bài Facebook">
       <header className="flex items-start gap-3 p-4">
@@ -28,8 +31,8 @@ export default function PostPreview({ text, comment, mediaPaths, names, mode, ta
       {mediaPaths.length > 0 && <div className={`poster-preview-media ${mediaPaths.length > 1 ? 'is-grid' : ''}`}>
         {mediaPaths.slice(0, 4).map((path, index) => (
           <div key={path} className="relative min-w-0">
-            {isVideo(path) ? <video controls preload="metadata" src={toLocalMediaUrl(path)} aria-label="Video xem trước" />
-              : <img src={toLocalMediaUrl(path)} alt={`Ảnh xem trước ${index + 1}`} />}
+            {isVideo(path) ? <video controls preload="metadata" src={mediaUrl(path)} aria-label="Video xem trước" />
+              : <img src={mediaUrl(path)} alt={`Ảnh xem trước ${index + 1}`} />}
             {index === 3 && mediaPaths.length > 4 && <span className="poster-media-more">+{mediaPaths.length - 4}</span>}
           </div>
         ))}

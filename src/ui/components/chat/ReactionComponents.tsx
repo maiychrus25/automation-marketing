@@ -1,5 +1,6 @@
 import React from 'react';
 import { zaloCodeToEmoji } from '@/lib/chat/emojiUtils';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 
 /** Parse reactions từ msg.reactions -> { emoji: count } (dùng cho hiển thị bubble) */
 function reactionKey(value: string, channel?: string): string {
@@ -273,7 +274,7 @@ function ReactionPopup({ msg, initialEmoji, contacts, groupMembers, currentUserI
           {users.map(({ uid, emojis, total }) => (
             <div key={uid} className="flex items-center gap-3 py-1">
               {getAvatar(uid) ? (
-                <img src={getAvatar(uid)} alt="" className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
+                <img src={toLocalMediaUrl(getAvatar(uid))} alt="" className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
               ) : (
                 <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
                   {(getName(uid) || 'U').charAt(0).toUpperCase()}

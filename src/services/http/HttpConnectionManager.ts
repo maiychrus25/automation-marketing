@@ -11,6 +11,7 @@ interface WorkspaceClient {
 interface WorkspaceSnapshot {
     permissions?: Array<{ module: string; can_access: boolean }>;
     assignedAccounts?: string[];
+    assigned_profiles?: string[];
     erpRole?: string;
     erpExtraJson?: string;
     employeesData?: any[];
@@ -71,13 +72,14 @@ class HttpConnectionManager {
         this.clients.set(workspaceId, { workspaceId, service });
 
         service.setOnStatusChange((connected: boolean, latency: number) => {
-            this.sendToRenderer('workspace:connectionStatus', { workspaceId, connected, latency });
+            this.sendToRenderer('workspace:connectionStatus', { workspaceId, connected, latency, socketConnected: service.isSocketConnected() });
         });
 
         service.setOnInitialState((data: any) => {
             const snapshot: WorkspaceSnapshot = {
                 permissions: data?.permissions || [],
                 assignedAccounts: data?.assignedAccounts || [],
+                assigned_profiles: data?.assigned_profiles || [],
                 erpRole: data?.erpRole || '',
                 erpExtraJson: data?.erpExtraJson || '',
                 employeesData: data?.employeesData || [],
@@ -92,11 +94,29 @@ class HttpConnectionManager {
             options?.onInitialState?.(data);
         });
 
+        // Quyền hoặc hồ sơ đổi: không qua bộ nén 60 giây của initialState; cập nhật cả snapshot lưu để lần phát lại không đưa lại danh sách cũ.
+        service.setOnPermissionUpdate((data: any) => {
+            const previous = this.snapshots.get(workspaceId);
+            if (previous) {
+                this.snapshots.set(workspaceId, {
+                    ...previous,
+                    permissions: data?.permissions || previous.permissions,
+                    assigned_profiles: data?.assigned_profiles || [],
+                    erpRole: data?.erpRole ?? previous.erpRole,
+                    erpExtraJson: data?.erpExtraJson ?? previous.erpExtraJson,
+                    employeesData: data?.employeesData || previous.employeesData,
+                    updatedAt: Date.now(),
+                });
+            }
+            this.sendToRenderer('workspace:permissionUpdate', { workspaceId, ...data });
+        });
+
         service.setOnAccountAccessUpdate((data: any) => {
             const previous = this.snapshots.get(workspaceId);
             const snapshot: WorkspaceSnapshot = {
                 permissions: previous?.permissions || [],
                 assignedAccounts: data?.assignedAccounts || [],
+                assigned_profiles: previous?.assigned_profiles || [],
                 erpRole: previous?.erpRole || '',
                 erpExtraJson: previous?.erpExtraJson || '',
                 employeesData: previous?.employeesData || [],
@@ -135,6 +155,13 @@ class HttpConnectionManager {
             client.service.disconnect();
             this.clients.delete(workspaceId);
             this.sendToRenderer('workspace:connectionStatus', { workspaceId, connected: false, latency: 0 });
+        }
+    }
+
+    /** Máy vừa thức dậy: mọi workspace nhân viên đang nối kiểm tra lại. Máy boss không có client nên không làm gì. */
+    public notifySystemResume(): void {
+        for (const { service } of this.clients.values()) {
+            try { service.notifySystemResume(); } catch (err: any) { Logger.warn(`[HttpConnectionManager] resume error: ${err.message}`); }
         }
     }
 
@@ -178,6 +205,7 @@ class HttpConnectionManager {
             workspaceId,
             permissions: snapshot.permissions || [],
             assignedAccounts: snapshot.assignedAccounts || [],
+            assigned_profiles: snapshot.assigned_profiles || [],
             erpRole: snapshot.erpRole || '',
             erpExtraJson: snapshot.erpExtraJson || '',
             employeesData: snapshot.employeesData || [],

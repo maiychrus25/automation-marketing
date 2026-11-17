@@ -41,17 +41,18 @@ jest.mock('../../utils/Logger', () => ({ __esModule: true, default: { error: jes
 jest.mock('../../services/facebookPoster/FacebookPosterStore', () => ({ FacebookPosterStore: class {} }));
 jest.mock('../../services/control/controlEvents', () => ({ buildResearchFinished: jest.fn(), emitControlEvent: jest.fn() }));
 jest.mock('../../../electron/ipc/browserProfileIpc', () => ({ getBrowserProfileService: () => ({ isRunning: () => false, openForAutomation: (...args: any[]) => mockOpenAutomation(...args) }) }));
+let mockEmployeeBlocked = false;
 jest.mock('../../../electron/ipc/facebookPosterIpc', () => ({
     assertFacebookJobAdmission: () => {},
     getProfileJobBinding: () => ({ assertCurrent: () => {}, isProfileBusy: () => false,
         openForAutomation: (...args: any[]) => mockOpenAutomation(...args), shouldYield: () => false }),
     getBoundFacebookLoginObserver: () => jest.fn(),
-    isFacebookPosterEmployeeBlocked: () => false, isPageLearnerRunning: () => mockLearnerRunning(), listFacebookLoginStates: () => [], listFacebookPosterRunProfileIds: () => [], observeFacebookLogin: jest.fn(),
+    isFacebookPosterEmployeeBlocked: () => mockEmployeeBlocked, isPageLearnerRunning: () => mockLearnerRunning(), listFacebookLoginStates: () => [], listFacebookPosterRunProfileIds: () => [], observeFacebookLogin: jest.fn(),
 }));
 let switching = false;
 jest.mock('../../../electron/ipc/workspaceIpc', () => ({ isWorkspaceSwitchInProgress: () => switching }));
 
-import { INVALID_LINK_ERROR, WORKSPACE_SWITCHING_ERROR, isResearchRunning, researchOperations, getResearchService, cancelAndWaitResearch } from '../../../electron/ipc/researchIpc';
+import { registerResearchIpc, runsOnEmployeeMachine, INVALID_LINK_ERROR, WORKSPACE_SWITCHING_ERROR, isResearchRunning, researchOperations, getResearchService, cancelAndWaitResearch } from '../../../electron/ipc/researchIpc';
 
 beforeEach(() => { jest.clearAllMocks(); switching = false; mockLearnerRunning.mockReturnValue(false); mockResearchRunning.mockReturnValue(false); });
 
@@ -164,5 +165,30 @@ describe('research/learner independent admission', () => {
         expect(isResearchRunning()).toBe(false);
         mockResearchRunning.mockReturnValue(true);
         expect(isResearchRunning()).toBe(true);
+    });
+});
+
+describe('research channels on an employee machine', () => {
+    afterEach(() => { mockEmployeeBlocked = false; });
+
+    it('only research:openLink runs locally', () => {
+        expect(runsOnEmployeeMachine('research:openLink')).toBe(true);
+        for (const c of ['research:list', 'research:search', 'research:getConfig', 'research:exportXlsx', 'research:cancel']) expect(runsOnEmployeeMachine(c)).toBe(false);
+    });
+
+    it('in employee mode openLink opens the link here and every other research channel is refused', async () => {
+        const handle = (require('electron').ipcMain.handle as jest.Mock);
+        handle.mockClear();
+        registerResearchIpc();
+        const handlers = new Map<string, (e: unknown, p: unknown) => Promise<any>>(handle.mock.calls.map((c: any[]) => [c[0], c[1]]));
+        mockEmployeeBlocked = true; // what isFacebookPosterEmployeeBlocked() answers on an employee machine
+        mockOpenExternal.mockClear();
+        expect(await handlers.get('research:openLink')!({}, { url: 'https://www.facebook.com/groups/1/' })).toEqual({ success: true });
+        expect(mockOpenExternal).toHaveBeenCalledTimes(1);
+        expect(await handlers.get('research:openLink')!({}, { url: 'https://evil.test/' })).toMatchObject({ success: false });
+        expect(mockOpenExternal).toHaveBeenCalledTimes(1);
+        for (const channel of ['research:list', 'research:search', 'research:exportXlsx']) {
+            expect(await handlers.get(channel)!({}, {})).toMatchObject({ success: false, error: expect.stringContaining('Boss/Standalone') });
+        }
     });
 });

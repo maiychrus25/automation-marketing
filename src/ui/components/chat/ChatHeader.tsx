@@ -631,7 +631,7 @@ export default function ChatHeader() {
           <div className="w-9 h-9 rounded-full overflow-hidden grid grid-cols-2 grid-rows-2 bg-green-700 flex-shrink-0">
             {members.slice(0, 4).map((m, i) => (
               <div key={i} className="overflow-hidden">
-                <img src={m.avatar} alt="" className="w-full h-full object-cover"
+                <img src={toLocalMediaUrl(m.avatar)} alt="" className="w-full h-full object-cover"
                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               </div>
             ))}
@@ -642,16 +642,16 @@ export default function ChatHeader() {
         return (
           <div className="w-9 h-9 rounded-full overflow-hidden flex flex-row bg-green-700 flex-shrink-0">
             <div className="flex-1 h-full overflow-hidden">
-              <img src={members[0].avatar} alt="" className="w-full h-full object-cover"
+              <img src={toLocalMediaUrl(members[0].avatar)} alt="" className="w-full h-full object-cover"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
             </div>
             <div className="flex-1 h-full flex flex-col overflow-hidden">
               <div className="flex-1 overflow-hidden">
-                <img src={members[1].avatar} alt="" className="w-full h-full object-cover"
+                <img src={toLocalMediaUrl(members[1].avatar)} alt="" className="w-full h-full object-cover"
                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               </div>
               <div className="flex-1 border-t border-gray-900/40 overflow-hidden">
-                <img src={members[2].avatar} alt="" className="w-full h-full object-cover"
+                <img src={toLocalMediaUrl(members[2].avatar)} alt="" className="w-full h-full object-cover"
                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               </div>
             </div>
@@ -662,11 +662,11 @@ export default function ChatHeader() {
         return (
           <div className="w-9 h-9 rounded-full overflow-hidden flex flex-row bg-green-700 flex-shrink-0">
             <div className="flex-1 h-full overflow-hidden">
-              <img src={members[0].avatar} alt="" className="w-full h-full object-cover"
+              <img src={toLocalMediaUrl(members[0].avatar)} alt="" className="w-full h-full object-cover"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
             </div>
             <div className="flex-1 h-full border-l border-gray-900/40 overflow-hidden">
-              <img src={members[1].avatar} alt="" className="w-full h-full object-cover"
+              <img src={toLocalMediaUrl(members[1].avatar)} alt="" className="w-full h-full object-cover"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
             </div>
           </div>

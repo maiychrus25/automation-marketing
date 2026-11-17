@@ -46,6 +46,28 @@ function refuseForeignAccount(req: http.IncomingMessage, res: http.ServerRespons
   return true;
 }
 
+/**
+ * A folder id from the body must name a folder of the account the upload goes to (media_library_folders.owner_zalo_id), read on the pinned database.
+ * Missing, malformed, unreadable or of another account: 403 and nothing is stored. Returns true when it answered.
+ */
+async function refuseForeignFolder(res: http.ServerResponse, employee: any, pinnedDbPath: string, zaloId: string, rawFolderId: unknown): Promise<boolean> {
+  if (rawFolderId === undefined || rawFolderId === null || rawFolderId === '') return false;
+  const id = parseInt(String(rawFolderId));
+  let allowed = false;
+  if (Number.isInteger(id)) {
+    try {
+      const row = await DatabaseService.getInstance().withDbPathAsync(pinnedDbPath, async () =>
+        DatabaseService.getInstance().queryOneStrict<{ owner: string | null }>('SELECT owner_zalo_id AS owner FROM media_library_folders WHERE id = ?', [id]));
+      allowed = !!row && !!zaloId && row.owner === zaloId;
+    } catch { allowed = false; }
+  }
+  if (allowed) return false;
+  Logger.warn(`[LibraryHandler] Denied employee=${employee.employee_id} path=library upload code=ACCOUNT_FORBIDDEN`);
+  res.writeHead(403, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ success: false, error: 'Không có quyền truy cập bản ghi này', code: 'ACCOUNT_FORBIDDEN' }));
+  return true;
+}
+
 export const libraryHandlers = {
   // ── Upload (multipart) ──────────────────────────────────────────
   // Boss nhận multipart từ employee (gửi qua curl, HTTP client, ...)
@@ -85,6 +107,7 @@ export const libraryHandlers = {
         const zaloId = parsed.fields?.zaloId || employee.assigned_accounts?.[0] || '';
         const employeeId = employee.employee_id || '';
         const tags = parsed.fields?.tags || '';
+        if (await refuseForeignFolder(res, employee, pinnedDbPath, zaloId, parsed.fields?.folderId)) return;
         const folderId = parsed.fields?.folderId ? parseInt(parsed.fields.folderId) : null;
 
         const item = await DatabaseService.getInstance().withDbPathAsync(pinnedDbPath, () => lib().upload({
@@ -148,6 +171,7 @@ export const libraryHandlers = {
 
         if (refuseForeignAccount(req, res, employee, zaloId)) return;
         const empZaloId = zaloId || employee.assigned_accounts?.[0] || '';
+        if (await refuseForeignFolder(res, employee, pinnedDbPath, empZaloId, folderId)) return;
         // ⚠️ Dùng withDbPathAsync vì lib().upload() là async (có await sharp bên trong).
         // withDbPath (sync) sẽ restore db BEFORE async ops complete → INSERT vào sai DB!
         const item = await DatabaseService.getInstance().withDbPathAsync(pinnedDbPath, () => lib().upload({

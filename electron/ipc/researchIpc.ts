@@ -286,11 +286,16 @@ async function exportXlsx(params: any): Promise<{ saved: boolean; path?: string 
     return { saved: true, path: result.filePath };
 }
 
-/** Cùng chặn chế độ nhân viên và phong bì kết quả như facebookPosterIpc. */
+/** Kênh nghiên cứu chạy được trên máy nhân viên: chỉ mở link (validate rồi mở trình duyệt của máy này, không đụng tới dữ liệu của boss). */
+export function runsOnEmployeeMachine(channel: string): boolean {
+    return channel === 'research:openLink';
+}
+
+/** Cùng chặn chế độ nhân viên và phong bì kết quả như facebookPosterIpc; riêng `research:openLink` vẫn chạy cục bộ. */
 function handle(channel: string, handler: (params: any) => Promise<Record<string, any> | void> | Record<string, any> | void): void {
     ipcMain.handle(channel, async (_event, params) => {
         try {
-            if (isFacebookPosterEmployeeBlocked()) {
+            if (isFacebookPosterEmployeeBlocked() && !runsOnEmployeeMachine(channel)) {
                 return { success: false, error: 'Tính năng Nghiên cứu chủ đề chỉ dùng được ở chế độ Boss/Standalone' };
             }
             const result = await handler(params || {});

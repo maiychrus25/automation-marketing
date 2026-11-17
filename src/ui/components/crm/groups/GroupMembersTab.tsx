@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useSyncExternalStore } from 'react';
 import DataAccessor from '@/lib/data/DataAccessor';
 import ipc, { buildZaloAuth } from '@/lib/ipc';
 import { useAccountStore } from '@/store/accountStore';
@@ -15,7 +15,11 @@ import BulkImportGroupsModal from '@/components/crm/groups/BulkImportGroupsModal
 import { syncZaloGroups, MemberPlaceholder, SyncGroupsProgress } from '@/lib/zaloGroupUtils';
 import { AlertIcon, CheckIcon, SearchIcon } from '@/components/common/icons';
 import { usePremiumMemberSync } from '@/hooks/usePremiumMemberSync';
+import { groupSyncSession } from '@/lib/groupSyncSession';
 import { toLocalMediaUrl } from '@/lib/localMedia';
+
+// Gắn một lần ở mức module để useSyncExternalStore không đăng ký lại mỗi lần render
+const subscribeGroupSync = groupSyncSession.subscribe.bind(groupSyncSession);
 
 interface ZaloGroup {
   contact_id: string;
@@ -103,23 +107,25 @@ function ZaloGroupMembersTab() {
   const [groups, setGroups] = useState<ZaloGroup[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [members, setMembers] = useState<GroupMember[]>([]);
-  const [groupsLoading, setGroupsLoading] = useState(false);
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersLastFetched, setMembersLastFetched] = useState(0);
   const [searchGroup, setSearchGroup] = useState('');
   const [searchMember, setSearchMember] = useState('');
 
   // ── Progress state ────────────────────────────────────────────────────────
-  /** Phase 1: syncing groups from API | Phase 2: enriching member details */
-  type GroupFetchProgress =
-    | { phase: 'groups'; current: number; total: number }
-    | { phase: 'members'; groupCurrent: number; groupTotal: number; memberCurrent: number; memberTotal: number; currentGroupName: string };
-  const [groupFetchProgress, setGroupFetchProgress] = useState<GroupFetchProgress | null>(null);
+  /** Đồng bộ nhóm chạy trong groupSyncSession (sống ngoài component); tab chỉ đọc trạng thái để khoá nút. */
+  const syncStatus = useSyncExternalStore(
+    subscribeGroupSync,
+    () => groupSyncSession.getState().status,
+  );
+  const groupsLoading = syncStatus === 'running' || syncStatus === 'stopping';
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  const activeAccountIdRef = useRef(activeAccountId);
+  activeAccountIdRef.current = activeAccountId;
   /** Progress bar shown while auto-fetching member details via getUserInfo (single group) */
   const [manualLoadProgress, setManualLoadProgress] = useState<{ current: number; total: number } | null>(null);
   const manualLoadStopRef = useRef(false);
-  /** Stop ref for Phase 2 bulk member enrichment inside fetchGroupsFromAPI */
-  const bulkEnrichStopRef = useRef(false);
 
   // ── Selection state ───────────────────────────────────────────────────────
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
@@ -267,37 +273,49 @@ function ZaloGroupMembersTab() {
     const acc = useAccountStore.getState().getActiveAccount();
     if (!acc) return;
     const auth = buildZaloAuth(acc, activeAccountId);
+    // Chụp tại thời điểm bắt đầu: vòng lặp chạy tiếp khi tab đã tháo, nên không đọc state/ref của component.
+    const syncAccountId = activeAccountId;
+    // Chỉ làm mới bảng khi tab còn gắn và vẫn đang ở đúng tài khoản; quay lại tab sẽ tải lại từ DB.
+    const refreshIfVisible = async () => {
+      if (mountedRef.current && activeAccountIdRef.current === syncAccountId) await loadGroupsFromDB();
+    };
 
-    setGroupsLoading(true);
-    bulkEnrichStopRef.current = false;
-    try {
-      await syncZaloGroups({
-        activeAccountId,
-        auth,
-        onProgress: (p: SyncGroupsProgress) => {
-          if (p.phase === 'groups') {
-            setGroupFetchProgress({ phase: 'groups', current: p.current, total: p.total });
-          } else {
-            setGroupFetchProgress({
-              phase: 'members',
-              groupCurrent: p.groupCurrent ?? 1,
-              groupTotal: p.groupTotal ?? 1,
-              memberCurrent: p.current,
-              memberTotal: p.total,
-              currentGroupName: p.currentGroupName ?? '',
-            });
-          }
-        },
-        onPhase1Done: async () => { await loadGroupsFromDB(); },
-        onGroupEnriched: async () => { await loadGroupsFromDB(); },
-        stopRef: bulkEnrichStopRef,
-      });
-      await loadGroupsFromDB();
-    } finally {
-      setGroupsLoading(false);
-      setGroupFetchProgress(null);
-      bulkEnrichStopRef.current = false;
-    }
+    groupSyncSession.start(async (ctl) => {
+      let step: 1 | 2 = 1;
+      let groupTotal = -1;
+      let finished = 0;
+      let enrichTotal = 0;
+      let enrichName = '';
+      try {
+        await syncZaloGroups({
+          activeAccountId: syncAccountId,
+          auth,
+          onProgress: (p: SyncGroupsProgress) => {
+            if (p.phase === 'groups') {
+              if (groupTotal !== p.total) { groupTotal = p.total; ctl.setStep(1, p.total); }
+              ctl.progress(p.current, p.total, '');
+            } else {
+              // done = số nhóm đã xong, không phải thứ tự nhóm đang chạy.
+              if (step !== 2) { step = 2; ctl.setStep(2); }
+              enrichTotal = p.groupTotal ?? 1;
+              enrichName = p.currentGroupName ?? '';
+              ctl.progress(finished, enrichTotal, enrichName);
+            }
+          },
+          onPhase1Done: refreshIfVisible,
+          onGroupEnriched: async () => {
+            ctl.progress(++finished, enrichTotal, enrichName);
+            await refreshIfVisible();
+          },
+          // syncZaloGroups đọc stopRef.current; getter chuyển câu hỏi "dừng chưa?" sang phiên dùng chung.
+          stopRef: { get current() { return ctl.shouldStop(); } } as { current: boolean },
+        });
+        await refreshIfVisible();
+      } catch (e) {
+        console.warn('[GroupMembersTab] group sync failed:', (e as { name?: string } | null)?.name);
+        throw new Error('Không đồng bộ được nhóm Zalo. Bạn thử lại sau.');
+      }
+    });
   }, [activeAccountId, loadGroupsFromDB]);
 
   // ── Fetch members - uses premium hook for scan API fallback ───────────
@@ -806,6 +824,11 @@ function ZaloGroupMembersTab() {
     manualLoadStopRef.current = true;
     if (activeAccountId) loadGroupsFromDB();
   }, [activeAccountId]);
+
+  // Phiên kết thúc khi tab được mở lại giữa chừng: bảng của lần gắn trước đã bị bỏ qua, nên tải lại.
+  useEffect(() => {
+    if ((syncStatus === 'done' || syncStatus === 'stopped' || syncStatus === 'failed') && activeAccountId) loadGroupsFromDB();
+  }, [syncStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setMembers([]); setMembersLastFetched(0); setSelectedMemberIds(new Set());
@@ -1770,103 +1793,6 @@ function ZaloGroupMembersTab() {
         </div>
       )}
 
-      {/* ── Group fetch progress modal ─────────────────────────────────────── */}
-      {groupFetchProgress !== null && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-          <div className="bg-gray-800 border border-gray-600 rounded-2xl w-[420px] p-6 shadow-2xl">
-
-            {groupFetchProgress.phase === 'groups' ? (
-              /* ── Phase 1: Sync groups ── */
-              <>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-9 h-9 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
-                    {SpinIcon}
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-white text-sm">Đang đồng bộ nhóm Zalo</h3>
-                    <p className="text-xs text-gray-400 mt-0.5">Tổng cộng <span className="text-white font-medium">{groupFetchProgress.total}</span> nhóm · Bước 1/2</p>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between text-xs mb-2">
-                  <span className="text-gray-400">
-                    Đã xử lý: <span className="text-white font-semibold">{groupFetchProgress.current}</span>
-                    <span className="text-gray-400"> / {groupFetchProgress.total}</span>
-                  </span>
-                  <span className="text-blue-400 font-semibold text-sm">
-                    {Math.round((groupFetchProgress.current / groupFetchProgress.total) * 100)}%
-                  </span>
-                </div>
-                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full transition-all duration-300"
-                    style={{ width: `${(groupFetchProgress.current / groupFetchProgress.total) * 100}%` }} />
-                </div>
-                <p className="text-[11px] text-gray-400 mt-3 text-center">
-                  Vui lòng không đóng cửa sổ trong khi đồng bộ...
-                </p>
-              </>
-            ) : (
-              /* ── Phase 2: Enrich member details ── */
-              <>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-9 h-9 rounded-xl bg-green-500/15 border border-green-500/30 flex items-center justify-center flex-shrink-0">
-                    {SpinIcon}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-white text-sm">Đang tải chi tiết thành viên · Bước 2/2</h3>
-                    <p className="text-xs text-gray-400 mt-0.5 truncate">
-                      Nhóm <span className="text-white font-medium">{groupFetchProgress.groupCurrent}/{groupFetchProgress.groupTotal}</span>
-                      {groupFetchProgress.currentGroupName && (
-                        <span className="ml-1 text-gray-400 truncate">· {groupFetchProgress.currentGroupName}</span>
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Group progress */}
-                <div className="mb-3">
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-gray-400">Tiến độ nhóm</span>
-                    <span className="text-green-400 font-semibold">
-                      {Math.round((groupFetchProgress.groupCurrent / groupFetchProgress.groupTotal) * 100)}%
-                    </span>
-                  </div>
-                  <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-green-500 to-green-400 rounded-full transition-all duration-300"
-                      style={{ width: `${(groupFetchProgress.groupCurrent / groupFetchProgress.groupTotal) * 100}%` }} />
-                  </div>
-                </div>
-
-                {/* Member progress */}
-                {groupFetchProgress.memberTotal > 0 && (
-                  <div className="mb-3">
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="text-gray-400">
-                        Thành viên: <span className="text-white">{groupFetchProgress.memberCurrent}</span>/{groupFetchProgress.memberTotal}
-                      </span>
-                      <span className="text-blue-400 font-semibold">
-                        {Math.round((groupFetchProgress.memberCurrent / groupFetchProgress.memberTotal) * 100)}%
-                      </span>
-                    </div>
-                    <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                      <div className="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full transition-all duration-300"
-                        style={{ width: `${(groupFetchProgress.memberCurrent / groupFetchProgress.memberTotal) * 100}%` }} />
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between mt-3">
-                  <p className="text-[11px] text-gray-400">Đang tải SĐT + thông tin thành viên từ Zalo...</p>
-                  <button
-                    onClick={() => { bulkEnrichStopRef.current = true; }}
-                    className="flex-shrink-0 ml-3 px-3 py-1 text-xs text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition-colors">
-                    Bỏ qua
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
       </div>
       )}
 

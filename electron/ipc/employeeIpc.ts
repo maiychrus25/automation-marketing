@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import EmployeeService from '../../src/services/employee/EmployeeService';
+import { sanitizeProfileIds } from '../../src/services/employee/profileAssignment';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import AppModeManager from '../../src/utils/AppModeManager';
 import HttpClientService from '../../src/services/http/HttpClientService';
@@ -127,6 +128,28 @@ export function registerEmployeeIpc(): void {
                 HttpRelayService.getInstance().refreshEmployeeState(employeeId, 'accounts-assigned');
             }
             return result;
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('employee:assignProfiles', async (_e, { employeeId, profileIds }: {
+        employeeId: string; profileIds: string[];
+    }) => {
+        try {
+            const valid = sanitizeProfileIds(profileIds, DatabaseService.getInstance().getBrowserProfiles().map((p) => p.id));
+            if (!valid) return { success: false, error: 'Danh sách hồ sơ không hợp lệ' };
+            const result = svc().assignProfiles(employeeId, valid);
+            if (result.success) HttpRelayService.getInstance().refreshEmployeeState(employeeId, 'profiles-assigned');
+            return result;
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('employee:getAssignedProfiles', async (_e, { employeeId }: { employeeId: string }) => {
+        try {
+            return { success: true, profileIds: svc().getAssignedProfiles(employeeId) };
         } catch (err: any) {
             return { success: false, error: err.message };
         }

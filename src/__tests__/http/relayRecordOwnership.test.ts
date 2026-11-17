@@ -212,4 +212,92 @@ describe('a record addressed by its own id must belong to an account the employe
     expect((await proxy('emp-1', 'db:deleteLocalLabel', { id: '41' })).success).toBe(false);
     expect(handler).not.toHaveBeenCalled();
   });
+
+  describe('fix round 2: workspace mismatch and lookup errors', () => {
+    const service = async (): Promise<any> => (await import('../../services/http/HttpRelayService')).default.getInstance();
+
+    test('withRecordRefsAndAPinnedDatabaseThatIsNotTheActiveOneTheCommandIsRefused', async () => {
+      const handler = relay.registerIpcHandler('db:deleteLocalLabel');
+      const relayService = await service();
+      relayService.pinnedDbPath = '/tmp/another-workspace.db';
+      try {
+        expect(await proxy('emp-1', 'db:deleteLocalLabel', { id: 7 })).toMatchObject({ success: false, code: 'WORKSPACE_MISMATCH', error: 'Máy Boss đang mở workspace khác. Thao tác này tạm thời chưa dùng được.' });
+        expect(handler).not.toHaveBeenCalled();
+      } finally { relayService.pinnedDbPath = null; }
+    });
+
+    test('theSameFileSpelledDifferentlyBehavesAsBefore', async () => {
+      const handler = relay.registerIpcHandler('db:deleteLocalLabel');
+      const relayService = await service();
+      relayService.pinnedDbPath = '/tmp/./x/../relay-test.db';
+      try {
+        expect((await proxy('emp-1', 'db:deleteLocalLabel', { id: 7 })).success).toBe(true);
+        expect(handler).toHaveBeenCalledTimes(1);
+      } finally { relayService.pinnedDbPath = null; }
+    });
+
+    test('aCommandWithoutRecordRefsIsNotBlockedByTheRule', async () => {
+      const handler = relay.registerIpcHandler('zalo:getContext');
+      const relayService = await service();
+      relayService.pinnedDbPath = '/tmp/another-workspace.db';
+      try {
+        expect((await proxy('emp-1', 'zalo:getContext', { zaloId: 'acc-a' })).success).toBe(true);
+        expect(handler).toHaveBeenCalledTimes(1);
+      } finally { relayService.pinnedDbPath = null; }
+    });
+
+    test('aLookupThatThrowsRefusesTheProxyCommandAndTheRestRoute', async () => {
+      const handler = relay.registerIpcHandler('db:deleteLocalLabel');
+      const original = relay.db.queryOneStrict.getMockImplementation();
+      relay.db.queryOneStrict.mockImplementation(() => { throw new Error('SQL boom'); });
+      try {
+        expect((await proxy('emp-1', 'db:deleteLocalLabel', { id: 7 })).success).toBe(false);
+        expect(handler).not.toHaveBeenCalled();
+        const rest = await call('emp-1', 'DELETE', '/api/command/labels/7');
+        expect(rest.status).toBe(403);
+        expect(relay.db.deleteLocalLabel).not.toHaveBeenCalled();
+      } finally { relay.db.queryOneStrict.mockImplementation(original!); }
+    });
+
+    test('aRestWriteThatAddressesARecordIsRefusedWhenThePinnedDatabaseIsNotTheActiveOne', async () => {
+      const relayService = await service();
+      relayService.pinnedDbPath = '/tmp/another-workspace.db';
+      try {
+        const res = await call('emp-1', 'DELETE', '/api/command/labels/7');
+        expect(res.status).toBe(403);
+        expect(res.body).toMatchObject({ success: false, code: 'WORKSPACE_MISMATCH', error: 'Máy Boss đang mở workspace khác. Thao tác này tạm thời chưa dùng được.' });
+        expect(relay.db.deleteLocalLabel).not.toHaveBeenCalled();
+        const body = await call('emp-1', 'POST', '/api/command/crm/campaigns/status', { campaignId: 3, status: 'active' });
+        expect(body.body.code).toBe('WORKSPACE_MISMATCH'); // a record id carried in the body is seen too
+        expect(relay.db.updateCRMCampaignStatus).not.toHaveBeenCalled();
+      } finally { relayService.pinnedDbPath = null; }
+    });
+
+    test('theSameFileSpelledDifferentlyAndAWriteWithoutRecordRefsAreNotRefusedByTheRule', async () => {
+      const relayService = await service();
+      relayService.pinnedDbPath = '/tmp/./x/../relay-test.db';
+      try {
+        expect((await call('emp-1', 'DELETE', '/api/command/labels/7')).status).toBe(200);
+        expect(relay.db.deleteLocalLabel).toHaveBeenCalled();
+      } finally { relayService.pinnedDbPath = null; }
+      relayService.pinnedDbPath = '/tmp/another-workspace.db';
+      try {
+        const res = await call('emp-1', 'POST', '/api/command/labels', { label: { name: 'n', color: '#fff', emoji: '', pageIds: 'acc-a' } });
+        expect(res.status).toBe(200);
+      } finally { relayService.pinnedDbPath = null; }
+    });
+
+    test('aLibraryWriteWhoseOwnershipLookupCannotOpenTheDatabaseAnswers500', async () => {
+      const relayService = await service();
+      relayService.pinnedDbPath = '/tmp/./relay-test.db'; // same file as the active one, different string: runOnPinnedDb goes through withDbPath
+      const original = relay.db.withDbPath;
+      // Only the ownership lookup fails (authentication and the rest of the request must still work).
+      relay.db.withDbPath = (_path: string, fn: () => any) => { if (String(new Error().stack).includes('deniesRecord')) throw new Error('cannot open'); return fn(); };
+      try {
+        const res = await call('emp-1', 'POST', '/api/library/folders', { name: 's', parentId: 8, zaloId: 'acc-a' });
+        expect(res.status).toBe(500);
+        expect(JSON.stringify(res.body)).not.toContain('cannot open');
+      } finally { relay.db.withDbPath = original; relayService.pinnedDbPath = null; }
+    });
+  });
 });

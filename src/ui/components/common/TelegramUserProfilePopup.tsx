@@ -2,6 +2,7 @@ import React from 'react';
 import { useChatStore } from '@/store/chatStore';
 import { useAppStore } from '@/store/appStore';
 import { getAdapter } from '@/lib/adapters/registry';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 
 interface TelegramUserProfilePopupProps {
   userId: string;
@@ -100,7 +101,7 @@ export function TelegramUserProfilePopup({
         <div className="relative px-4 pb-4">
           <div className="absolute -top-9 left-4">
             {avatarUrl ? (
-              <img src={avatarUrl} alt={displayName} className="h-[72px] w-[72px] rounded-full border-4 border-[#1e2535] object-cover" />
+              <img src={toLocalMediaUrl(avatarUrl)} alt={displayName} className="h-[72px] w-[72px] rounded-full border-4 border-[#1e2535] object-cover" />
             ) : (
               <div className="flex h-[72px] w-[72px] items-center justify-center rounded-full border-4 border-[#1e2535] bg-sky-600 text-2xl font-bold text-white">
                 {(displayName || 'T').charAt(0).toUpperCase()}

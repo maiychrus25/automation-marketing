@@ -3,6 +3,7 @@ import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { Spinner } from '@/components/common/PageLoading';
 import TrackConfigPopover from './TrackConfigPopover';
+import { useEmployeePoster, useEmployeeReload } from './useEmployeePoster';
 import { formatCount, formatRate } from './researchFormat';
 import { GROUP_BY_OPTIONS, RANGE_OPTIONS, gradeChip, formatBestTimes, followerSummary } from './trackingFormat';
 import type { GroupScore } from '../../../services/facebookPoster/groupScores';
@@ -109,6 +110,8 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
     return () => { cancelled = true; };
   }, [campaignId, reloadTick]);
 
+  const { isEmployee } = useEmployeePoster();
+  const reloadStats = useEmployeeReload(() => setReloadTick((n) => n + 1), isEmployee);
   useEffect(() => {
     let cancelled = false;
     ipc.facebookPoster?.trackStatus().then((res) => {
@@ -116,17 +119,17 @@ export default function PerformancePanel({ campaignId, scheduleId }: Props = {})
       setRunning(!!res.running);
       if (res.running && res.progress) setProgress(res.progress);
     }).catch(() => { /* sự kiện tiến độ sẽ cập nhật */ });
-    const offProgress = ipc.on?.('facebookPoster:trackProgress', (data: { done: number; total: number }) => {
+    const offProgress = ipc.on?.('facebookPoster:trackProgress', (data: { done: number; total: number } | null) => {
       setRunning(true);
-      setProgress({ done: data.done, total: data.total });
+      setProgress({ done: data?.done ?? 0, total: data?.total ?? 0 });
     });
     const offFinished = ipc.on?.('facebookPoster:trackFinished', () => {
       setRunning(false);
       setProgress(null);
-      setReloadTick((n) => n + 1);
+      reloadStats();
     });
     return () => { cancelled = true; offProgress?.(); offFinished?.(); };
-  }, []);
+  }, [reloadStats]);
 
   const start = useCallback(async () => {
     setStarting(true);

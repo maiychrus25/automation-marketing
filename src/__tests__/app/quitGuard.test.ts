@@ -106,7 +106,7 @@ async function mainHarness(options: { platform?: string } = {}) {
         exit, focus: (opts: unknown) => events.push(`app.focus:${JSON.stringify(opts)}`),
     });
     const electron = {
-        app, BrowserWindow: Window,
+        app, BrowserWindow: Window, powerMonitor: { on: () => {} },
         ipcMain: { on: (name: string, callback: any) => handlers.set(name, callback), handle: (name: string, callback: any) => handlers.set(name, callback), removeAllListeners: (name: string) => handlers.delete(name) },
         Tray: class extends EventEmitter { setToolTip() {} setContextMenu(menu: any[]) { trayMenu = menu; } },
         Menu: { buildFromTemplate: (template: any[]) => template },

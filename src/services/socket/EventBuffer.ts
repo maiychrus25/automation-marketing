@@ -5,8 +5,9 @@
  * - Boss push mọi event vào buffer với seqId tăng dần
  * - Employee track lastSeqId đã nhận
  * - Reconnect → gửi lastSeqId → Boss replay buffer từ seqId đó
- * - Buffer giới hạn 2000 event gần nhất (đủ cho ~10-15 phút ở cường độ cao)
+ * - Buffer giới hạn 5000 event gần nhất (MAX_SIZE; cấu hình được bằng setMaxSize)
  */
+import { randomUUID } from 'crypto';
 import type { RelayAudience } from './relayAudience';
 
 export interface BufferedEvent {
@@ -19,9 +20,18 @@ export interface BufferedEvent {
 
 class EventBuffer {
   private buffer: BufferedEvent[] = [];
-  private nextSeqId = 1;
+  private nextSeqId: number;
   private static MAX_SIZE = 5000;
-  private prunedCount = 0; // thống kê
+  private prunedCount = 0; // số event đã bị loại trong luồng này
+  private readonly now: () => number;
+  /** Mã luồng hiện tại; đổi mỗi lần reset để client biết số thứ tự cũ không còn giá trị. */
+  public bootId: string;
+
+  constructor(opts: { now?: () => number; bootId?: string } = {}) {
+    this.now = opts.now ?? Date.now;
+    this.bootId = opts.bootId ?? randomUUID();
+    this.nextSeqId = this.now() * 1000 + 1; // luồng sau luôn lớn hơn luồng trước
+  }
 
   /** Có thể cấu hình MAX_SIZE từ ngoài (cho test hoặc tuning) */
   public static setMaxSize(size: number): void {
@@ -57,6 +67,23 @@ class EventBuffer {
     return this.buffer.filter(e => e.seqId > lastSeqId);
   }
 
+  oldestSeqId(): number | null {
+    return this.buffer.length ? this.buffer[0].seqId : null;
+  }
+
+  newestSeqId(): number | null {
+    return this.buffer.length ? this.buffer[this.buffer.length - 1].seqId : null;
+  }
+
+  /** Đếm event có seqId > `seqId`; có `accept` thì chỉ đếm event được chấp nhận. */
+  countAfter(seqId: number, accept?: (e: BufferedEvent) => boolean): number {
+    let n = 0;
+    for (let i = this.buffer.length - 1; i >= 0 && this.buffer[i].seqId > seqId; i--) {
+      if (!accept || accept(this.buffer[i])) n++;
+    }
+    return n;
+  }
+
   /**
    * Số event hiện tại trong buffer
    */
@@ -64,19 +91,18 @@ class EventBuffer {
     return this.buffer.length;
   }
 
-  /**
-   * Số event đã bị loại bỏ do buffer đầy
-   */
-  get totalPruned(): number {
-    return this.prunedCount;
+  /** Luồng này đã loại bỏ event do buffer đầy (không còn giữ mọi thứ đã cấp). */
+  get evicted(): boolean {
+    return this.prunedCount > 0;
   }
 
   /**
-   * Reset buffer (dùng khi test)
+   * Bắt đầu luồng mới: xoá bộ đệm, bootId mới, số thứ tự mới lớn hơn mọi số đã cấp.
    */
   reset(): void {
     this.buffer = [];
-    this.nextSeqId = 1;
+    this.bootId = randomUUID();
+    this.nextSeqId = Math.max(this.now() * 1000 + 1, this.nextSeqId);
     this.prunedCount = 0;
   }
 }

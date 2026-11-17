@@ -31,7 +31,14 @@ export function withFacebookParents<T extends { zalo_id: string; channel?: strin
 
 export function isAccountOnline(
     row: { zalo_id: string; channel?: string | null },
-    deps: { zaloConnected: (id: string) => boolean; facebookConnected: (facebookId: string) => boolean },
+    deps: {
+        zaloConnected: (id: string) => boolean;
+        facebookConnected: (facebookId: string) => boolean;
+        telegramUserConnected: (id: string) => boolean;
+        telegramBotPolling: (id: string) => boolean;
+    },
 ): boolean {
+    if (row.channel === 'telegram_user') return deps.telegramUserConnected(row.zalo_id);
+    if (row.channel === 'telegram_bot') return deps.telegramBotPolling(row.zalo_id);
     return row.channel === 'facebook' ? deps.facebookConnected(row.zalo_id) : deps.zaloConnected(row.zalo_id);
 }

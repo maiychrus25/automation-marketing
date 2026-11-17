@@ -20,7 +20,7 @@ describe('withFacebookParents', () => {
 });
 
 describe('isAccountOnline', () => {
-  const deps = { zaloConnected: (id: string) => id === 'acc-a', facebookConnected: (id: string) => id === 'page-1' };
+  const deps = { zaloConnected: (id: string) => id === 'acc-a', facebookConnected: (id: string) => id === 'page-1', telegramUserConnected: () => false, telegramBotPolling: () => false };
   test('usesTheZaloCheckForZaloAndTheFacebookCheckForFacebook', () => {
     expect(isAccountOnline({ zalo_id: 'acc-a', channel: 'zalo' }, deps)).toBe(true);
     expect(isAccountOnline({ zalo_id: 'acc-a', channel: 'facebook' }, deps)).toBe(false);
@@ -38,5 +38,22 @@ describe('a Page the boss switched off', () => {
     const rows = withFacebookParents([{ zalo_id: 'page-off', channel: 'facebook' }, { zalo_id: 'page-1', channel: 'facebook' }], fb);
     expect(rows[0]).toMatchObject({ parent_zalo_id: 'fb-personal', enabled: 0 });
     expect(rows[1]).not.toHaveProperty('enabled');
+  });
+});
+
+describe('isAccountOnline for Telegram', () => {
+  const calls: string[] = [];
+  const deps = {
+    zaloConnected: (id: string) => { calls.push(`zalo:${id}`); return true; },
+    facebookConnected: (id: string) => { calls.push(`fb:${id}`); return true; },
+    telegramUserConnected: (id: string) => id === 'tg-user',
+    telegramBotPolling: (id: string) => id === 'tg-bot',
+  };
+  test('userAccountsAndBotsUseTheirOwnCheckAndNeverTheZaloOne', () => {
+    expect(isAccountOnline({ zalo_id: 'tg-user', channel: 'telegram_user' }, deps)).toBe(true);
+    expect(isAccountOnline({ zalo_id: 'tg-bot', channel: 'telegram_user' }, deps)).toBe(false);
+    expect(isAccountOnline({ zalo_id: 'tg-bot', channel: 'telegram_bot' }, deps)).toBe(true);
+    expect(isAccountOnline({ zalo_id: 'tg-user', channel: 'telegram_bot' }, deps)).toBe(false);
+    expect(calls).toEqual([]);
   });
 });

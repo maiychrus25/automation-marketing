@@ -3,7 +3,7 @@ import {useChatStore} from '@/store/chatStore';
 import {useAccountStore} from '@/store/accountStore';
 import {useAppStore} from '@/store/appStore';
 import {useEmployeeStore} from '@/store/employeeStore';
-import { withoutBossOnlyFbCaps } from '@/lib/employeeAccounts';
+import { withoutBossOnlyFbCaps, employeeSendFailure } from '@/lib/employeeAccounts';
 import ipc from '@/lib/ipc'
 import { toLocalMediaUrl } from '@/lib/localMedia';
 import DataAccessor from '@/lib/data/DataAccessor';;
@@ -1530,7 +1530,7 @@ export default function MessageInput() {
               if (isNonZalo(ch)) {
                 // FB: send multiple images via channelIpc
                 for (const imgPath of imagePaths) {
-                  await channelIpc.sendAttachment(ch, {
+                  const imgRes = await channelIpc.sendAttachment(ch, {
                     accountId,
                     threadId,
                     threadType: threadType as any,
@@ -1538,6 +1538,8 @@ export default function MessageInput() {
                     filePath: imgPath,
                     body: '',
                   });
+                  const imgFailure = employeeSendFailure(isEmployeeMode, imgRes);
+                  if (imgFailure) throw new Error(imgFailure.error);
                 }
               } else {
                 await ipc.zalo?.sendImages({ auth, threadId, type: threadType, filePaths: imagePaths });
@@ -1571,7 +1573,7 @@ export default function MessageInput() {
 
               const ch = activeContact?.channel || CHANNEL.ZALO;
               if (isNonZalo(ch)) {
-                await channelIpc.sendVideo(ch, {
+                const vidRes = await channelIpc.sendVideo(ch, {
                   accountId,
                   threadId,
                   threadType,
@@ -1579,6 +1581,8 @@ export default function MessageInput() {
                   filePath: videoPath,
                   body: '',
                 });
+                const vidFailure = employeeSendFailure(isEmployeeMode, vidRes);
+                if (vidFailure) throw new Error(vidFailure.error);
               } else {
                 let thumbUrl = '';
                 if (thumbPath) {
@@ -1785,7 +1789,13 @@ export default function MessageInput() {
         const rawMsgId = editingMsg.msg_id?.replace(/^tg_/, '') || editingMsg.msg_id;
         console.log(`[MessageInput] Edit msg: channel=${activeContact?.channel} msgId=${rawMsgId} chatId=${activeThreadId}`);
         if (isTelegramBot(activeContact?.channel)) {
-          await ipc.telegram?.editMessage({ accountId: activeAccountId, chatId: activeThreadId, messageId: rawMsgId, text: msgText });
+          const botEditRes = await ipc.telegram?.editMessage({ accountId: activeAccountId, chatId: activeThreadId, messageId: rawMsgId, text: msgText });
+          // Máy nhân viên: lệnh qua boss thất bại → báo lỗi thay vì "Đã sửa"
+          const botEditFailure = employeeSendFailure(isEmployeeMode, botEditRes);
+          if (botEditFailure) {
+            showNotification('Sửa tin nhắn thất bại: ' + botEditFailure.error, 'error');
+            return;
+          }
         } else if (isTelegramUser(activeContact?.channel)) {
           const res = await (ipc as any).telegramUser?.editMessage({ accountId: activeAccountId, chatId: activeThreadId, messageId: rawMsgId, text: msgText });
           console.log(`[MessageInput] Telegram editMessage result:`, JSON.stringify(res));
@@ -1873,7 +1883,7 @@ export default function MessageInput() {
                       accountId: activeAccountId!, threadId: activeThreadId, threadType: activeThreadType,
                       topicRootMessageId: activeTopicId || undefined, filePath, fileType: 'image',
                     });
-                    if (!result?.success) return { success: false, error: result?.error || 'Gửi ảnh Telegram thất bại' };
+                    if (!result?.success) return { success: false, error: result?.error || 'Gửi ảnh Telegram thất bại', code: (result as any)?.code };
                     messageId = result.messageId;
                   }
                   return { success: true, msgId: messageId };
@@ -1968,7 +1978,7 @@ export default function MessageInput() {
               if (isTelegramUser(ch) && activeTopicId && !isTelegramForumGeneral(activeTopicId)) {
                 const r = await ((await import('@/lib/adapters/registry')).getAdapter('telegram_user') as any)
                   .sendTopicMessage({ accountId: activeAccountId, threadId: activeThreadId, topicId: activeTopicId, text: msgText });
-                if (!r?.success) return { success: false, error: r?.error || 'Gửi link Telegram thất bại' };
+                if (!r?.success) return { success: false, error: r?.error || 'Gửi link Telegram thất bại', code: (r as any)?.code };
                 return { success: true, msgId: r?.messageId };
               } else if (isNonZalo(ch)) {
                 const r = await channelIpc.sendMessage(ch, { accountId: activeAccountId, threadId: activeThreadId, body: msgText, threadType: activeThreadType, quote: quotePayload });
@@ -2125,7 +2135,7 @@ export default function MessageInput() {
               topicId: activeTopicId,
               text: '👍',
             });
-            if (!result?.success) return { success: false, error: result?.error || 'Gửi thất bại' };
+            if (!result?.success) return { success: false, error: result?.error || 'Gửi thất bại', code: (result as any)?.code };
             return { success: true, msgId: result.messageId };
           } else if (isNonZalo(ch)) {
             const res = await channelIpc.sendMessage(ch, { accountId: activeAccountId, threadId: activeThreadId, body: '👍', threadType: activeThreadType });
@@ -2198,7 +2208,7 @@ export default function MessageInput() {
                 accountId: activeAccountId!, threadId: activeThreadId, threadType: activeThreadType,
                 topicRootMessageId: activeTopicId || undefined, filePath, fileType: 'image',
               });
-              if (!result?.success) return { success: false, error: result?.error || 'Gửi ảnh Telegram thất bại' };
+              if (!result?.success) return { success: false, error: result?.error || 'Gửi ảnh Telegram thất bại', code: (result as any)?.code };
               messageId = result.messageId;
             }
             return { success: true, msgId: messageId };
@@ -2982,7 +2992,7 @@ export default function MessageInput() {
 
         const ch = activeContact?.channel || CHANNEL.ZALO;
         if (isNonZalo(ch)) {
-          await channelIpc.sendVideo(ch, {
+          const dropVidRes = await channelIpc.sendVideo(ch, {
             accountId: activeAccountId!,
             threadId: activeThreadId,
             threadType: activeThreadType,
@@ -2991,6 +3001,8 @@ export default function MessageInput() {
             body: '',
             quote: quotePayload || undefined,
           });
+          const dropVidFailure = employeeSendFailure(isEmployeeMode, dropVidRes);
+          if (dropVidFailure) throw new Error(dropVidFailure.error);
         } else {
           let thumbUrl = '';
           if (thumbPath) {
@@ -3481,12 +3493,14 @@ export default function MessageInput() {
                   if (!activeThreadId || sendingRef.current) return;
                   setSending(true);
                   try {
-                    await ipc.telegramUser?.sendSticker({
+                    const stickerRes = await ipc.telegramUser?.sendSticker({
                       accountId: activeAccountId || '',
                       chatId: activeThreadId,
                       stickerId: sticker.id,
                       accessHash: sticker.accessHash,
                     });
+                    const stickerFailure = employeeSendFailure(isEmployeeMode, stickerRes);
+                    if (stickerFailure) throw new Error(stickerFailure.error);
                     setText('');
                   } catch (err: any) {
                     showNotification('Gửi sticker thất bại: ' + err.message, 'error');
@@ -4092,7 +4106,7 @@ export default function MessageInput() {
                 className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${idx === mentionSelectedIdx ? 'bg-gray-700' : 'hover:bg-gray-700'}`}
               >
                 {member.avatar ? (
-                  <img src={member.avatar} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+                  <img src={toLocalMediaUrl(member.avatar)} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
                 ) : (
                   <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
                     {(member.displayName || 'U').charAt(0).toUpperCase()}
@@ -4224,7 +4238,7 @@ export default function MessageInput() {
             </svg>
             <span className="text-[11px] text-gray-400 flex-shrink-0">Đang trả lời từ:</span>
             {ownerAcc.avatar_url
-              ? <img src={ownerAcc.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
+              ? <img src={toLocalMediaUrl(ownerAcc.avatar_url)} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
               : <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center text-white text-[7px] font-bold flex-shrink-0">{(ownerAcc.full_name || ownerAcc.zalo_id).charAt(0).toUpperCase()}</div>
             }
             <span className="text-[11px] text-blue-300 font-medium truncate">{ownerAcc.full_name || ownerAcc.zalo_id}</span>
@@ -5366,7 +5380,10 @@ function TelegramStickerItem({
           accessHash: sticker.accessHash,
         });
         if (!cancelled && res?.success && res.localPath) {
-          const url = (window as any).electronAPI?.file?.toLocalMediaUrl?.(res.localPath) || res.localPath;
+          // Employee: the sticker file lives on the boss, so it goes through the boss media URL
+          const url = useEmployeeStore.getState().mode === 'employee'
+            ? toLocalMediaUrl(res.localPath, accountId)
+            : (window as any).electronAPI?.file?.toLocalMediaUrl?.(res.localPath) || res.localPath;
           stickerThumbCache.set(sticker.id, url);
           setThumbUrl(url);
         }

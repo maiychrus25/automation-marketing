@@ -15,7 +15,7 @@
  * has no handler under those names, so they never worked and are not listed.
  */
 
-import { FACEBOOK_CHANNEL_ROUTES } from './employeeChannelRoutes';
+import { EMPLOYEE_CHANNEL_ROUTES, POSTER_CHANNEL_ROUTES } from './employeeChannelRoutes';
 
 export interface EmployeeChannelRule {
     /** The employee needs ONE of these modules; empty = no module needed. */
@@ -23,6 +23,8 @@ export interface EmployeeChannelRule {
     /** 'default': act on the account in the params, else on the employee's first usable account. 'none': no account.
      *  'required': `params.accountId` must be present (never the first usable account) and one the employee may use. */
     account: 'default' | 'none' | 'required';
+    /** 'profiles': the params must stay inside the browser profiles assigned to the employee (checkPosterRequest). */
+    scope?: 'profiles';
 }
 
 const CHAT = ['chat'] as const;
@@ -82,10 +84,18 @@ add('integration', INTEGRATION, ['integration'], 'none');
 add('db', DB_CHAT, CHAT, 'default');
 add('db', DB_FRIENDS, FRIENDS_CHAT, 'default');
 
-// Page inbox commands: the closed list comes from the `proxy` entries of FACEBOOK_CHANNEL_ROUTES; every other fb:* is refused.
-for (const [channel, spec] of Object.entries(FACEBOOK_CHANNEL_ROUTES)) {
-    if (spec.route === 'proxy') RULES.set(channel, { modules: spec.modules ?? [], account: 'required' });
+// Page inbox and Telegram commands: the closed list comes from the `proxy` entries of EMPLOYEE_CHANNEL_ROUTES; every other fb:* / telegram* is refused.
+for (const [channel, spec] of Object.entries(EMPLOYEE_CHANNEL_ROUTES)) {
+    if (spec.route === 'proxy' && !(channel in POSTER_CHANNEL_ROUTES)) RULES.set(channel, { modules: spec.modules ?? [], account: 'required' });
 }
+
+/** Rules of the poster `proxy` channels: the module, no account, and `scope: 'profiles'` (executeProxyAction runs checkPosterRequest for them and refuses any other scope value). */
+export const POSTER_PROXY_RULES: Readonly<Record<string, EmployeeChannelRule>> = Object.fromEntries(
+    Object.entries(POSTER_CHANNEL_ROUTES)
+        .filter(([, spec]) => spec.route === 'proxy')
+        .map(([channel, spec]) => [channel, { modules: spec.modules ?? [], account: 'none', scope: 'profiles' } as EmployeeChannelRule]),
+);
+for (const [channel, rule] of Object.entries(POSTER_PROXY_RULES)) RULES.set(channel, rule);
 
 export const EMPLOYEE_PROXY_CHANNELS: readonly string[] = [...RULES.keys()];
 

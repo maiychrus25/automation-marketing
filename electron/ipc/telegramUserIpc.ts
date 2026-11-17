@@ -12,10 +12,14 @@
  * - telegramUser:getActive      — Get danh sách listeners active
  */
 
-import { ipcMain } from 'electron';
+import { ipcMain as electronIpcMain } from 'electron';
+import { employeeRoutedIpcMain } from './proxyHelper';
 import * as TelegramUser from '../../src/services/telegram/TelegramUserListener';
 import Logger from '../../src/utils/Logger';
 import type { TelegramChatContext, TelegramForumTopicContext } from '../../src/models/telegram';
+
+// Employee machine: Telegram commands go to the Boss, which holds the sessions.
+const ipcMain = employeeRoutedIpcMain(electronIpcMain);
 
 type LegacyTelegramForumTopicContext = TelegramChatContext & {
   /** Backward-compatible alias; callers must migrate to topicRootMessageId. */
@@ -469,5 +473,5 @@ export function registerTelegramUserIpc(): void {
     catch (err: any) { return { success: false, error: err.message }; }
   });
 
-  Logger.log('[telegramUserIpc] Registered 59 Telegram User IPC channels');
+  Logger.log('[telegramUserIpc] Registered Telegram User IPC channels');
 }

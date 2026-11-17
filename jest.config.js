@@ -10,6 +10,8 @@ module.exports = {
       tsconfig: { isolatedModules: true, module: 'CommonJS', target: 'ES2020', esModuleInterop: true, resolveJsonModule: true },
     }],
   },
+  // Alias "@/" của giao diện (trùng tsconfig paths) để kiểm thử nạp được các module src/ui dùng "@/"
+  moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/ui/$1' },
   testMatch: ['<rootDir>/src/__tests__/**/*.test.ts'], // Đường dẫn đến các tệp test
   // services/ là gói riêng (máy chủ render) có package.json và jest riêng, không quét trong Jest của MaiHub
   testPathIgnorePatterns: ["/node_modules/", "<rootDir>/services/"],

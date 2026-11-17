@@ -317,7 +317,7 @@ export default function ForwardMessageModal({ messages, onClose, onForward }: {
                       <div className="relative flex-shrink-0">
                         <div className="w-9 h-9 rounded-full overflow-hidden ring-1 ring-white/10">
                           {acc.avatar_url ? (
-                            <img src={acc.avatar_url} alt="" className="w-full h-full object-cover"
+                            <img src={toLocalMediaUrl(acc.avatar_url)} alt="" className="w-full h-full object-cover"
                               onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                           ) : (
                             <div className="w-full h-full bg-blue-600 flex items-center justify-center text-white font-bold text-xs">

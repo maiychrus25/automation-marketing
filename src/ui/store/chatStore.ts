@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { RESYNC_MESSAGES_LIMIT, mergeFetchedWindow } from '@/lib/employeeResync';
 import ipc from "@/lib/ipc";
 import type { Channel } from '@/../configs/channelConfig';
 import { CHANNEL } from '@/lib/channelHelper';
@@ -44,6 +45,16 @@ function clearPersistedForumTopics(cacheKey: string): void {
  * its parent chat ID. Keep the old base key for ordinary conversations and
  * add the topic root only when one is selected.
  */
+/** Văn bản dùng để so trùng tin tạm với tin thật (tin rtf lấy tiêu đề, chuỗi JSON lấy giá trị chuỗi). */
+export function extractDedupText(c: string): string {
+  try {
+    const p = JSON.parse(c);
+    if (p?.action === 'rtf' && typeof p.title === 'string') return p.title;
+    if (typeof p === 'string') return p;
+  } catch {}
+  return c;
+}
+
 export function getMessageCacheKey(accountId: string, threadId: string, topicRootMessageId?: string | null): string {
   const base = `${accountId}_${threadId}`;
   return topicRootMessageId ? `${base}${MESSAGE_TOPIC_KEY_SEPARATOR}${topicRootMessageId}` : base;
@@ -205,6 +216,8 @@ interface ChatStore {
   addMessage: (zaloId: string, threadId: string, message: MessageItem, topicRootMessageId?: string | null) => void;
   replaceTempMessage: (zaloId: string, threadId: string, tempContent: string, realMsg: Partial<MessageItem>) => void;
   prependMessages: (zaloId: string, threadId: string, messages: MessageItem[], topicRootMessageId?: string | null) => void;
+  /** Trộn lô tin tải lại từ boss vào thread (cập nhật dòng trùng id, không để lỗ hổng) - xem mergeFetchedWindow */
+  mergeFetchedMessages: (zaloId: string, threadId: string, fetched: MessageItem[], topicRootMessageId?: string | null) => void;
   updateContact: (zaloId: string, contact: Partial<ContactItem> & { contact_id: string }) => void;
   setActiveThread: (threadId: string | null, type?: number) => void;
   incrementUnread: (zaloId: string, contactId: string) => void;
@@ -418,14 +431,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // DEDUP STRATEGY (ưu tiên từ cao → thấp):
       //   1. Match bằng real_msg_id (set bởi MessageQueue khi API trả về msgId)
       //   2. Fallback: match bằng content text (cho trường hợp API không trả msgId)
-      const extractDedupText = (c: string): string => {
-        try {
-          const p = JSON.parse(c);
-          if (p?.action === 'rtf' && typeof p.title === 'string') return p.title;
-          if (typeof p === 'string') return p;
-        } catch {}
-        return c;
-      };
       let filtered = existing;
       if (message.is_sent === 1 && !message.msg_id.startsWith('temp_')) {
         const incomingMsgId = String(message.msg_id);
@@ -471,6 +476,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const merged = [...newMessages, ...existing];
       merged.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
       return { messages: { ...state.messages, [key]: merged } };
+    });
+  },
+
+  mergeFetchedMessages: (zaloId, threadId, fetched, topicRootMessageId) => {
+    const key = getMessageCacheKey(zaloId, threadId, topicRootMessageId);
+    set((state) => {
+      const existing = state.messages[key] || [];
+      const merged = mergeFetchedWindow(existing, fetched, RESYNC_MESSAGES_LIMIT, extractDedupText) as MessageItem[];
+      return merged === existing ? state : { messages: { ...state.messages, [key]: merged } };
     });
   },
 

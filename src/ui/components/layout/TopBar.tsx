@@ -19,7 +19,10 @@ import { Spinner } from '@/components/common/PageLoading';
 import { AlertIcon, KeyIcon, MonitorIcon, PluginIcon, RefreshIcon, StarIcon } from '@/components/common/icons';
 import { isFacebook, isTelegram } from '@/lib/channelHelper';
 import { fbConnectedReloadSource } from '@/lib/employeeAccounts';
-import { reloadEmployeeConversations } from '@/lib/employeeConversations';
+import { bootstrapAfterReconnect, reloadEmployeeConversations } from '@/lib/employeeConversations';
+import { useResyncStatus } from '@/hooks/useEmployeeResync';
+import { resyncStatusText } from '@/lib/employeeResync';
+import { bootstrapProgressText } from '@/lib/backgroundLoad';
 import MobileSyncButton from './MobileSyncButton';
 import FacebookSyncButton from './FacebookSyncButton';
 
@@ -62,6 +65,9 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
 
   // Employee store
   const { mode: empMode, currentEmployee, bossConnected, bossUrl, latency, previewEmployeeId, employees, setBossConnected, setToken } = useEmployeeStore();
+  const resync = useResyncStatus();
+  const bootstrapText = useEmployeeStore((s) => bootstrapProgressText(s.bootstrapDone, s.bootstrapTotal, s.bootstrapFailed));
+  const resyncText = bootstrapText ?? resyncStatusText(resync.running, resync.failed);
   const previewEmployee = previewEmployeeId ? employees.find((e: any) => e.employee_id === previewEmployeeId) : null;
 
   // Reconnect popup state
@@ -103,6 +109,7 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
       // Chỉ set disconnected, KHÔNG reset currentEmployee/mode
       // => giữ nguyên badge + nút kết nối lại trên UI
       setBossConnected(false);
+      useEmployeeStore.getState().setEmployeeInitialLoadDone(false);
       setToken('');
 
       showNotification('Đã ngắt kết nối khỏi BOSS', 'success');
@@ -157,15 +164,20 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
         for (const p of employee.permissions) permsMap[p.module] = p.can_access;
       }
 
+      const previousEmployeeId = useEmployeeStore.getState().currentEmployee?.employee_id;
       useEmployeeStore.getState().setCurrentEmployee(employee);
       useEmployeeStore.getState().setPermissions(permsMap);
       useEmployeeStore.getState().setAssignedAccounts(employee.assigned_accounts || []);
+      useEmployeeStore.getState().setAssignedProfiles(((loginRes as any).snapshot || loginRes.data?.snapshot)?.assigned_profiles || []);
       useEmployeeStore.getState().setBossUrl(bossAddr);
       // Persist bossUrl to workspace cache — không bị cached URL cũ ghi đè
       ipc.workspace?.update?.(useWorkspaceStore.getState().activeWorkspaceId, { bossUrl: bossAddr } as any).catch(() => {});
       useEmployeeStore.getState().setBossConnected(true);
       useEmployeeStore.getState().setToken(token);
       useEmployeeStore.getState().setMode('employee');
+      // Bộ nạp chung: nhập vào lượt đang chạy hoặc nạp phần còn thiếu; cờ employeeInitialLoadDone theo "nạp xong".
+      // Đăng nhập bằng nhân viên khác thì xoá dữ liệu của người trước và lấy tài khoản từ snapshot.
+      void bootstrapAfterReconnect((loginRes as any).snapshot || loginRes.data?.snapshot, previousEmployeeId, employee.employee_id);
 
       showNotification(`Đã kết nối lại! Xin chào ${employee.display_name}`, 'success');
       savePassword(password);
@@ -459,6 +471,7 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
               <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${bossConnected ? 'bg-green-400' : 'bg-red-400 animate-pulse'}`} />
               <span className="text-[11px] text-gray-300">{bossConnected ? (latency > 0 ? `Online - ${latency}ms` : 'Online') : 'Offline'}</span>
               <span className="text-[11px] text-gray-300">- {currentEmployee.display_name}</span>
+              {resyncText && <span className="text-[11px] text-gray-300 truncate max-w-[200px]" title={resyncText}>- {resyncText}</span>}
             </div>
 
             {/* Nút Ngắt kết nối — chỉ hiện khi đang connected */}
