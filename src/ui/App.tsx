@@ -48,6 +48,7 @@ import LockScreen from './components/auth/LockScreen';
 import { Spinner } from '@/components/common/PageLoading';
 import { GlobeIcon } from '@/components/common/icons';
 import { CHANNEL, isZalo, isNonZalo, isFacebook } from '@/lib/channelHelper';
+import { normalizeEmployeeAccount, shouldCheckFbInit } from '@/lib/employeeAccounts';
 
 const HEALTH_CHECK_INTERVAL_MS = 60 * 1000; // 1 phút
 const NETWORK_RECONNECT_COOLDOWN_MS = 15 * 1000; // 15 giây
@@ -61,6 +62,8 @@ type WorkspaceAccountCache = {
   is_business?: number;
   is_active?: number;
   listener_active?: number;
+  channel?: string;
+  parent_zalo_id?: string | null;
 };
 
 function buildPermissionsMap(permissions?: WorkspacePermissionCache[]): Record<string, boolean> {
@@ -72,26 +75,7 @@ function buildPermissionsMap(permissions?: WorkspacePermissionCache[]): Record<s
 }
 
 function normalizeWorkspaceAccounts(accounts?: WorkspaceAccountCache[]) {
-  return (accounts || []).map((account: any) => {
-    const listenerState = account.listener_active ?? account.listenerActive ?? (account.isConnected ? 1 : 0);
-    const fullName = account.full_name || account.display_name || account.zalo_id;
-    return {
-    zalo_id: account.zalo_id,
-    display_name: fullName,
-    full_name: fullName,
-    avatar_url: account.avatar_url || '',
-    phone: account.phone || '',
-    is_business: account.is_business || 0,
-    imei: '',
-    user_agent: '',
-    cookies: '',
-    is_active: account.is_active ?? 1,
-    created_at: '',
-    listenerActive: !!listenerState,
-    isConnected: !!listenerState,
-    isOnline: !!listenerState,
-  };
-  });
+  return (accounts || []).map(normalizeEmployeeAccount);
 }
 
 function buildCurrentEmployeeFromWorkspace(ws: any) {
@@ -534,6 +518,8 @@ export default function App() {
     // Each account is checked at most once per app session.
     const accountId = activeAccountId;
     if (isFacebook(channel)) {
+      // Nhân viên: không hiện panel khởi tạo (nó chạy fb:getThreads trên boss rồi nạp danh bạ cục bộ trống).
+      if (!shouldCheckFbInit(useEmployeeStore.getState().mode === 'employee')) return;
       // FB init: simpler flow - just sync threads
       import('@/lib/fbInitUtils').then(({ checkFBAccountInitNeeds }) => {
         checkFBAccountInitNeeds(accountId).then(needs => {
@@ -1242,7 +1228,7 @@ export default function App() {
           //     (reconnectAllFBAccounts runs in main process before renderer is ready,
           //      so the fb:onConnectionStatus event may have been missed)
           const fbAccounts = accountsRes.accounts.filter((a: any) => (a.channel || CHANNEL.ZALO) === 'facebook');
-          if (fbAccounts.length > 0) {
+          if (!isEmployeeMode && fbAccounts.length > 0) { // nhân viên: fb:checkHealth là lệnh chỉ boss
             setTimeout(async () => {
               for (const fbAcc of fbAccounts) {
                 try {

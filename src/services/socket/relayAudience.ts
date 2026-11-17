@@ -27,6 +27,18 @@ export function moduleForRelayChannel(channel: string): string | undefined {
   return MODULE_RELAY_CHANNELS.get(channel);
 }
 
+/** Sự kiện Facebook chuyển cho nhân viên theo Page (fbAccountId). Cố ý không có fb:onTyping, fb:onPresence: quá ồn. */
+export const FACEBOOK_RELAY_CHANNELS: readonly string[] = [
+  'fb:onMessage',
+  'fb:onReaction',
+  'fb:onSeen',
+  'fb:onUnsend',
+  'fb:onEdit',
+  'fb:onContactUpdate',
+  'fb:onThreadInfoUpdate',
+  'fb:onConnectionStatus',
+];
+
 const ACCOUNT_KEYS = ['zaloId', 'zalo_id', 'ownerZaloId', 'owner_zalo_id', 'accountId', 'account_id', 'fbAccountId'];
 
 const ACCOUNT_LIST_KEYS = ['zaloIds', 'ownerZaloIds'];

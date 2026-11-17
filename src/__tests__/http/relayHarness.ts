@@ -3,11 +3,14 @@
 import * as http from 'http';
 import type { AddressInfo } from 'net';
 import type { AccountRow } from '../../services/http/employeeAccess';
+import type { FbAccountRef } from '../../services/http/accountRows';
 
 // Trạng thái dùng chung cho các bản giả (tên phải bắt đầu bằng "mock" để jest.mock cho phép tham chiếu).
 const mockState: {
   employees: Array<{ id: string; assigned: string[]; modules: string[] }>;
   accounts: any[];
+  fbAccounts: Array<FbAccountRef & { id: string }>;
+  connectedFacebook: Set<string>;
   handlerCalls: string[];
   lastEmployee: any;
   db: Record<string, any>;
@@ -21,7 +24,7 @@ const mockState: {
   owners: Map<string, unknown>;
   assistants: Map<string, { platform: string; baseUrl: string | null }>;
   savedAssistants: any[];
-} = { employees: [], accounts: [], handlerCalls: [], lastEmployee: undefined, db: {}, libraryUpload: jest.fn(async () => ({ uuid: 'u1', thumb_path: null })), ipcHandlers: new Map(), mediaRoot: '', revoked: new Set(), inactive: new Set(), disconnected: [], published: [], owners: new Map(), assistants: new Map(), savedAssistants: [] };
+} = { employees: [], accounts: [], fbAccounts: [], connectedFacebook: new Set<string>(), handlerCalls: [], lastEmployee: undefined, db: {}, libraryUpload: jest.fn(async () => ({ uuid: 'u1', thumb_path: null })), ipcHandlers: new Map(), mediaRoot: '', revoked: new Set(), inactive: new Set(), disconnected: [], published: [], owners: new Map(), assistants: new Map(), savedAssistants: [] };
 
 jest.mock('electron', () => ({
   app: { getPath: () => '/tmp', quit: jest.fn() }, ipcMain: { handle: jest.fn(), _invokeHandlers: mockState.ipcHandlers }, BrowserWindow: { getAllWindows: () => [] },
@@ -34,6 +37,11 @@ jest.mock('uuid', () => ({ v4: () => 'id' }));
 jest.mock('../../utils/Logger', () => ({ __esModule: true, default: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), info: jest.fn(), debug: jest.fn() } }));
 jest.mock('../../services/event/EventBroadcaster', () => ({ __esModule: true, default: { emit: jest.fn(), on: jest.fn(), off: jest.fn() } }));
 jest.mock('../../utils/ConnectionManager', () => ({ __esModule: true, default: { isConnected: () => false, getAllConnections: () => new Map() } }));
+// Kết nối Facebook khoá theo id nội bộ của fb_accounts; mockState.connectedFacebook liệt kê facebook_id đang nối.
+jest.mock('../../utils/FacebookConnectionManager', () => ({ __esModule: true, default: { get: (uuid: string) => {
+  const row = mockState.fbAccounts.find((fb) => fb.id === uuid);
+  return row && mockState.connectedFacebook.has(String(row.facebook_id)) ? { isConnected: () => true } : null;
+} } }));
 jest.mock('../../services/tunnel/TunnelService', () => ({ __esModule: true, default: { getInstance: () => ({}) } }));
 jest.mock('../../services/socket/SocketIOService', () => ({ __esModule: true, default: { getInstance: () => ({ attach: jest.fn(), disconnectEmployee: (id: string) => { mockState.disconnected.push(id); }, setAllowedAccountsResolver: jest.fn(), setModulePermissionResolver: jest.fn(), publish: (channel: string, data: any, audience: any) => { mockState.published.push({ channel, data, audience }); } }) } }));
 jest.mock('../../services/ai/AIAssistantService', () => ({ __esModule: true, default: { getInstance: () => ({ chat: async () => ({}), getSuggestions: async () => [], getAssistant: (id: string) => mockState.assistants.get(id) ?? null, saveAssistant: (a: any) => { mockState.savedAssistants.push(a); return a.id || 'new'; } }) } }));
@@ -70,7 +78,9 @@ jest.mock('../../services/database/DatabaseService', () => {
   // Mọi phương thức không khai báo đều là jest.fn() trả undefined.
   const explicit: Record<string, any> = {
     getDbPath: () => '/tmp/relay-test.db',
-    getAccounts: () => mockState.accounts,
+    getAccounts: () => mockState.accounts.filter((a) => a.is_active === 1), // the real query: WHERE is_active = 1
+    getFBAccounts: () => mockState.fbAccounts,
+    getFBAccountByFacebookId: (facebookId: string) => mockState.fbAccounts.find((fb) => fb.facebook_id === facebookId),
     getSetting: jest.fn(() => null),
     getLocalLabels: jest.fn(() => []),
     getAllLocalQuickMessages: jest.fn(() => []),
@@ -128,7 +138,7 @@ jest.mock('../../services/employee/EmployeeService', () => {
 });
 
 // Handler giả: ghi tên, trả { success: true, data: {} }. getIntegrations dùng bản thật để kiểm tra việc bỏ thông tin xác thực.
-const REAL_REST_HANDLERS = new Set(['getIntegrations', 'getAllQuickMessagesHandler', 'getLabels']);
+const REAL_REST_HANDLERS = new Set(['getIntegrations', 'getAllQuickMessagesHandler', 'getLabels', 'getConversations', 'getMessages', 'getConversationsUpdates', 'getConversationById', 'getMessagesAround', 'getFileMessages', 'getMediaMessages', 'getMessageById', 'searchMessages', 'getMessagesByTypeHandler']);
 const mockRecordingProxy = (realModule: () => any, realNames: ReadonlySet<string>) =>
   new Proxy({}, {
     get: (_t, name: string) => (...args: any[]) => {
@@ -156,7 +166,12 @@ jest.mock('../../services/http/handlers/LibraryHandler', () => ({
 
 export interface RelayOptions {
   employees: Array<{ id: string; assigned: string[]; modules: string[] }>;
+  /** Rows of the `accounts` table: it has no parent_zalo_id column (a Page's parent lives in `fbAccounts`). */
   accounts: AccountRow[];
+  /** Rows of `fb_accounts` (id is the internal UUID); a Page is an `accounts` row plus an fb_accounts row with parent_facebook_id. */
+  fbAccounts?: Array<FbAccountRef & { id: string }>;
+  /** facebook_id values that currently hold a live Facebook connection. */
+  connectedFacebook?: string[];
   /** Real folder used as the boss media root (default: none). */
   mediaRoot?: string;
 }
@@ -189,6 +204,8 @@ export interface RelayHarness {
 export async function startRelay(opts: RelayOptions): Promise<RelayHarness> {
   mockState.employees = opts.employees;
   mockState.accounts = opts.accounts;
+  mockState.fbAccounts = opts.fbAccounts ?? [];
+  mockState.connectedFacebook = new Set(opts.connectedFacebook ?? []);
   mockState.mediaRoot = opts.mediaRoot ?? '';
   mockState.handlerCalls.length = 0;
   mockState.revoked.clear();

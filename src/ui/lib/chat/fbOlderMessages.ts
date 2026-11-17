@@ -10,8 +10,9 @@ export function shouldFetchFbHistoryOnOpen(input: { channel?: string; isEmployee
   return isFacebook(input.channel) && !input.isEmployee && !input.isPage && input.localCount === 0 && !input.alreadyTried;
 }
 
-export function shouldFetchFbOlder(input: { channel?: string; isEmployee: boolean }): boolean {
-  return isFacebook(input.channel) && !input.isEmployee;
+// Nhân viên chỉ tải tin cũ cho Page được giao (boss xử lý fb:fetchOlderMessages); Facebook cá nhân không bao giờ tới máy nhân viên.
+export function shouldFetchFbOlder(input: { channel?: string; isEmployee: boolean; isPage?: boolean }): boolean {
+  return isFacebook(input.channel) && (!input.isEmployee || !!input.isPage);
 }
 
 /** Tin thật (không phải temp_…) có thời điểm nhỏ nhất. */

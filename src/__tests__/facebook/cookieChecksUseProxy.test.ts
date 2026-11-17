@@ -7,7 +7,7 @@ import * as path from 'path';
 describe('cookie checks in facebookIpc go through the account proxy', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../../../electron/ipc/facebookIpc.ts'), 'utf8');
 
-  test.each(['initSession', 'fetchFBHomepage', 'checkCookieAlive', 'checkCookieState'])('%s_isNeverCalledWithTheCookieAlone', (fn) => {
+  test.each(['initSession', 'fetchFBHomepage', 'checkCookieStateDetailed'])('%s_isNeverCalledWithTheCookieAlone', (fn) => {
     const withAgent = source.match(new RegExp(`\\b${fn}\\(\\w+,\\s*\\S`, 'g')) ?? [];
     const cookieAlone = source.match(new RegExp(`\\b${fn}\\(\\w+\\)`, 'g')) ?? [];
     expect(withAgent.length).toBeGreaterThan(0);

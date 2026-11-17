@@ -18,6 +18,7 @@ import { Spinner } from '@/components/common/PageLoading';
 import type { Channel } from '@/../configs/channelConfig';
 import { channelSupports, resolveAccountChannel, getChannelLabel } from '@/../configs/channelConfig';
 import * as channelIpc from '@/lib/channelIpc';
+import { fbCookieExpiredMessage } from '@/lib/employeeAccounts';
 
 interface AccountCardProps {
   account: AccountInfo;
@@ -26,7 +27,7 @@ interface AccountCardProps {
 }
 
 // ─── FB Cookie Update Modal ───────────────────────────────────────────────────
-function FBUpdateCookieModal({ accountId, onClose }: { accountId: string; onClose: () => void }) {
+function FBUpdateCookieModal({ accountId, name, onClose }: { accountId: string; name: string; onClose: () => void }) {
   const [cookie, setCookie] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -43,7 +44,7 @@ function FBUpdateCookieModal({ accountId, onClose }: { accountId: string; onClos
         ipc.fb?.connect({ accountId }).catch(() => {});
         onClose();
       } else {
-        setError(res?.error || 'Cập nhật thất bại');
+        setError(res?.problem ? fbCookieExpiredMessage(false, name, res.problem) : (res?.error || 'Cập nhật thất bại'));
       }
     } catch (err: any) {
       setError(err.message);
@@ -125,7 +126,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
           showNotification(`Kết nối ${getChannelLabel(accountChannel)} thành công!`, 'success');
         } else {
           updateListenerActive(acc.zalo_id, false);
-          showNotification(res?.error || `Kết nối ${getChannelLabel(accountChannel)} thất bại`, 'error');
+          showNotification(res?.problem ? fbCookieExpiredMessage(false, acc.full_name || acc.zalo_id, res.problem) : (res?.error || `Kết nối ${getChannelLabel(accountChannel)} thất bại`), 'error');
         }
         return;
       }
@@ -562,7 +563,7 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
       </div>
     </div>
     {fbCookieModalOpen && (
-      <FBUpdateCookieModal accountId={acc.zalo_id} onClose={() => setFbCookieModalOpen(false)} />
+      <FBUpdateCookieModal accountId={acc.zalo_id} name={acc.full_name || acc.zalo_id} onClose={() => setFbCookieModalOpen(false)} />
     )}
     {pagesModalOpen && (
       <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200] p-4" onClick={() => setPagesModalOpen(false)}>

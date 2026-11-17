@@ -1,7 +1,7 @@
 import { startRelay, RelayHarness } from './relayHarness';
 
 const ACCOUNTS: any[] = ['acc-a', 'acc-b', 'acc-c'].map((id) => ({
-  zalo_id: id, full_name: id, avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', parent_zalo_id: null, cookies: 'SECRET', imei: 'IMEI', user_agent: 'UA',
+  zalo_id: id, full_name: id, avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', cookies: 'SECRET', imei: 'IMEI', user_agent: 'UA',
 }));
 const ALL_MODULES = ['chat', 'crm', 'ai_assistant', 'integration', 'friends'];
 const OWN_UUID = 'aaaa-1111';

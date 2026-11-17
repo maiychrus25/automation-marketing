@@ -9,7 +9,7 @@ const mockCreateTask = jest.fn(() => ({ id: 't-new' }));
 jest.mock('../../services/erp/ErpTaskService', () => ({ __esModule: true, default: { getInstance: () => ({ createTask: mockCreateTask }) } }));
 
 const ACCOUNTS: any[] = ['acc-a', 'acc-b'].map((id) => ({
-  zalo_id: id, full_name: id, avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', parent_zalo_id: null, cookies: 'S', imei: 'I', user_agent: 'UA',
+  zalo_id: id, full_name: id, avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', cookies: 'S', imei: 'I', user_agent: 'UA',
 }));
 const ALL_MODULES = ['chat', 'crm'];
 

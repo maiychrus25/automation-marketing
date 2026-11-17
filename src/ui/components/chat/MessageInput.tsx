@@ -3,6 +3,7 @@ import {useChatStore} from '@/store/chatStore';
 import {useAccountStore} from '@/store/accountStore';
 import {useAppStore} from '@/store/appStore';
 import {useEmployeeStore} from '@/store/employeeStore';
+import { withoutBossOnlyFbCaps } from '@/lib/employeeAccounts';
 import ipc from '@/lib/ipc'
 import { toLocalMediaUrl } from '@/lib/localMedia';
 import DataAccessor from '@/lib/data/DataAccessor';;
@@ -161,7 +162,8 @@ export default function MessageInput() {
 
   // Channel capability for active thread
   const activeContact = useChatStore(s => (s.contacts[activeAccountId || ''] || []).find(c => c.contact_id === activeThreadId));
-  const channelCap = getCapability((activeContact?.channel || CHANNEL.ZALO) as any);
+  const isEmployeeMode = useEmployeeStore(s => s.mode === 'employee');
+  const channelCap = withoutBossOnlyFbCaps(getCapability((activeContact?.channel || CHANNEL.ZALO) as any), isEmployeeMode, activeContact?.channel);
   const activeTelegramTopic = activeAccountId && activeThreadId && activeTopicId
     ? (forumTopics[`${activeAccountId}_${activeThreadId}`] || []).find((topic: any) =>
         String(topic.rootMessageId || topic.id) === String(activeTopicId))
@@ -369,6 +371,8 @@ export default function MessageInput() {
     const account = getActiveAccount();
     if (!account) return;
     const channel = activeContact?.channel || CHANNEL.ZALO;
+    // sendTyping là lệnh chỉ boss làm được: nhân viên trên Facebook/Page bỏ qua, tránh gọi IPC vô ích mỗi 4 giây
+    if (isFacebook(channel) && useEmployeeStore.getState().mode === 'employee') return;
     if (isNonZalo(channel)) {
       channelIpc.sendTyping(channel as any, {
         accountId: activeAccountId,
@@ -935,7 +939,7 @@ export default function MessageInput() {
               const ch = activeContact?.channel || CHANNEL.ZALO;
               if (isNonZalo(ch)) {
                 const r = await channelIpc.sendVideo(ch as any, { accountId: activeAccountId!, threadId: activeThreadId, threadType: activeThreadType, topicRootMessageId: activeTopicId || undefined, filePath: tempPath, body: '', quote: quotePayload || undefined });
-                if (!r.success) return { success: false, error: r.error || 'Gửi video Facebook thất bại' };
+                if (!r.success) return { success: false, error: r.error || 'Gửi video Facebook thất bại', code: (r as any)?.code };
                 return { success: true, msgId: (r as any)?.messageId };
               } else {
                 let thumbUrl = '';
@@ -978,7 +982,7 @@ export default function MessageInput() {
             try {
               if (isNonZalo(ch)) {
                 const fileRes = await channelIpc.sendAttachment(ch as any, { accountId: activeAccountId!, threadId: activeThreadId, topicRootMessageId: activeTopicId || undefined, filePath: tempPath, threadType: activeThreadType });
-                if (!fileRes?.success) return { success: false, error: fileRes?.error || 'Gửi file thất bại' };
+                if (!fileRes?.success) return { success: false, error: fileRes?.error || 'Gửi file thất bại', code: (fileRes as any)?.code };
                 return { success: true, msgId: (fileRes as any)?.messageId };
               } else {
                 const res = await ipc.zalo?.sendFile({ auth, threadId: activeThreadId, type: activeThreadType, filePath: tempPath, ...(quotePayload ? { quote: quotePayload } : {}) });
@@ -1763,7 +1767,7 @@ export default function MessageInput() {
               filePaths: imgs, body: caption || undefined,
               typeChat: activeThreadType === 0 ? 'user' : null,
             });
-            if (!res?.success) return { success: false, error: res?.error || 'Gửi ảnh Facebook thất bại' };
+            if (!res?.success) return { success: false, error: res?.error || 'Gửi ảnh Facebook thất bại', code: (res as any)?.code };
             return { success: true, msgId: (res as any)?.messageId };
           } catch (err: any) { return { success: false, error: err?.message || String(err) }; }
         },
@@ -1879,7 +1883,7 @@ export default function MessageInput() {
                     typeChat: activeThreadType === 0 ? 'user' : null,
                     ...(batchReplyToMsgId ? { replyToMessageId: batchReplyToMsgId } : {}),
                   });
-                  if (!batchRes?.success) return { success: false, error: batchRes?.error || 'Gửi ảnh Facebook thất bại' };
+                  if (!batchRes?.success) return { success: false, error: batchRes?.error || 'Gửi ảnh Facebook thất bại', code: (batchRes as any)?.code };
                   return { success: true, msgId: (batchRes as any)?.messageId };
                 } else {
                   const res = await ipc.zalo?.sendImages({
@@ -1968,7 +1972,7 @@ export default function MessageInput() {
                 return { success: true, msgId: r?.messageId };
               } else if (isNonZalo(ch)) {
                 const r = await channelIpc.sendMessage(ch, { accountId: activeAccountId, threadId: activeThreadId, body: msgText, threadType: activeThreadType, quote: quotePayload });
-                if (!r?.success) return { success: false, error: r?.error || 'Gửi tin nhắn Facebook thất bại' };
+                if (!r?.success) return { success: false, error: r?.error || 'Gửi tin nhắn Facebook thất bại', code: (r as any)?.code };
                 return { success: true, msgId: (r as any)?.messageId };
               } else {
                 const res = await ipc.zalo?.sendLink({
@@ -2020,7 +2024,7 @@ export default function MessageInput() {
                   quote: quotePayload,
                   ...(isTelegramUser(activeChannel) && mentions.length > 0 ? { mentions } : {}),
                 });
-              if (!res?.success) return { success: false, error: res?.error || 'Gửi tin nhắn Facebook thất bại' };
+              if (!res?.success) return { success: false, error: res?.error || 'Gửi tin nhắn Facebook thất bại', code: (res as any)?.code };
               return { success: true, msgId: res?.messageId };
             } catch (err: any) {
               return { success: false, error: err?.message || String(err) };
@@ -2125,7 +2129,7 @@ export default function MessageInput() {
             return { success: true, msgId: result.messageId };
           } else if (isNonZalo(ch)) {
             const res = await channelIpc.sendMessage(ch, { accountId: activeAccountId, threadId: activeThreadId, body: '👍', threadType: activeThreadType });
-            if (!res?.success) return { success: false, error: res?.error || 'Gửi thất bại' };
+            if (!res?.success) return { success: false, error: res?.error || 'Gửi thất bại', code: (res as any)?.code };
             return { success: true, msgId: res?.messageId };
           } else {
             const res = await ipc.zalo?.sendMessage({ auth, threadId: activeThreadId, type: activeThreadType, message: '👍' });
@@ -2203,7 +2207,7 @@ export default function MessageInput() {
               accountId: activeAccountId!, threadId: activeThreadId,
               filePaths, typeChat: activeThreadType === 0 ? 'user' : null,
             });
-            if (!batchRes?.success) return { success: false, error: batchRes?.error || 'Gửi ảnh Facebook thất bại' };
+            if (!batchRes?.success) return { success: false, error: batchRes?.error || 'Gửi ảnh Facebook thất bại', code: (batchRes as any)?.code };
             return { success: true, msgId: (batchRes as any)?.messageId };
           } else {
             const res = await ipc.zalo?.sendImages({
@@ -2255,7 +2259,7 @@ export default function MessageInput() {
         try {
           if (isNonZalo(ch)) {
             const fileRes = await channelIpc.sendAttachment(ch, { accountId: activeAccountId!, threadId: activeThreadId, topicRootMessageId: activeTopicId || undefined, filePath, threadType: activeThreadType });
-            if (!fileRes?.success) return { success: false, error: fileRes?.error || 'Gửi file Facebook thất bại' };
+            if (!fileRes?.success) return { success: false, error: fileRes?.error || 'Gửi file Facebook thất bại', code: (fileRes as any)?.code };
             return { success: true, msgId: (fileRes as any)?.messageId };
           } else {
             const res = await ipc.zalo?.sendFile({
@@ -2322,7 +2326,7 @@ export default function MessageInput() {
               topicRootMessageId: activeTopicId || undefined,
               filePath: videoPath, body: '', quote: quotePayload || undefined,
             });
-            if (!r.success) return { success: false, error: r.error || 'Gửi video Facebook thất bại' };
+            if (!r.success) return { success: false, error: r.error || 'Gửi video Facebook thất bại', code: (r as any)?.code };
             return { success: true, msgId: (r as any)?.messageId };
           } else {
             let thumbUrl = '';

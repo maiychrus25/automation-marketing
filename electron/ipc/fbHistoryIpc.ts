@@ -1,8 +1,12 @@
-import { ipcMain } from 'electron';
+import { ipcMain as electronIpcMain } from 'electron';
+import { employeeRoutedIpcMain } from './proxyHelper';
 import FacebookHistorySyncService from '../../src/services/facebook/FacebookHistorySyncService';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import Logger from '../../src/utils/Logger';
 import { getFBServiceOrReconnect, resolveInternalId } from './facebookIpc';
+
+// Employee machine: Page-inbox commands go to the Boss instead of the local (empty) database.
+const ipcMain = employeeRoutedIpcMain(electronIpcMain);
 
 const EMPLOYEE_ERROR = 'Chỉ chủ tài khoản (máy đang đăng nhập Facebook) mới tải được lịch sử tin nhắn';
 const INVALID_ERROR = 'Tham số không hợp lệ';
@@ -39,7 +43,6 @@ function guardedSync(channel: string, needsRange: boolean, run: (accountId: stri
 
 export function registerFbHistoryIpc(): void {
     ipcMain.handle('fb:fetchOlderMessages', async (_event, p) => {
-        if (isEmployeeMode()) return { success: false, code: 'NOT_CONNECTED', error: EMPLOYEE_ERROR };
         if (!isAccountId(p?.accountId) || !isThreadId(p.threadId) || !isOptionalTs(p.beforeTimestampMs) || !isOptionalMessageId(p.beforeMessageId)) {
             return { success: false, code: 'FETCH', error: INVALID_ERROR };
         }

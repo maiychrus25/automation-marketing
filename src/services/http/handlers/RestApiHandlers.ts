@@ -51,6 +51,15 @@ function error(msg: string, code?: string): JsonResponse {
 
 // ── Handlers ────────────────────────────────────────────────────────
 
+// Mọi dòng hội thoại / tin nhắn trả cho nhân viên đi qua hai hàm này để luôn mang `channel` (cột đã lưu, thiếu thì 'zalo').
+// Máy nhân viên chọn đường gửi theo channel và thay nguyên danh sách hội thoại (setContacts), nên thiếu channel là mất Page.
+export function conversationRow<T extends object>(stored: any, shaped: T = stored): T & { channel: string } {
+  return { ...shaped, channel: stored?.channel || 'zalo' };
+}
+export function messageRow<T extends object>(stored: any, shaped: T = stored): T & { channel: string } {
+  return { ...shaped, channel: stored?.channel || 'zalo' };
+}
+
 export const handlers = {
   // ═══════════════════════════════════════════════════════════════
   // BOOT API — toàn bộ data cần thiết cho employee mới connect
@@ -167,7 +176,7 @@ export const handlers = {
       [...queryParams, limit, offset]
     ) || [];
 
-    const items = page.map((c: any) => ({
+    const items = page.map((c: any) => conversationRow(c, {
       contact_id: c.contact_id,
       owner_zalo_id: c.owner_zalo_id || '',
       display_name: c.display_name || '',
@@ -205,7 +214,7 @@ export const handlers = {
     const items = (db().query<any>(
       `SELECT * FROM contacts WHERE owner_zalo_id = ? AND last_message_time > ? ORDER BY last_message_time DESC LIMIT ?`,
       [zaloId, sinceTs, limit]
-    ) || []).map((c: any) => ({
+    ) || []).map((c: any) => conversationRow(c, {
       contact_id: c.contact_id,
       owner_zalo_id: c.owner_zalo_id || '',
       display_name: c.display_name || '',
@@ -228,7 +237,7 @@ export const handlers = {
       `SELECT * FROM contacts WHERE owner_zalo_id = ? AND contact_id = ? LIMIT 1`,
       [zaloId, params.contactId]
     ))[0] || null;
-    return success(contact);
+    return success(contact ? conversationRow(contact) : null);
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -250,7 +259,7 @@ export const handlers = {
 
     console.log(`[RestApi] getMessages: zaloId=${zaloId} threadId=${params.threadId} limit=${limit} → ${messages.length} msgs`);
 
-    const items = messages.map((m: any) => ({
+    const items = messages.map((m: any) => messageRow(m, {
       msg_id: m.msg_id,
       cli_msg_id: m.cli_msg_id,
       thread_id: m.thread_id,
@@ -288,7 +297,7 @@ export const handlers = {
     const limit = Math.min(parseInt(params.limit) || 20, 50);
 
     const around = db().getMessagesAround(zaloId, params.threadId, timestamp, limit);
-    return success({ items: around || [] });
+    return success({ items: (around || []).map((m: any) => messageRow(m)) });
   },
 
   getFileMessages(employee: RegisteredEmployee, params: any): JsonResponse {
@@ -299,7 +308,7 @@ export const handlers = {
     const offset = parseInt(params.offset) || 0;
 
     const messages = db().getFileMessages(zaloId, params.threadId, limit, offset);
-    return success({ items: messages || [] }, {
+    return success({ items: (messages || []).map((m: any) => messageRow(m)) }, {
       page: Math.floor(offset / limit) + 1,
       limit,
       total: messages?.length || 0,
@@ -318,7 +327,7 @@ export const handlers = {
         ? db().getMediaMessages(zaloId, params.threadId, limit, offset)
         : db().getAllLocalMediaMessages(zaloId);
 
-    return success({ items: messages || [] }, {
+    return success({ items: (messages || []).map((m: any) => messageRow(m)) }, {
       page: Math.floor(offset / limit) + 1,
       limit,
       total: messages?.length || 0,
@@ -331,7 +340,7 @@ export const handlers = {
     if (!zaloId || !params.msgId) return error('Missing zaloId or msgId');
 
     const msg = db().getMessageById(zaloId, params.msgId, params.threadId);
-    return success(msg || null);
+    return success(msg ? messageRow(msg) : null);
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -348,7 +357,7 @@ export const handlers = {
     const limit = Math.min(parseInt(params.limit) || 50, 100);
     const messages = db().searchMessages(zaloId, query);
 
-    const items = (messages || []).slice(0, limit).map((m: any) => ({
+    const items = (messages || []).slice(0, limit).map((m: any) => messageRow(m, {
       msg_id: m.msg_id,
       thread_id: m.thread_id,
       thread_name: m.thread_name || m.thread_id || '',
@@ -704,7 +713,7 @@ export const handlers = {
     if (!zaloId || !params.threadId || !params.msgType) return error('Missing params');
     const limit = parseInt(params.limit) || 100;
     const msgs = db().getMessagesByType(zaloId, params.threadId, params.msgType, limit) || [];
-    return success({ items: msgs });
+    return success({ items: msgs.map((m: any) => messageRow(m)) });
   },
 
   // ═══════════════════════════════════════════════════════════════

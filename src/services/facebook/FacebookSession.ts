@@ -10,6 +10,7 @@ import { dataSplit } from './FacebookUtils';
 import Logger from '../../utils/Logger';
 import { FB_SEC_CH_UA, FB_SEC_CH_UA_PLATFORM, FB_USER_AGENT } from './facebookIdentity';
 import { mergeRefreshedCookies, refreshedCookiesFrom } from './facebookCookieRefresh';
+import { diagnoseHomepage, type FbSessionProblem } from './facebookSessionDiagnosis';
 
 const FB_HOME_URL = 'https://www.facebook.com/';
 
@@ -63,7 +64,7 @@ export async function fetchFBHomepage(cookie: string, httpsAgent?: any): Promise
 }
 
 /** Trang chủ Facebook kèm các dòng Set-Cookie của phản hồi. */
-async function loadHomepage(cookie: string, httpsAgent?: any): Promise<{ html: string; setCookie: unknown }> {
+async function loadHomepage(cookie: string, httpsAgent?: any): Promise<{ html: string; setCookie: unknown; finalUrl?: string }> {
   try {
     const response = await axios.get(FB_HOME_URL, {
       headers: fbHeaders(cookie),
@@ -71,7 +72,7 @@ async function loadHomepage(cookie: string, httpsAgent?: any): Promise<{ html: s
       timeout: 60000,
       ...(httpsAgent ? { httpsAgent } : {}),
     });
-    return { html: response.data as string, setCookie: response.headers?.['set-cookie'] };
+    return { html: response.data as string, setCookie: response.headers?.['set-cookie'], finalUrl: response.request?.res?.responseUrl };
   } catch (err: any) {
     const status = err.response?.status ?? '?';
     const msg = err.message || 'Unknown error';
@@ -112,8 +113,9 @@ export async function initSession(cookie: string, httpsAgent?: any, opts: { fres
 
   let html: string;
   let setCookie: unknown;
+  let finalUrl: string | undefined;
   try {
-    ({ html, setCookie } = await loadHomepage(cookie, httpsAgent));
+    ({ html, setCookie, finalUrl } = await loadHomepage(cookie, httpsAgent));
   } catch (err: any) {
     Logger.error(err.message);
     throw err;
@@ -142,7 +144,8 @@ export async function initSession(cookie: string, httpsAgent?: any, opts: { fres
     const errMsg = `[FacebookSession] Missing required session fields: ${missing.join(', ')}`
       + (parseErrors.length > 0 ? ` (parse errors: ${parseErrors.join(', ')})` : '');
     Logger.error(errMsg);
-    throw new Error(errMsg);
+    // Lý do suy ra từ HTML và URL cuối đã có, không gọi thêm yêu cầu; không đưa nội dung trang vào lỗi.
+    throw Object.assign(new Error(errMsg), { fbSessionProblem: diagnoseHomepage(String(html ?? ''), finalUrl) });
   }
 
   // Validate FacebookID là số (port từ Python)
@@ -172,18 +175,27 @@ export function isTransientFacebookError(err: unknown): boolean {
  * expired = Facebook từ chối (redirect login/checkpoint, thiếu field bắt buộc...).
  * `init` chỉ để test tiêm giả.
  */
+export async function checkCookieStateDetailed(
+  cookie: string,
+  httpsAgent?: any,
+  init: typeof initSession = initSession,
+): Promise<{ state: 'alive' | 'expired' | 'unknown'; problem?: FbSessionProblem }> {
+  try {
+    await init(cookie, httpsAgent);
+    return { state: 'alive' };
+  } catch (err: any) {
+    Logger.warn(`[FacebookSession] checkCookieState error: ${err?.message}`);
+    if (isTransientFacebookError(err)) return { state: 'unknown' };
+    return err?.fbSessionProblem ? { state: 'expired', problem: err.fbSessionProblem } : { state: 'expired' };
+  }
+}
+
 export async function checkCookieState(
   cookie: string,
   httpsAgent?: any,
   init: typeof initSession = initSession,
 ): Promise<'alive' | 'expired' | 'unknown'> {
-  try {
-    await init(cookie, httpsAgent);
-    return 'alive';
-  } catch (err: any) {
-    Logger.warn(`[FacebookSession] checkCookieState error: ${err?.message}`);
-    return isTransientFacebookError(err) ? 'unknown' : 'expired';
-  }
+  return (await checkCookieStateDetailed(cookie, httpsAgent, init)).state;
 }
 
 /** Còn dùng được? Chỉ `expired` mới là false — mất mạng không bị coi là hết hạn. */

@@ -18,11 +18,16 @@ describe('shouldFetchFbHistoryOnOpen', () => {
   it('false when already tried', () => expect(shouldFetchFbHistoryOnOpen({ ...base, alreadyTried: true })).toBe(false));
   it('false when local messages exist', () => expect(shouldFetchFbHistoryOnOpen({ ...base, localCount: 3 })).toBe(false));
   it('false for a Page account', () => expect(shouldFetchFbHistoryOnOpen({ ...base, isPage: true })).toBe(false));
+  it('false for an employee on a Page too (empty Page thread has no anchor)', () =>
+    expect(shouldFetchFbHistoryOnOpen({ ...base, isEmployee: true, isPage: true })).toBe(false));
 });
 
 describe('shouldFetchFbOlder', () => {
   it('true for Facebook non-employee', () => expect(shouldFetchFbOlder({ channel: 'facebook', isEmployee: false })).toBe(true));
   it('false for employee', () => expect(shouldFetchFbOlder({ channel: 'facebook', isEmployee: true })).toBe(false));
+  it('true for an employee on a Page', () => expect(shouldFetchFbOlder({ channel: 'facebook', isEmployee: true, isPage: true })).toBe(true));
+  it('false for an employee on a personal Facebook account', () => expect(shouldFetchFbOlder({ channel: 'facebook', isEmployee: true, isPage: false })).toBe(false));
+  it('false for an employee on a Zalo Page flag', () => expect(shouldFetchFbOlder({ channel: 'zalo', isEmployee: true, isPage: true })).toBe(false));
   // Từ 26.44.0 tài khoản Page (kênh facebook) cũng kéo lên tải tin cũ được.
   it('true for a Facebook Page account', () => expect(shouldFetchFbOlder({ channel: 'facebook', isEmployee: false })).toBe(true));
   it.each(['zalo', 'telegram_user', undefined])('false for channel %s', (channel) =>

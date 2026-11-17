@@ -45,6 +45,8 @@ export interface WorkspaceInfo {
         is_business?: number;
         is_active?: number;
         listener_active?: number;
+        channel?: string;
+        parent_zalo_id?: string | null;
     }>;
 }
 

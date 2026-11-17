@@ -5,6 +5,7 @@ import { useAppStore } from '@/store/appStore';
 import { useAccountStore } from '@/store/accountStore';
 import { useChatStore } from '@/store/chatStore';
 import DataAccessor from '@/lib/data/DataAccessor';
+import { normalizeEmployeeAccount } from '@/lib/employeeAccounts';
 import RestQueryService from '../../../services/http/RestQueryService';
 import { AlertIcon, GlobeIcon, HomeIcon, PluginIcon, UserIcon } from '@/components/common/icons';
 
@@ -27,26 +28,7 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
     const [connecting, setConnecting] = useState(false);
     const [error, setError] = useState('');
 
-    const normalizeAccounts = (accounts: any[] = []) => accounts.map((account) => {
-        const listenerState = account.listener_active ?? account.listenerActive ?? (account.isConnected ? 1 : 0);
-        const fullName = account.full_name || account.display_name || account.zalo_id;
-        return {
-            zalo_id: account.zalo_id,
-            display_name: fullName,
-            full_name: fullName,
-            avatar_url: account.avatar_url || '',
-            phone: account.phone || '',
-            is_business: account.is_business || 0,
-            imei: '',
-            user_agent: '',
-            cookies: '',
-            is_active: account.is_active ?? 1,
-            created_at: '',
-            listenerActive: !!listenerState,
-            isConnected: !!listenerState,
-            isOnline: !!listenerState,
-        };
-    });
+    const normalizeAccounts = (accounts: any[] = []) => accounts.map(normalizeEmployeeAccount);
 
     const bootstrapAccountsFromSnapshot = async (snapshot: any) => {
         const accounts = normalizeAccounts(snapshot?.accountsData || []);

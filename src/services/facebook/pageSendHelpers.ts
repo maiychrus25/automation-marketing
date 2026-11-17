@@ -43,3 +43,13 @@ export function classifyPageNotification(body: string): 'image' | 'video' | 'sti
   if (/đã gửi.*ảnh|sent .*photo/i.test(b)) return 'image';
   return null;
 }
+
+/** The sticker list only returns Facebook CDN thumbnails; the boss never downloads any other URL. */
+export function isFacebookStickerThumbUrl(url: unknown): boolean {
+  if (typeof url !== 'string') return false;
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port) return false;
+  const host = u.hostname.toLowerCase();
+  return ['fbcdn.net', 'facebook.com'].some(d => host === d || host.endsWith(`.${d}`));
+}

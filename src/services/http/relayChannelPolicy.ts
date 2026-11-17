@@ -15,11 +15,14 @@
  * has no handler under those names, so they never worked and are not listed.
  */
 
+import { FACEBOOK_CHANNEL_ROUTES } from './employeeChannelRoutes';
+
 export interface EmployeeChannelRule {
     /** The employee needs ONE of these modules; empty = no module needed. */
     modules: readonly string[];
-    /** 'default': act on the account in the params, else on the employee's first usable account. 'none': no account. */
-    account: 'default' | 'none';
+    /** 'default': act on the account in the params, else on the employee's first usable account. 'none': no account.
+     *  'required': `params.accountId` must be present (never the first usable account) and one the employee may use. */
+    account: 'default' | 'none' | 'required';
 }
 
 const CHAT = ['chat'] as const;
@@ -78,6 +81,11 @@ add('ai', AI_ACCOUNT, ['ai_assistant'], 'default');
 add('integration', INTEGRATION, ['integration'], 'none');
 add('db', DB_CHAT, CHAT, 'default');
 add('db', DB_FRIENDS, FRIENDS_CHAT, 'default');
+
+// Page inbox commands: the closed list comes from the `proxy` entries of FACEBOOK_CHANNEL_ROUTES; every other fb:* is refused.
+for (const [channel, spec] of Object.entries(FACEBOOK_CHANNEL_ROUTES)) {
+    if (spec.route === 'proxy') RULES.set(channel, { modules: spec.modules ?? [], account: 'required' });
+}
 
 export const EMPLOYEE_PROXY_CHANNELS: readonly string[] = [...RULES.keys()];
 

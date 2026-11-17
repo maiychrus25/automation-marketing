@@ -1,5 +1,10 @@
 const handlers = new Map<string, (...a: any[]) => Promise<any>>();
 jest.mock('electron', () => ({ ipcMain: { handle: (ch: string, fn: any) => handlers.set(ch, fn) } }));
+const proxyAction = jest.fn();
+jest.mock('../../services/http/HttpConnectionManager', () => ({
+    __esModule: true,
+    default: { getInstance: () => ({ isConnected: () => true, proxyAction: (...a: any[]) => proxyAction(...a) }) },
+}));
 jest.mock('../../utils/Logger', () => ({ __esModule: true, default: { error: jest.fn(), log: jest.fn(), warn: jest.fn() } }));
 let workspaceType = 'local';
 jest.mock('../../utils/WorkspaceManager', () => ({
@@ -38,11 +43,14 @@ describe('fbHistory IPC', () => {
         expect([...handlers.keys()].sort()).toEqual(['fb:fetchOlderMessages', 'fb:historySync:cancel', 'fb:historySync:start', 'fb:historySync:status']);
     });
 
-    it('refuses employee mode on all four channels without touching services', async () => {
+    it('forwards fetchOlderMessages to the boss and refuses the sync channels in employee mode', async () => {
         workspaceType = 'remote';
-        expect(await call('fb:fetchOlderMessages', { accountId: '1', threadId: '2' })).toEqual({ success: false, code: 'NOT_CONNECTED', error: EMPLOYEE_ERROR });
+        proxyAction.mockResolvedValue({ success: true, from: 'boss' });
+        const params = { accountId: '1', threadId: '2' };
+        expect(await call('fb:fetchOlderMessages', params)).toEqual({ success: true, from: 'boss' });
+        expect(proxyAction).toHaveBeenCalledWith(undefined, 'fb:fetchOlderMessages', params, 60000);
         for (const ch of ['start', 'cancel', 'status']) {
-            expect(await call(`fb:historySync:${ch}`, { accountId: '1', fromTs: null, toTs: null })).toEqual({ success: false, error: EMPLOYEE_ERROR });
+            expect(await call(`fb:historySync:${ch}`, { accountId: '1', fromTs: null, toTs: null })).toMatchObject({ success: false, code: 'BOSS_ONLY' });
         }
         expect(getFBServiceOrReconnect).not.toHaveBeenCalled();
         expect(sync.start).not.toHaveBeenCalled();

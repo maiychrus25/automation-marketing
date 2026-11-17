@@ -18,6 +18,7 @@
 
 import { useChatStore, type MessageItem } from '@/store/chatStore';
 import { CHANNEL, isFacebook } from '@/lib/channelHelper';
+import { isRetryableSendCode, isTimeoutErrorText } from '@/lib/chat/sendRetry';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,8 @@ export interface SendResult {
   /** Nhiều msgIds khi gửi nhiều attachment (multi-image) — để webhook xử lý dedup */
   msgIds?: string[];
   error?: string;
+  /** Mã lỗi của máy Boss (TIMEOUT, BOSS_ONLY...) — quyết định có được gửi lại hay không */
+  code?: string;
 }
 
 export interface QueueItem {
@@ -318,16 +321,16 @@ class MessageQueue {
         item.onSuccess?.('', result);
       } else {
         // ── API trả về error ──
-        throw new Error(result.error || 'Send failed');
+        throw Object.assign(new Error(result.error || 'Send failed'), { code: result.code });
       }
     } catch (err: any) {
       this.clearTimeout(tempId);
       const errorMsg = err?.message || String(err);
-      const isTimeout = errorMsg.includes('timeout');
+      const isTimeout = isTimeoutErrorText(errorMsg);
       const newStatus = isTimeout ? 'timeout' : 'failed';
 
       // Retry logic
-      if (item.retryCount < maxRetries && !isTimeout) {
+      if (item.retryCount < maxRetries && !isTimeout && isRetryableSendCode(err?.code)) {
         const delay = RETRY_DELAYS[item.retryCount] || RETRY_DELAYS[RETRY_DELAYS.length - 1];
         console.warn(`[MessageQueue] ⚠️ Retry ${item.retryCount + 1}/${maxRetries} for tempId=${tempId} in ${delay}ms: ${errorMsg}`);
 

@@ -18,6 +18,8 @@ import NotificationCenter from '@/features/erp/notifications/NotificationCenter'
 import { Spinner } from '@/components/common/PageLoading';
 import { AlertIcon, KeyIcon, MonitorIcon, PluginIcon, RefreshIcon, StarIcon } from '@/components/common/icons';
 import { isFacebook, isTelegram } from '@/lib/channelHelper';
+import { fbConnectedReloadSource } from '@/lib/employeeAccounts';
+import { reloadEmployeeConversations } from '@/lib/employeeConversations';
 import MobileSyncButton from './MobileSyncButton';
 import FacebookSyncButton from './FacebookSyncButton';
 
@@ -320,12 +322,16 @@ export default function TopBar({ variant = 'full' }: { variant?: 'full' | 'start
         const res = await ipc.fb?.getThreads({ accountId: activeAccountId, forceRefresh: true });
         if (res?.success) {
           const count = res.threads?.length ?? 0;
-          // Reload contacts from DB into chat store
+          // Reload contacts into chat store: nhân viên lấy từ boss qua REST, boss đọc DB cục bộ
           try {
-            const contactsRes = await ipc.db?.getContacts(activeAccountId);
-            const contacts = contactsRes?.contacts ?? contactsRes ?? [];
-            if (contacts.length > 0) {
-              useChatStore.getState().setContacts(activeAccountId, contacts);
+            if (fbConnectedReloadSource(useEmployeeStore.getState().mode === 'employee') === 'rest') {
+              await reloadEmployeeConversations(activeAccountId);
+            } else {
+              const contactsRes = await ipc.db?.getContacts(activeAccountId);
+              const contacts = contactsRes?.contacts ?? contactsRes ?? [];
+              if (contacts.length > 0) {
+                useChatStore.getState().setContacts(activeAccountId, contacts);
+              }
             }
           } catch {}
           // Refresh avatar cho active thread nếu là 1-1 Facebook

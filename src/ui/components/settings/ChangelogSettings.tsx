@@ -15,6 +15,43 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.46.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '📥 Nhân viên được gán Page Facebook giờ làm việc với hộp thư của Page ngay trên máy của mình',
+      '👀 Máy boss thấy nhân viên nào đã gửi từng tin',
+      '🔁 Máy boss và máy nhân viên đều cần cập nhật lên bản này',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Nhân viên được gán một Page Facebook xem được các cuộc trò chuyện của Page, nhận tin ngay khi khách nhắn, gửi chữ, ảnh, tệp và nhãn dán, thả cảm xúc và kéo lên xem tin cũ',
+          'Máy boss hiển thị nhân viên nào đã gửi từng tin trong hộp thư của Page',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Màn gán tài khoản cho nhân viên nay chia nhóm theo kênh. Tài khoản Facebook cá nhân bị khoá, không tích chọn được, và "chọn tất cả" chỉ chọn các tài khoản gán được',
+          'Với Page, nhân viên chưa dùng được: thu hồi, sửa, chuyển tiếp tin, tạo bình chọn, chặn, đổi tên nhóm và "Đồng bộ lịch sử" cho cả tài khoản. Tài khoản Facebook cá nhân vẫn chưa mở cho nhân viên',
+          'Khi một tài khoản Facebook ngừng hoạt động, MaiHub nay cho biết lý do: Facebook đã đăng xuất tài khoản, Facebook đang yêu cầu xác minh, hay không đọc được trang Facebook',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Sửa lỗi ở bản 26.45.0: Page được gán cho nhân viên cũng bị chặn nhầm, nhân viên không thấy Page đó',
+          'Khi máy boss không trả lời kịp hoặc kết nối bị ngắt giữa chừng, tin của nhân viên không còn bị tự gửi lại nhiều lần',
+          'Page mà boss đã tắt không còn dùng được với nhân viên, và nhân viên mở hội thoại không làm Page đó tự bật lại',
+          'Ảnh nhân viên vừa gửi không còn hiện lỗi sau khi tin được xác nhận',
+          'Nhân viên không còn thấy bảng khởi tạo tài khoản khi mở Page; nút đồng bộ Facebook nhờ máy boss làm mới rồi tải lại hội thoại',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.45.0',
     date: '11/2026',
     type: 'minor',
@@ -27,7 +64,7 @@ const CHANGELOG: VersionEntry[] = [
         category: 'improved',
         items: [
           'Sau khi cập nhật, mỗi nhân viên phải đăng nhập lại một lần. Máy boss và máy nhân viên đều cần cập nhật lên bản này; máy nhân viên bản cũ sẽ không tải được ảnh từ máy boss đã cập nhật',
-          'Nhân viên không còn dùng được tài khoản Facebook cá nhân, kể cả khi tài khoản đó đang được tích chọn trong phần gán. Các Page không bị ảnh hưởng',
+          'Nhân viên không còn dùng được tài khoản Facebook cá nhân, kể cả khi tài khoản đó đang được tích chọn trong phần gán. Trong bản 26.45.0, các Page cũng tạm thời không dùng được với nhân viên; bản 26.46.0 mở lại',
           'Tắt, xoá hoặc đăng xuất nhân viên, hay đổi mật khẩu của họ, có hiệu lực ngay: nhân viên bị ngắt khỏi máy boss tức thì',
           'Nhãn áp dụng cho nhiều tài khoản chỉ được xoá, sắp xếp lại hoặc bật/tắt bởi người được dùng tất cả các tài khoản đó',
           'Nhân viên chỉ thấy tin nhắn nhanh và sự kiện thư viện của tài khoản mình được dùng',

@@ -15,8 +15,13 @@ import DataAccessor from '../lib/data/DataAccessor';;
 import { useChatStore, type MessageItem } from '@/store/chatStore';
 import { useAccountStore } from '@/store/accountStore';
 import { useAppStore } from '@/store/appStore';
+import { useEmployeeStore } from '@/store/employeeStore';
+import { fbConnectedReloadSource, fbCookieExpiredMessage } from '@/lib/employeeAccounts';
+import type { FbSessionProblem } from '../../services/facebook/facebookSessionDiagnosis';
 import { playNotificationSound, showDesktopNotification } from '../utils/NotificationService';
 import { getFilteredUnreadCount } from '@/lib/badgeUtils';
+import { reloadEmployeeConversations } from '@/lib/employeeConversations';
+import { mergeTempAttachments } from '@/lib/chat/mergeTempAttachments';
 import { ImageIcon, PaletteIcon, PaperclipIcon } from '@/components/common/icons';
 
 /**
@@ -191,17 +196,9 @@ export function useChatEvents(): void {
           return false;
         });
         if (tempIdx >= 0) {
-          // Replace temp with real message, preserve localPath from temp attachments
+          // Replace temp with real message; the real localPath wins, the temp one only fills a missing one
           const tempMsg = existing[tempIdx];
-          let mergedAttachments = normalized.attachments;
-          try {
-            const tempAtts = JSON.parse(tempMsg.attachments || '[]');
-            const realAtts = JSON.parse(normalized.attachments || '[]');
-            if (tempAtts.length > 0 && realAtts.length > 0 && tempAtts[0].localPath) {
-              realAtts[0].localPath = tempAtts[0].localPath;
-              mergedAttachments = JSON.stringify(realAtts);
-            }
-          } catch {}
+          const mergedAttachments = mergeTempAttachments(tempMsg.attachments, normalized.attachments);
           const updated = [...existing];
           updated[tempIdx] = { ...tempMsg, ...normalized, attachments: mergedAttachments, send_status: 'received' as const };
           useChatStore.setState((s) => ({
@@ -364,6 +361,7 @@ export function useChatEvents(): void {
     const unsubStatus = ipc.on?.('fb:onConnectionStatus', (data: {
       fbAccountId: string;
       status: string;
+      problem?: FbSessionProblem;
     }) => {
       if (!data?.fbAccountId) return;
       const { updateAccountStatus, updateListenerActive } = useAccountStore.getState();
@@ -372,7 +370,11 @@ export function useChatEvents(): void {
         case 'connected':
           updateAccountStatus(data.fbAccountId, true, true);
           updateListenerActive(data.fbAccountId, true);
-          // Reload contacts from DB after FB connects
+          // Reload contacts after FB connects: nhân viên lấy từ boss qua REST, boss đọc DB cục bộ
+          if (fbConnectedReloadSource(useEmployeeStore.getState().mode === 'employee') === 'rest') {
+            reloadEmployeeConversations(data.fbAccountId).catch(() => {});
+            break;
+          }
           ipc.db?.getContacts(data.fbAccountId)
             .then((res: any) => {
               if (res?.contacts) {
@@ -397,7 +399,7 @@ export function useChatEvents(): void {
             const acc = accounts.find((a: any) => a.zalo_id === data.fbAccountId || a.facebook_id === data.fbAccountId);
             const name = acc?.full_name || acc?.zalo_id || data.fbAccountId;
             useAppStore.getState().showNotification(
-              `⚠️ Tài khoản Facebook "${name}" bị ngắt kết nối (FB phát hiện bot hoặc cookie hết hạn). Vui lòng đăng nhập lại FB để lấy cookie mới.`,
+              fbCookieExpiredMessage(useEmployeeStore.getState().mode === 'employee', name, data.problem),
               'error'
             );
           }

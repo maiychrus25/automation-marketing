@@ -2,6 +2,7 @@ import * as http from 'http';
 import Logger from '../../utils/Logger';
 import EventBroadcaster from '../event/EventBroadcaster';
 import SocketIOClient from '../socket/SocketIOClient';
+import { FACEBOOK_RELAY_CHANNELS } from '../socket/relayAudience';
 
 /**
  * HttpClientService - Employee side only.
@@ -54,6 +55,7 @@ class HttpClientService {
         'event:reminder',
         'event:localPath',
         'event:listenerDead',
+        ...FACEBOOK_RELAY_CHANNELS,
         'relay:messageSentByEmployee',
         'erp:event:taskCreated',
         'erp:event:taskUpdated',
@@ -210,7 +212,7 @@ class HttpClientService {
 
     // ─── Proxy actions through Boss ──────────────────────────────────
 
-    public async proxyAction(channel: string, params: any): Promise<any> {
+    public async proxyAction(channel: string, params: any, timeoutMs: number = 30000): Promise<any> {
         if (!this.connected) {
             throw new Error('Chưa kết nối tới BOSS');
         }
@@ -219,7 +221,7 @@ class HttpClientService {
             `${this.bossUrl}/api/proxy/action`,
             { channel, params },
             { Authorization: `Bearer ${this.token}` },
-            30000
+            timeoutMs
         );
     }
 
@@ -981,7 +983,7 @@ class HttpClientService {
                 );
 
                 req.on('error', (err: Error) => reject(err));
-                req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+                req.on('timeout', () => { req.destroy(); reject(Object.assign(new Error('Request timeout'), { code: 'ETIMEDOUT' })); });
                 req.write(payload);
                 req.end();
             } catch (err) {

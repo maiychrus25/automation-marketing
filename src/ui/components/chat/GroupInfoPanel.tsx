@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useEmployeeStore } from '@/store/employeeStore';
+import { withoutBossOnlyFbCaps } from '@/lib/employeeAccounts';
 import { useChatStore } from '@/store/chatStore';
 import { useAccountStore } from '@/store/accountStore';
 import { useAppStore, CachedGroupInfo, GroupMember } from '@/store/appStore';
@@ -127,7 +129,7 @@ export default function GroupInfoPanel() {
   const avatarUrl = contact?.avatar_url || '';
 
   // Channel capability
-  const channelCap = getCapability((contact?.channel || CHANNEL.ZALO) as Channel);
+  const channelCap = withoutBossOnlyFbCaps(getCapability((contact?.channel || CHANNEL.ZALO) as Channel), useEmployeeStore.getState().mode === 'employee', contact?.channel);
 
   const getAuth = () => {
     const acc = getActiveAccount();

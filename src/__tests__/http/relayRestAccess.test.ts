@@ -34,9 +34,9 @@ const refusedByDesign = (route: string) => ALWAYS_REFUSED.some((re) => re.test(r
 
 const ALL_MODULES = ['chat', 'analytics', 'crm', 'erp', 'ai_assistant', 'workflow', 'integration', 'friends'];
 const ACCOUNTS: any[] = [
-  { zalo_id: 'acc-a', full_name: 'A', avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', parent_zalo_id: null, cookies: 'SECRET', imei: 'IMEI', user_agent: 'UA' },
-  { zalo_id: 'acc-b', full_name: 'B', avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', parent_zalo_id: null, cookies: 'SECRET', imei: 'IMEI', user_agent: 'UA' },
-  { zalo_id: 'fb-personal', full_name: 'F', avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'facebook', parent_zalo_id: null, cookies: 'SECRET', imei: 'IMEI', user_agent: 'UA' },
+  { zalo_id: 'acc-a', full_name: 'A', avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', cookies: 'SECRET', imei: 'IMEI', user_agent: 'UA' },
+  { zalo_id: 'acc-b', full_name: 'B', avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', cookies: 'SECRET', imei: 'IMEI', user_agent: 'UA' },
+  { zalo_id: 'fb-personal', full_name: 'F', avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'facebook', cookies: 'SECRET', imei: 'IMEI', user_agent: 'UA' },
 ];
 
 describe('REST routes of the boss relay check accounts and modules', () => {
@@ -59,6 +59,7 @@ describe('REST routes of the boss relay check accounts and modules', () => {
         { id: 'emp-3', assigned: ['acc-a'], modules: ['chat'] },
       ],
       accounts: ACCOUNTS,
+      fbAccounts: [{ id: 'uuid-fb-personal', facebook_id: 'fb-personal', parent_facebook_id: null }],
     });
   });
   afterAll(() => relay.close());

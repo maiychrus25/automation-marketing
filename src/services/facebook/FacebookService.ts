@@ -9,7 +9,7 @@ import {
   FBReactionAction, FBAttachmentUploadResult, FBThread, FBMQTTMessage,
   FBE2EEStatus, FBE2EEMessageRaw,
 } from './FacebookTypes';
-import { initSession, checkCookieAlive, fetchUserAvatarFromProfile, getUserInfoFacebookHtml } from './FacebookSession';
+import { initSession, checkCookieStateDetailed, fetchUserAvatarFromProfile, getUserInfoFacebookHtml } from './FacebookSession';
 import { sendMessage as sendMessageREST, unsendMessage, addReaction, editMessage, forwardMessage, pinMessage, unpinMessage, createPoll, votePoll } from './FacebookMessageSender';
 import { uploadAttachment, uploadPageAttachment } from './FacebookAttachment';
 import { isOwnSender, parsePageSenderName } from './FacebookPages';
@@ -38,6 +38,8 @@ import { PageSticker, fetchPageStickers, findStickers, searchPageStickers } from
 import EventBroadcaster from '../event/EventBroadcaster';
 import { recordFacebookReceipt } from '../receipts/peerReceipts';
 import DatabaseService from '../database/DatabaseService';
+import type { FbSessionProblem } from './facebookSessionDiagnosis';
+import { cookieCheckDetail, formatCookieRefreshDetail, recordCookieCheck, recordFbSessionEvent } from './fbSessionEvents';
 import FileStorageService from '../file/FileStorageService';
 import { createProxyAgent } from '../../utils/ProxyHelper';
 import { secureGet } from '../secure/SecureSettingsService';
@@ -79,6 +81,8 @@ export class FacebookService {
   private _connectPromise: Promise<void> | null = null;
   private listener: FacebookMQTTListener | null = null;
   private status: FBAccountStatus = 'disconnected';
+  /** Lý do của lần kiểm tra cookie gần nhất báo hết hạn (undefined: chưa biết hoặc còn sống). */
+  private lastCookieProblem?: FbSessionProblem;
   private statusChangeCallback?: (status: FBAccountStatus) => void;
   /** Cached real Facebook UID - resolved once from DB, used for broadcasts */
   private _facebookId: string | null = null;
@@ -272,13 +276,16 @@ export class FacebookService {
     this.statusChangeCallback = cb;
   }
 
-  private setStatus(status: FBAccountStatus): void {
+  private setStatus(status: FBAccountStatus, problem?: FbSessionProblem): void {
+    const changed = status !== this.status;
     this.status = status;
+    if (changed) recordFbSessionEvent({ accountId: this.accountId, kind: 'status', detail: problem ? `${status} problem=${problem}` : status });
     // Cookie hết hạn: kết nối hộp thư Page không thể nối lại được, dừng hẳn thay vì thử tải trang mãi. Kết nối lại sẽ dựng lại.
     if (status === 'cookie_expired') this.stopPageInbox();
     EventBroadcaster.emit('fb:onConnectionStatus', {
       fbAccountId: this.getFacebookId(),
       status,
+      ...(status === 'cookie_expired' && problem ? { problem } : {}),
     });
     this.statusChangeCallback?.(status);
 
@@ -451,7 +458,7 @@ export class FacebookService {
             break;
           case 'cookie_expired':
             Logger.warn(`[FacebookService:${this.accountId}] MQTT health check - cookie expired`);
-            this.setStatus('cookie_expired');
+            this.setStatus('cookie_expired', this.lastCookieProblem);
             try {
               const fbId = this.getFacebookId();
               if (fbId) {
@@ -553,13 +560,13 @@ export class FacebookService {
   /**
    * Health check: kiểm tra cookie + listener
    */
-  public async checkHealth(): Promise<{ alive: boolean; listenerConnected: boolean; reason?: string }> {
+  public async checkHealth(): Promise<{ alive: boolean; listenerConnected: boolean; reason?: string; problem?: FbSessionProblem }> {
     try {
-      const cookieAlive = await checkCookieAlive(this.cookie, this.httpsAgent);
+      const cookieAlive = await this.checkCookieHealth();
       const listenerConnected = this.listener?.isConnected() || false;
 
       if (!cookieAlive) {
-        return { alive: false, listenerConnected, reason: 'cookie_expired' };
+        return { alive: false, listenerConnected, reason: 'cookie_expired', ...(this.lastCookieProblem ? { problem: this.lastCookieProblem } : {}) };
       }
       return { alive: true, listenerConnected };
     } catch (err: any) {
@@ -574,7 +581,10 @@ export class FacebookService {
    */
   public async checkCookieHealth(): Promise<boolean> {
     try {
-      return await checkCookieAlive(this.cookie, this.httpsAgent);
+      const { state, problem } = await checkCookieStateDetailed(this.cookie, this.httpsAgent);
+      this.lastCookieProblem = state === 'expired' ? problem : undefined;
+      recordCookieCheck(this.accountId, cookieCheckDetail({ state, problem }));
+      return state !== 'expired';
     } catch {
       return false;
     }
@@ -1599,6 +1609,7 @@ export class FacebookService {
         Logger.warn(`[FacebookService:${this.accountId}] Could not store refreshed cookie: ${err.message}`);
       }
     }
+    recordFbSessionEvent({ accountId: this.accountId, kind: 'cookie_refreshed', detail: formatCookieRefreshDetail(source, names, stored) });
     Logger.log(`[FacebookService:${this.accountId}] Facebook refreshed session cookies (${source}): ${names.join(', ')} (${stored ? 'stored' : 'kept in memory'})`);
   }
 

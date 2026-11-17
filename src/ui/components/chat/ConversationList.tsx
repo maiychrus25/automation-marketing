@@ -1414,7 +1414,7 @@ export default function ConversationList() {
             // Facebook: DB trống → tải trang mới nhất (một lần mỗi hội thoại trong lần chạy app)
             const fbTriedKey = fbHistoryTriedKey(zaloId!, contactId);
             const fbIsPage = !!useAccountStore.getState().accounts.find(a => a.zalo_id === zaloId)?.parent_zalo_id;
-            if (shouldFetchFbHistoryOnOpen({ channel: accChannel, isEmployee: false, isPage: fbIsPage, localCount: 0, alreadyTried: fbHistoryTried.has(fbTriedKey) })) {
+            if (shouldFetchFbHistoryOnOpen({ channel: accChannel, isEmployee: useEmployeeStore.getState().mode === 'employee', isPage: fbIsPage, localCount: 0, alreadyTried: fbHistoryTried.has(fbTriedKey) })) {
               fbHistoryTried.add(fbTriedKey);
               // Fire-and-forget: không giữ trạng thái đang tải của hội thoại tới ~30s
               (async () => {

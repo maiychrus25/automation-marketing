@@ -5,12 +5,17 @@
  */
 
 import { Channel } from '../../../configs/channelConfig';
+import type { FbSessionProblem } from '../../../services/facebook/facebookSessionDiagnosis';
 
 // ─── Common Result Types ──────────────────────────────────────────────────────
 
 export interface ActionResult {
   success: boolean;
   error?: string;
+  /** Mã lỗi từ máy Boss khi nhân viên gửi qua Boss (TIMEOUT, NOT_CONNECTED...) */
+  code?: string;
+  /** Facebook: vì sao cookie hết hạn (logged_out | checkpoint | unrecognised_page), khi biết */
+  problem?: FbSessionProblem;
   msgId?: string;
   messageId?: string;
   pollId?: string;

@@ -66,7 +66,8 @@ describe('FacebookService keeps the cookies Facebook refreshes', () => {
     const setSetting = jest.spyOn(db, 'setSetting');
     svc.adoptSessionCookie({ cookieFacebook: COOKIE });
     expect(svc.cookie).toBe(COOKIE);
-    expect(setSetting).not.toHaveBeenCalled();
+    // fb_session_events ghi tên cookie, không phải cookie: chỉ các khoá khác mới là dấu hiệu lưu cookie.
+    expect(setSetting.mock.calls.filter(([key]) => key !== 'fb_session_events')).toEqual([]);
     setSetting.mockRestore();
   });
 
@@ -82,7 +83,8 @@ describe('FacebookService keeps the cookies Facebook refreshes', () => {
     svc.adoptBridgeCookies({ c_user: FB, xs: 'bridge-xs' }); // không có gì mới
     svc.adoptBridgeCookies({ c_user: '100000000009999', xs: 'someone-else' }); // tài khoản khác
     svc.adoptBridgeCookies(null);
-    expect(setSetting).not.toHaveBeenCalled();
+    // fb_session_events ghi tên cookie, không phải cookie: chỉ các khoá khác mới là dấu hiệu lưu cookie.
+    expect(setSetting.mock.calls.filter(([key]) => key !== 'fb_session_events')).toEqual([]);
     expect(svc.cookie).toContain('xs=bridge-xs');
     setSetting.mockRestore();
   });
@@ -94,7 +96,8 @@ describe('FacebookService keeps the cookies Facebook refreshes', () => {
     const setSetting = jest.spyOn(db, 'setSetting');
     svc.adoptSessionCookie({ cookieFacebook: pageCookie.replace('old-xs', 'new-xs'), refreshedCookieNames: ['xs'] });
     expect(svc.cookie).toContain('xs=new-xs');
-    expect(setSetting).not.toHaveBeenCalled();
+    // fb_session_events ghi tên cookie, không phải cookie: chỉ các khoá khác mới là dấu hiệu lưu cookie.
+    expect(setSetting.mock.calls.filter(([key]) => key !== 'fb_session_events')).toEqual([]);
     setSetting.mockRestore();
   });
 

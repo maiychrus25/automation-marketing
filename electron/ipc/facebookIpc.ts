@@ -4,12 +4,14 @@
  * Pattern: ipcMain.handle('fb:channel', async (_event, params) => { ... })
  */
 
-import { ipcMain } from 'electron';
+import { ipcMain as electronIpcMain } from 'electron';
+import { employeeRoutedIpcMain } from './proxyHelper';
 import { v4 as uuid } from 'uuid';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import FacebookHistorySyncService from '../../src/services/facebook/FacebookHistorySyncService';
 import FacebookConnectionManager from '../../src/utils/FacebookConnectionManager';
-import { initSession, fetchBasicProfileFromHome, fetchFBHomepage, getUserInfoFacebookHtml, checkCookieState, isTransientFacebookError } from '../../src/services/facebook/FacebookSession';
+import { initSession, fetchBasicProfileFromHome, fetchFBHomepage, getUserInfoFacebookHtml, checkCookieStateDetailed, isTransientFacebookError } from '../../src/services/facebook/FacebookSession';
+import { cookieCheckDetail, recordCookieCheck, recordFbSessionEvent } from '../../src/services/facebook/fbSessionEvents';
 import { createStartupRetry } from '../../src/services/facebook/facebookStartupRetry';
 import { loginWithCredentials } from '../../src/services/facebook/FacebookLoginHelper';
 import { secureGet, secureSet, secureDelete } from '../../src/services/secure/SecureSettingsService';
@@ -21,6 +23,9 @@ import FacebookService from "../../src/services/facebook/FacebookService";
 import { resolveFBCookie, resolveFBProxyId } from '../../src/services/facebook/FacebookAccountCookie';
 import { forgetProxyChangeFailure, reconnectPageChildren } from '../../src/services/facebook/facebookProxyChange';
 import { fetchManagedPages, mergePageList, stripPageCookie, buildPageCookie } from '../../src/services/facebook/FacebookPages';
+
+// Employee machine: Page-inbox commands go to the Boss instead of the local (empty) database.
+const ipcMain = employeeRoutedIpcMain(electronIpcMain);
 
 // ─── Cookie secure storage helpers ───────────────────────────────────────────
 
@@ -319,7 +324,16 @@ export function registerFacebookIpc(): void {
       // Verify cookie alive + init session
       // Mọi yêu cầu bằng cookie của tài khoản đi qua proxy của chính tài khoản đó (kể cả lần kiểm tra trước khi kết nối).
       const httpsAgent = proxyAgentFor(resolveFBProxyId(account));
-      const sessionData = await initSession(cookie, httpsAgent);
+      let sessionData: Awaited<ReturnType<typeof initSession>>;
+      try {
+        sessionData = await initSession(cookie, httpsAgent);
+      } catch (initErr: any) {
+        const problem = initErr?.fbSessionProblem;
+        recordCookieCheck(internalId, cookieCheckDetail(isTransientFacebookError(initErr) ? { state: 'unknown' } : { state: 'expired', problem }));
+        Logger.error(`[facebookIpc] fb:updateCookie error: ${initErr.message}`);
+        return { success: false, error: initErr.message, ...(problem ? { problem } : {}) };
+      }
+      recordCookieCheck(internalId, 'alive');
       const fbId = sessionData.FacebookID;
       if (!fbId || !fbId.match(/^\d+$/) || fbId.includes('Unable')) {
         return { success: false, error: 'Cookie không hợp lệ hoặc đã hết hạn' };
@@ -356,6 +370,7 @@ export function registerFacebookIpc(): void {
       );
 
       reconnectPageChildren(account.facebook_id).catch(() => {});
+      recordFbSessionEvent({ accountId: internalId, kind: 'cookie_updated', detail: 'by=user' });
       Logger.log(`[facebookIpc] fb:updateCookie success for ${internalId}`);
       return { success: true };
     } catch (err: any) {
@@ -592,9 +607,9 @@ export function registerFacebookIpc(): void {
       if (!cookie) return { success: false, error: 'No cookie found for this account' };
 
       try {
-        const { checkCookieAlive } = require('../../src/services/facebook/FacebookSession');
-        const alive = await checkCookieAlive(cookie, proxyAgentFor(proxyId));
-        if (!alive) return { success: false, error: 'Cookie đã hết hạn. Vui lòng đăng nhập lại Facebook và copy cookie mới.' };
+        const check = await checkCookieStateDetailed(cookie, proxyAgentFor(proxyId));
+        recordCookieCheck(internalId, cookieCheckDetail(check));
+        if (check.state === 'expired') return { success: false, error: 'Cookie đã hết hạn. Vui lòng đăng nhập lại Facebook và copy cookie mới.', ...(check.problem ? { problem: check.problem } : {}) };
       } catch (healthErr: any) {
         Logger.warn(`[facebookIpc] fb:connect health check failed: ${healthErr.message}, proceeding anyway`);
       }
@@ -954,10 +969,12 @@ export function registerFacebookIpc(): void {
       // Lưu + hiển thị như ảnh gửi (đứng tên Page). Tải thumbUrl về làm ảnh local.
       try {
         const { FacebookSendService } = require('../../src/services/facebook/FacebookSendService');
+        const { isFacebookStickerThumbUrl } = require('../../src/services/facebook/pageSendHelpers');
         const fbId = resolveRealFacebookId(internalId, service);
         let localRelPath: string | undefined;
-        if (params.thumbUrl) {
-          const abs = await FileStorageService.downloadImage(fbId, params.thumbUrl, `sticker_${r.messageId.slice(-8)}_${Date.now()}.webp`, '', undefined, 'https://business.facebook.com/');
+        // Only Facebook's own CDN: the URL may come from an employee machine, so the boss must not fetch any other host.
+        if (isFacebookStickerThumbUrl(params.thumbUrl)) {
+          const abs = await FileStorageService.downloadImage(fbId, params.thumbUrl!, `sticker_${r.messageId.slice(-8)}_${Date.now()}.webp`, '', undefined, 'https://business.facebook.com/');
           if (abs) localRelPath = FileStorageService.toRelativePath(abs);
         }
         await FacebookSendService.persistSentMessage({
@@ -991,6 +1008,7 @@ export function registerFacebookIpc(): void {
         const { FacebookSendService } = require('../../src/services/facebook/FacebookSendService');
         const fbId = resolveRealFacebookId(internalId, service);
         let ok = 0;
+        const messageIds: string[] = []; // ids of the rows saved, in send order (the relay tags employee sends by id)
         for (let i = 0; i < params.filePaths.length; i++) {
           const fp = params.filePaths[i];
           const fileName = path.basename(fp);
@@ -1015,10 +1033,11 @@ export function registerFacebookIpc(): void {
                 attachments: JSON.stringify([{ type: attachType, name: fileName, ...(localRelPath ? { localPath: localRelPath } : {}) }]),
                 ...(localRelPath ? { localPath: localRelPath } : {}),
               });
+              messageIds.push(r.messageId);
             } catch (e: any) { Logger.warn(`[facebookIpc] Page batch persist error: ${e.message}`); }
           }
         }
-        return { success: ok > 0, uploadedCount: ok, totalCount: params.filePaths.length };
+        return { success: ok > 0, uploadedCount: ok, totalCount: params.filePaths.length, messageIds };
       }
 
       // C2: 1:1 → gửi qua E2EE bridge
@@ -2272,7 +2291,9 @@ async function connectStartupAccount(acc: any): Promise<void> {
   // Test cookie health trước khi connect
   let state: 'alive' | 'expired' | 'unknown' = 'alive';
   try {
-    state = await checkCookieState(cookie, proxyAgentFor(resolveFBProxyId(acc)));
+    const check = await checkCookieStateDetailed(cookie, proxyAgentFor(resolveFBProxyId(acc)));
+    state = check.state;
+    recordCookieCheck(acc.id, cookieCheckDetail(check));
   } catch (healthErr: any) {
     Logger.warn(`[facebookIpc] reconnectAllFBAccounts ${acc.id}: health check failed: ${healthErr.message}, trying anyway`);
   }

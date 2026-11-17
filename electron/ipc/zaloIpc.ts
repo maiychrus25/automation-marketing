@@ -8,7 +8,7 @@ import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import Logger from '../../src/utils/Logger';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import FileStorageService from '../../src/services/file/FileStorageService';
-import { uploadEmployeeMedia } from './proxyHelper';
+import { prepareLocalFilesForProxy } from './proxyHelper';
 
 /**
  * Registry of IPC handler functions.
@@ -77,35 +77,6 @@ function resolveAuthFromConnection(auth: any, zaloId: string): any {
         return conn.auth;
     }
     return auth;
-}
-
-/**
- * Upload local media files from Employee machine to Boss storage before proxying.
- * Employee's local file paths are invalid on Boss - reads each file on the
- * Employee side, sends as base64 via uploadEmployeeMedia(), returns Boss-resolved paths.
- * In standalone/boss mode (no-op) returns original params unchanged.
- */
-async function prepareLocalFilesForProxy(params: any): Promise<any> {
-    const singleFields = ['filePath', 'videoPath', 'thumbPath', 'voicePath', 'avatarPath', 'mediaPath'];
-    let result = { ...params };
-
-    for (const field of singleFields) {
-        if (result[field] && typeof result[field] === 'string' && result[field].length > 0) {
-            const bossPaths = await uploadEmployeeMedia([result[field]]);
-            if (bossPaths && bossPaths[0]) {
-                result[field] = bossPaths[0];
-            }
-        }
-    }
-
-    if (result.filePaths && Array.isArray(result.filePaths) && result.filePaths.length > 0) {
-        const bossPaths = await uploadEmployeeMedia(result.filePaths);
-        if (bossPaths && bossPaths.length > 0) {
-            result.filePaths = bossPaths;
-        }
-    }
-
-    return result;
 }
 
 function wrap(channel: string, fn: (service: ZaloService, params: any) => Promise<any>) {

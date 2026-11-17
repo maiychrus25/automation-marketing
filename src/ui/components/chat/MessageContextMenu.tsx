@@ -366,7 +366,9 @@ export default function MessageContextMenu({
           danger
         />
       )}
-      <MenuItem icon="↺" label="Xóa (chỉ mình tôi)" onClick={() => { onDelete(msg); onClose(); }} danger />
+      {(channelCap?.supportsDeleteForMe ?? true) && (
+        <MenuItem icon="↺" label="Xóa (chỉ mình tôi)" onClick={() => { onDelete(msg); onClose(); }} danger />
+      )}
       {onDeleteFromDb && (
         <MenuItem
           icon={

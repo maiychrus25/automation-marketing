@@ -190,10 +190,10 @@ class HttpConnectionManager {
         return true;
     }
 
-    public async proxyAction(workspaceId: string, channel: string, params: any): Promise<any> {
+    public async proxyAction(workspaceId: string, channel: string, params: any, timeoutMs?: number): Promise<any> {
         const client = this.clients.get(workspaceId);
         if (!client) throw new Error(`Workspace "${workspaceId}" chưa kết nối tới BOSS`);
-        return client.service.proxyAction(channel, params);
+        return client.service.proxyAction(channel, params, timeoutMs);
     }
 
     public async proxyActiveWorkspace(channel: string, params: any): Promise<any> {

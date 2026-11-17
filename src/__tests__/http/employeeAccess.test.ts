@@ -177,3 +177,11 @@ describe('paramsWithExtraAccountIds', () => {
     expect(paramsWithExtraAccountIds('db:setLocalLabelActive', label)).toBe(label);
   });
 });
+
+describe('isEmployeeUsableAccount and a switched-off Page', () => {
+  test('aPageSwitchedOffIsNotUsableButAnEnabledOneIs', () => {
+    expect(isEmployeeUsableAccount({ zalo_id: 'page-1', channel: 'facebook', parent_zalo_id: 'fb-personal', enabled: 0 })).toBe(false);
+    expect(isEmployeeUsableAccount({ zalo_id: 'page-1', channel: 'facebook', parent_zalo_id: 'fb-personal', enabled: 1 })).toBe(true);
+    expect(isEmployeeUsableAccount({ zalo_id: 'page-1', channel: 'facebook', parent_zalo_id: 'fb-personal' })).toBe(true);
+  });
+});

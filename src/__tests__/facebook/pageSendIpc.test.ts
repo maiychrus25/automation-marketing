@@ -107,6 +107,15 @@ describe('Page sends through the Facebook IPC', () => {
       expect(mockService.sendPageAttachment.mock.calls.map((c: any[]) => c[2])).toEqual(['chu', undefined]);
       expect(mockPersistSent.mock.calls.map(c => c[0].body)).toEqual([null, null]);
     });
+
+    test('returnsTheIdsOfTheSavedRowsInSendOrderAndSkipsAFailedFile', async () => {
+      mockService.sendPageAttachment
+        .mockResolvedValueOnce({ success: true, messageId: 'mid.$f1' })
+        .mockResolvedValueOnce({ success: false, error: 'x' })
+        .mockResolvedValueOnce({ success: true, messageId: 'page:3' });
+      const res = await call('fb:sendAttachments', { accountId: ACC, threadId: PEER, filePaths: [file, file, file] });
+      expect(res).toMatchObject({ success: true, uploadedCount: 2, totalCount: 3, messageIds: ['mid.$f1', 'page:3'] });
+    });
   });
 
   // Lỗi avatar sai (17/11/2026): thông tin khách của Page không bao giờ lấy bằng cách đọc trang cá nhân dưới danh nghĩa Page,
@@ -144,5 +153,22 @@ describe('Page sends through the Facebook IPC', () => {
       .resolves.toEqual({ success: true, messageId: 'mid.$s1' });
     expect(mockService.sendPageSticker).toHaveBeenCalledWith(PEER, 'vui', 3, '369239263222822');
     expect(mockPersistSent).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'mid.$s1', type: 'image' }));
+  });
+
+  describe('sticker thumbnail download', () => {
+    const FileStorage = require('../../services/file/FileStorageService').default;
+    beforeEach(() => FileStorage.downloadImage.mockClear());
+    test('aRefusedThumbnailUrlTriggersNoDownloadAndTheSendResultIsUnchanged', async () => {
+      mockService.sendPageSticker.mockResolvedValue({ success: true, messageId: 'mid.$s2', timestamp: 5 });
+      await expect(call('fb:sendPageSticker', { accountId: ACC, threadId: PEER, keyword: 'vui', index: 0, thumbUrl: 'https://169.254.169.254/latest/meta-data' }))
+        .resolves.toEqual({ success: true, messageId: 'mid.$s2' });
+      expect(FileStorage.downloadImage).not.toHaveBeenCalled();
+      expect(mockPersistSent).toHaveBeenLastCalledWith(expect.objectContaining({ messageId: 'mid.$s2', type: 'image' }));
+    });
+    test('aFacebookCdnThumbnailIsStillDownloaded', async () => {
+      mockService.sendPageSticker.mockResolvedValue({ success: true, messageId: 'mid.$s3', timestamp: 5 });
+      await call('fb:sendPageSticker', { accountId: ACC, threadId: PEER, keyword: 'vui', index: 0, thumbUrl: 'https://scontent.xx.fbcdn.net/v/s.webp' });
+      expect(FileStorage.downloadImage).toHaveBeenCalledTimes(1);
+    });
   });
 });

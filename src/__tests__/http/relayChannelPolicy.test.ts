@@ -21,6 +21,10 @@ describe('isEmployeeChannelAllowed', () => {
     'ai:saveAssistant', 'ai:deleteAssistant', 'ai:uploadFile', 'ai:removeFile', 'ai:setAccountAssistant',
     'integration:save', 'integration:delete', 'integration:toggle',
     'db:markAsRead', 'db:deleteMessages', 'db:saveFriends', 'db:pinMessage', 'db:upsertLocalLabel',
+    // Page inbox commands (fb:*), run on the boss with a required accountId
+    'fb:getThreads', 'fb:getMessages', 'fb:fetchThreadMessages', 'fb:fetchOlderMessages', 'fb:sendMessage', 'fb:sendAttachment',
+    'fb:sendAttachments', 'fb:sendPageSticker', 'fb:listPageStickers', 'fb:addReaction', 'fb:markAsRead', 'fb:sendSeen',
+    'fb:getUserInfoFacebookHtml', 'fb:refreshContactAvatar',
   ];
   test.each(usedByEmployees)('allows %s', (channel) => {
     expect(isEmployeeChannelAllowed(channel)).toBe(true);
@@ -50,7 +54,8 @@ describe('isEmployeeChannelAllowed', () => {
     'workspace:switch', 'workspace:delete',
     'proxy:save', 'proxy:delete', 'proxy:list',
     'lockScreen:setPin', 'login:loginQR', 'login:removeAccount',
-    'telegram:sendMessage', 'fb:sendMessage',
+    'telegram:sendMessage',
+    'fb:updateCookie', 'fb:addAccount', 'fb:removeAccount', 'fb:historySync:start', 'fb:toggleE2EE', 'fb:scanGetTabs', 'fb:notClassified',
     'shell:openExternal', 'util:fetchUrl',
     'db:setStoragePath', 'db:saveAccount', 'db:selectStorageFolder', 'db:getSetting', 'db:setSetting',
     'ai:chat', 'ai:generateImage', 'zalo:', 'db:',
@@ -106,6 +111,8 @@ describe('isEmployeeChannelAllowed', () => {
     expect(employeeChannelRule('integration:toggle')).toEqual({ modules: ['integration'], account: 'none' });
     expect(employeeChannelRule('db:markAsRead')).toEqual({ modules: ['chat'], account: 'default' });
     expect(employeeChannelRule('db:saveFriends')).toEqual({ modules: ['friends', 'chat'], account: 'default' });
+    expect(employeeChannelRule('fb:sendMessage')).toEqual({ modules: ['chat'], account: 'required' });
+    expect(employeeChannelRule('fb:getThreads')).toEqual({ modules: ['chat'], account: 'required' });
     expect(employeeChannelRule('db:setStoragePath')).toBeNull();
     expect(employeeChannelRule(42)).toBeNull();
   });

@@ -3674,7 +3674,7 @@ class DatabaseService {
     public getAllLocalMediaMessages(ownerZaloId: string): Message[] {
         if (!this.initialized) return [];
         return this.query<Message>(
-            `SELECT msg_id, owner_zalo_id, thread_id, sender_id, content, msg_type, timestamp, local_paths
+            `SELECT msg_id, owner_zalo_id, thread_id, sender_id, content, msg_type, timestamp, local_paths, channel
              FROM messages
              WHERE owner_zalo_id = ?
                AND local_paths IS NOT NULL AND local_paths != '{}' AND local_paths != '' AND local_paths != 'null'

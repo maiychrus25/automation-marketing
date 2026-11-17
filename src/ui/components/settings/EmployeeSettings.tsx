@@ -6,6 +6,7 @@ import { useEmployeeStore } from '@/store/employeeStore';
 import { showConfirm } from '../common/ConfirmDialog';
 import RelayStatusPanel from './RelayStatusPanel';
 import { toLocalMediaUrl } from '@/lib/localMedia';
+import { groupAssignableAccounts, assignableAccountIds } from '@/lib/employeeAssignableAccounts';
 import { BookIcon, BotIcon, ChartIcon, ChatIcon, CheckCircleIcon, CheckIcon, ClipboardListIcon, ClockIcon, EditIcon, FolderIcon, GlobeIcon, ImageIcon, KeyIcon, LightningIcon, LinkIcon, PlusIcon, RefreshIcon, SearchIcon, SettingsIcon, SmartphoneIcon, SunIcon, TrendingUpIcon, UserIcon, UsersIcon } from '@/components/common/icons';
 
 const ALL_MODULES = [
@@ -18,7 +19,7 @@ const ALL_MODULES = [
     { key: 'analytics', label: 'Thống kê', icon: <TrendingUpIcon className="w-4 h-4" />, desc: 'Báo cáo phân tích', group: 'main' },
     { key: 'ai_assistant', label: 'AI', icon: <BotIcon className="w-4 h-4" />, desc: 'Trợ lý AI', group: 'main' },
     { key: 'facebook', label: 'Facebook', icon: <BookIcon className="w-4 h-4" />, desc: 'Facebook Messenger nhóm', group: 'main' },
-    { key: 'settings_accounts', label: 'Quản lý TK Zalo', icon: <UserIcon className="w-4 h-4" />, desc: 'Xem/xóa tài khoản (boss)', group: 'settings', bossOnly: true },
+    { key: 'settings_accounts', label: 'Quản lý tài khoản', icon: <UserIcon className="w-4 h-4" />, desc: 'Xem/xóa tài khoản (boss)', group: 'settings', bossOnly: true },
     { key: 'settings_employees', label: 'Quản lý nhân viên', icon: <UsersIcon className="w-4 h-4" />, desc: 'Thêm/sửa/xóa NV (boss)', group: 'settings', bossOnly: true },
 ] as const;
 
@@ -420,7 +421,7 @@ export default function EmployeeSettings() {
                         <div className="flex-1 min-w-0">
                             <p className="text-sm font-semibold text-amber-100"><RefreshIcon className="w-4 h-4 inline" /> Đang giả lập: {simEmp.display_name}</p>
                             <p className="text-[11px] text-amber-300/70">
-                                Chỉ thấy {simEmp.assigned_accounts?.length || 0} TK Zalo, {simEmp.permissions?.filter((p: any) => p.can_access).length || 0} modules được phân quyền.
+                                Chỉ thấy {simEmp.assigned_accounts?.length || 0} tài khoản, {simEmp.permissions?.filter((p: any) => p.can_access).length || 0} modules được phân quyền.
                             </p>
                         </div>
                         <button
@@ -790,9 +791,14 @@ function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved }: {
     });
 
     // Account access
-    const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(
-        new Set(employee?.assigned_accounts || [])
-    );
+    const assignableIds = useMemo(() => assignableAccountIds(accounts), [accounts]);
+    const accountGroups = useMemo(() => groupAssignableAccounts(accounts), [accounts]);
+    // Facebook cá nhân đã lưu từ trước bị bỏ khỏi lựa chọn nên cũng không được lưu lại.
+    const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(() => {
+        const assignable = new Set(assignableIds);
+        const personalIds = new Set(accounts.map(a => a.zalo_id).filter(id => !assignable.has(id)));
+        return new Set((employee?.assigned_accounts || []).filter((id: string) => !personalIds.has(id)));
+    });
 
     const togglePermission = (key: string) => {
         setPermissions(prev => ({ ...prev, [key]: !prev[key] }));
@@ -808,8 +814,8 @@ function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved }: {
     };
 
     const toggleAllAccounts = () => {
-        if (selectedAccounts.size === accounts.length) setSelectedAccounts(new Set());
-        else setSelectedAccounts(new Set(accounts.map(a => a.zalo_id)));
+        if (selectedAccounts.size === assignableIds.length) setSelectedAccounts(new Set());
+        else setSelectedAccounts(new Set(assignableIds));
     };
 
     const toggleAllPermissions = () => {
@@ -1071,7 +1077,7 @@ function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved }: {
                                     </label>
                                 ))}
                             </div>
-                            <p className="text-[10px] text-gray-400 mt-1.5 italic"><SunIcon className="w-4 h-4 inline" /> Giao diện, Thông báo, Lưu trữ, Giới thiệu, Log phiên bản - luôn truy cập được. Chỉ Quản lý TK Zalo và Nhân viên cần phân quyền riêng.
+                            <p className="text-[10px] text-gray-400 mt-1.5 italic"><SunIcon className="w-4 h-4 inline" /> Giao diện, Thông báo, Lưu trữ, Giới thiệu, Log phiên bản - luôn truy cập được. Chỉ Quản lý tài khoản và Nhân viên cần phân quyền riêng.
                             </p>
                         </div>
                     </div>
@@ -1079,54 +1085,62 @@ function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved }: {
                     {/* Account access - with avatar + phone */}
                     <div className="space-y-2">
                         <div className="flex items-center justify-between">
-                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Tài khoản Zalo được quản lý</p>
+                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Tài khoản được quản lý</p>
                             <button onClick={toggleAllAccounts} className="text-[11px] text-blue-400 hover:text-blue-300">
-                                {selectedAccounts.size === accounts.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                                {selectedAccounts.size === assignableIds.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
                             </button>
                         </div>
                         {accounts.length === 0 ? (
-                            <p className="text-xs text-gray-400 py-2">Chưa có tài khoản Zalo nào</p>
+                            <p className="text-xs text-gray-400 py-2">Chưa có tài khoản nào</p>
                         ) : (
                             <div className="space-y-1 max-h-48 overflow-y-auto">
-                                {accounts.map(acc => (
-                                    <label
-                                        key={acc.zalo_id}
-                                        className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer transition-colors ${
-                                            selectedAccounts.has(acc.zalo_id) ? 'bg-green-600/15 border border-green-500/30' : 'bg-gray-700/50 border border-transparent hover:bg-gray-700'
-                                        }`}
-                                    >
-                                        <input
-                                            type="checkbox" checked={selectedAccounts.has(acc.zalo_id)}
-                                            onChange={() => toggleAccount(acc.zalo_id)}
-                                            className="sr-only"
-                                        />
-                                        <span className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${
-                                            selectedAccounts.has(acc.zalo_id) ? 'bg-green-600 border-green-500' : 'border-gray-500'
-                                        }`}>
-                                            {selectedAccounts.has(acc.zalo_id) && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><path d="M20 6L9 17l-5-5"/></svg>}
-                                        </span>
-                                        {/* Account avatar */}
-                                        <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 bg-gray-600">
-                                            {acc.avatar_url ? (
-                                                <img src={acc.avatar_url} className="w-full h-full object-cover" alt=""
-                                                     onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                                            ) : (
-                                                <div className="w-full h-full flex items-center justify-center text-xs text-gray-400 font-bold">
-                                                    {(acc.full_name || acc.zalo_id).charAt(0).toUpperCase()}
+                                {accountGroups.map(group => (
+                                    <div key={group.key} className="space-y-1">
+                                        <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider pt-1">{group.label}</p>
+                                        {group.note && <p className="text-[10px] text-gray-400 italic">{group.note}</p>}
+                                        {group.accounts.map(acc => (
+                                            <label
+                                                key={acc.zalo_id}
+                                                className={`flex items-center gap-2.5 p-2 rounded-lg transition-colors ${
+                                                    !group.assignable ? 'bg-gray-700/50 border border-transparent opacity-50 cursor-not-allowed'
+                                                    : `cursor-pointer ${selectedAccounts.has(acc.zalo_id) ? 'bg-green-600/15 border border-green-500/30' : 'bg-gray-700/50 border border-transparent hover:bg-gray-700'}`
+                                                }`}
+                                            >
+                                                <input
+                                                    type="checkbox" checked={group.assignable && selectedAccounts.has(acc.zalo_id)}
+                                                    disabled={!group.assignable} aria-disabled={!group.assignable}
+                                                    onChange={() => toggleAccount(acc.zalo_id)}
+                                                    className="sr-only"
+                                                />
+                                                <span className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                                                    selectedAccounts.has(acc.zalo_id) ? 'bg-green-600 border-green-500' : 'border-gray-500'
+                                                }`}>
+                                                    {selectedAccounts.has(acc.zalo_id) && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><path d="M20 6L9 17l-5-5"/></svg>}
+                                                </span>
+                                                {/* Account avatar */}
+                                                <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 bg-gray-600">
+                                                    {acc.avatar_url ? (
+                                                        <img src={acc.avatar_url} className="w-full h-full object-cover" alt=""
+                                                             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                                                    ) : (
+                                                        <div className="w-full h-full flex items-center justify-center text-xs text-gray-400 font-bold">
+                                                            {(acc.full_name || acc.zalo_id).charAt(0).toUpperCase()}
+                                                        </div>
+                                                    )}
                                                 </div>
-                                            )}
-                                        </div>
-                                        <div className={`w-2 h-2 rounded-full flex-shrink-0 ${acc.isOnline ? 'bg-green-400' : 'bg-gray-500'}`} />
-                                        <div className="min-w-0 flex-1">
-                                            <p className="text-xs text-gray-200 font-medium truncate">{acc.full_name || acc.zalo_id}</p>
-                                            <div className="flex items-center gap-2">
-                                                {acc.phone && (
-                                                    <p className="text-[10px] text-gray-400">📞 {acc.phone}</p>
-                                                )}
-                                                <p className="text-[10px] text-gray-400">{acc.zalo_id}</p>
-                                            </div>
-                                        </div>
-                                    </label>
+                                                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${acc.isOnline ? 'bg-green-400' : 'bg-gray-500'}`} />
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="text-xs text-gray-200 font-medium truncate">{acc.full_name || acc.zalo_id}</p>
+                                                    <div className="flex items-center gap-2">
+                                                        {acc.phone && (
+                                                            <p className="text-[10px] text-gray-400">📞 {acc.phone}</p>
+                                                        )}
+                                                        <p className="text-[10px] text-gray-400">{acc.zalo_id}</p>
+                                                    </div>
+                                                </div>
+                                            </label>
+                                        ))}
+                                    </div>
                                 ))}
                             </div>
                         )}

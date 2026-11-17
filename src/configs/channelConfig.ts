@@ -32,6 +32,7 @@ export interface ChannelCapability {
   supportsForward: boolean;
   supportsPin: boolean;
   supportsEdit: boolean;           // Chỉnh sửa tin nhắn đã gửi
+  supportsDeleteForMe?: boolean;   // Mục "Xóa (chỉ mình tôi)"; mặc định bật, tắt cho nhân viên trên Facebook (chạy qua fb:unsendMessage, chỉ boss)
 
   // ─── Tính năng chỉ Zalo ──────────────────────────────────────
   supportsBusinessCard: boolean;

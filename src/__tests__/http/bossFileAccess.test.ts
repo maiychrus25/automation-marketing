@@ -131,15 +131,17 @@ describe('file_path of an ERP task attachment', () => {
 });
 
 describe('the path field list matches what the boss handlers read', () => {
-  // Names matching /Paths?/ in zaloIpc.ts that are not a file on disk the boss would open.
+  // Names matching /Paths?/ in zaloIpc.ts and proxyHelper.ts that are not a file on disk the boss would open.
   const NOT_FILE_PATH_NAMES = [
     'bossPaths',            // local variable holding the paths returned by the upload, not a param
+    'bossPath',             // proxyHelper.ts: field of the upload result, not a param
+    'path',                 // proxyHelper.ts: the node 'path' module
     'paths',                // word in a comment ("Boss-resolved paths")
     'resolveAbsolutePath',  // FileStorageService method name
   ];
   test('everyPathParamNameIsListedOrExplainedHere', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../../electron/ipc/zaloIpc.ts'), 'utf8');
-    const names = new Set(source.match(/\b\w*[Pp]aths?\b/g) || []);
+    const names = new Set(['zaloIpc.ts', 'proxyHelper.ts'].flatMap((f) =>
+      fs.readFileSync(path.join(__dirname, '../../../electron/ipc', f), 'utf8').match(/\b\w*[Pp]aths?\b/g) || []));
     const unknown = [...names].filter((n) => !PROXY_FILE_PATH_FIELDS.includes(n) && n !== 'filePaths' && !NOT_FILE_PATH_NAMES.includes(n));
     expect(unknown).toEqual([]);
   });
@@ -150,10 +152,11 @@ describe('every employee-side upload site is matched by a boss-side check', () =
   // until someone decides how the boss checks the field it uploads.
   const COVERED_SITES: Record<string, string> = {
     'electron/ipc/proxyHelper.ts: uploadEmployeeMedia(filePaths: string[], zaloId?: string': 'definition, no field',
-    'electron/ipc/zaloIpc.ts: prepareLocalFilesForProxy(params: any': 'definition, no field',
-    'electron/ipc/zaloIpc.ts: uploadEmployeeMedia([result[field]]': 'PROXY_FILE_PATH_FIELDS (filePath, videoPath, thumbPath, voicePath, avatarPath, mediaPath)',
-    'electron/ipc/zaloIpc.ts: uploadEmployeeMedia(result.filePaths': 'filePaths',
-    'electron/ipc/zaloIpc.ts: prepareLocalFilesForProxy(params': 'same fields as the two sites above',
+    'electron/ipc/proxyHelper.ts: prepareLocalFilesForProxy(params: any, accountId?: string': 'definition, no field',
+    'electron/ipc/proxyHelper.ts: uploadEmployeeMedia([result[field]], accountId': 'PROXY_FILE_PATH_FIELDS (filePath, videoPath, thumbPath, voicePath, avatarPath, mediaPath)',
+    'electron/ipc/proxyHelper.ts: uploadEmployeeMedia(result.filePaths, accountId': 'filePaths',
+    'electron/ipc/proxyHelper.ts: prepareLocalFilesForProxy(params, params?.accountId': 'fb: proxy channels, same fields as above; boss checks via the proxy route',
+    'electron/ipc/zaloIpc.ts: prepareLocalFilesForProxy(params': 'same fields as the sites above',
     'electron/ipc/crmIpc.ts: uploadEmployeeMedia(block.images, zaloId': 'images (template_message.blocks[].images, object or JSON text)',
   };
   const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));

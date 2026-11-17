@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useEmployeeStore } from '@/store/employeeStore';
+import { withoutBossOnlyFbCaps } from '@/lib/employeeAccounts';
 import { useChatStore } from '@/store/chatStore';
 import { useAccountStore } from '@/store/accountStore';
 import { useAppStore } from '@/store/appStore';
@@ -77,7 +79,7 @@ function UserConversationInfo() {
 
   const contactList = activeAccountId ? (contacts[activeAccountId] || []) : [];
   const contact = contactList.find((c) => c.contact_id === activeThreadId);
-  const channelCap = getCapability((contact?.channel || CHANNEL.ZALO) as Channel);
+  const channelCap = withoutBossOnlyFbCaps(getCapability((contact?.channel || CHANNEL.ZALO) as Channel), useEmployeeStore.getState().mode === 'employee', contact?.channel);
   // Kiểm tra thêm account channel để fallback đúng cho FB khi contact thiếu channel field
   const activeAccount = getActiveAccount();
   const effectiveChannel = (contact?.channel || activeAccount?.channel || CHANNEL.ZALO) as Channel;

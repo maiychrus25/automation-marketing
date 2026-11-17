@@ -8,6 +8,7 @@ import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 import { SECRET_STORE_LOCKED_MESSAGE, isStoredSecretUnreadable } from '../../src/services/secure/secretStore';
 import ZaloLoginHelper from '../../src/utils/ZaloLoginHelper';
+import { withFacebookParents } from '../../src/services/http/accountRows';
 import * as TelegramUserListener from '../../src/services/telegram/TelegramUserListener';
 import * as TelegramBotChannelService from '../../src/services/telegram/TelegramBotChannelService';
 function postLoginSetup(_zaloId: string, _mainWindow: BrowserWindow | null, _name?: string, _phone?: string) {
@@ -225,19 +226,19 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
     // ─── Lấy danh sách tài khoản đã lưu ──────────────────────────────────
     ipcMain.handle('login:getAccounts', async () => {
         try {
-            const accounts = DatabaseService.getInstance().getAccounts();
             // Build FB account lookup (fbId → uuid) for connection status checks
             let fbIdToUuid: Record<string, string> = {};
-            let fbParentOf: Record<string, string | null> = {};
+            let fbAccounts: any[] = [];
             try {
-                const fbAccounts = DatabaseService.getInstance().getFBAccounts();
+                fbAccounts = DatabaseService.getInstance().getFBAccounts();
                 for (const fb of fbAccounts) {
                     if (fb.facebook_id && fb.id) fbIdToUuid[fb.facebook_id] = fb.id;
-                    if (fb.facebook_id) fbParentOf[fb.facebook_id] = fb.parent_facebook_id || null;
                 }
             } catch {}
+            const accounts = DatabaseService.getInstance().getAccounts();
+            const parentsOf = withFacebookParents(accounts, fbAccounts);
             // Thêm trạng thái online/offline
-            const accountsWithStatus = accounts.map((acc) => {
+            const accountsWithStatus = accounts.map((acc, index) => {
                 const isFB = (acc as any).channel === 'facebook';
                 const isTelegramUser = (acc as any).channel === 'telegram_user';
                 const isTelegramBot = (acc as any).channel === 'telegram_bot';
@@ -264,7 +265,7 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
                                 ? isBotConnected
                                 : ConnectionManager.getConnection(acc.zalo_id) !== undefined,
                     // For FB accounts, zalo_id IS the facebook_id now - expose for display
-                    ...(isFB ? { facebook_id: acc.zalo_id, parent_zalo_id: fbParentOf[acc.zalo_id] ?? null } : {}),
+                    ...(isFB ? { facebook_id: acc.zalo_id, parent_zalo_id: parentsOf[index].parent_zalo_id } : {}),
                 };
             });
             return { success: true, accounts: accountsWithStatus };

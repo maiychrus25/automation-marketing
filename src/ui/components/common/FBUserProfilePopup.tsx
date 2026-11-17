@@ -7,6 +7,7 @@ import React from 'react';
 import { useChatStore } from '@/store/chatStore';
 import { useAppStore } from '@/store/appStore';
 import ipc from '@/lib/ipc';
+import { useEmployeeStore } from '@/store/employeeStore';
 import { toLocalMediaUrl } from '@/lib/localMedia';
 
 export function FBUserProfilePopup({ userId, anchorX, anchorY, contacts, activeAccountId, activeThreadId, onClose }: {
@@ -25,6 +26,8 @@ export function FBUserProfilePopup({ userId, anchorX, anchorY, contacts, activeA
   const [confirmBlock, setConfirmBlock] = React.useState(false);
   const [blocking, setBlocking] = React.useState(false);
   const [isBlocked, setIsBlocked] = React.useState(false);
+  // Chặn/bỏ chặn là lệnh chỉ boss làm được: ẩn nút với nhân viên
+  const isEmployeeMode = useEmployeeStore(s => s.mode === 'employee');
   const avatarRefreshedRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -183,7 +186,7 @@ export function FBUserProfilePopup({ userId, anchorX, anchorY, contacts, activeA
             </svg>
             Mở trang Facebook
           </button>
-          {!isMe && (
+          {!isMe && !isEmployeeMode && (
             <>
               <div className="h-px bg-gray-100" />
               <button onClick={() => setConfirmBlock(true)}

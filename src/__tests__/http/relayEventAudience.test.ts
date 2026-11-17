@@ -1,7 +1,7 @@
 import { startRelay, RelayHarness } from './relayHarness';
 import { canReceiveRelayEvent, classifyRelayEvent } from '../../services/socket/relayAudience';
 
-const account = (id: string): any => ({ zalo_id: id, full_name: id, avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', parent_zalo_id: null, cookies: '', imei: '', user_agent: '' });
+const account = (id: string): any => ({ zalo_id: id, full_name: id, avatar_url: '', phone: '', is_business: 0, is_active: 1, channel: 'zalo', cookies: '', imei: '', user_agent: '' });
 
 describe('relayEventToEmployees audience', () => {
   let h: RelayHarness;

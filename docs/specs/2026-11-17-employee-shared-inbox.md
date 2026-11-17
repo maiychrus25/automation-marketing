@@ -1,7 +1,7 @@
 # Nhân viên dùng chung qua máy boss: vá kiểm soát truy cập và mở hộp thư Page
 
 **Ngày:** 2026-11-17  
-**Trạng thái:** Anh duyệt ngày 17/11/2026. Đợt 1 đã triển khai trong 26.45.0 (plan: `docs/plans/2026-11-17-employee-relay-hardening.md`). Phần đặt boss lên máy chủ (đợt 6) bỏ theo yêu cầu của anh.  
+**Trạng thái:** Anh duyệt ngày 17/11/2026. Đợt 1 đã triển khai trong 26.45.0 (plan: `docs/plans/2026-11-17-employee-relay-hardening.md`). Đợt 2 (hộp thư Page cho nhân viên) đã triển khai trong 26.46.0 (plan: `docs/plans/2026-11-17-employee-page-inbox.md`). Phần đặt boss lên máy chủ (đợt 6) bỏ theo yêu cầu của anh.  
 **Phạm vi:** Máy chủ chuyển tiếp trên máy boss (`src/services/http/`, `src/services/socket/`), phần định tuyến lệnh ở máy nhân viên (`electron/ipc/proxyHelper.ts`), các handler `fb:*`, màn hình gán tài khoản. Không đổi cách MaiHub nối tới Zalo, Facebook, Telegram.  
 **Nguồn:** Rà soát code ngày 17/11/2026 và thiết kế của dự án gốc `babyvibe/deplao-builder` tại commit `515f1dc` (bản 26.11.1, giấy phép MIT). Chuyển sang bằng tay, không sao chép nguyên tệp; ghi nhận nguồn trong `NOTICE.md` như các lần trước.
 
@@ -160,3 +160,15 @@ Mã đã phát hành khác spec ở các điểm sau:
 - Sửa việc ghi cài đặt thông báo theo tài khoản: trước đó ghi vào khoá không ai đọc.
 - Sửa lỗi mã trong route bật/tắt và sắp xếp nhãn (boss bỏ qua lệnh của nhân viên).
 - Danh sách nhân viên khác trong snapshot được rút gọn (mã, tên hiển thị, avatar) chứ không bỏ hẳn.
+
+## Ghi chú sau phát hành (26.46.0, đợt 2)
+
+Mã đã phát hành khác mục 3.3 của tài liệu này ở các điểm sau:
+
+- Sự kiện đang gõ và hiện diện (`fb:onTyping`, `fb:onPresence`) không được chuyển tiếp tới nhân viên (`FACEBOOK_RELAY_CHANNELS` trong `src/services/socket/relayAudience.ts`).
+- Ba sự kiện Facebook (`fb:onSeen`, `fb:onContactUpdate`, `fb:onThreadInfoUpdate`) được chuyển tiếp nhưng listener ở giao diện vẫn tắt (danh sách cho phép trong `electron/preload.ts` không đổi), nên tên, ảnh liên hệ và tên hội thoại không làm mới trực tiếp; dấu đã xem tới giao diện qua `event:receipt`.
+- Cờ "đây là Page" được suy từ `fb_accounts.parent_facebook_id` (`src/services/http/accountRows.ts`). Bản 26.45.0 dựa vào `parent_zalo_id`, cột không có trong `accounts`, nên loại nhầm cả Page; 26.46.0 sửa.
+- Tin gửi được gắn nhân viên chỉ theo mã tin; không đoán theo hội thoại cho Facebook. Lần gửi không có mã tin thì được ghi log mà không gắn nhãn.
+- Danh sách chỉ Boss (`boss_only`) rộng hơn mục 3.3: ngoài sửa, thu hồi, chuyển tiếp, ghim, bình chọn, nhóm, chặn còn có báo đang gõ, E2EE, kiểm tra sức khoẻ tài khoản, ghi chú, đồng bộ lịch sử và quét mạng (`src/services/http/employeeChannelRoutes.ts`).
+- Hết thời gian chờ được báo riêng (`TIMEOUT`, lệnh có thể đã chạy) tách khỏi mất kết nối (`NOT_CONNECTED`).
+- Nhân viên trên Page không thấy "Xoá (chỉ mình tôi)"; trên máy Boss nút này gọi thu hồi, hành vi có từ trước và chưa sửa.

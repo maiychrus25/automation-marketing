@@ -4,6 +4,7 @@
 import type { MobileSyncStatus, SyncRange } from '../../services/zalo/mobileSync/types';
 import type { FbHistoryPageResult, FbHistoryRange, FbHistorySyncStatus } from '../../services/facebook/facebookHistory';
 import type { ScopedKeyPolicy } from '../../services/control/controlAuthorization';
+import type { FbSessionProblem } from '../../services/facebook/facebookSessionDiagnosis';
 import type { PageIdentity } from '../../models/dailyBrief';
 import { useAppStore } from '../store/appStore';
 import type { TelegramForumTopicContext } from '../../models/telegram';
@@ -526,14 +527,14 @@ declare global {
         addAccount:           (params: { cookie: string; proxyId?: number | null }) => Promise<{ success: boolean; account?: any; facebookId?: string; name?: string; error?: string }>;
         addAccountWithCredentials: (params: { username: string; password: string; twoFASecret?: string; proxyId?: number | null }) => Promise<{ success: boolean; need2FA?: boolean; account?: any; facebookId?: string; name?: string; error?: string; errorTitle?: string }>;
         removeAccount:        (params: { accountId: string }) => Promise<{ success: boolean; error?: string }>;
-        updateCookie:         (params: { accountId: string; cookie: string }) => Promise<{ success: boolean; error?: string }>;
+        updateCookie:         (params: { accountId: string; cookie: string }) => Promise<{ success: boolean; error?: string; problem?: FbSessionProblem }>;
         refreshProfile:       (params: { accountId: string }) => Promise<{ success: boolean; name?: string; avatarUrl?: string; error?: string, facebookId?: string }>;
         listPages:            (params: { accountId: string }) => Promise<{ success: boolean; pages?: Array<{ profileId: string; name: string; delegatePageId: string | null; avatarUrl: string | null; enabled: boolean }>; error?: string }>;
         setPageEnabled:       (params: { accountId: string; profileId: string; enabled: boolean }) => Promise<{ success: boolean; error?: string }>;
         getAccounts:          () => Promise<{ success: boolean; accounts: any[]; error?: string }>;
-        connect:              (params: { accountId: string }) => Promise<{ success: boolean; error?: string }>;
+        connect:              (params: { accountId: string }) => Promise<{ success: boolean; error?: string; problem?: FbSessionProblem }>;
         disconnect:           (params: { accountId: string }) => Promise<{ success: boolean; error?: string }>;
-        checkHealth:          (params: { accountId: string }) => Promise<{ success: boolean; alive: boolean; listenerConnected: boolean; reason?: string }>;
+        checkHealth:          (params: { accountId: string }) => Promise<{ success: boolean; alive: boolean; listenerConnected: boolean; reason?: string; problem?: FbSessionProblem }>;
         sendMessage:          (params: { accountId: string; threadId: string; body: string; options?: any }) => Promise<{ success: boolean; messageId?: string; error?: string }>;
         sendAttachment:       (params: { accountId: string; threadId: string; filePath: string; body?: string; typeChat?: 'user' | null; fileType?: 'image' | 'video' | 'audio' | 'file' }) => Promise<{ success: boolean; error?: string }>;
         sendAttachments:      (params: { accountId: string; threadId: string; filePaths: string[]; body?: string; typeChat?: 'user' | null }) => Promise<{ success: boolean; uploadedCount?: number; totalCount?: number; error?: string }>;

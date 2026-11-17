@@ -14,6 +14,8 @@ export interface AccountRow {
     zalo_id: string;
     channel?: string | null;
     parent_zalo_id?: string | null;
+    /** 0 = a Facebook Page the boss switched off. */
+    enabled?: number | null;
 }
 
 export interface AccessDenied {
@@ -22,9 +24,9 @@ export interface AccessDenied {
     error: string;
 }
 
-// Personal Facebook accounts stay boss-only; a Facebook Page (has a parent) is usable.
+// Personal Facebook accounts stay boss-only; a Facebook Page (has a parent) is usable unless the boss switched it off.
 export function isEmployeeUsableAccount(row: AccountRow): boolean {
-    return !(row.channel === 'facebook' && !row.parent_zalo_id);
+    return !(row.channel === 'facebook' && (!row.parent_zalo_id || row.enabled === 0));
 }
 
 export function allowedAccounts(assigned: readonly string[], accounts: readonly AccountRow[]): string[] {

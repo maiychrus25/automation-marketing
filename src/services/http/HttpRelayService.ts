@@ -7,9 +7,10 @@ import EmployeeService from '../employee/EmployeeService';
 import DatabaseService from '../database/DatabaseService';
 import EventBroadcaster from '../event/EventBroadcaster';
 import ConnectionManager from '../../utils/ConnectionManager';
+import FacebookConnectionManager from '../../utils/FacebookConnectionManager';
 import TunnelService, { TunnelOptions, TunnelProvider } from '../tunnel/TunnelService';
 import SocketIOService from '../socket/SocketIOService';
-import { RelayAudience, classifyRelayEvent, moduleForRelayChannel } from '../socket/relayAudience';
+import { FACEBOOK_RELAY_CHANNELS, RelayAudience, classifyRelayEvent, moduleForRelayChannel } from '../socket/relayAudience';
 import { storedLabelScope, storedQuickMessageOwner } from './labelEventScope';
 import { LoginThrottle } from '../employee/employeeTokenPolicy';
 import { handlers as restHandlers } from './handlers/RestApiHandlers';
@@ -17,10 +18,12 @@ import { handleMediaRequest as handleMediaFileServe } from './handlers/MediaHand
 import { libraryHandlers } from './handlers/LibraryHandler';
 import FileStorageService from '../file/FileStorageService';
 import { employeeChannelRule } from './relayChannelPolicy';
+import { employeeSendInfo } from './employeeChannelRoutes';
 import { findForeignRecord, recordRefsFor, RecordTarget } from './recordOwnership';
 import { checkProxyFilePaths, checkServiceAccountPaths, isInside, ProxyFileCheck, safeUploadName } from './bossFileAccess';
 import { checkAssistantHostChange } from './assistantKeyGuard';
-import { AccountRow, allowedAccounts, checkEmployeeAccess, paramsWithExtraAccountIds, hasMalformedAccountParam, requestedAccountIds, isEmployeeSettingReadable, isEmployeeSettingWritable } from './employeeAccess';
+import { isAccountOnline, withFacebookParents } from './accountRows';
+import { allowedAccounts, checkEmployeeAccess, paramsWithExtraAccountIds, hasMalformedAccountParam, requestedAccountIds, isEmployeeSettingReadable, isEmployeeSettingWritable } from './employeeAccess';
 
 interface RegisteredEmployee {
     employee_id: string;
@@ -222,6 +225,7 @@ class HttpRelayService {
         'event:reminder',
         'event:localPath',
         'event:listenerDead',
+        ...FACEBOOK_RELAY_CHANNELS,
         // ─── ERP module events (Phase 1 MVP) ───────────────────────
         'erp:event:projectCreated',
         'erp:event:projectUpdated',
@@ -300,7 +304,7 @@ class HttpRelayService {
         const cached = this.allowedAccountsCache.get(employeeId);
         if (cached && Date.now() - cached.ts < HttpRelayService.ALLOWED_ACCOUNTS_TTL_MS) return cached.accounts;
         const accounts = this.runOnPinnedDb((db) =>
-            allowedAccounts(EmployeeService.getInstance().getAssignedAccounts(employeeId), db.getAccounts()));
+            allowedAccounts(EmployeeService.getInstance().getAssignedAccounts(employeeId), withFacebookParents(db.getAccounts(), db.getFBAccounts())));
         this.allowedAccountsCache.set(employeeId, { accounts, ts: Date.now() });
         return accounts;
     }
@@ -316,9 +320,17 @@ class HttpRelayService {
             const emp = employeeService.getEmployeeById(employeeId);
             if (!emp) return null;
 
-            const allAccounts = db.getAccounts();
+            const allAccounts = withFacebookParents(db.getAccounts(), db.getFBAccounts());
             const assignedAccounts = allowedAccounts(emp.assigned_accounts || [], allAccounts);
-            const onlineAccounts = assignedAccounts.filter((zaloId) => ConnectionManager.isConnected(zaloId));
+            // Kết nối Facebook khoá theo id nội bộ của fb_accounts, không phải facebook_id.
+            const online = (row: { zalo_id: string; channel?: string | null }) => isAccountOnline(row, {
+                zaloConnected: (id) => ConnectionManager.isConnected(id),
+                facebookConnected: (facebookId) => {
+                    const fbUuid = db.getFBAccountByFacebookId(facebookId)?.id;
+                    return !!(fbUuid && FacebookConnectionManager.get(fbUuid)?.isConnected());
+                },
+            });
+            const onlineAccounts = allAccounts.filter((a) => assignedAccounts.includes(a.zalo_id) && online(a)).map((a) => a.zalo_id);
             let profile = db.queryOne<{ erp_role?: string; extra_json?: string }>(
                 `SELECT erp_role, extra_json FROM erp_employee_profiles WHERE employee_id = ?`,
                 [employeeId],
@@ -372,9 +384,9 @@ class HttpRelayService {
                     phone: a.phone || '',
                     is_business: a.is_business || 0,
                     is_active: a.is_active,
-                    listener_active: ConnectionManager.isConnected(a.zalo_id) ? 1 : 0,
+                    listener_active: online(a) ? 1 : 0,
                     channel: a.channel,
-                    parent_zalo_id: (a as AccountRow).parent_zalo_id, // cột có trong bảng nhưng chưa nằm trong kiểu Account
+                    parent_zalo_id: a.parent_zalo_id,
                 }));
 
             return {
@@ -761,6 +773,12 @@ class HttpRelayService {
             return this.refuseProxy(employee, channel, 'ACCOUNT_FORBIDDEN', 'Không có quyền truy cập tài khoản này');
         }
         let zaloId = requested[0] || '';
+        if (rule.account === 'required') {
+            // The Page inbox handlers read `accountId` themselves: no other key and no default account stands in for it.
+            zaloId = typeof params?.accountId === 'string' ? params.accountId : '';
+            // The access check trims and splits ids on commas; the handler gets the raw string, so it must be one plain id.
+            if (!zaloId || zaloId !== zaloId.trim() || zaloId.includes(',') || !requested.includes(zaloId)) return this.refuseProxy(employee, channel, 'ACCOUNT_REQUIRED', 'Thiếu tài khoản cần thao tác');
+        }
         if (rule.account === 'default' && !zaloId) {
             zaloId = employee.assigned_accounts[0] || '';
             if (!zaloId) return this.refuseProxy(employee, channel, 'NO_ACCOUNT', 'Không có quyền truy cập tài khoản này');
@@ -1025,116 +1043,7 @@ class HttpRelayService {
                     const threadId = params?.threadId || params?.thread_id || '';
                     Logger.log(`[HttpRelayService] 📤 SEND result for employee=${employee.employee_id}: channel=${channel}, msgId="${msgId}", rawMsgId=${rawMsgId} (type=${typeof rawMsgId}), threadId="${threadId}", zaloId="${zaloId}", response=${JSON.stringify(result?.response || {}).slice(0, 500)}`);
 
-                    this.runOnPinnedDb((db) => db.logEmployeeAction({
-                        employee_id: employee.employee_id,
-                        zalo_id: zaloId,
-                        thread_id: threadId,
-                        thread_type: params?.threadType ?? params?.thread_type ?? 0,
-                        msg_id: msgId,
-                        action: 'sent',
-                        metadata: JSON.stringify({ channel, proxy: true }),
-                    }));
-
-                    // Also log 'replied' action with response_time_ms for analytics
-                    // Calculate response time = time from last customer message to now
-                    if (threadId && zaloId) {
-                        try {
-                            this.runOnPinnedDb((db) => {
-                                // Get the last incoming (non-sent) message timestamp in this thread
-                                const rows = db.query<any>(
-                                    `SELECT timestamp FROM messages WHERE owner_zalo_id = ? AND thread_id = ? AND is_sent = 0 ORDER BY timestamp DESC LIMIT 1`,
-                                    [zaloId, threadId]
-                                );
-                                const lastIncoming = rows?.[0];
-                                if (lastIncoming?.timestamp) {
-                                    const responseTimeMs = Date.now() - lastIncoming.timestamp;
-                                    // Only log if response time is reasonable (< 24 hours)
-                                    if (responseTimeMs > 0 && responseTimeMs < 86400000) {
-                                        db.logEmployeeAction({
-                                            employee_id: employee.employee_id,
-                                            zalo_id: zaloId,
-                                            thread_id: threadId,
-                                            thread_type: params?.threadType ?? params?.thread_type ?? 0,
-                                            msg_id: msgId,
-                                            action: 'replied',
-                                            metadata: JSON.stringify({ channel, response_time_ms: responseTimeMs }),
-                                        });
-                                    }
-                                }
-                            });
-                        } catch {}
-                    }
-
-                    // Mark message as handled by employee in DB
-                    // Register pending info IMMEDIATELY so broadcastMessage can tag it at save time
-                    if (zaloId) {
-                        const empId = employee.employee_id;
-
-                        // Register in pending map - consumed by EventBroadcaster.broadcastMessage
-                        // Always register (even if msgId is empty) - the thread fallback will work
-                        HttpRelayService.setPendingEmployeeMsg(msgId, {
-                            employee_id: empId,
-                            employee_name: employee.display_name,
-                            employee_avatar: employee.avatar_url || '',
-                            zaloId,
-                            threadId,
-                        });
-                        Logger.log(`[HttpRelayService] 📌 setPendingEmployeeMsg: msgId="${msgId}", threadKey="${zaloId}:${threadId}", empId="${empId}"`);
-
-                        // Also retry DB update after delays as fallback
-                        // Use setMessageHandledByEmployeeFlexible to match by msg_id OR cli_msg_id
-                        // (proxy may return cliMsgId while webhook uses globalMsgId)
-                        // Delay 2s/5s - webhook typically arrives within 200ms-2s
-                        const doFallbackUpdate = (delay: number) => {
-                            setTimeout(() => {
-                                try {
-                                    if (msgId) {
-                                        this.runOnPinnedDb((db) => db.setMessageHandledByEmployeeFlexible(zaloId, msgId, empId));
-                                        Logger.log(`[HttpRelayService] 📌 DB fallback update (${delay}s): msgId="${msgId}", empId="${empId}"`);
-                                    } else if (threadId) {
-                                        // Thread-based fallback for attachment-only sends (image/file) where msgId is empty
-                                        this.runOnPinnedDb((db) => {
-                                            const rows = db.query(
-                                                `SELECT msg_id FROM messages WHERE owner_zalo_id = ? AND thread_id = ? AND is_sent = 1
-                                                 AND handled_by_employee IS NULL ORDER BY timestamp DESC LIMIT 1`,
-                                                [zaloId, threadId]
-                                            ) as any[];
-                                            if (rows?.[0]?.msg_id) {
-                                                db.setMessageHandledByEmployee(zaloId, String(rows[0].msg_id), empId);
-                                                Logger.log(`[HttpRelayService] 📌 DB thread-fallback update (${delay}s): thread="${threadId}", found msgId="${rows[0].msg_id}", empId="${empId}"`);
-                                            }
-                                        });
-                                    }
-                                } catch {}
-                            }, delay);
-                        };
-                        doFallbackUpdate(2000);
-                        doFallbackUpdate(5000);
-                    }
-
-                    // Broadcast sender info to ALL employees so they know who replied
-                    if (msgId || threadId) {
-                        const senderPayload = {
-                            zaloId,
-                            threadId,
-                            msgId,
-                            employee_id: employee.employee_id,
-                            employee_name: employee.display_name,
-                            employee_avatar: employee.avatar_url || '',
-                            channel,
-                        };
-                        // Chỉ nhân viên được dùng tài khoản này mới nhận
-                        if (zaloId) {
-                            try {
-                                SocketIOService.getInstance().publish('relay:messageSentByEmployee', senderPayload, { kind: 'accounts', ids: [String(zaloId)] });
-                            } catch {
-                                Logger.warn('[HttpRelayService] publish failed for channel relay:messageSentByEmployee');
-                            }
-                        }
-                        // Also emit to local renderer (boss side)
-                        Logger.log(`[HttpRelayService] 📡 Emitting relay:messageSentByEmployee to boss renderer: msgId="${msgId}", empId="${employee.employee_id}", threadId="${threadId}"`);
-                        EventBroadcaster.emit('relay:messageSentByEmployee', senderPayload);
-                    }
+                    this.recordEmployeeSend(employee, channel, params, zaloId, threadId, msgId, () => this.tagZaloSend(employee, zaloId, threadId, msgId));
                 }
 
                 return result;
@@ -1144,7 +1053,21 @@ class HttpRelayService {
             const { ipcMain } = require('electron');
             const internalHandlers: Map<string, Function> | undefined = (ipcMain as any)._invokeHandlers;
             if (internalHandlers && internalHandlers.has(channel)) {
-                return await internalHandlers.get(channel)!(null, params);
+                const result = await internalHandlers.get(channel)!(null, params);
+                // Facebook: the sent row is already saved (no broadcastMessage later), so tag it right away.
+                const sent = employeeSendInfo(channel, params, result);
+                if (sent) {
+                    try {
+                        // Tag by id only: no id means the send is counted but no row is guessed by thread, and no sender event goes out.
+                        const tagById = (messageId: string) => this.recordEmployeeSend(employee, channel, params, sent.accountId, sent.threadId, messageId,
+                            () => this.runOnPinnedDb((db) => db.setMessageHandledByEmployeeFlexible(sent.accountId, messageId, employee.employee_id)));
+                        if (sent.messageIds.length === 0) this.recordEmployeeSend(employee, channel, params, sent.accountId, sent.threadId, '', () => undefined, false);
+                        else sent.messageIds.forEach(tagById);
+                    } catch {
+                        Logger.warn(`[HttpRelayService] Could not record the sender of ${channel} for employee ${employee.employee_id}`);
+                    }
+                }
+                return result;
             }
 
             return { success: false, error: `No handler for channel: ${channel}` };
@@ -1152,6 +1075,128 @@ class HttpRelayService {
             Logger.error(`[HttpRelayService] Proxy error (${channel}): ${err.message}`);
             return { success: false, error: err.message };
         }
+    }
+
+    /** Records which employee sent a message: audit rows, the tagging step of the caller, then the sender event to the account's audience. */
+    private recordEmployeeSend(employee: RegisteredEmployee, channel: string, params: any, zaloId: string, threadId: string, msgId: string, tagMessage: () => void, announce = true): void {
+        this.runOnPinnedDb((db) => db.logEmployeeAction({
+            employee_id: employee.employee_id,
+            zalo_id: zaloId,
+            thread_id: threadId,
+            thread_type: params?.threadType ?? params?.thread_type ?? 0,
+            msg_id: msgId,
+            action: 'sent',
+            metadata: JSON.stringify({ channel, proxy: true }),
+        }));
+
+        // Also log 'replied' action with response_time_ms for analytics
+        // Calculate response time = time from last customer message to now
+        if (threadId && zaloId) {
+            try {
+                this.runOnPinnedDb((db) => {
+                    // Get the last incoming (non-sent) message timestamp in this thread
+                    const rows = db.query<any>(
+                        `SELECT timestamp FROM messages WHERE owner_zalo_id = ? AND thread_id = ? AND is_sent = 0 ORDER BY timestamp DESC LIMIT 1`,
+                        [zaloId, threadId]
+                    );
+                    const lastIncoming = rows?.[0];
+                    if (lastIncoming?.timestamp) {
+                        const responseTimeMs = Date.now() - lastIncoming.timestamp;
+                        // Only log if response time is reasonable (< 24 hours)
+                        if (responseTimeMs > 0 && responseTimeMs < 86400000) {
+                            db.logEmployeeAction({
+                                employee_id: employee.employee_id,
+                                zalo_id: zaloId,
+                                thread_id: threadId,
+                                thread_type: params?.threadType ?? params?.thread_type ?? 0,
+                                msg_id: msgId,
+                                action: 'replied',
+                                metadata: JSON.stringify({ channel, response_time_ms: responseTimeMs }),
+                            });
+                        }
+                    }
+                });
+            } catch {}
+        }
+
+        tagMessage();
+
+        // Broadcast sender info to ALL employees so they know who replied
+        if (announce && (msgId || threadId)) {
+            const senderPayload = {
+                zaloId,
+                threadId,
+                msgId,
+                employee_id: employee.employee_id,
+                employee_name: employee.display_name,
+                employee_avatar: employee.avatar_url || '',
+                channel,
+            };
+            // Chỉ nhân viên được dùng tài khoản này mới nhận
+            if (zaloId) {
+                try {
+                    SocketIOService.getInstance().publish('relay:messageSentByEmployee', senderPayload, { kind: 'accounts', ids: [String(zaloId)] });
+                } catch {
+                    Logger.warn('[HttpRelayService] publish failed for channel relay:messageSentByEmployee');
+                }
+            }
+            // Also emit to local renderer (boss side)
+            Logger.log(`[HttpRelayService] 📡 Emitting relay:messageSentByEmployee to boss renderer: msgId="${msgId}", empId="${employee.employee_id}", threadId="${threadId}"`);
+            EventBroadcaster.emit('relay:messageSentByEmployee', senderPayload);
+        }
+    }
+
+    /** Zalo: the row is saved later by EventBroadcaster.broadcastMessage, so register the sender now and retry the DB tag after a delay. */
+    private tagZaloSend(employee: RegisteredEmployee, zaloId: string, threadId: string, msgId: string): void {
+        // Mark message as handled by employee in DB
+        // Register pending info IMMEDIATELY so broadcastMessage can tag it at save time
+        if (zaloId) {
+            const empId = employee.employee_id;
+
+            // Register in pending map - consumed by EventBroadcaster.broadcastMessage
+            // Always register (even if msgId is empty) - the thread fallback will work
+            HttpRelayService.setPendingEmployeeMsg(msgId, {
+                employee_id: empId,
+                employee_name: employee.display_name,
+                employee_avatar: employee.avatar_url || '',
+                zaloId,
+                threadId,
+            });
+            Logger.log(`[HttpRelayService] 📌 setPendingEmployeeMsg: msgId="${msgId}", threadKey="${zaloId}:${threadId}", empId="${empId}"`);
+
+            // Also retry DB update after delays as fallback
+            // Use setMessageHandledByEmployeeFlexible to match by msg_id OR cli_msg_id
+            // (proxy may return cliMsgId while webhook uses globalMsgId)
+            // Delay 2s/5s - webhook typically arrives within 200ms-2s
+            const doFallbackUpdate = (delay: number) => {
+                setTimeout(() => this.tagSentMessage(zaloId, threadId, msgId, empId, `${delay}s`), delay);
+            };
+            doFallbackUpdate(2000);
+            doFallbackUpdate(5000);
+        }
+    }
+
+    /** Tags the sent row with the employee: by message id (msg_id or cli_msg_id), else the newest untagged row the account sent in the thread. */
+    private tagSentMessage(zaloId: string, threadId: string, msgId: string, empId: string, when: string): void {
+        try {
+            if (msgId) {
+                this.runOnPinnedDb((db) => db.setMessageHandledByEmployeeFlexible(zaloId, msgId, empId));
+                Logger.log(`[HttpRelayService] 📌 DB fallback update (${when}): msgId="${msgId}", empId="${empId}"`);
+            } else if (threadId) {
+                // Thread-based fallback for attachment-only sends (image/file) where msgId is empty
+                this.runOnPinnedDb((db) => {
+                    const rows = db.query(
+                        `SELECT msg_id FROM messages WHERE owner_zalo_id = ? AND thread_id = ? AND is_sent = 1
+                         AND handled_by_employee IS NULL ORDER BY timestamp DESC LIMIT 1`,
+                        [zaloId, threadId]
+                    ) as any[];
+                    if (rows?.[0]?.msg_id) {
+                        db.setMessageHandledByEmployee(zaloId, String(rows[0].msg_id), empId);
+                        Logger.log(`[HttpRelayService] 📌 DB thread-fallback update (${when}): thread="${threadId}", found msgId="${rows[0].msg_id}", empId="${empId}"`);
+                    }
+                });
+            }
+        } catch {}
     }
 
     // ─── Sync handlers ────────────────────────────────────────────────
