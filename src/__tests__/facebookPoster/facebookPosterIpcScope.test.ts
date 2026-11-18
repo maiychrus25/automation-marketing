@@ -44,6 +44,7 @@ let mockDatabaseInstance = {
     getBrowserProfiles: () => mockProfiles, getSetting: () => null, setSetting: jest.fn(),
 };
 
+jest.mock('uuid', () => ({ v4: () => 'test-uuid' }));
 jest.mock('electron', () => ({ dialog: {}, ipcMain: { handle: jest.fn() } }));
 jest.mock('../../services/database/DatabaseService', () => ({
     __esModule: true,
@@ -150,11 +151,15 @@ jest.mock('../../services/control/controlEvents', () => ({
 
 jest.mock('../../services/dailyBrief/pageIdentity', () => ({ ...jest.requireActual('../../services/dailyBrief/pageIdentity'), readPageIdentity: (...args: any[]) => mockRead(...args) }));
 
-import { posterOperations, campaignOperations, trackingOperations, leadOperations, scopedStatus, startFacebookPosterScheduler, stopFacebookPosterScheduler } from '../../../electron/ipc/facebookPosterIpc';
+import EmployeeService from '../../services/employee/EmployeeService';
+import Logger from '../../utils/Logger';
+import EventBroadcaster from '../../services/event/EventBroadcaster';
+import { pauseEmployeeSchedules, posterOperations, campaignOperations, trackingOperations, leadOperations, scopedStatus, startFacebookPosterScheduler, stopFacebookPosterScheduler } from '../../../electron/ipc/facebookPosterIpc';
 
 const NOW = Date.now();
 const TODAY = new Date().toISOString().slice(0, 10);
 const asRelay = (p: Record<string, unknown> = {}, scope: string[] = ['p1']) => ({ ...p, _fromRelay: true, _profileScope: scope });
+const asEmployee = (employeeId: string, p: Record<string, unknown> = {}, scope: string[] = ['p1']) => ({ ...asRelay(p, scope), _relayEmployeeId: employeeId });
 const params = (...ids: string[]) => JSON.stringify({ mode: 'group', text: 'secret text', profiles: ids.map((profileId) => ({ profileId, targets: [] })) });
 const run = (sql: string, p: unknown[] = []) => mockDb.run(sql, p);
 
@@ -387,9 +392,9 @@ describe('active runs', () => {
 });
 
 describe('the two internal keys are never stored', () => {
-    const body = { kind: 'once', runAt: Date.now() + 3_600_000, name: 'n', params: { mode: 'group', text: 'Bài', profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123456789'] }], _profileScope: ['p2'], _fromRelay: true } };
+    const body = { kind: 'once', runAt: Date.now() + 3_600_000, name: 'n', params: { mode: 'group', text: 'Bài', profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123456789'] }], _profileScope: ['p2'], _fromRelay: true, _relayEmployeeId: 'forged' } };
     const stored = (table: string, id: string) => (mockDb.queryOne<any>(`SELECT params_json FROM ${table} WHERE id = ?`, [id])!.params_json as string);
-    const clean = (json: string) => expect(json).not.toMatch(/_profileScope|_fromRelay/);
+    const clean = (json: string) => expect(json).not.toMatch(/_profileScope|_fromRelay|_relayEmployeeId/);
 
     test('scheduleCreateKeepsThemOutOfParamsJson', () => {
         const created = posterOperations.scheduleCreate(asRelay(body)).schedule!;
@@ -424,5 +429,139 @@ describe('the two internal keys are never stored', () => {
     test('campaignCreateAcceptsTheRelayKeysWithoutStoringThem', () => {
         const created = campaignOperations.create(asRelay({ name: 'Mới từ nhân viên' })).campaign;
         expect(JSON.stringify(created)).not.toMatch(/_profileScope|_fromRelay/);
+    });
+});
+
+describe('who created a schedule or draft', () => {
+    const post = { mode: 'group', text: 'Bài', profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123456789'] }] };
+    const once = () => ({ kind: 'once', runAt: Date.now() + 3_600_000, name: 'n', params: post });
+    const creator = (id: string) => mockDb.queryOne<any>('SELECT created_by_employee AS c, params_json AS p FROM fb_poster_schedules WHERE id = ?', [id])!;
+
+    test('scheduleCreateStoresTheRelayEmployeeAndTheEmployeeNeverSeesIt', () => {
+        const created = posterOperations.scheduleCreate(asEmployee('emp1', once())).schedule!;
+        expect(creator(created.id).c).toBe('emp1');
+        expect(created).not.toHaveProperty('createdByEmployee');
+        expect(creator(created.id).p).not.toMatch(/_relayEmployeeId|emp1/);
+        expect(posterOperations.scheduleList(asRelay()).schedules.every((x: any) => !('createdByEmployee' in x))).toBe(true);
+        expect(posterOperations.scheduleList({}).schedules.find((x: any) => x.id === created.id).createdByEmployee).toBe('emp1');
+        expect(posterOperations.scheduleList({}).schedules.find((x: any) => x.id === 's1').createdByEmployee).toBeNull();
+    });
+
+    test('aBossCallStoresNoCreatorAndAnUnrelayedEmployeeIdIsIgnored', () => {
+        const boss = posterOperations.scheduleCreate(once()).schedule!;
+        expect(boss.createdByEmployee).toBeNull();
+        const fake = posterOperations.scheduleCreate({ ...once(), _relayEmployeeId: 'emp1' }).schedule!;
+        expect(creator(fake.id).c).toBeNull();
+        const noId = posterOperations.scheduleCreate(asRelay(once())).schedule!;
+        expect(creator(noId.id).c).toBeNull();
+    });
+
+    test('draftSaveStampsOnlyNewDraftsAndNeverChangesTheCreator', () => {
+        const draft = posterOperations.draftSave(asEmployee('emp1', { params: post })).schedule!;
+        expect(creator(draft.id).c).toBe('emp1');
+        expect(draft).not.toHaveProperty('createdByEmployee');
+        expect(creator(draft.id).p).not.toMatch(/_relayEmployeeId/);
+        posterOperations.draftSave(asEmployee('emp2', { id: draft.id, params: { ...post, text: 'Sửa' } }));
+        expect(creator(draft.id).c).toBe('emp1');
+        posterOperations.draftSave({ id: draft.id, params: { ...post, text: 'Boss sửa' } });
+        expect(creator(draft.id).c).toBe('emp1');
+        expect(posterOperations.draftGet(asRelay({ id: draft.id })).draft).not.toHaveProperty('createdByEmployee');
+        expect(posterOperations.draftGet({ id: draft.id }).draft.createdByEmployee).toBe('emp1');
+        const bossDraft = posterOperations.draftSave({ params: post, _relayEmployeeId: 'emp1' }).schedule!;
+        expect(creator(bossDraft.id).c).toBeNull();
+    });
+
+    test('updatingASchedulePreservesTheCreatorAndHidesItFromTheEmployee', () => {
+        const created = posterOperations.scheduleCreate(asEmployee('emp1', once())).schedule!;
+        const updated = posterOperations.scheduleUpdate(asEmployee('emp2', { id: created.id, name: 'đổi tên' })).schedule!;
+        expect(updated).not.toHaveProperty('createdByEmployee');
+        expect(creator(created.id).c).toBe('emp1');
+        expect(posterOperations.scheduleUpdate({ id: created.id, name: 'boss' }).schedule!.createdByEmployee).toBe('emp1');
+    });
+
+    test('pauseEmployeeSchedulesPausesAndReportsTheCount', () => {
+        mockReschedule.mockClear();
+        const a = posterOperations.scheduleCreate(asEmployee('emp1', once())).schedule!;
+        const b = posterOperations.scheduleCreate(asEmployee('emp2', once())).schedule!;
+        mockReschedule.mockClear();
+        expect(pauseEmployeeSchedules('emp3')).toBe(0);
+        expect(mockReschedule).not.toHaveBeenCalled();
+        expect(pauseEmployeeSchedules('emp1', ['p9'])).toBe(0);
+        expect(pauseEmployeeSchedules('emp1', ['p1'])).toBe(1);
+        expect(mockReschedule).toHaveBeenCalledTimes(1);
+        expect(posterOperations.scheduleList({}).schedules.find((x: any) => x.id === a.id).enabled).toBe(false);
+        expect(posterOperations.scheduleList({}).schedules.find((x: any) => x.id === b.id).enabled).toBe(true);
+    });
+
+    test('pauseEmployeeSchedulesDoesNotThrowWhenTheStoreIsNotReady', () => {
+        const spy = jest.spyOn(mockDatabaseInstance, 'getDbPath').mockImplementation(() => { throw new Error('no db'); });
+        try { expect(pauseEmployeeSchedules('emp1')).toBe(0); } finally { spy.mockRestore(); }
+    });
+});
+
+describe('pausing on the database the employee rows live in', () => {
+    const post = { mode: 'group', text: 'Bài', profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123456789'] }] };
+    const pinnedPath = path.join(mockDir, 'pinned.sqlite');
+    let pinned: ReturnType<typeof memoryDb>;
+    let saved: any;
+    beforeEach(() => {
+        pinned = memoryDb();
+        const pinnedStore = new FacebookPosterStore(pinned);
+        pinnedStore.ensureSchema();
+        pinnedStore.createSchedule({ id: 'pin-s', name: 'n', kind: 'once', params: post, runAt: 5000, days: [], time: '', enabled: true, nextRunAt: 5000, createdAt: 1, createdByEmployee: 'emp1' });
+        saved = { ...mockDatabaseInstance };
+        (mockDatabaseInstance as any).withDbPath = (p: string, fn: (d: any) => unknown) => {
+            const before = { ...mockDatabaseInstance };
+            Object.assign(mockDatabaseInstance, { exec: pinned.exec, run: pinned.run, runInsert: pinned.runInsert, transaction: pinned.transaction, query: pinned.query, queryOne: pinned.queryOne, queryStrict: undefined, getDbPath: () => p });
+            try { return fn(mockDatabaseInstance); } finally { Object.assign(mockDatabaseInstance, before); }
+        };
+        (EmployeeService.getInstance() as any).pinnedDbPath = pinnedPath;
+        mockReschedule.mockClear();
+        (EventBroadcaster.emit as jest.Mock).mockClear();
+    });
+    afterEach(() => {
+        (EmployeeService.getInstance() as any).pinnedDbPath = null;
+        for (const key of Object.keys(mockDatabaseInstance)) if (!(key in saved)) delete (mockDatabaseInstance as any)[key];
+        Object.assign(mockDatabaseInstance, saved);
+    });
+
+    test('whenTheOpenWorkspaceIsAnotherOneItPausesThePinnedRowsAndDoesNotReschedule', () => {
+        const active = posterOperations.scheduleCreate(asEmployee('emp1', { kind: 'once', runAt: Date.now() + 3_600_000, params: post })).schedule!;
+        mockReschedule.mockClear();
+        (EventBroadcaster.emit as jest.Mock).mockClear();
+        expect(pauseEmployeeSchedules('emp1')).toBe(1);
+        expect(pinned.queryOne<any>("SELECT enabled FROM fb_poster_schedules WHERE id = 'pin-s'")!.enabled).toBe(0);
+        expect(mockDb.queryOne<any>('SELECT enabled FROM fb_poster_schedules WHERE id = ?', [active.id])!.enabled).toBe(1);
+        expect(mockReschedule).not.toHaveBeenCalled();
+        expect(EventBroadcaster.emit).not.toHaveBeenCalled();
+    });
+
+    test('whenThePinnedDatabaseIsTheOpenOneItReschedulesAndEmits', () => {
+        (EmployeeService.getInstance() as any).pinnedDbPath = path.join(mockDir, mockDbName);
+        const created = posterOperations.scheduleCreate(asEmployee('emp1', { kind: 'once', runAt: Date.now() + 3_600_000, params: post })).schedule!;
+        mockReschedule.mockClear();
+        (EventBroadcaster.emit as jest.Mock).mockClear();
+        expect(pauseEmployeeSchedules('emp1')).toBe(1);
+        expect(mockDb.queryOne<any>('SELECT enabled FROM fb_poster_schedules WHERE id = ?', [created.id])!.enabled).toBe(0);
+        expect(pinned.queryOne<any>("SELECT enabled FROM fb_poster_schedules WHERE id = 'pin-s'")!.enabled).toBe(1);
+        expect(mockReschedule).toHaveBeenCalledTimes(1);
+        expect(EventBroadcaster.emit).toHaveBeenCalled();
+    });
+
+    test('aFailingReadIsLoggedAndReturnsZero', () => {
+        (EmployeeService.getInstance() as any).pinnedDbPath = null;
+        (mockDatabaseInstance as any).queryStrict = () => { throw new Error('read failed'); };
+        (Logger.warn as jest.Mock).mockClear();
+        expect(pauseEmployeeSchedules('emp1')).toBe(0);
+        expect((Logger.warn as jest.Mock).mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/pauseEmployeeSchedules failed for employee=emp1: read failed/);
+    });
+});
+
+describe('draftApprove from a scoped call', () => {
+    test('doesNotReturnTheCreator', () => {
+        const draft = posterOperations.draftSave(asEmployee('emp1', { params: { mode: 'group', text: 'Bài', profiles: [{ profileId: 'p1', targets: ['https://www.facebook.com/groups/123456789'] }] } })).schedule!;
+        const approved = posterOperations.draftApprove(asEmployee('emp1', { id: draft.id, when: 'schedule', kind: 'once', runAt: Date.now() + 3_600_000 })).schedule!;
+        expect(approved).not.toHaveProperty('createdByEmployee');
+        expect(mockDb.queryOne<any>('SELECT created_by_employee AS c FROM fb_poster_schedules WHERE id = ?', [draft.id])!.c).toBe('emp1');
     });
 });

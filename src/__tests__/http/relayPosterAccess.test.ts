@@ -390,6 +390,15 @@ describe('boss relay: poster commands of an employee', () => {
       expect(received._profileScope).toEqual(['p1', 'p2']);
     });
 
+    test('theRelayNamesTheEmployeeAndNeverTrustsTheOneTheEmployeeSends', async () => {
+      const handler = relay.registerIpcHandler('facebookPoster:scheduleCreate');
+      await send('facebookPoster:scheduleCreate', { kind: 'once', _relayEmployeeId: 'someone-else', params: { ...post('p1'), _relayEmployeeId: 'nested' } });
+      const received = handler.mock.calls[0][1] as any;
+      expect(received._relayEmployeeId).toBe('poster');
+      expect(received._fromRelay).toBe(true);
+      expect(received.params).not.toHaveProperty('_relayEmployeeId');
+    });
+
     test('aRemovedPermissionOrAssignmentIsRefusedOnTheNextRequest', async () => {
       const handler = relay.registerIpcHandler('facebookPoster:start');
       const me = table.find((e) => e.id === 'poster-acc')!;

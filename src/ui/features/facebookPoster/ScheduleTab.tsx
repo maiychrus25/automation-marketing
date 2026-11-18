@@ -1,3 +1,4 @@
+import { creatorLine } from './creatorLabel';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
@@ -17,6 +18,8 @@ import { joinFileNames } from '../../lib/employeePoster';
 interface Props {
   selectedChannels: string[] | null;
   profileNames: Map<string, string>;
+  /** Boss only: employee id -> display name, null until loaded (and always null on an employee machine). */
+  employeeNames: Map<string, string> | null;
   onCompose: (at?: number) => void;
   onOpenHistory: () => void;
   onEditDraft: (id: string) => void;
@@ -26,7 +29,7 @@ const dateLabel = (date: Date) => date.toLocaleDateString('vi-VN', { day: '2-dig
 const clock = (at: number) => new Date(at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
 const LABELS: Record<string, string> = { draft: 'Nháp', scheduled: 'Đã hẹn', paused: 'Tạm dừng', queued: 'Đang chờ', ...Object.fromEntries(Object.entries(STATUS_LABEL).map(([key, value]) => [key, value.label])) };
 
-export default function ScheduleTab({ selectedChannels, profileNames, onCompose, onOpenHistory, onEditDraft }: Props) {
+export default function ScheduleTab({ selectedChannels, profileNames, employeeNames, onCompose, onOpenHistory, onEditDraft }: Props) {
   const showNotification = useAppStore(s => s.showNotification);
   const { isEmployee, noProfiles } = useEmployeePoster();
   const [schedules, setSchedules] = useState<FbPosterScheduleView[]>([]);
@@ -246,6 +249,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
           {visibleSchedules.length === 0 && <p className="poster-empty">Chưa có lịch đăng phù hợp. Bấm Soạn bài để hẹn giờ.</p>}
           {visibleSchedules.map(schedule => <article key={schedule.id} className="poster-schedule-row">
             <div className="min-w-0 flex-1"><h3 className="font-semibold truncate" title={schedule.name}>{schedule.name}</h3><p className="poster-muted text-xs mt-1">{schedule.draft ? `Nháp · ${schedule.runAt ? 'Dự kiến ' + formatShort(schedule.runAt) : 'Chưa xếp lịch'}` : <>{schedule.kind === 'once' ? 'Một lần' : describeRecurrence(schedule.days, schedule.time)} · {schedule.nextRunAt ? formatShort(schedule.nextRunAt) : 'Không có lần chạy tới'}{queued.has(schedule.id) ? ' · Đang chờ' : ''}</>}</p>
+              {creatorLine(schedule.createdByEmployee, employeeNames) && <p className="poster-muted text-xs mt-1 truncate" title={creatorLine(schedule.createdByEmployee, employeeNames)!}>{creatorLine(schedule.createdByEmployee, employeeNames)}</p>}
               {schedule.lastRun && <button onClick={onOpenHistory} className="poster-link text-xs mt-1">Lần gần nhất: {STATUS_LABEL[schedule.lastRun.status]?.label} · {formatShort(schedule.lastRun.startedAt)}</button>}</div>
             {schedule.draft ? <div className="flex flex-wrap gap-2 items-center">
               <button className="poster-button" onClick={() => onEditDraft(schedule.id)}>Sửa</button>
@@ -282,6 +286,7 @@ export default function ScheduleTab({ selectedChannels, profileNames, onCompose,
         <header className="poster-dialog-header"><h2 id="poster-detail-title" className="break-words min-w-0">{detail.schedule.name}</h2><button className="poster-icon-button shrink-0" aria-label="Đóng chi tiết bài" onClick={closeDetail}>✕</button></header>
         <div className="p-5 space-y-4"><p className="poster-muted">{detail.schedule.draft && detail.schedule.runAt === null ? 'Chưa xếp lịch' : formatShort(detail.at)} · {LABELS[status(detail)]}</p>
           {(operationError || error) && <p role="alert" className="text-red-400 text-sm break-words">{operationError || error}</p>}
+          {creatorLine(detail.schedule.createdByEmployee, employeeNames) && <p className="poster-muted text-xs break-words">{creatorLine(detail.schedule.createdByEmployee, employeeNames)}</p>}
           {detail.schedule.campaignId && <p className="text-sm break-words">Chiến dịch: <strong>{campaignName(detail.schedule.campaignId)}</strong></p>}
           <PostPreview text={String(detail.schedule.params.text || '')} comment={String(detail.schedule.params.comment || '')} mediaPaths={[]} mode={detail.schedule.params.mode === 'page' ? 'page' : 'group'} names={((detail.schedule.params.profiles || []) as { profileId: string }[]).map(profile => profileNames.get(profile.profileId) || profile.profileId)} />
           {hydrateVariants(detail.schedule.params).length > 0 && <div className="space-y-1">

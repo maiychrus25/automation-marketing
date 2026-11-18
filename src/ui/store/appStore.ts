@@ -3,6 +3,7 @@ import { useAccountStore } from './accountStore';
 import { useEmployeeStore } from './employeeStore';
 import DataAccessor from '@/lib/data/DataAccessor';
 import { type AppTheme, type ThemePreference, THEME_STORAGE_KEY, parseThemePreference, resolveTheme, systemPrefersDark } from '../lib/theme';
+import { notificationDurationMs } from '../lib/notificationDuration';
 
 type AppView = 'chat' | 'friends' | 'settings' | 'dashboard' | 'crm' | 'workflow' | 'integration' | 'analytics' | 'erp' | 'browser' | 'facebookPoster';
 export type { AppTheme, ThemePreference };
@@ -451,7 +452,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setLoading: (isLoading) => set({ isLoading }),
   showNotification: (message, type = 'info') => {
     set({ notification: { message, type } });
-    setTimeout(() => set({ notification: null }), 4000);
+    setTimeout(() => set({ notification: null }), notificationDurationMs(message));
   },
   hideNotification: () => set({ notification: null }),
   showErpPermissionDialog: (payload) => set({

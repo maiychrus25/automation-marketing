@@ -816,7 +816,7 @@ class HttpRelayService {
             if (profileScoped) {
                 // The handler narrows itself by `_profileScope` (set by checkPosterRequest); no account auth is injected and none of the employee's is forwarded.
                 const { auth: _employeeAuth, ...rest } = params;
-                params = { ...rest, _fromRelay: true };
+                params = { ...rest, _fromRelay: true, _relayEmployeeId: employee.employee_id };
             } else if (channel.startsWith('telegram')) {
                 // Telegram handlers take the account id only: the stored session or bot token is never loaded into a call for an employee.
                 const { auth: _dropped, ...rest } = params ?? {};

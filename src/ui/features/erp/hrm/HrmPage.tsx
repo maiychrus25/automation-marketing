@@ -6,6 +6,7 @@ import { useAppStore } from '@/store/appStore';
 import ipc from '@/lib/ipc';
 import { ConfirmDialog, ErpModalCard, ErpOverlay } from '../shared/ErpDialogs';
 import { EMPLOYEE_MODULE_OPTIONS, permissionPatch } from '@/lib/employeeModules';
+import { joinNotice, pausedNotice, pausedOf } from '@/lib/employeeSaveSteps';
 import { BookIcon, BotIcon, ChartIcon, ChatIcon, ClipboardListIcon, EditIcon, GlobeIcon, UsersIcon, LightningIcon, LinkIcon, LockIcon, SettingsIcon, TrashIcon, TrendingUpIcon, UserIcon } from '@/components/common/icons';
 
 import {
@@ -298,6 +299,9 @@ function EmployeesTab() {
   const handleDeleteEmployee = async (row: any) => {
     const employeeId = row.employee?.employee_id || row.profile?.employee_id;
     if (!employeeId) return;
+    let paused = 0;
+    // The pause already happened once the employee is deleted: later failures still tell the boss about it.
+    const failWith = (message: string) => showNotification(joinNotice(message, pausedNotice(paused, row.employee?.display_name || employeeId)), 'error');
     try {
       if (row.employee) {
         const res = await ipc.employee?.delete?.(employeeId);
@@ -305,18 +309,19 @@ function EmployeesTab() {
           showNotification(res?.error || 'Không thể xóa nhân viên', 'error');
           return;
         }
+        paused = pausedOf(res);
       }
       if (row.profile) {
         const res = await ipc.erp?.employeeDeleteProfile?.({ employeeId });
         if (res && !res.success) {
-          showNotification(res.error || 'Không thể xóa hồ sơ ERP', 'error');
+          failWith(res.error || 'Không thể xóa hồ sơ ERP');
           return;
         }
       }
       await Promise.all([loadEmployees(), loadProfiles()]);
-      showNotification('Đã xóa nhân viên khỏi ERP', 'success');
+      showNotification(joinNotice('Đã xóa nhân viên khỏi ERP', pausedNotice(paused, row.employee?.display_name || employeeId)), 'success');
     } catch (error: any) {
-      showNotification(error?.message || 'Xóa nhân viên thất bại', 'error');
+      failWith(error?.message || 'Xóa nhân viên thất bại');
     }
   };
 
@@ -459,6 +464,7 @@ function EmployeesTab() {
           onClose={() => setEditorState(null)}
           onSave={async ({ employeeId, employeePatch, profilePatch, modulePermissionsPatch, shouldCreateAccount, shouldUpdateAccount }: any) => {
             let resolvedEmployeeId = employeeId;
+            let paused = 0;
             if (shouldCreateAccount) {
               const created = await ipc.employee?.create?.(employeePatch);
               if (!created?.success || !created?.employee?.employee_id) {
@@ -472,17 +478,21 @@ function EmployeesTab() {
                 showNotification(updated?.error || 'Không thể cập nhật tài khoản', 'error');
                 return;
               }
+              paused += pausedOf(updated);
             }
             if (resolvedEmployeeId) {
               if (modulePermissionsPatch && (shouldCreateAccount || shouldUpdateAccount)) {
                 const permissionRes = await ipc.employee?.setPermissions?.(resolvedEmployeeId, modulePermissionsPatch);
                 if (permissionRes && !permissionRes.success) {
-                  showNotification(permissionRes.error || 'Không thể cập nhật quyền module', 'error');
+                  showNotification(joinNotice(permissionRes.error || 'Không thể cập nhật quyền module', pausedNotice(paused, employeePatch?.display_name || editorState.employee?.display_name || resolvedEmployeeId)), 'error');
                   return;
                 }
+                paused += pausedOf(permissionRes);
               }
               await upsertProfile(resolvedEmployeeId, profilePatch);
               await Promise.all([loadEmployees(), loadProfiles()]);
+              const notice = pausedNotice(paused, employeePatch?.display_name || editorState.employee?.display_name || resolvedEmployeeId);
+              if (notice) showNotification(notice, 'info');
             }
             setEditorState(null);
           }}

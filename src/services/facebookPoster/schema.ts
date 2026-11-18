@@ -232,6 +232,8 @@ export const FB_POSTER_MIGRATIONS: string[] = [
     'ALTER TABLE fb_poster_post_tracking ADD COLUMN next_comment_at INTEGER DEFAULT NULL',
     'CREATE INDEX IF NOT EXISTS idx_fb_poster_post_tracking_next_comment ON fb_poster_post_tracking(next_comment_at)',
     'ALTER TABLE fb_poster_schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 1',
+    // 26.48: nhân viên tạo lịch/bản nháp (null = tạo trên máy boss hoặc trước 26.48)
+    'ALTER TABLE fb_poster_schedules ADD COLUMN created_by_employee TEXT DEFAULT NULL',
     "ALTER TABLE fb_poster_schedules ADD COLUMN authority_kind TEXT NOT NULL DEFAULT 'owner' CHECK (authority_kind IN ('owner','autonomy'))",
     // 26.33: theo dõi bài Page dùng chung bảng (dòng cũ tự là 'group'). Index tạo sau ALTER.
     "ALTER TABLE fb_poster_post_tracking ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'group'",

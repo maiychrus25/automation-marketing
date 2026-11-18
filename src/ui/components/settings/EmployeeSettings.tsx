@@ -9,7 +9,7 @@ import { toLocalMediaUrl } from '@/lib/localMedia';
 import { EMPLOYEE_MODULE_OPTIONS, permissionPatch } from '@/lib/employeeModules';
 import type { BrowserProfile, BrowserProfileGroup } from '../../../models/browserProfile';
 import { groupAssignableAccounts, assignableAccountIds } from '@/lib/employeeAssignableAccounts';
-import { firstSaveFailure } from '@/lib/employeeSaveSteps';
+import { firstSaveFailure, joinNotice, pausedNotice, pausedOf } from '@/lib/employeeSaveSteps';
 import { BookIcon, BotIcon, ChartIcon, ChatIcon, CheckCircleIcon, CheckIcon, ClipboardListIcon, ClockIcon, EditIcon, FolderIcon, GlobeIcon, ImageIcon, KeyIcon, LightningIcon, LinkIcon, PlusIcon, RefreshIcon, SearchIcon, SettingsIcon, SmartphoneIcon, SunIcon, TrendingUpIcon, UserIcon, UsersIcon } from '@/components/common/icons';
 
 const MODULE_META: Record<string, { icon: React.ReactNode; desc: string }> = {
@@ -263,7 +263,9 @@ export default function EmployeeSettings() {
         if (!ok) return;
         const res = await ipc.employee?.delete(emp.employee_id);
         if (res?.success) {
-            showNotification('Đã xóa nhân viên', 'success');
+            // Một ô thông báo duy nhất: câu tạm dừng nối vào câu thành công để không đè mất nó.
+            const notice = pausedNotice(pausedOf(res), emp.display_name);
+            showNotification(joinNotice('Đã xóa nhân viên', notice), 'success');
             loadEmployees();
         } else {
             showNotification(res?.error || 'Xóa thất bại', 'error');
@@ -274,7 +276,9 @@ export default function EmployeeSettings() {
         const newActive = emp.is_active ? 0 : 1;
         const res = await ipc.employee?.update(emp.employee_id, { is_active: newActive });
         if (res?.success) {
-            showNotification(newActive ? 'Đã kích hoạt' : 'Đã vô hiệu hóa', 'success');
+            const notice = pausedNotice(pausedOf(res), emp.display_name);
+            const done = newActive ? 'Đã kích hoạt' : 'Đã vô hiệu hóa';
+            showNotification(joinNotice(done, notice), 'success');
             loadEmployees();
         }
     };
@@ -902,16 +906,18 @@ function EmployeeFormModal({ employee, accounts, groups, onClose, onSaved, onRel
                 if (password) updates.password = password;
                 const res = await ipc.employee?.update(employee!.employee_id, updates);
                 if (!res?.success) { showNotification(res?.error || 'Cập nhật thất bại', 'error'); setSaving(false); return; }
+                let paused = pausedOf(res);
 
                 // Quyền, tài khoản, hồ sơ: bước lỗi đầu tiên dừng việc lưu và hiện lỗi của nó (không báo thành công).
                 const failure = await firstSaveFailure([
                     { run: () => ipc.employee?.setPermissions(employee!.employee_id, permissionPatch(permissions)), fallback: 'Lưu quyền thất bại' },
                     { run: () => ipc.employee?.assignAccounts(employee!.employee_id, Array.from(selectedAccounts)), fallback: 'Gán tài khoản thất bại' },
                     ...(profilesLoaded ? [{ run: () => ipc.employee?.assignProfiles(employee!.employee_id, Array.from(selectedProfiles)), fallback: 'Gán hồ sơ thất bại' }] : []),
-                ]);
-                if (failure) { showNotification(failure, 'error'); setSaving(false); return; }
+                ], (r) => { paused += pausedOf(r); });
+                const notice = pausedNotice(paused, displayName);
+                if (failure) { showNotification(joinNotice(failure, notice), 'error'); setSaving(false); return; }
 
-                showNotification('Đã cập nhật nhân viên', 'success');
+                showNotification(joinNotice('Đã cập nhật nhân viên', notice), 'success');
             } else {
                 // Create new (or, after a failed later step, continue with the employee that already exists)
                 let empId = createdId;

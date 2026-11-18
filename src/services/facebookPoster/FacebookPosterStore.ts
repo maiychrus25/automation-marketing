@@ -94,6 +94,7 @@ function mapSchedule(row: any): FbPosterSchedule {
         authorityKind: row.authority_kind,
         origin: row.origin === 'api' ? 'api' : 'app',
         campaignId: row.campaign_id ?? null,
+        createdByEmployee: row.created_by_employee ?? null,
         nextRunAt: row.next_run_at ?? null,
         lastRunId: row.last_run_id ?? null,
         createdAt: row.created_at,
@@ -359,12 +360,12 @@ export class FacebookPosterStore {
 
     // ─── Schedules ───────────────────────────────────────────────────────────
 
-    createSchedule(s: Omit<FbPosterSchedule, 'lastRunId' | 'updatedAt' | 'draft' | 'campaignId' | 'revision'> & { draft?: boolean; campaignId?: string | null }): void {
+    createSchedule(s: Omit<FbPosterSchedule, 'lastRunId' | 'updatedAt' | 'draft' | 'campaignId' | 'revision' | 'createdByEmployee'> & { draft?: boolean; campaignId?: string | null; createdByEmployee?: string | null }): void {
         this.db.run(
             `INSERT INTO fb_poster_schedules
-                (id, name, kind, params_json, run_at, days, time, enabled, draft, campaign_id, next_run_at, last_run_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-            [s.id, s.name, s.kind, JSON.stringify(s.params), s.runAt, s.days.join(','), s.time, s.enabled ? 1 : 0, s.draft ? 1 : 0, s.campaignId ?? null, s.nextRunAt, s.createdAt, s.createdAt],
+                (id, name, kind, params_json, run_at, days, time, enabled, draft, campaign_id, created_by_employee, next_run_at, last_run_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+            [s.id, s.name, s.kind, JSON.stringify(s.params), s.runAt, s.days.join(','), s.time, s.enabled ? 1 : 0, s.draft ? 1 : 0, s.campaignId ?? null, s.createdByEmployee ?? null, s.nextRunAt, s.createdAt, s.createdAt],
         );
     }
 
@@ -429,6 +430,22 @@ export class FacebookPosterStore {
             [...values, id, ...(expectedRevision === undefined ? [] : [expectedRevision])]);
         if (expectedRevision !== undefined && this.db.queryOne<{ n: number }>('SELECT changes() AS n')?.n !== 1)
             throw new Error('Bản nháp đã thay đổi, vui lòng tải lại');
+    }
+
+    /** Tạm dừng lịch (không phải bản nháp, đang bật) do nhân viên này tạo; `profileIds` thu hẹp xuống lịch có dùng một trong các profile đó. Trả về mã lịch đã tắt. */
+    pauseSchedulesCreatedBy(employeeId: string, profileIds?: readonly string[]): string[] {
+        return this.db.transaction(() => {
+            const rows = this.strict().query<{ id: string; params_json: string }>(
+                'SELECT id, params_json FROM fb_poster_schedules WHERE created_by_employee = ? AND draft = 0 AND enabled = 1', [employeeId]);
+            const now = Date.now();
+            const paused: string[] = [];
+            for (const row of rows) {
+                if (profileIds && !profileIdsOfStoredParams(row.params_json).some((id) => profileIds.includes(id))) continue;
+                this.db.run('UPDATE fb_poster_schedules SET enabled = 0, next_run_at = NULL, revision = revision + 1, updated_at = ? WHERE id = ?', [now, row.id]);
+                paused.push(row.id);
+            }
+            return paused;
+        });
     }
 
     private invalidateAutonomySchedule(id: string): void {

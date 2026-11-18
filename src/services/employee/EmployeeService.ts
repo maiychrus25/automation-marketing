@@ -81,6 +81,16 @@ class EmployeeService {
         return fn(db);
     }
 
+    /**
+     * Run a function on the database the employee rows live in (the relay's pinned one). `isActiveDb` is true when that
+     * is also the workspace open in the app, false when the boss has switched to another workspace.
+     */
+    public runOnEmployeeDb<T>(fn: (db: DatabaseService, isActiveDb: boolean) => T): T {
+        const path = require('path');
+        const activeBefore = DatabaseService.getInstance().getDbPath();
+        return this.runOnDb((db) => fn(db, path.resolve(db.getDbPath()) === path.resolve(activeBefore)));
+    }
+
     // ─── CRUD ──────────────────────────────────────────────────────────
 
     public async createEmployee(params: {

@@ -15,6 +15,33 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.48.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '👤 Lịch đăng và bản nháp do nhân viên tạo giờ ghi rõ ai tạo',
+      '⏸️ Khi bạn gỡ hồ sơ, gỡ quyền Đăng Facebook, vô hiệu hoá hoặc xoá nhân viên, các lịch đăng của người đó tự tạm dừng',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Trong Lịch đăng, mỗi lịch hoặc bản nháp do nhân viên tạo có thêm dòng "Tạo bởi: tên nhân viên" (hoặc "nhân viên đã xoá" nếu tài khoản đó không còn). Dòng này hiện ở chế độ xem "Danh sách" và trong cửa sổ chi tiết của lịch hoặc bản nháp, không hiện trên các ô của lịch. Nhân viên không thấy dòng này.',
+          'Khi bạn gỡ một hồ sơ khỏi nhân viên, gỡ quyền Đăng Facebook, vô hiệu hoá hoặc xoá nhân viên, các lịch đăng đang bật của người đó tự tạm dừng (khi gỡ hồ sơ: chỉ những lịch có dùng hồ sơ bị gỡ). MaiHub báo số lịch đã tạm dừng. Muốn giữ lại một lịch, bạn mở Lịch đăng và bấm "Bật lại" (chế độ Danh sách) hoặc "Bật lịch" (cửa sổ chi tiết); lịch một lần đã quá giờ thì bấm "Sửa giờ" để chọn giờ mới trước.',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Thông báo dài hiện lâu hơn (tối đa 12 giây) để bạn kịp đọc; thông báo ngắn vẫn hiện 4 giây như cũ',
+          'Chỉ máy boss cần cập nhật lên bản này; máy nhân viên dùng bản 26.47.0 vẫn hoạt động bình thường',
+          'Chưa tự tạm dừng: lịch tạo ở bản 26.47.0 (chưa ghi người tạo nên bạn vẫn phải tắt thủ công); bản nháp; lịch hoặc bản nháp do chính bạn tạo rồi nhân viên sửa hoặc bật lên',
+          'Lượt đăng đang chạy lúc bạn gỡ quyền vẫn chạy xong, lượt đang chờ thì không bắt đầu. Xoá một hồ sơ trình duyệt không tạm dừng lịch nào',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.47.0',
     date: '11/2026',
     type: 'minor',

@@ -50,7 +50,8 @@ function readCampaignChange(deps: DraftDeps, value: unknown, current: string | n
     return value === current ? undefined : readCampaignRef(value, (id) => deps.store.getCampaign(id));
 }
 
-export function saveDraft(deps: DraftDeps, input: SaveDraftInput): FbPosterSchedule {
+/** `createdByEmployee`: only a NEW draft takes it (the relay's employee); an edit never changes the creator. */
+export function saveDraft(deps: DraftDeps, input: SaveDraftInput, createdByEmployee: string | null = null): FbPosterSchedule {
     const protectedEdit = typeof input.id === 'string' && !!input.id && deps.store.isWorkOwnedDraft(input.id);
     if (input.expectedRevision !== undefined || protectedEdit) {
         const prepared = prepareDraft(deps, protectedEdit && input.expectedRevision === undefined
@@ -83,7 +84,7 @@ export function saveDraft(deps: DraftDeps, input: SaveDraftInput): FbPosterSched
     try {
         store.createSchedule({
             id: newId, name, kind: 'once', params: { ...params, mediaPaths: names },
-            runAt, days: [], time: '', enabled: false, nextRunAt: null, createdAt: now, draft: true, campaignId: campaignId ?? null,
+            runAt, days: [], time: '', enabled: false, nextRunAt: null, createdAt: now, draft: true, campaignId: campaignId ?? null, createdByEmployee,
         });
     } catch (err) {
         removeScheduleMedia(baseDir, newId);

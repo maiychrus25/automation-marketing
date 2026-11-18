@@ -1,4 +1,4 @@
-import { firstSaveFailure } from '../../ui/lib/employeeSaveSteps';
+import { firstSaveFailure, joinNotice, pausedNotice, pausedOf } from '../../ui/lib/employeeSaveSteps';
 
 const ok = async () => ({ success: true });
 const calls: string[] = [];
@@ -22,4 +22,38 @@ describe('firstSaveFailure', () => {
     expect(await firstSaveFailure([step('a', async () => { throw new Error('Mất kết nối'); })])).toBe('Mất kết nối');
     expect(await firstSaveFailure([step('a', async () => { throw {}; }, 'Gán hồ sơ thất bại')])).toBe('Gán hồ sơ thất bại');
   });
+});
+
+test('pausedOf reads a positive count and ignores anything else', () => {
+  expect(pausedOf({ success: true, pausedSchedules: 3 })).toBe(3);
+  expect(pausedOf({ success: true })).toBe(0);
+  expect(pausedOf({ pausedSchedules: -1 })).toBe(0);
+  expect(pausedOf({ pausedSchedules: '2' })).toBe(0);
+  expect(pausedOf(undefined)).toBe(0);
+  expect(pausedOf({ pausedSchedules: NaN })).toBe(0);
+  expect(pausedOf({ pausedSchedules: Infinity })).toBe(0);
+});
+
+test('pausedNotice names the count and the employee, or is null', () => {
+  expect(pausedNotice(2, 'An')).toBe('Đã tạm dừng 2 lịch đăng của An. Bật lại trong Lịch đăng nếu bạn muốn giữ.');
+  expect(pausedNotice(0, 'An')).toBeNull();
+  expect(pausedNotice(-1, 'An')).toBeNull();
+});
+
+test('firstSaveFailure hands every result to onResult until the first failure', async () => {
+  const seen: unknown[] = [];
+  const out = await firstSaveFailure([
+    { run: async () => ({ success: true, pausedSchedules: 1 }), fallback: 'a' },
+    { run: async () => ({ success: false, error: 'boom' }), fallback: 'b' },
+    { run: async () => ({ success: true, pausedSchedules: 5 }), fallback: 'c' },
+  ], (r) => seen.push(r));
+  expect(out).toBe('boom');
+  expect(seen).toHaveLength(2);
+});
+
+test('joinNotice joins two sentences without a doubled full stop', () => {
+  expect(joinNotice('Lưu thất bại', 'Đã tạm dừng 1 lịch.')).toBe('Lưu thất bại. Đã tạm dừng 1 lịch.');
+  expect(joinNotice('Lưu thất bại.', 'Đã tạm dừng 1 lịch.')).toBe('Lưu thất bại. Đã tạm dừng 1 lịch.');
+  expect(joinNotice('Lưu thất bại  ', 'x')).toBe('Lưu thất bại. x');
+  expect(joinNotice('Đã xóa', null)).toBe('Đã xóa');
 });

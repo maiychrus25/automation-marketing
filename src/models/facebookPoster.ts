@@ -48,6 +48,8 @@ export interface FbPosterSchedule {
     /** Nguồn lệnh khi duyệt bản nháp; lượt từ lịch kế thừa. Dòng cũ là 'app'. */
     origin?: 'api' | 'app';
     campaignId: string | null;
+    /** Mã nhân viên đã tạo lịch/bản nháp qua relay; null/vắng = tạo trên máy boss hoặc trước 26.48.0. */
+    createdByEmployee?: string | null;
     nextRunAt: number | null;
     lastRunId: string | null;
     createdAt: number;

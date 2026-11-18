@@ -48,6 +48,16 @@ export default function FacebookPosterView() {
   const [bootstrapSeq, setBootstrapSeq] = useState(0);
   const resolveRunRef = useRef<(runId: string) => void>(() => {});
   const [profileNames, setProfileNames] = useState<Map<string, string>>(new Map());
+  // Boss only: who created a schedule (never requested on an employee machine, which has no employee list).
+  const [employeeNames, setEmployeeNames] = useState<Map<string, string> | null>(null);
+  useEffect(() => {
+    if (isEmployee) { setEmployeeNames(null); return; }
+    let alive = true;
+    Promise.resolve(ipc.employee?.list()).then((res) => {
+      if (alive && res?.success) setEmployeeNames(new Map(res.employees.map((e: any) => [e.employee_id, e.display_name])));
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [isEmployee]);
   const [channels, setChannels] = useState<PosterChannel[]>([]);
   const [selectedChannels, setSelectedChannels] = useState<string[] | null>(null);
   const [channelsLoading, setChannelsLoading] = useState(true);
@@ -244,7 +254,7 @@ export default function FacebookPosterView() {
             onAdd={isEmployee ? undefined : () => setView('browser')} noProfiles={noProfiles} loading={channelsLoading} error={channelsError} onRetry={loadChannels} />
           <main className="poster-content" aria-label={SECTIONS[section].label}>
             {noProfiles && <p className="poster-muted text-sm text-center p-8">{POSTER_NO_PROFILE_NOTICE}</p>}
-            {!noProfiles && section === 'schedule' && <ScheduleTab selectedChannels={selectedChannels} profileNames={profileNames} onCompose={compose} onEditDraft={editDraft} onOpenHistory={() => openFacebookPoster('history')} />}
+            {!noProfiles && section === 'schedule' && <ScheduleTab selectedChannels={selectedChannels} profileNames={profileNames} employeeNames={employeeNames} onCompose={compose} onEditDraft={editDraft} onOpenHistory={() => openFacebookPoster('history')} />}
             {!noProfiles && section !== 'schedule' && <div className="poster-task-page">
               <p className="poster-muted mb-6">{SECTIONS[section].description}</p>
               {section === 'campaigns' && <CampaignsTab />}

@@ -8,6 +8,13 @@ import HttpConnectionManager from '../../src/services/http/HttpConnectionManager
 import HttpRelayService from '../../src/services/http/HttpRelayService';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import Logger from '../../src/utils/Logger';
+import { becameInactive, removedProfileIds, revokedFbPoster } from '../../src/services/employee/revocation';
+import { pauseEmployeeSchedules } from './facebookPosterIpc';
+
+/** The write (and any pause) is already committed: a failing notification to the relay is logged, never turned into a failed result. */
+function notifyRelay(notify: () => void): void {
+    try { notify(); } catch (err: any) { Logger.warn(`[employeeIpc] relay notification failed: ${String(err?.message).slice(0, 200)}`); }
+}
 
 export function registerEmployeeIpc(): void {
     const svc = () => EmployeeService.getInstance();
@@ -52,10 +59,14 @@ export function registerEmployeeIpc(): void {
         employeeId: string; updates: { display_name?: string; avatar_url?: string; password?: string; is_active?: number; role?: string; group_id?: string | null };
     }) => {
         try {
+            const wasActive = svc().getEmployeeById(employeeId)?.is_active;
             const result = svc().updateEmployee(employeeId, updates);
+            if (!result.success) return result;
+            // Pause right after the committed write: a failing notification below must not skip it.
+            const pausedSchedules = becameInactive(wasActive, updates.is_active) ? pauseEmployeeSchedules(employeeId) : 0;
             // Vô hiệu hoá hoặc đổi mật khẩu: ngắt phiên đang chạy (kickEmployee cũng thu hồi token).
-            if (result.success && (updates.is_active === 0 || updates.password)) HttpRelayService.getInstance().kickEmployee(employeeId);
-            return result;
+            if (updates.is_active === 0 || updates.password) notifyRelay(() => HttpRelayService.getInstance().kickEmployee(employeeId));
+            return { ...result, pausedSchedules };
         } catch (err: any) {
             return { success: false, error: err.message };
         }
@@ -64,8 +75,10 @@ export function registerEmployeeIpc(): void {
     ipcMain.handle('employee:delete', async (_e, { employeeId }: { employeeId: string }) => {
         try {
             const result = svc().deleteEmployee(employeeId);
-            if (result.success) HttpRelayService.getInstance().kickEmployee(employeeId);
-            return result;
+            if (!result.success) return result;
+            const pausedSchedules = pauseEmployeeSchedules(employeeId);
+            notifyRelay(() => HttpRelayService.getInstance().kickEmployee(employeeId));
+            return { ...result, pausedSchedules };
         } catch (err: any) {
             return { success: false, error: err.message };
         }
@@ -77,9 +90,11 @@ export function registerEmployeeIpc(): void {
         employeeId: string; permissions: Array<{ module: string; can_access: boolean }>;
     }) => {
         try {
+            const before = svc().getPermissions(employeeId);
             const result = svc().setPermissions(employeeId, permissions);
             Logger.log(`[employeeIpc] setPermissions → employee=${employeeId} permissions=${permissions.length} success=${result.success}`);
             if (result.success) {
+                const pausedSchedules = revokedFbPoster(before, svc().getPermissions(employeeId)) ? pauseEmployeeSchedules(employeeId) : 0;
                 // Auto-create ERP profile when erp module is enabled
                 const erpPerm = permissions.find(p => p.module === 'erp');
                 if (erpPerm?.can_access) {
@@ -98,7 +113,8 @@ export function registerEmployeeIpc(): void {
                         Logger.warn(`[employeeIpc] Failed to auto-create ERP profile: ${erpErr.message}`);
                     }
                 }
-                HttpRelayService.getInstance().refreshEmployeeState(employeeId, 'permissions-updated');
+                notifyRelay(() => HttpRelayService.getInstance().refreshEmployeeState(employeeId, 'permissions-updated'));
+                return { ...result, pausedSchedules };
             }
             return result;
         } catch (err: any) {
@@ -137,11 +153,16 @@ export function registerEmployeeIpc(): void {
         employeeId: string; profileIds: string[];
     }) => {
         try {
-            const valid = sanitizeProfileIds(profileIds, DatabaseService.getInstance().getBrowserProfiles().map((p) => p.id));
+            // Validate against the database the assignment is written to (the relay's pinned one), not the open workspace.
+            const valid = sanitizeProfileIds(profileIds, svc().runOnEmployeeDb((db) => db.getBrowserProfiles().map((p) => p.id)));
             if (!valid) return { success: false, error: 'Danh sách hồ sơ không hợp lệ' };
+            const previous = svc().getAssignedProfiles(employeeId);
             const result = svc().assignProfiles(employeeId, valid);
-            if (result.success) HttpRelayService.getInstance().refreshEmployeeState(employeeId, 'profiles-assigned');
-            return result;
+            if (!result.success) return result;
+            const removed = removedProfileIds(previous, valid);
+            const pausedSchedules = removed.length ? pauseEmployeeSchedules(employeeId, removed) : 0;
+            notifyRelay(() => HttpRelayService.getInstance().refreshEmployeeState(employeeId, 'profiles-assigned'));
+            return { ...result, pausedSchedules };
         } catch (err: any) {
             return { success: false, error: err.message };
         }

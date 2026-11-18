@@ -40,3 +40,12 @@ export function readProfileScope(params: unknown): string[] | undefined {
   const scope = params[PROFILE_SCOPE_PARAM];
   return Array.isArray(scope) && scope.every((v) => typeof v === 'string') ? [...scope] : undefined;
 }
+
+export const RELAY_EMPLOYEE_PARAM = '_relayEmployeeId';
+
+/** Only the relay may name the employee behind a command: a value without `_fromRelay === true` is ignored. */
+export function readRelayEmployeeId(params: unknown): string | undefined {
+  if (!isRecord(params) || params._fromRelay !== true) return undefined;
+  const id = params[RELAY_EMPLOYEE_PARAM];
+  return typeof id === 'string' && id !== '' ? id : undefined;
+}

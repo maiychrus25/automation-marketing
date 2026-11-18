@@ -1,6 +1,7 @@
 const mockHandlers = new Map<string, (e: unknown, arg: any) => Promise<any>>();
 jest.mock('electron', () => ({ ipcMain: { handle: (c: string, fn: any) => mockHandlers.set(c, fn) }, BrowserWindow: { getAllWindows: () => [] } }));
-const mockSvc = { assignProfiles: jest.fn(), getAssignedProfiles: jest.fn() };
+const mockSvc = { assignProfiles: jest.fn(), getAssignedProfiles: jest.fn(), runOnEmployeeDb: (fn: any) => fn({ getBrowserProfiles: () => [{ id: 'p1' }, { id: 'p2' }] }, true) };
+jest.mock('../../../electron/ipc/facebookPosterIpc', () => ({ pauseEmployeeSchedules: () => 0 }));
 const mockRelay = { refreshEmployeeState: jest.fn() };
 jest.mock('../../services/employee/EmployeeService', () => ({ __esModule: true, default: { getInstance: () => mockSvc } }));
 jest.mock('../../services/database/DatabaseService', () => ({ __esModule: true, default: { getInstance: () => ({ getBrowserProfiles: () => [{ id: 'p1' }, { id: 'p2' }] }) } }));
@@ -24,8 +25,9 @@ describe('employee:assignProfiles handler', () => {
   });
 
   test('dropsNonStringsAndUnknownIdsThenPushes', async () => {
+    mockSvc.getAssignedProfiles.mockReturnValue([]);
     mockSvc.assignProfiles.mockReturnValue({ success: true });
-    expect(await assign(['p1', 7, 'gone'])).toEqual({ success: true });
+    expect(await assign(['p1', 7, 'gone'])).toEqual({ success: true, pausedSchedules: 0 });
     expect(mockSvc.assignProfiles).toHaveBeenCalledWith('e1', ['p1']);
     expect(mockRelay.refreshEmployeeState).toHaveBeenCalledWith('e1', 'profiles-assigned');
   });

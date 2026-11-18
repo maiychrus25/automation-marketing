@@ -363,3 +363,15 @@ describe('posterActionRef', () => {
     expect(posterActionRef({ id: 'x'.repeat(200) }, {})).toBe('-');
   });
 });
+
+describe('an employee-supplied _relayEmployeeId', () => {
+  test('isDroppedAtTheTopLevelAndInsideParamsParams', () => {
+    const top = ok('facebookPoster:active', { _relayEmployeeId: 'someone-else', note: 1 });
+    expect(top).not.toHaveProperty('_relayEmployeeId');
+    const input = { kind: 'once', _relayEmployeeId: 'x', params: { ...post(['p1']), _relayEmployeeId: 'y' } };
+    const out = ok('facebookPoster:scheduleCreate', input) as { params: Record<string, unknown> };
+    expect(out).not.toHaveProperty('_relayEmployeeId');
+    expect(out.params).not.toHaveProperty('_relayEmployeeId');
+    expect(input.params).toHaveProperty('_relayEmployeeId');
+  });
+});

@@ -5,7 +5,7 @@
  */
 
 import { POSTER_CHANNEL_ROUTES } from './employeeChannelRoutes';
-import { PROFILE_SCOPE_PARAM, isWithinScope, startProfileRefs } from '../facebookPoster/profileScope';
+import { PROFILE_SCOPE_PARAM, RELAY_EMPLOYEE_PARAM, isWithinScope, startProfileRefs } from '../facebookPoster/profileScope';
 
 /** `null` = no such record (the boss-side handler reports "not found"). */
 export interface PosterLookup {
@@ -53,11 +53,12 @@ export function checkPosterRequest(channel: string, params: unknown, allowed: re
     const out: Record<string, unknown> = { ...(params as Record<string, unknown> | undefined) };
     delete out[PROFILE_SCOPE_PARAM];
     delete out._fromRelay;
+    delete out[RELAY_EMPLOYEE_PARAM];
     for (const key of UNSAFE_KEYS) delete out[key];
     if (isRecord(out.params)) {
         out.params = { ...out.params };
         // draftSave stores every key of the post params, so the relay keys must not survive in the nested object either.
-        for (const key of [...UNSAFE_KEYS, PROFILE_SCOPE_PARAM, '_fromRelay']) delete (out.params as Record<string, unknown>)[key];
+        for (const key of [...UNSAFE_KEYS, PROFILE_SCOPE_PARAM, RELAY_EMPLOYEE_PARAM, '_fromRelay']) delete (out.params as Record<string, unknown>)[key];
     }
 
     // Rule 2: profile references, shape first and then membership.

@@ -76,7 +76,7 @@ import { campaignBlockReason, readCampaignRef } from '../../src/services/faceboo
 import { scoreGroups } from '../../src/services/facebookPoster/groupScores';
 import { pickBestTimes } from '../../src/services/facebookPoster/bestTimes';
 import { createCampaignOperations } from '../../src/services/facebookPoster/campaignOperations';
-import { isWithinScope, profileIdsOfStoredParams, readProfileScope } from '../../src/services/facebookPoster/profileScope';
+import { isWithinScope, profileIdsOfStoredParams, readProfileScope, readRelayEmployeeId } from '../../src/services/facebookPoster/profileScope';
 import { createPosterLookup, strictReader } from '../../src/services/facebookPoster/posterLookup';
 import { AutonomyLimiter } from '../../src/services/autonomy/AutonomyLimiter';
 import { createAutonomyOperations, type AutonomyOperations } from '../../src/services/autonomy/autonomyOperations';
@@ -419,6 +419,33 @@ function cancelApiWork(): { cancelledRuns: number; disabledSchedules: number } {
     });
     if (result.disabledSchedules) { scheduler?.reschedule(); emitSchedulesChanged(); }
     return result;
+}
+
+/**
+ * Pause the enabled schedules an employee created (all of them, or only those using one of `profileIds`) when the boss revokes access.
+ * Runs on the database the employee rows live in (the relay's pinned one), which may not be the open workspace; the scheduler is
+ * only woken when it is. Never throws.
+ */
+export function pauseEmployeeSchedules(employeeId: string, profileIds?: readonly string[]): number {
+    try {
+        // Required lazily: EmployeeService pulls auth libraries the poster IPC (and its many test suites) otherwise never load.
+        const EmployeeService = require('../../src/services/employee/EmployeeService').default as typeof import('../../src/services/employee/EmployeeService').default;
+        return EmployeeService.getInstance().runOnEmployeeDb((employeeDb, isActiveDb) => {
+            const paused = new FacebookPosterStore(employeeDb).pauseSchedulesCreatedBy(employeeId, profileIds).length;
+            if (paused && isActiveDb) { scheduler?.reschedule(); emitSchedulesChanged(); }
+            return paused;
+        });
+    } catch (err: any) {
+        Logger.warn(`[facebookPosterIpc] pauseEmployeeSchedules failed for employee=${employeeId}: ${String(err?.message).slice(0, LOG_MESSAGE_MAX)}`);
+        return 0;
+    }
+}
+
+/** An employee (scoped call) never sees who created a schedule; the boss does. */
+function forCaller<T extends object | null | undefined>(params: unknown, row: T): T {
+    if (!row || readProfileScope(params) === undefined) return row;
+    const { createdByEmployee: _hidden, ...rest } = row as Record<string, unknown>;
+    return rest as T;
 }
 
 let autonomyBinding: { db: DatabaseService; path: string; limiter: AutonomyLimiter; ops: AutonomyOperations } | null = null;
@@ -1368,6 +1395,7 @@ export const posterOperations = {
                 enabled: true,
                 nextRunAt: computeNextRun({ kind, ...timing }, now),
                 createdAt: now,
+                createdByEmployee: readRelayEmployeeId(params) ?? null,
             });
         } catch (err) {
             removeScheduleMedia(baseDir, id);
@@ -1375,13 +1403,14 @@ export const posterOperations = {
         }
         scheduler?.reschedule();
         emitSchedulesChanged();
-        return { schedule: theStore.getSchedule(id) };
+        return { schedule: forCaller(params, theStore.getSchedule(id)) };
     },
 
     scheduleList: (params?: any) => {
         if (params?.campaignId !== undefined && typeof params.campaignId !== 'string') throw new Error('campaignId không hợp lệ');
         const scope = readProfileScope(params);
-        const schedules = store().listSchedules({ ...(params?.campaignId === undefined ? {} : { campaignId: params.campaignId }), profileIds: scope });
+        const all = store().listSchedules({ ...(params?.campaignId === undefined ? {} : { campaignId: params.campaignId }), profileIds: scope });
+        const schedules = all.map((s) => forCaller(params, s));
         const queued = scheduler?.queuedIds() ?? [];
         return { schedules, queuedIds: scope === undefined ? queued : queued.filter((id) => schedules.some((s) => s.id === id)) };
     },
@@ -1401,7 +1430,7 @@ export const posterOperations = {
         if (fields.nextRunAt !== undefined) scheduler?.clearCampaignGateBypass(current.id);
         scheduler?.reschedule();
         emitSchedulesChanged();
-        return { schedule: theStore.getSchedule(current.id) };
+        return { schedule: forCaller(params, theStore.getSchedule(current.id)) };
     },
 
     scheduleDelete: (params: any) => {
@@ -1420,18 +1449,18 @@ export const posterOperations = {
         const inner = params?.params;
         // A relayed draft keeps only the post's own keys (the validator would store any other key, `mediaIds` included); a boss call is unchanged.
         const relayed = params?._fromRelay === true && inner && typeof inner === 'object' && !Array.isArray(inner);
-        const schedule = saveDraft(draftDeps(), relayed ? { ...params, params: Object.fromEntries(Object.entries(inner).filter(([key]) => POST_PARAM_KEYS.includes(key))) } : params);
+        const schedule = saveDraft(draftDeps(), relayed ? { ...params, params: Object.fromEntries(Object.entries(inner).filter(([key]) => POST_PARAM_KEYS.includes(key))) } : params, readRelayEmployeeId(params) ?? null);
         emitSchedulesChanged();
-        return { schedule };
+        return { schedule: forCaller(params, schedule) };
     },
 
-    draftGet: (params: any) => getDraft(draftDeps(), params.id),
+    draftGet: (params: any) => { const got = getDraft(draftDeps(), params.id); return { ...got, draft: forCaller(params, got.draft) }; },
 
     // `origin` is 'api' only from the Control API port (controlApiIpc); IPC from the app keeps the default.
     draftApprove: (params: any, origin: 'api' | 'app' = 'app') => {
         const schedule = approveDraft(draftDeps(), params, origin);
         afterDraftApproval(schedule, params?.when);
-        return { schedule };
+        return { schedule: forCaller(params, schedule) };
     },
 
     takeMissed: (_params?: any) => {
