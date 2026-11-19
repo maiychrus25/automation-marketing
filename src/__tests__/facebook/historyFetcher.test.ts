@@ -20,6 +20,7 @@ import { BridgeNotReadyError } from '../../services/facebook/FacebookE2EEBridge'
 const ACC = 'acc-history';
 const OWNER = '100500';
 const T0 = 1_700_000_000_000;
+const E2EE_TEXT = 'Hội thoại mã hoá đầu cuối: Facebook không cho tải tin cũ';
 const NO_ANCHOR = { timestampMs: 0, messageId: '' };
 
 describe('FacebookHistoryFetcher', () => {
@@ -93,6 +94,187 @@ describe('FacebookHistoryFetcher', () => {
       expect(await fetcher.fetchPage(id, NO_ANCHOR)).toMatchObject({ success: false, code: 'E2EE', error: 'Hội thoại mã hoá đầu cuối: Facebook không cho tải tin cũ' });
       expect(gql).not.toHaveBeenCalled();
       expect(bridge.fetchMessages).not.toHaveBeenCalled();
+    });
+
+    // Thử nghiệm 26.49.0: chat 1-1 mã hoá thử MỘT yêu cầu lịch sử thường mỗi lần chạy app (xem planE2eeProbe).
+    describe('e2ee pre-history probe', () => {
+      const PROBE = { probeE2ee: true };
+      const logged = () => (Logger.info as jest.Mock).mock.calls.map(c => String(c[0])).filter(l => l.includes('e2ee pre-history probe'));
+      beforeEach(() => (Logger.info as jest.Mock).mockClear());
+
+      test('timestampOnlyAnchorWhenNoMidMessageExists', async () => {
+        const { fetcher, bridge, gql } = make();
+        const id = newThread(true);
+        seedLocal(id, '7526000000000000001', T0 - 5_000);
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cOLD1', T0 - 9_000)]));
+        const res: any = await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE);
+        expect(res).toMatchObject({ success: true, source: 'lightspeed', saved: 1, received: 1 });
+        expect(bridge.fetchMessages).toHaveBeenCalledTimes(1);
+        expect(bridge.fetchMessages).toHaveBeenCalledWith({ threadId: id, beforeTimestampMs: T0 - 5_000, beforeMessageId: '' });
+        expect(gql).not.toHaveBeenCalled();
+        expect(rows(id).map((r: any) => r.msg_id)).toContain('mid.$cOLD1');
+        expect(logged()).toEqual(['[FacebookHistoryFetcher] e2ee pre-history probe: anchor=timestamp received=1 saved=1 hasMore=true outcome=loaded']);
+      });
+
+      test('callerTimestampWinsAndZeroMeansNone', async () => {
+        const { fetcher, bridge } = make();
+        const id = newThread(true);
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cOLD2', T0 - 9_000)]));
+        await fetcher.fetchPage(id, { timestampMs: T0 - 1_000, messageId: '7526000000000000009' }, undefined, PROBE);
+        expect(bridge.fetchMessages).toHaveBeenLastCalledWith({ threadId: id, beforeTimestampMs: T0 - 1_000, beforeMessageId: '' });
+        const other = newThread(true);
+        bridge.fetchMessages.mockResolvedValue(bridgePage(other, [bridgeMsg(other, 'mid.$cOLD3', T0 - 9_000)]));
+        await fetcher.fetchPage(other, NO_ANCHOR, undefined, PROBE);
+        expect(bridge.fetchMessages).toHaveBeenLastCalledWith({ threadId: other, beforeTimestampMs: 0, beforeMessageId: '' });
+        expect(logged()[1]).toContain('anchor=none');
+      });
+
+      test('midAnchorIsUsedWhenOneExists', async () => {
+        const { fetcher, bridge } = make();
+        const id = newThread(true);
+        seedLocal(id, 'mid.$cKEEP', T0 - 2_000);
+        seedLocal(id, '7526000000000000002', T0);
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cOLD4', T0 - 9_000)]));
+        await fetcher.fetchPage(id, { timestampMs: T0, messageId: '7526000000000000002' }, undefined, PROBE);
+        expect(bridge.fetchMessages).toHaveBeenCalledWith({ threadId: id, beforeTimestampMs: T0 - 2_000, beforeMessageId: 'mid.$cKEEP' });
+        expect(logged()[0]).toContain('anchor=mid');
+      });
+
+      test.each([
+        ['emptyPage', () => Promise.resolve({ threadId: '1', messages: [], hasMoreBefore: false, minTimestampMs: 0 }), 'empty'],
+        ['timeout', () => Promise.reject(new Error('timed out waiting for Messenger history')), 'timeout'],
+      ])('%sIsRefusedAndNotRetried', async (_n, answer, outcome) => {
+        const { fetcher, bridge, limiter } = make();
+        const id = newThread(true);
+        bridge.fetchMessages.mockImplementation(answer as any);
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: false, code: 'E2EE', error: E2EE_TEXT });
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: false, code: 'E2EE', error: E2EE_TEXT });
+        expect(bridge.fetchMessages).toHaveBeenCalledTimes(1);
+        expect(limiter.cooldownRemaining()).toBe(0);
+        expect(logged()).toHaveLength(1);
+        expect(logged()[0]).toContain(`outcome=${outcome}`);
+      });
+
+      test('riskErrorReturnsRiskAndTheNextCallMayProbeAgain', async () => {
+        const { fetcher, bridge, clock } = make();
+        const id = newThread(true);
+        bridge.fetchMessages.mockRejectedValueOnce(new Error('checkpoint required'));
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: false, code: 'RISK', error: HISTORY_RISK_TEXT });
+        clock.t += 31 * 60_000;
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cOLD5', T0 - 9_000)]));
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: true });
+        expect(bridge.fetchMessages).toHaveBeenCalledTimes(2);
+        expect(logged()[0]).toContain('outcome=risk');
+      });
+
+      test('backgroundAndGroupSendNoRequest', async () => {
+        const { fetcher, bridge, gql } = make();
+        const id = newThread(true);
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, { mode: 'background', probeE2ee: true })).toMatchObject({ code: 'E2EE' });
+        const group = String(200000 + ++seq);
+        db.saveFBThread({ id: group, account_id: ACC, name: 'Nhom', type: 'group', participant_count: 5, unread_count: 0, is_muted: 0, is_e2ee: 1 } as any);
+        expect(await fetcher.fetchPage(group, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: false, code: 'E2EE', error: E2EE_TEXT });
+        expect(bridge.fetchMessages).not.toHaveBeenCalled();
+        expect(gql).not.toHaveBeenCalled();
+        expect(logged()).toHaveLength(0);
+      });
+
+      test('bridgeDownIsReportedAndThreadIsNotMarked', async () => {
+        let alive = false;
+        const { fetcher, bridge } = make();
+        bridge.isAlive.mockImplementation(() => alive);
+        const id = newThread(true);
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: false, code: 'BRIDGE_DOWN' });
+        alive = true;
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cOLD6', T0 - 9_000)]));
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: true });
+      });
+
+      test('bridgeDroppingMidRequestDoesNotMarkTheThread', async () => {
+        const { fetcher, bridge } = make();
+        const id = newThread(true);
+        // The bridge died while the request was in flight: it may never have reached Facebook, so the user may try again.
+        bridge.fetchMessages.mockRejectedValueOnce(new Error('bridge disconnected'));
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: false, code: 'BRIDGE_DOWN' });
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cOLD7', T0 - 9_000)]));
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: true });
+        expect(bridge.fetchMessages).toHaveBeenCalledTimes(2);
+      });
+
+      test('logLineHasNoThreadIdOrMessageId', async () => {
+        const { fetcher, bridge } = make();
+        const id = newThread(true);
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cSECRETID', T0 - 9_000)]));
+        await fetcher.fetchPage(id, { timestampMs: T0, messageId: '' }, undefined, PROBE);
+        const line = logged()[0];
+        expect(line).not.toContain(id);
+        expect(line).not.toContain('SECRETID');
+        expect(line).not.toContain(String(T0));
+      });
+
+      test('withoutTheFlagNothingIsSentOrLogged', async () => {
+        const { fetcher, bridge, gql } = make();
+        const id = newThread(true);
+        for (const opts of [undefined, { mode: 'interactive' as const }, { probeE2ee: false }, { probeE2ee: 'true' as any }]) {
+          expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, opts)).toMatchObject({ success: false, code: 'E2EE', error: E2EE_TEXT });
+        }
+        expect(bridge.fetchMessages).not.toHaveBeenCalled();
+        expect(gql).not.toHaveBeenCalled();
+        expect(logged()).toHaveLength(0);
+      });
+
+      test('oneLimiterRequestPerProbe', async () => {
+        const { fetcher, bridge, limiter } = make();
+        const spy = jest.spyOn(limiter, 'recordRequest');
+        const id = newThread(true);
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cOLD7', T0 - 9_000)]));
+        await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE);
+        expect(spy).toHaveBeenCalledTimes(1);
+      });
+
+      test('flaggedThreadWithAMidMessageIsProbedAgainWithThatAnchorNeverGraphql', async () => {
+        const { fetcher, bridge, gql } = make();
+        const id = newThread(true);
+        seedLocal(id, 'mid.$cHELD', T0 - 3_000);
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cOLD8', T0 - 9_000)]));
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: true, source: 'lightspeed' });
+        expect(bridge.fetchMessages).toHaveBeenCalledWith({ threadId: id, beforeTimestampMs: T0 - 3_000, beforeMessageId: 'mid.$cHELD' });
+        expect(gql).not.toHaveBeenCalled();
+      });
+
+      // Mỗi chat chỉ một yêu cầu đã gửi, trừ khi trang có tin mới được lưu hoặc là RISK.
+      test.each([
+        ['otherError', (id: string, b: any) => b.fetchMessages.mockRejectedValue(new Error('fetch messages task: boom')), 'error'],
+        ['collision', (id: string, b: any) => b.fetchMessages.mockRejectedValue(new Error('history request already running')), 'error'],
+        ['storedNothing', (id: string, b: any) => {
+          seedLocal(id, 'mid.$cDUP', T0 - 9_000);
+          b.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cDUP', T0 - 9_000, { text: 'cu' })]));
+        }, 'empty'],
+      ])('%sIsRememberedAfterTheSend', async (_n, arrange, outcome) => {
+        const { fetcher, bridge } = make();
+        const id = newThread(true);
+        arrange(id, bridge);
+        await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE);
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: false, code: 'E2EE', error: E2EE_TEXT });
+        expect(bridge.fetchMessages).toHaveBeenCalledTimes(1);
+        expect(logged()).toHaveLength(1);
+        expect(logged()[0]).toContain(`outcome=${outcome}`);
+      });
+
+      test('exitsBeforeTheSendDoNotMarkTheThread', async () => {
+        const { fetcher, bridge, limiter, clock } = make();
+        const id = newThread(true);
+        bridge.fetchMessages.mockResolvedValue(bridgePage(id, [bridgeMsg(id, 'mid.$cOLD9', T0 - 9_000)]));
+        limiter.recordResult(false, 'checkpoint');
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ code: 'COOLDOWN' });
+        clock.t += 31 * 60_000;
+        for (let i = 0; i < 120; i++) limiter.recordRequest();
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ code: 'BUSY' });
+        expect(bridge.fetchMessages).not.toHaveBeenCalled();
+        clock.t += 3 * 3_600_000;
+        expect(await fetcher.fetchPage(id, NO_ANCHOR, undefined, PROBE)).toMatchObject({ success: true });
+        expect(bridge.fetchMessages).toHaveBeenCalledTimes(1);
+      });
     });
 
     test('threadWithOnlyBridgeMessageIdsIsTreatedAsE2EE', async () => {

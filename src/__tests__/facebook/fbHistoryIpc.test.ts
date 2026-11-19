@@ -83,6 +83,20 @@ describe('fbHistory IPC', () => {
         expect(service.fetchHistoryPage).not.toHaveBeenCalled();
     });
 
+    it('fetchOlderMessages enables the E2EE probe only for the boolean true and never for relayed calls', async () => {
+        service.fetchHistoryPage.mockResolvedValue({ success: true });
+        const base = { accountId: '1', threadId: '2', beforeTimestampMs: 5, beforeMessageId: '' };
+        const optsOf = () => service.fetchHistoryPage.mock.calls.at(-1)[3];
+        await call('fb:fetchOlderMessages', { ...base, probeE2ee: true });
+        expect(optsOf()).toEqual({ mode: 'interactive', probeE2ee: true });
+        for (const v of ['true', 1, {}, false, undefined]) {
+            await call('fb:fetchOlderMessages', { ...base, probeE2ee: v });
+            expect(optsOf()).toEqual({ mode: 'interactive' });
+        }
+        await call('fb:fetchOlderMessages', { ...base, probeE2ee: true, _fromRelay: true });
+        expect(optsOf()).toEqual({ mode: 'interactive' });
+    });
+
     it('fetchOlderMessages rejects a missing payload', async () => {
         expect(await call('fb:fetchOlderMessages', undefined)).toEqual({ success: false, code: 'FETCH', error: 'Tham số không hợp lệ' });
     });

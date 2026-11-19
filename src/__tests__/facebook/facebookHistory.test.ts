@@ -1,6 +1,6 @@
 import {
   activityMs, isLightSpeedMessageId, messageInRange, threadActiveInRange, nextHistoryAnchor,
-  isFbHistorySyncActive, emptyFbHistorySyncStatus, FB_HISTORY_SYNC_EVENT,
+  isFbHistorySyncActive, emptyFbHistorySyncStatus, FB_HISTORY_SYNC_EVENT, planE2eeProbe,
 } from '../../services/facebook/facebookHistory';
 
 const OPEN = { fromTs: null, toTs: null };
@@ -83,5 +83,27 @@ describe('facebookHistory helpers', () => {
     expect(isFbHistorySyncActive(null)).toBe(false);
     const s = emptyFbHistorySyncStatus('acc');
     expect(s).toMatchObject({ accountId: 'acc', stage: 'idle', range: OPEN, messagesSaved: 0, startedAt: 0 });
+  });
+});
+
+describe('planE2eeProbe', () => {
+  const base = { probe: true, isGroup: false, probedEmpty: false, resolved: null, callerTimestampMs: 0, oldestLocalMs: 0 };
+  test('refusesBackgroundGroupAndAlreadyProbed', () => {
+    expect(planE2eeProbe({ ...base, mode: 'background' })).toBeNull();
+    expect(planE2eeProbe({ ...base, isGroup: true })).toBeNull();
+    expect(planE2eeProbe({ ...base, probedEmpty: true })).toBeNull();
+  });
+  test('refusesUnlessProbeIsExactlyTrue', () => {
+    for (const probe of [undefined, false, 'true' as any, 1 as any]) expect(planE2eeProbe({ ...base, probe })).toBeNull();
+  });
+  test('normalisesTheCallerTimestamp', () => {
+    expect(planE2eeProbe({ ...base, callerTimestampMs: 1700000000 })).toEqual({ anchor: { timestampMs: 1700000000000, messageId: '' }, kind: 'timestamp' });
+  });
+  test('prefersMidAnchorThenCallerThenOldestLocalThenNone', () => {
+    const mid = { timestampMs: 5, messageId: 'mid.$x' };
+    expect(planE2eeProbe({ ...base, resolved: mid, callerTimestampMs: 9 })).toEqual({ anchor: mid, kind: 'mid' });
+    expect(planE2eeProbe({ ...base, callerTimestampMs: 9e12, oldestLocalMs: 3e12 })).toEqual({ anchor: { timestampMs: 9e12, messageId: '' }, kind: 'timestamp' });
+    expect(planE2eeProbe({ ...base, oldestLocalMs: 3e12 })).toEqual({ anchor: { timestampMs: 3e12, messageId: '' }, kind: 'timestamp' });
+    expect(planE2eeProbe(base)).toEqual({ anchor: { timestampMs: 0, messageId: '' }, kind: 'none' });
   });
 });

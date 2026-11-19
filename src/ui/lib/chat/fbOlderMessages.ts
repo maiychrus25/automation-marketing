@@ -47,3 +47,37 @@ export function rowsFromGetMessages(res: any): any[] {
 export function fbHistoryTriedKey(accountId: string, threadId: string): string {
   return `${accountId}::${threadId}`;
 }
+
+export const FB_E2EE_PROBE_BUTTON = 'Thử tải tin từ trước khi mã hoá';
+export const FB_E2EE_PROBE_BUTTON_BUSY = 'Đang thử…';
+// Trung tính: cũng hiện khi Facebook không trả lời kịp, hoặc khi MaiHub không gửi yêu cầu (nhóm, hội thoại đã thử).
+export const FB_E2EE_PROBE_EMPTY_NOTE = 'Không tải được tin nào từ trước khi mã hoá.';
+export const FB_E2EE_PROBE_LATER = 'Chưa thử được lúc này, hãy thử lại sau.';
+export const FB_E2EE_PROBE_FAILED = 'Không tải được, hãy thử lại sau.';
+
+/** Nút thử chỉ hiện cạnh dòng "mã hoá đầu cuối" trên máy chủ tài khoản cá nhân, và chỉ khi chat chưa được thử xong. */
+export function shouldShowFbProbeButton(input: { note: string | null; isEmployee: boolean; isPage: boolean; probeClosed: boolean }): boolean {
+  return input.note === FB_E2EE_HISTORY_NOTE && !input.isEmployee && !input.isPage && !input.probeClosed;
+}
+
+export type FbProbeOutcome =
+  | { kind: 'loaded'; hasMore: boolean }
+  | { kind: 'empty'; note: string }
+  | { kind: 'warn'; text: string }
+  | { kind: 'later'; notify: string }
+  | { kind: 'failed'; notify: string };
+
+/** Kết quả của nút thử → việc giao diện làm. empty/failed đóng nút cho tới khi đổi hội thoại; warn/later giữ nút. */
+export function interpretFbProbeResult(res: FbHistoryPageResult | null | undefined): FbProbeOutcome {
+  const base = interpretFbOlderResult(res);
+  if (base.kind === 'loaded') return base;
+  if (base.kind === 'later') return { kind: 'later', notify: FB_E2EE_PROBE_LATER };
+  if (base.kind === 'stop' && base.warn) return { kind: 'warn', text: base.warn };
+  if (base.kind === 'stop' && base.note) return { kind: 'empty', note: FB_E2EE_PROBE_EMPTY_NOTE };
+  return { kind: 'failed', notify: FB_E2EE_PROBE_FAILED };
+}
+
+/** Các kết quả đóng nút trong hội thoại này (fetcher đã đánh dấu hội thoại). */
+export function closesFbProbe(outcome: FbProbeOutcome): boolean {
+  return outcome.kind === 'empty' || outcome.kind === 'failed';
+}

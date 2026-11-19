@@ -1,6 +1,7 @@
 import {
   FB_E2EE_HISTORY_NOTE, shouldFetchFbHistoryOnOpen, shouldFetchFbOlder, fbOlderAnchor,
   interpretFbOlderResult, fbHistoryTriedKey, rowsFromGetMessages,
+  shouldShowFbProbeButton, interpretFbProbeResult, closesFbProbe,
 } from '../../ui/lib/chat/fbOlderMessages';
 import type { FbHistoryPageResult } from '../../services/facebook/facebookHistory';
 
@@ -87,5 +88,41 @@ describe('rowsFromGetMessages', () => {
     expect(rowsFromGetMessages(null)).toEqual([]);
     expect(rowsFromGetMessages({})).toEqual([]);
     expect(rowsFromGetMessages({ messages: 'x' })).toEqual([]);
+  });
+});
+
+describe('shouldShowFbProbeButton', () => {
+  const base = { note: FB_E2EE_HISTORY_NOTE, isEmployee: false, isPage: false, probeClosed: false };
+  it('shows beside the encrypted note on a boss/standalone personal account', () => expect(shouldShowFbProbeButton(base)).toBe(true));
+  it.each([
+    ['another note', { note: 'khac' }], ['no note', { note: null }], ['employee', { isEmployee: true }],
+    ['page', { isPage: true }], ['closed', { probeClosed: true }],
+  ])('hidden for %s', (_n, over) => expect(shouldShowFbProbeButton({ ...base, ...over } as any)).toBe(false));
+});
+
+describe('interpretFbProbeResult', () => {
+  it('loaded keeps hasMore', () => {
+    expect(interpretFbProbeResult(ok())).toEqual({ kind: 'loaded', hasMore: true });
+    expect(interpretFbProbeResult(ok({ hasMoreBefore: false }))).toEqual({ kind: 'loaded', hasMore: false });
+  });
+  it('E2EE means nothing came back and closes the button', () => {
+    const o = interpretFbProbeResult(fail('E2EE'));
+    expect(o).toEqual({ kind: 'empty', note: 'Không tải được tin nào từ trước khi mã hoá.' });
+    expect(closesFbProbe(o)).toBe(true);
+  });
+  it('RISK warns with the result text and keeps the button', () => {
+    const o = interpretFbProbeResult(fail('RISK', 'dừng'));
+    expect(o).toEqual({ kind: 'warn', text: 'dừng' });
+    expect(closesFbProbe(o)).toBe(false);
+  });
+  it.each(['NOT_CONNECTED', 'BRIDGE_DOWN', 'BUSY', 'COOLDOWN', 'CANCELLED'])('%s is temporary and keeps the button', (code) => {
+    const o = interpretFbProbeResult(fail(code));
+    expect(o).toEqual({ kind: 'later', notify: 'Chưa thử được lúc này, hãy thử lại sau.' });
+    expect(closesFbProbe(o)).toBe(false);
+  });
+  it.each([fail('FETCH'), fail('BRIDGE_OLD'), null, undefined])('anything else fails and closes the button (%p)', (res) => {
+    const o = interpretFbProbeResult(res as any);
+    expect(o).toEqual({ kind: 'failed', notify: 'Không tải được, hãy thử lại sau.' });
+    expect(closesFbProbe(o)).toBe(true);
   });
 });

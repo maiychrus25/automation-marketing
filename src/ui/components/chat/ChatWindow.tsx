@@ -37,7 +37,10 @@ import PollBubble from './PollBubble';
 import FriendRequestBar from './FriendRequestBar';
 import { ReactionContextMenu, ReactionPopup, parseReactions, parseReactionsFull, displayReactionEmoji } from './ReactionComponents';
 import { withoutBossOnlyFbCaps, employeeSendFailure, isTelegramChannel, pinsFromResponse } from '@/lib/employeeAccounts';
-import { shouldFetchFbOlder, fbOlderAnchor, interpretFbOlderResult, rowsFromGetMessages } from '../../lib/chat/fbOlderMessages';
+import {
+  shouldFetchFbOlder, fbOlderAnchor, interpretFbOlderResult, rowsFromGetMessages,
+  shouldShowFbProbeButton, interpretFbProbeResult, closesFbProbe, FB_E2EE_PROBE_BUTTON, FB_E2EE_PROBE_BUTTON_BUSY, fbHistoryTriedKey,
+} from '../../lib/chat/fbOlderMessages';
 import { lastOutgoingReceipt, receiptDisplay, receiptLabel } from '../../lib/chat/messageReceipt';
 import {
   EmployeeAvatar, FileBubble, MediaBubble, VoiceBubble,
@@ -90,6 +93,10 @@ export default function ChatWindow() {
   const [loadError, setLoadError] = useState(false);
   // Dòng ghi chú đầu danh sách tin (Facebook: hội thoại mã hoá đầu cuối không tải được tin cũ)
   const [fbNote, setFbNote] = useState<string | null>(null);
+  // Nút "Thử tải tin từ trước khi mã hoá": đang chạy / đã đóng cho hội thoại này (đặt lại khi đổi hội thoại)
+  const [fbProbeBusy, setFbProbeBusy] = useState(false);
+  const [fbProbeClosed, setFbProbeClosed] = useState(false);
+  const fbProbeInFlightRef = useRef<Set<string>>(new Set());
   const [viewerState, setViewerState] = useState<{ images: MediaViewerImage[]; index: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; msg: any; isSent: boolean; isGroupAdmin?: boolean } | null>(null);
   const [forwardMsgs, setForwardMsgs] = useState<any[] | null>(null);
@@ -687,6 +694,8 @@ export default function ChatWindow() {
     setIsSelecting(false);
     setSelectedMsgIds(new Set());
     setFbNote(null);
+    setFbProbeBusy(false);
+    setFbProbeClosed(false);
     // Yêu cầu tải đang chạy của thread cũ không được giữ (hay về sau tự mở) khoá tải thêm của thread mới
     loadMoreGenRef.current += 1;
     setLoadingMore(false);
@@ -1600,6 +1609,63 @@ export default function ChatWindow() {
   };
 
   // Tải thêm tin nhắn cũ dùng timestamp cursor (tránh lỗi offset khi có tin real-time)
+  // Facebook: đọc lại các hàng cũ hơn mốc từ DB cục bộ (sau khi trang vừa tải đã lưu) và chèn vào đầu danh sách.
+  // active=false: người dùng đã đổi hội thoại/tài khoản trong lúc chờ (không đụng hasMore).
+  const prependFbOlderFromDb = async (beforeTimestampMs: number, hasMoreBefore: boolean): Promise<{ active: boolean; prepended: boolean }> => {
+    const dbRes = await DataAccessor.getMessages({
+      zaloId: activeAccountId,
+      threadId: activeThreadId,
+      limit: MESSAGE_LOAD_LIMIT,
+      before: beforeTimestampMs,
+      topicId: activeTopicId || undefined,
+    });
+    const olderRows = rowsFromGetMessages(dbRes); // nhân viên trả items, boss trả messages
+    const prepended = olderRows.length > 0;
+    if (prepended) {
+      useChatStore.getState().prependMessages(activeAccountId!, activeThreadId!, olderRows, activeTopicId);
+    }
+    const active = useChatStore.getState().activeThreadId === activeThreadId && useAccountStore.getState().activeAccountId === activeAccountId;
+    if (active && (!hasMoreBefore || !prepended)) setHasMore(false);
+    return { active, prepended };
+  };
+
+  // Nút "Thử tải tin từ trước khi mã hoá": cách DUY NHẤT gửi cờ probeE2ee; các đường tải tự động không bao giờ gửi.
+  const handleFbProbe = async () => {
+    if (!activeAccountId || !activeThreadId || fbProbeBusy) return;
+    const accountId = activeAccountId, threadId = activeThreadId;
+    // Chốt đồng bộ theo từng hội thoại: đổi sang hội thoại khác rồi quay lại khi yêu cầu còn chạy cũng không gửi được lần hai.
+    const flightKey = fbHistoryTriedKey(accountId, threadId);
+    if (fbProbeInFlightRef.current.has(flightKey)) return;
+    const anchor = fbOlderAnchor(useChatStore.getState().messages[getMessageCacheKey(accountId, threadId, activeTopicId)] || []);
+    if (!anchor) return;
+    const stillActive = () => useChatStore.getState().activeThreadId === threadId && useAccountStore.getState().activeAccountId === accountId;
+    fbProbeInFlightRef.current.add(flightKey);
+    setFbProbeBusy(true);
+    try {
+      const outcome = interpretFbProbeResult(await ipc.fb?.fetchOlderMessages({ accountId, threadId, ...anchor, probeE2ee: true }));
+      if (!stillActive()) return;
+      if (outcome.kind === 'loaded') {
+        setFbNote(null);
+        shouldRestoreScrollRef.current = true; // giữ vị trí cuộn khi chèn tin vào đầu, như đường tải tự động
+        const { active, prepended } = await prependFbOlderFromDb(anchor.beforeTimestampMs, outcome.hasMore);
+        if (active && !prepended) shouldRestoreScrollRef.current = false;
+        // Còn trang cũ hơn: bật lại tải tiếp. Hội thoại có cờ mã hoá sẽ bị từ chối ở lần tải tự động và hiện lại nút.
+        if (active && prepended && outcome.hasMore) setHasMore(true);
+        return;
+      }
+      if (outcome.kind === 'empty') setFbNote(outcome.note);
+      else showNotification(outcome.kind === 'warn' ? outcome.text : outcome.notify, outcome.kind === 'warn' ? 'warning' : 'info');
+      if (closesFbProbe(outcome)) setFbProbeClosed(true);
+    } catch {
+      if (!stillActive()) return;
+      showNotification('Không tải được, hãy thử lại sau.', 'info');
+      setFbProbeClosed(true);
+    } finally {
+      fbProbeInFlightRef.current.delete(flightKey);
+      if (stillActive()) setFbProbeBusy(false);
+    }
+  };
+
   const handleLoadMore = async () => {
     // Double-guard: check refs to prevent race conditions
     if (!activeAccountId || !activeThreadId || loadingMoreRef.current || !hasMoreRef.current) return;
@@ -1793,20 +1859,8 @@ export default function ChatWindow() {
           const stillActive = () => useChatStore.getState().activeThreadId === activeThreadId && useAccountStore.getState().activeAccountId === activeAccountId;
           if (!stillActive()) return;
           if (outcome.kind === 'loaded') {
-            const dbRes = await DataAccessor.getMessages({
-              zaloId: activeAccountId,
-              threadId: activeThreadId,
-              limit: MESSAGE_LOAD_LIMIT,
-              before: anchor.beforeTimestampMs,
-              topicId: activeTopicId || undefined,
-            });
-            const olderRows = rowsFromGetMessages(dbRes); // nhân viên trả items, boss trả messages
-            const prepended = olderRows.length > 0;
-            if (prepended) {
-              useChatStore.getState().prependMessages(activeAccountId!, activeThreadId, olderRows, activeTopicId);
-            }
-            if (!stillActive()) return;
-            if (!outcome.hasMore || !prepended) setHasMore(false);
+            const { active, prepended } = await prependFbOlderFromDb(anchor.beforeTimestampMs, outcome.hasMore);
+            if (!active) return;
             if (!prepended) shouldRestoreScrollRef.current = false;
             return; // có tin được chèn: giữ shouldRestoreScrollRef để khôi phục vị trí cuộn
           } else if (outcome.kind === 'later') {
@@ -2659,7 +2713,21 @@ export default function ChatWindow() {
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto [overflow-anchor:auto] relative" style={{ willChange: 'scroll-position' }}>
                 {loadingSpinner && <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900 pointer-events-none"><div className="flex flex-col items-center gap-3"><div className="w-8 h-8 border-4 border-blue-400 border-t-transparent rounded-full animate-spin"></div><p className="text-sm text-gray-400">Đang tải...</p></div></div>}
         <div className="p-4 space-y-1.5">
-        {fbNote && <p className="text-center text-xs text-gray-400 py-1">{fbNote}</p>}
+        {fbNote && (
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 py-1">
+            <p className="text-center text-xs text-gray-400">{fbNote}</p>
+            {shouldShowFbProbeButton({ note: fbNote, isEmployee: useEmployeeStore.getState().mode === 'employee', isPage: !!getActiveAccount()?.parent_zalo_id, probeClosed: fbProbeClosed }) && (
+              <button
+                type="button"
+                onClick={handleFbProbe}
+                disabled={fbProbeBusy}
+                className="text-xs px-3 py-1 rounded-full bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              >
+                {fbProbeBusy ? FB_E2EE_PROBE_BUTTON_BUSY : FB_E2EE_PROBE_BUTTON}
+              </button>
+            )}
+          </div>
+        )}
         {/* Load More Button - Hiển thị trên tin nhắn đầu tiên (cũ nhất) */}
         {msgs.length > 0 && (hasMore || loadError) && (
           <div className="flex justify-center py-3 mb-2">

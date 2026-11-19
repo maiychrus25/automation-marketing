@@ -50,7 +50,9 @@ export function registerFbHistoryIpc(): void {
             const service = await getFBServiceOrReconnect(resolveInternalId(p.accountId));
             if (!service) return { success: false, code: 'NOT_CONNECTED', error: NOT_CONNECTED_ERROR };
             return await service.fetchHistoryPage(
-                p.threadId.split('@')[0], { timestampMs: p.beforeTimestampMs ?? 0, messageId: p.beforeMessageId ?? '' }, undefined, { mode: 'interactive' },
+                p.threadId.split('@')[0], { timestampMs: p.beforeTimestampMs ?? 0, messageId: p.beforeMessageId ?? '' }, undefined,
+                // Chỉ boolean true từ máy này bật thử tin trước mã hoá; lệnh chuyển tiếp từ máy nhân viên (_fromRelay) không bao giờ bật.
+                { mode: 'interactive', ...(p.probeE2ee === true && p._fromRelay !== true ? { probeE2ee: true } : {}) },
             );
         } catch (err: any) {
             Logger.warn(`[fbHistoryIpc] fb:fetchOlderMessages failed: ${err?.message}`);

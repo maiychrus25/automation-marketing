@@ -15,6 +15,22 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.49.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🔐 Thử nghiệm: nút "Thử tải tin từ trước khi mã hoá" trong hội thoại Messenger mã hoá 1-1',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Thử nghiệm: khi một hội thoại Messenger mã hoá 1-1 hiện dòng "Hội thoại mã hoá đầu cuối: Facebook không cho tải tin cũ", có thêm nút để bạn thử tải một lần phần tin từ trước khi hội thoại được mã hoá. MaiHub chỉ hỏi Facebook khi bạn bấm nút. Nếu lần thử không mang về tin mới, dòng ghi chú đổi thành "Không tải được tin nào từ trước khi mã hoá." và hội thoại đó không được thử lại cho tới khi kết nối Facebook được khởi động lại. Nếu có tin về, bạn bấm tiếp để tải các trang cũ hơn. Hội thoại đã biết là nhóm, đồng bộ hàng loạt và máy nhân viên chưa áp dụng; tin đã mã hoá cũ (kho lưu trữ an toàn của Messenger) vẫn chưa tải được.',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.48.0',
     date: '11/2026',
     type: 'minor',

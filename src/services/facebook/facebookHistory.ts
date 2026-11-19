@@ -69,6 +69,20 @@ export function messageInRange(timestampMs: unknown, range: FbHistoryRange): boo
   return true;
 }
 
+/**
+ * Thử một lần tải tin trước khi mã hoá của chat 1-1 mã hoá (thử nghiệm 26.49.0, chỉ khi `probe` đúng là true). null = từ chối như cũ (E2EE, không gửi yêu cầu).
+ * Mốc: tin mid.$… tìm được thì dùng; không thì chỉ theo thời gian (mốc của người gọi, rồi tin cũ nhất trong máy, rồi 0 = "bây giờ").
+ */
+export function planE2eeProbe(input: {
+  probe?: boolean; mode?: 'interactive' | 'background'; isGroup: boolean; probedEmpty: boolean;
+  resolved: FbHistoryAnchor | null; callerTimestampMs: number; oldestLocalMs: number;
+}): { anchor: FbHistoryAnchor; kind: 'mid' | 'timestamp' | 'none' } | null {
+  if (input.probe !== true || input.mode === 'background' || input.isGroup || input.probedEmpty) return null;
+  if (input.resolved) return { anchor: input.resolved, kind: 'mid' };
+  const timestampMs = activityMs(input.callerTimestampMs) || activityMs(input.oldestLocalMs);
+  return { anchor: { timestampMs, messageId: '' }, kind: timestampMs > 0 ? 'timestamp' : 'none' };
+}
+
 /** Mã tin Messenger thường (`mid.$…`) — mốc hợp lệ cho FetchMessagesTask; mã E2EE (số) và tin tạm thì không. */
 export function isLightSpeedMessageId(id: unknown): boolean {
   return /^mid\.\$./.test(String(id ?? ''));

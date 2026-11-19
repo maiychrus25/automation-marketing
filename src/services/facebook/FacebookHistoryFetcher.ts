@@ -4,11 +4,12 @@
  * Hành vi theo babyvibe/deplao-builder @2162f07 (MIT); nhịp gọi dùng FacebookHistoryLimiter (hằng số cố định).
  */
 import DatabaseService from '../database/DatabaseService';
+import Logger from '../../utils/Logger';
 import { BridgeHistoryPage, BridgeNotReadyError } from './FacebookE2EEBridge';
 import { FacebookHistoryLimiter, HISTORY_INTERACTIVE_MAX_WAIT_MS } from './FacebookHistoryLimiter';
 import {
   FbHistorySource, FbHistoryAnchor, FbHistoryCode, FbHistoryPageResult, FbHistoryRange,
-  activityMs, isLightSpeedMessageId, messageInRange, nextHistoryAnchor,
+  activityMs, isLightSpeedMessageId, messageInRange, nextHistoryAnchor, planE2eeProbe,
 } from './facebookHistory';
 
 export const HISTORY_GRAPHQL_PAGE = 20;
@@ -21,6 +22,8 @@ const WAIT_SLICE_MS = 1_000;
 const COLLISION_WAIT_MS = 5_000;
 const COLLISION_MAX_RETRIES = 6;
 const COLLISION_PATTERN = /history request already running/i;
+const HISTORY_TIMEOUT_PATTERN = /timed out waiting for Messenger history/i;
+const E2EE_REFUSED_TEXT = 'Hội thoại mã hoá đầu cuối: Facebook không cho tải tin cũ';
 const NOTIFY_WAIT_MS = 4_000;
 const ATTACHMENT_TYPES = new Set(['image', 'video', 'audio', 'sticker', 'gif', 'file']);
 // Thẻ liên kết / vị trí của bridge đã nằm trong nội dung chữ, không lưu thành tệp đính kèm.
@@ -47,7 +50,9 @@ export interface FacebookHistoryDeps {
   runOnBossDb?: (fn: (db: DatabaseService) => void) => void;
 }
 
-export interface FetchPageOptions { mode?: 'interactive' | 'background'; shouldStop?: () => boolean; onWait?: (ms: number) => void; latestKnownMs?: number }
+export interface FetchPageOptions { mode?: 'interactive' | 'background'; shouldStop?: () => boolean; onWait?: (ms: number) => void; latestKnownMs?: number;
+  /** Chỉ nút "Thử tải tin từ trước khi mã hoá" đặt true (đúng boolean true). Tải tự động không bao giờ đặt. */
+  probeE2ee?: boolean }
 
 export interface HistorySyncOptions {
   shouldStop?: () => boolean;
@@ -71,6 +76,8 @@ const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(res
 export class FacebookHistoryFetcher {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
+  /** Chat mã hoá đã gửi yêu cầu thử mà không có tin mới (hoặc lỗi, trừ RISK): không thử lại khi instance này còn sống (không lưu). */
+  private readonly probed = new Set<string>();
 
   constructor(private readonly deps: FacebookHistoryDeps) {
     this.sleep = deps.sleep ?? defaultSleep;
@@ -143,9 +150,21 @@ export class FacebookHistoryFetcher {
     if (cooling) return cooling;
     const threadId = stripJid(rawThreadId);
     if (!/^\d+$/.test(threadId)) return this.fail('FETCH', 'Mã hội thoại không hợp lệ');
-    if (this.isE2EEThread(threadId)) return this.fail('E2EE', 'Hội thoại mã hoá đầu cuối: Facebook không cho tải tin cũ');
+    const encrypted = this.isE2EEThread(threadId);
+    // Hội thoại mã hoá: không có cờ thì từ chối ngay như trước 26.49.0 (không tra cứu, không gửi, không log).
+    if (encrypted && opts.probeE2ee !== true) return this.fail('E2EE', E2EE_REFUSED_TEXT);
 
-    const start = this.resolveAnchor(threadId, anchor, opts.latestKnownMs);
+    let start = this.resolveAnchor(threadId, anchor, opts.latestKnownMs);
+    let probe: 'mid' | 'timestamp' | 'none' | null = null;
+    if (encrypted) {
+      const plan = planE2eeProbe({
+        probe: true, mode: opts.mode, isGroup: this.isGroupThread(threadId), probedEmpty: this.probed.has(threadId),
+        resolved: start, callerTimestampMs: anchor.timestampMs, oldestLocalMs: this.oldestLocalMs(threadId),
+      });
+      if (!plan) return this.fail('E2EE', E2EE_REFUSED_TEXT);
+      start = plan.anchor;
+      probe = plan.kind;
+    }
     const noLatestPage = start ? null : this.deps.latestPageUnavailable?.();
     if (noLatestPage) return this.fail('FETCH', noLatestPage);
     if (start && !this.liveBridge()) return this.bridgeDown();
@@ -168,19 +187,38 @@ export class FacebookHistoryFetcher {
           ? await this.pageFromBridge(live!, threadId, start, range)
           : await this.pageFromGraphQL(threadId, range);
         limiter.recordResult(true);
+        if (probe && page.success) {
+          if (page.received > 0 && page.stored > 0) { this.logProbe(probe, page.received, page.saved, page.hasMoreBefore, 'loaded'); return page; }
+          this.logProbe(probe, page.received, page.saved, page.hasMoreBefore, 'empty');
+          this.probed.add(threadId);
+          return this.fail('E2EE', E2EE_REFUSED_TEXT);
+        }
         return page;
       } catch (err: any) {
         const raw = typeof err === 'string' ? err : err?.message;
         const message = typeof raw === 'string' && raw ? raw : 'Facebook không trả lời';
+        if (probe && HISTORY_TIMEOUT_PATTERN.test(message)) {
+          limiter.recordResult(false, message);
+          this.logProbe(probe, 0, 0, false, 'timeout');
+          this.probed.add(threadId);
+          return this.fail('E2EE', E2EE_REFUSED_TEXT);
+        }
         // Hai yêu cầu cùng hội thoại va nhau: nền thì chờ rồi thử lại (chưa gửi gì tới Facebook), không tính là lỗi.
         if (COLLISION_PATTERN.test(message)) {
           if (opts.mode === 'background' && collisions < COLLISION_MAX_RETRIES) {
             if (!(await this.sleepUnlessStopped(COLLISION_WAIT_MS, opts.shouldStop))) return this.fail('CANCELLED', 'Đã huỷ');
             continue;
           }
+          if (probe) { this.logProbe(probe, 0, 0, false, 'error'); this.probed.add(threadId); }
           return this.fail('FETCH', message, source);
         }
-        return this.classify(err, message, source);
+        const failure = this.classify(err, message, source);
+        if (probe) {
+          this.logProbe(probe, 0, 0, false, failure.code === 'RISK' ? 'risk' : 'error');
+          // RISK: bộ giới hạn đã tạm dừng. BRIDGE_DOWN: bridge rớt giữa chừng, yêu cầu có thể chưa tới Facebook nên cho thử lại.
+          if (failure.code !== 'RISK' && failure.code !== 'BRIDGE_DOWN') this.probed.add(threadId);
+        }
+        return failure;
       }
     }
   }
@@ -228,6 +266,22 @@ export class FacebookHistoryFetcher {
       return this.bridgeDown(source);
     }
     return this.fail('FETCH', message, source);
+  }
+
+  /** Chỉ đếm, không ghi mã hội thoại / mã tin / nội dung. */
+  private logProbe(anchor: string, received: number, saved: number, hasMore: boolean, outcome: string): void {
+    Logger.info(`[FacebookHistoryFetcher] e2ee pre-history probe: anchor=${anchor} received=${received} saved=${saved} hasMore=${hasMore} outcome=${outcome}`);
+  }
+
+  private isGroupThread(threadId: string): boolean {
+    return this.onBossDb(db => !!db.queryOne<any>("SELECT 1 AS hit FROM fb_threads WHERE id = ? AND account_id = ? AND type = 'group'", [threadId, this.deps.accountId]));
+  }
+
+  private oldestLocalMs(threadId: string): number {
+    const row = this.onBossDb(db => db.queryOne<{ ts: number | null }>(
+      "SELECT MIN(timestamp) AS ts FROM messages WHERE owner_zalo_id = ? AND channel = 'facebook' AND thread_id = ? AND timestamp > 0",
+      [this.deps.facebookId(), threadId]));
+    return activityMs(row?.ts);
   }
 
   private fail(code: FbHistoryCode, error: string, source?: Failure['source']): Failure {
