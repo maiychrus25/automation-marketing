@@ -70,6 +70,7 @@ export const FACEBOOK_CHANNEL_ROUTES: Readonly<Record<string, EmployeeChannelSpe
     ...PROXY_ROUTES,
     ...Object.fromEntries(LOCAL_NAMES.map((name) => [`fb:${name}`, LOCAL])),
     ...Object.fromEntries(BOSS_ONLY_NAMES.map((name) => [`fb:${name}`, BOSS_ONLY])),
+    'fb:isEncryptedThread': BOSS_ONLY,
     'fb:historySync:start': BOSS_ONLY,
     'fb:historySync:cancel': BOSS_ONLY,
     'fb:historySync:status': BOSS_ONLY,

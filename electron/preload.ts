@@ -495,6 +495,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     changeNickname:      (params: any) => ipcRenderer.invoke('fb:changeNickname', params),
     loginWithCredentials:(params: any) => ipcRenderer.invoke('fb:loginWithCredentials', params),    fetchThreadMessages:   (params: any) => ipcRenderer.invoke('fb:fetchThreadMessages', params),
     fetchOlderMessages:    (params: any) => ipcRenderer.invoke('fb:fetchOlderMessages', params),
+    isEncryptedThread:     (params: any) => ipcRenderer.invoke('fb:isEncryptedThread', params),
     refreshContactAvatar:  (params: any) => ipcRenderer.invoke('fb:refreshContactAvatar', params),
     sendTyping:            (params: any) => ipcRenderer.invoke('fb:sendTyping', params),
     blockUser:             (params: any) => ipcRenderer.invoke('fb:blockUser', params),

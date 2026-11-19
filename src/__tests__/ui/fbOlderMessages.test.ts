@@ -1,7 +1,7 @@
 import {
   FB_E2EE_HISTORY_NOTE, shouldFetchFbHistoryOnOpen, shouldFetchFbOlder, fbOlderAnchor,
   interpretFbOlderResult, fbHistoryTriedKey, rowsFromGetMessages,
-  shouldShowFbProbeButton, interpretFbProbeResult, closesFbProbe,
+  shouldCheckFbEncryption, shouldShowFbProbeButton, interpretFbProbeResult, closesFbProbe,
 } from '../../ui/lib/chat/fbOlderMessages';
 import type { FbHistoryPageResult } from '../../services/facebook/facebookHistory';
 
@@ -124,5 +124,14 @@ describe('interpretFbProbeResult', () => {
     const o = interpretFbProbeResult(res as any);
     expect(o).toEqual({ kind: 'failed', notify: 'Không tải được, hãy thử lại sau.' });
     expect(closesFbProbe(o)).toBe(true);
+  });
+});
+
+describe('shouldCheckFbEncryption', () => {
+  it('personal Facebook on a boss/standalone machine only', () => {
+    expect(shouldCheckFbEncryption({ channel: 'facebook', isEmployee: false, isPage: false })).toBe(true);
+    expect(shouldCheckFbEncryption({ channel: 'facebook', isEmployee: true, isPage: false })).toBe(false);
+    expect(shouldCheckFbEncryption({ channel: 'facebook', isEmployee: false, isPage: true })).toBe(false);
+    expect(shouldCheckFbEncryption({ channel: 'zalo', isEmployee: false, isPage: false })).toBe(false);
   });
 });

@@ -3,6 +3,7 @@ import { employeeRoutedIpcMain } from './proxyHelper';
 import FacebookHistorySyncService from '../../src/services/facebook/FacebookHistorySyncService';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import Logger from '../../src/utils/Logger';
+import FacebookConnectionManager from '../../src/utils/FacebookConnectionManager';
 import { getFBServiceOrReconnect, resolveInternalId } from './facebookIpc';
 
 // Employee machine: Page-inbox commands go to the Boss instead of the local (empty) database.
@@ -57,6 +58,19 @@ export function registerFbHistoryIpc(): void {
         } catch (err: any) {
             Logger.warn(`[fbHistoryIpc] fb:fetchOlderMessages failed: ${err?.message}`);
             return { success: false, code: 'FETCH', error: err?.message || 'Lỗi không xác định' };
+        }
+    });
+
+    // Chỉ đọc DB cục bộ: dùng instance dịch vụ ĐÃ có (FacebookConnectionManager.get), không nối lại, không gọi bridge/mạng.
+    ipcMain.handle('fb:isEncryptedThread', async (_event, p) => {
+        if (!isAccountId(p?.accountId) || !isThreadId(p.threadId)) return { success: false, code: 'FETCH', error: INVALID_ERROR };
+        if (p._fromRelay === true) return { success: true, encrypted: false };
+        try {
+            const service = FacebookConnectionManager.get(resolveInternalId(p.accountId));
+            return { success: true, encrypted: service ? service.isE2EEThread(p.threadId.split('@')[0]) : false };
+        } catch (err: any) {
+            Logger.warn(`[fbHistoryIpc] fb:isEncryptedThread failed: ${err?.message}`);
+            return { success: true, encrypted: false };
         }
     });
 

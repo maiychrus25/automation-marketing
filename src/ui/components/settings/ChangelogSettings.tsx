@@ -15,6 +15,28 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.49.1',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🛠️ Hội thoại Messenger mã hoá 1-1 giờ hiện dòng ghi chú và nút "Thử tải tin từ trước khi mã hoá"',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Ở bản 26.49.0, dòng ghi chú và nút "Thử tải tin từ trước khi mã hoá" không hiện vì MaiHub dừng ở các tin đã lưu trên máy và không bao giờ kiểm tra hội thoại có mã hoá hay không. Giờ khi tin lưu trên máy đã hết, MaiHub tự kiểm tra ngay trên máy (không gửi yêu cầu nào tới Facebook) xem hội thoại có mã hoá không, rồi hiện dòng ghi chú kèm nút. MaiHub vẫn chỉ hỏi Facebook về một hội thoại mã hoá khi bạn bấm nút.',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Giới hạn đã biết: trong hội thoại Facebook thường, kéo lên vẫn không tải thêm tin cũ từ Facebook khi tin lưu trên máy đã hết (đã như vậy từ bản 26.36.0). Hãy dùng "Đồng bộ" theo khoảng thời gian để tải lịch sử cũ.',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.49.0',
     date: '11/2026',
     type: 'minor',

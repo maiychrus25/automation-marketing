@@ -15,6 +15,11 @@ export function shouldFetchFbOlder(input: { channel?: string; isEmployee: boolea
   return isFacebook(input.channel) && (!input.isEmployee || !!input.isPage);
 }
 
+/** Chỉ máy chủ tài khoản Facebook cá nhân hỏi được máy xem hội thoại có mã hoá không (chỉ đọc DB cục bộ). */
+export function shouldCheckFbEncryption(input: { channel?: string; isEmployee: boolean; isPage: boolean }): boolean {
+  return isFacebook(input.channel) && !input.isEmployee && !input.isPage;
+}
+
 /** Tin thật (không phải temp_…) có thời điểm nhỏ nhất. */
 export function fbOlderAnchor(messages: Array<{ msg_id: string; timestamp?: number }>): { beforeTimestampMs: number; beforeMessageId: string } | null {
   let best: { beforeTimestampMs: number; beforeMessageId: string } | null = null;

@@ -23,12 +23,15 @@ jest.mock('../../../electron/ipc/facebookIpc', () => ({
     getFBServiceOrReconnect: (id: string) => getFBServiceOrReconnect(id),
 }));
 
+const connectionGet = jest.fn();
+jest.mock('../../utils/FacebookConnectionManager', () => ({ __esModule: true, default: { get: (id: string) => connectionGet(id) } }));
+
 import { registerFbHistoryIpc } from '../../../electron/ipc/fbHistoryIpc';
 
 const EMPLOYEE_ERROR = 'Chỉ chủ tài khoản (máy đang đăng nhập Facebook) mới tải được lịch sử tin nhắn';
 const NOT_CONNECTED = 'Tài khoản chưa kết nối. Vui lòng kết nối lại Facebook.';
 const call = (ch: string, payload: any) => handlers.get(ch)!({}, payload);
-const service = { isPage: jest.fn(), fetchHistoryPage: jest.fn() };
+const service = { isPage: jest.fn(), fetchHistoryPage: jest.fn(), isE2EEThread: jest.fn() };
 
 beforeAll(() => registerFbHistoryIpc());
 beforeEach(() => {
@@ -39,8 +42,8 @@ beforeEach(() => {
 });
 
 describe('fbHistory IPC', () => {
-    it('registers the four channels', () => {
-        expect([...handlers.keys()].sort()).toEqual(['fb:fetchOlderMessages', 'fb:historySync:cancel', 'fb:historySync:start', 'fb:historySync:status']);
+    it('registers the five channels', () => {
+        expect([...handlers.keys()].sort()).toEqual(['fb:fetchOlderMessages', 'fb:historySync:cancel', 'fb:historySync:start', 'fb:historySync:status', 'fb:isEncryptedThread'].sort());
     });
 
     it('forwards fetchOlderMessages to the boss and refuses the sync channels in employee mode', async () => {
@@ -192,5 +195,44 @@ describe('fbHistory IPC', () => {
         sync.getStatus.mockImplementation(() => { throw new Error('z'); });
         expect(await call('fb:historySync:status', { accountId: '1' })).toEqual({ success: false, error: 'z' });
         sync.getStatus.mockReset();
+    });
+
+    describe('fb:isEncryptedThread', () => {
+        it('asks the existing service only and never reconnects', async () => {
+            connectionGet.mockReturnValue(service);
+            service.isE2EEThread.mockReturnValue(true);
+            expect(await call('fb:isEncryptedThread', { accountId: '1', threadId: '2@x' })).toEqual({ success: true, encrypted: true });
+            expect(connectionGet).toHaveBeenCalledWith('internal-1');
+            expect(service.isE2EEThread).toHaveBeenCalledWith('2');
+            service.isE2EEThread.mockReturnValue(false);
+            expect(await call('fb:isEncryptedThread', { accountId: '1', threadId: '2' })).toEqual({ success: true, encrypted: false });
+            expect(getFBServiceOrReconnect).not.toHaveBeenCalled();
+            expect(service.fetchHistoryPage).not.toHaveBeenCalled();
+        });
+
+        it('answers false without creating a service when none exists', async () => {
+            connectionGet.mockReturnValue(null);
+            expect(await call('fb:isEncryptedThread', { accountId: '1', threadId: '2' })).toEqual({ success: true, encrypted: false });
+            expect(getFBServiceOrReconnect).not.toHaveBeenCalled();
+        });
+
+        it('answers false for a relayed call without looking anything up', async () => {
+            connectionGet.mockReturnValue(service);
+            service.isE2EEThread.mockReturnValue(true);
+            expect(await call('fb:isEncryptedThread', { accountId: '1', threadId: '2', _fromRelay: true })).toEqual({ success: true, encrypted: false });
+            expect(connectionGet).not.toHaveBeenCalled();
+            expect(service.isE2EEThread).not.toHaveBeenCalled();
+        });
+
+        it.each([[{ accountId: '', threadId: '2' }], [{ accountId: '1', threadId: 'abc' }], [{ accountId: '1' }], [undefined]])('rejects invalid payload %p', async (p) => {
+            expect(await call('fb:isEncryptedThread', p)).toEqual({ success: false, code: 'FETCH', error: 'Tham số không hợp lệ' });
+            expect(connectionGet).not.toHaveBeenCalled();
+        });
+
+        it('answers false when the lookup throws', async () => {
+            connectionGet.mockReturnValue(service);
+            service.isE2EEThread.mockImplementation(() => { throw new Error('db'); });
+            expect(await call('fb:isEncryptedThread', { accountId: '1', threadId: '2' })).toEqual({ success: true, encrypted: false });
+        });
     });
 });

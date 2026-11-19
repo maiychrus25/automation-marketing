@@ -38,7 +38,7 @@ import FriendRequestBar from './FriendRequestBar';
 import { ReactionContextMenu, ReactionPopup, parseReactions, parseReactionsFull, displayReactionEmoji } from './ReactionComponents';
 import { withoutBossOnlyFbCaps, employeeSendFailure, isTelegramChannel, pinsFromResponse } from '@/lib/employeeAccounts';
 import {
-  shouldFetchFbOlder, fbOlderAnchor, interpretFbOlderResult, rowsFromGetMessages,
+  shouldFetchFbOlder, fbOlderAnchor, interpretFbOlderResult, rowsFromGetMessages, shouldCheckFbEncryption, FB_E2EE_HISTORY_NOTE,
   shouldShowFbProbeButton, interpretFbProbeResult, closesFbProbe, FB_E2EE_PROBE_BUTTON, FB_E2EE_PROBE_BUTTON_BUSY, fbHistoryTriedKey,
 } from '../../lib/chat/fbOlderMessages';
 import { lastOutgoingReceipt, receiptDisplay, receiptLabel } from '../../lib/chat/messageReceipt';
@@ -1749,6 +1749,14 @@ export default function ChatWindow() {
         // If NO new messages were added (all duplicates), set hasMore = false
         if (countAfter === countBefore) {
           setHasMore(false);
+          // Facebook cá nhân: DB cục bộ hết. Hỏi MÁY NÀY (chỉ đọc DB, không gọi Facebook, không nối lại) xem hội thoại có mã hoá không để hiện dòng ghi chú + nút thử.
+          const acc = getActiveAccount();
+          if (shouldCheckFbEncryption({ channel: acc?.channel, isEmployee, isPage: !!acc?.parent_zalo_id })) {
+            const accountId = activeAccountId, threadId = activeThreadId;
+            ipc.fb?.isEncryptedThread({ accountId, threadId }).then((r: any) => {
+              if (r?.encrypted === true && useChatStore.getState().activeThreadId === threadId && useAccountStore.getState().activeAccountId === accountId) setFbNote(FB_E2EE_HISTORY_NOTE);
+            }).catch(() => {});
+          }
           return;
         }
         // Async fixup: query DB for original messages not in the loaded batch
