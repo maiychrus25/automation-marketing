@@ -737,6 +737,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     start:     (accountId: string, range: { fromTs: number | null; toTs: number | null }) => ipcRenderer.invoke('fb:historySync:start', { accountId, ...range }),
     cancel:    (accountId: string) => ipcRenderer.invoke('fb:historySync:cancel', { accountId }),
     getStatus: (accountId: string) => ipcRenderer.invoke('fb:historySync:status', { accountId }),
+    importE2eeExport: (accountId: string) => ipcRenderer.invoke('fb:importE2eeExport', { accountId }),
   },
 
   // ─── Media Library ───────────────────────────────────────────────

@@ -1,10 +1,11 @@
-import { ipcMain as electronIpcMain } from 'electron';
+import { dialog, ipcMain as electronIpcMain } from 'electron';
 import { employeeRoutedIpcMain } from './proxyHelper';
 import FacebookHistorySyncService from '../../src/services/facebook/FacebookHistorySyncService';
 import WorkspaceManager from '../../src/utils/WorkspaceManager';
 import Logger from '../../src/utils/Logger';
 import FacebookConnectionManager from '../../src/utils/FacebookConnectionManager';
 import { getFBServiceOrReconnect, resolveInternalId } from './facebookIpc';
+import { BOSS_ONLY_CHANNEL_CODE, BOSS_ONLY_CHANNEL_ERROR } from '../../src/services/http/employeeChannelRoutes';
 
 // Employee machine: Page-inbox commands go to the Boss instead of the local (empty) database.
 const ipcMain = employeeRoutedIpcMain(electronIpcMain);
@@ -42,7 +43,42 @@ function guardedSync(channel: string, needsRange: boolean, run: (accountId: stri
     });
 }
 
+// Mỗi tài khoản một lượt nhập tại một thời điểm (tính cả lúc hộp chọn tệp đang mở).
+const importsRunning = new Set<string>();
+
+/** Nhập tệp sao lưu đoạn chat của Facebook: chỉ boss, chỉ tài khoản cá nhân, hộp chọn tệp do tiến trình chính mở, không gọi mạng. */
+async function importE2eeExport(p: any) {
+    if (p?._fromRelay === true || isEmployeeMode()) return { success: false, code: BOSS_ONLY_CHANNEL_CODE, error: BOSS_ONLY_CHANNEL_ERROR };
+    if (!isAccountId(p?.accountId)) return { success: false, error: INVALID_ERROR };
+    const internalId = resolveInternalId(p.accountId);
+    const db = require('../../src/services/database/DatabaseService').default.getInstance();
+    const account = db.getFBAccount(internalId);
+    if (!account) return { success: false, error: INVALID_ERROR };
+    if (account.parent_facebook_id) return { success: false, code: 'PAGE_ACCOUNT', error: 'PAGE_ACCOUNT' };
+    if (importsRunning.has(internalId)) return { success: false, code: 'IMPORT_IN_PROGRESS', error: 'IMPORT_IN_PROGRESS' };
+    importsRunning.add(internalId);
+    try {
+        const picked = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'ZIP', extensions: ['zip'] }] });
+        if (picked.canceled || !picked.filePaths?.[0]) return { success: true, canceled: true };
+        const { FacebookE2eeExportImporter } = require('../../src/services/facebook/e2eeExport/FacebookE2eeExportImporter');
+        const summary = await new FacebookE2eeExportImporter({ db, accountId: internalId }).importFile(picked.filePaths[0]);
+        // Chỉ số đếm: không tên, nội dung, đường dẫn hay mã.
+        Logger.info(`[fbHistoryIpc] E2EE export import: ${Object.entries(summary).map(([k, v]) => `${k}=${v}`).join(' ')}`);
+        return { success: true, summary };
+    } catch (err: any) {
+        const limit = err?.code === 'LIMIT';
+        // Chỉ thêm err.code / err.name (dạng ký hiệu ngắn); không bao giờ err.message: có thể chứa tên mục trong tệp.
+        const tag = String(err?.code || err?.name || '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 40);
+        Logger.warn(`[fbHistoryIpc] fb:importE2eeExport failed: ${limit ? 'LIMIT' : 'FAILED'}${tag ? ` ${tag}` : ''}`);
+        return limit ? { success: false, code: 'LIMIT', error: 'FILE_TOO_LARGE' } : { success: false, code: 'FAILED', error: 'IMPORT_FAILED' };
+    } finally {
+        importsRunning.delete(internalId);
+    }
+}
+
 export function registerFbHistoryIpc(): void {
+    ipcMain.handle('fb:importE2eeExport', (_event, p) => importE2eeExport(p));
+
     ipcMain.handle('fb:fetchOlderMessages', async (_event, p) => {
         if (!isAccountId(p?.accountId) || !isThreadId(p.threadId) || !isOptionalTs(p.beforeTimestampMs) || !isOptionalMessageId(p.beforeMessageId)) {
             return { success: false, code: 'FETCH', error: INVALID_ERROR };

@@ -1,3 +1,4 @@
+import { importedActionRefusal } from '../../lib/chat/importedMessageGuard';
 import React, {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {useChatStore} from '@/store/chatStore';
 import {useAccountStore} from '@/store/accountStore';
@@ -1787,6 +1788,8 @@ export default function MessageInput() {
         setSending(true);
         // Strip tg_ prefix for Telegram topic messages
         const rawMsgId = editingMsg.msg_id?.replace(/^tg_/, '') || editingMsg.msg_id;
+        const importedRefusal = importedActionRefusal(editingMsg);
+        if (importedRefusal) { showNotification(importedRefusal, 'error'); return; } // finally dọn ô soạn; không gọi, không đổi nội dung cục bộ
         console.log(`[MessageInput] Edit msg: channel=${activeContact?.channel} msgId=${rawMsgId} chatId=${activeThreadId}`);
         if (isTelegramBot(activeContact?.channel)) {
           const botEditRes = await ipc.telegram?.editMessage({ accountId: activeAccountId, chatId: activeThreadId, messageId: rawMsgId, text: msgText });

@@ -74,6 +74,7 @@ export const FACEBOOK_CHANNEL_ROUTES: Readonly<Record<string, EmployeeChannelSpe
     'fb:historySync:start': BOSS_ONLY,
     'fb:historySync:cancel': BOSS_ONLY,
     'fb:historySync:status': BOSS_ONLY,
+    'fb:importE2eeExport': BOSS_ONLY,
 };
 
 // Telegram (user accounts and bots). Every handler not listed below as boss_only is proxied; the source-scan test fails when one is not classified.

@@ -3,6 +3,7 @@ import ipc from '@/lib/ipc';
 import { DataAccessor } from '@/lib/data/DataAccessor';
 import { useAppStore } from '@/store/appStore';
 import { useAccountStore } from '@/store/accountStore';
+import { useEmployeeStore } from '@/store/employeeStore';
 import { getMessageCacheKey, useChatStore } from '@/store/chatStore';
 import { isFacebook } from '@/lib/channelHelper';
 import DateInputVN from '@/components/common/DateInputVN';
@@ -12,8 +13,8 @@ import {
   mergeThreadMessages, nextFocusIndex, refreshPlan, resolveSyncRange, tabStopIndexes, type SyncPreset,
 } from '../../lib/chat/mobileSyncView';
 import {
-  FB_SYNC_ALL_WARNING, FB_SYNC_TITLE, FB_SYNC_WAITING,
-  fbSyncNotes, fbSyncProgress, isFbSyncRunning, isFbSyncTerminal, isFbSyncWaiting, reduceFbSyncStatus,
+  FB_IMPORT_BUSY, FB_IMPORT_LABEL, FB_IMPORT_NOTE, FB_SYNC_ALL_WARNING, FB_SYNC_TITLE, FB_SYNC_WAITING,
+  fbImportResultText, fbImportTone, fbSyncNotes, fbSyncProgress, isFbSyncRunning, isFbSyncTerminal, isFbSyncWaiting, reduceFbSyncStatus,
 } from '../../lib/chat/fbHistorySyncView';
 
 const PRESETS: { value: SyncPreset; label: string }[] = [
@@ -53,6 +54,9 @@ export default function FacebookSyncButton() {
   const activeAccountId = useAccountStore(s => s.activeAccountId);
   const account = useAccountStore(s => s.accounts.find(a => a.zalo_id === activeAccountId));
   const visible = !!activeAccountId && isFacebook(account?.channel);
+  // Nhập tệp sao lưu: chỉ tài khoản cá nhân (Page có parent_zalo_id) và chỉ máy Boss.
+  const isEmployee = useEmployeeStore(s => s.mode === 'employee');
+  const canImport = !isEmployee && !account?.parent_zalo_id;
 
   const [open, setOpen] = useState(false);
   const [statuses, setStatuses] = useState<Record<string, FbHistorySyncStatus>>({});
@@ -64,6 +68,8 @@ export default function FacebookSyncButton() {
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ text: string; tone: 'success' | 'neutral' | 'error' } | null>(null);
 
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -111,7 +117,7 @@ export default function FacebookSyncButton() {
   }, [applyStatus]);
 
   useEffect(() => {
-    setBusy(false); setCancelling(false); setFormError(''); setActionError(''); setRetry(false);
+    setBusy(false); setCancelling(false); setFormError(''); setActionError(''); setRetry(false); setImportResult(null);
   }, [activeAccountId]);
   useEffect(() => { if (!visible) setOpen(false); }, [visible]);
 
@@ -156,8 +162,26 @@ export default function FacebookSyncButton() {
     return () => window.removeEventListener('keydown', onKey);
   }, [shown, close]);
 
+  const handleImport = async () => {
+    if (!activeAccountId || importing || busy || running) return;
+    const accountId = activeAccountId; // kết quả đến muộn không được hiện sang tài khoản khác
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const res = await ipc.fbHistorySync?.importE2eeExport(accountId);
+      if (res?.success && res.canceled) return;
+      // Cùng cách làm mới như khi đồng bộ hàng loạt kết thúc.
+      if (res?.success && (res.summary?.imported ?? 0) > 0) void refreshChats(accountId);
+      if (activeRef.current === accountId) setImportResult({ text: fbImportResultText(res), tone: fbImportTone(res) });
+    } catch {
+      if (activeRef.current === accountId) setImportResult({ text: fbImportResultText(null), tone: 'error' });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const handleStart = async () => {
-    if (!activeAccountId || busy) return;
+    if (!activeAccountId || busy || importing) return;
     const range = resolveSyncRange(preset, fromDate, toDate, Date.now());
     if ('error' in range) { setFormError(range.error); return; }
     setFormError('');
@@ -196,6 +220,17 @@ export default function FacebookSyncButton() {
       : status?.stage === 'failed' ? 'bg-red-500/10 text-red-400'
         : 'bg-gray-700 text-gray-200';
   const progress = status ? fbSyncProgress(status) : 0;
+  const importBlock = canImport && (
+    <div className="space-y-2 pt-1">
+      <button type="button" onClick={handleImport} disabled={importing || busy || running} className="btn-secondary disabled:opacity-50">
+        {importing ? FB_IMPORT_BUSY : FB_IMPORT_LABEL}
+      </button>
+      <p className="text-gray-400 text-xs leading-relaxed">{FB_IMPORT_NOTE}</p>
+      {importResult && (
+        <p role="status" className={`rounded-lg px-3 py-2 text-xs ${importResult.tone === 'success' ? 'bg-green-500/10 text-green-400' : importResult.tone === 'neutral' ? 'bg-gray-700 text-gray-200' : 'bg-red-500/10 text-red-400'}`}>{importResult.text}</p>
+      )}
+    </div>
+  );
   const title = running ? `${FB_SYNC_TITLE} — đang chạy nền` : FB_SYNC_TITLE;
 
   return (
@@ -263,6 +298,7 @@ export default function FacebookSyncButton() {
                   )}
                   {preset === 'all' && <p className="text-orange-400 text-xs">{FB_SYNC_ALL_WARNING}</p>}
                   {formError && <p role="alert" className="text-red-400 text-xs">{formError}</p>}
+                  {importBlock}
                 </>
               )}
 
@@ -291,11 +327,12 @@ export default function FacebookSyncButton() {
                   <div className={`rounded-lg px-3 py-2 ${toneClass}`}>
                     {status.stage === 'failed' ? (status.error || status.message) : status.message}
                   </div>
-                  {fbSyncNotes(status).length > 0 && (
+                  {fbSyncNotes(status, canImport).length > 0 && (
                     <ul className="list-disc pl-5 text-gray-400 text-xs space-y-0.5">
-                      {fbSyncNotes(status).map(n => <li key={n}>{n}</li>)}
+                      {fbSyncNotes(status, canImport).map(n => <li key={n}>{n}</li>)}
                     </ul>
                   )}
+                  {importBlock}
                 </>
               )}
             </div>
@@ -310,9 +347,9 @@ export default function FacebookSyncButton() {
                 <>
                   <button type="button" onClick={close} className="btn-secondary">Đóng</button>
                   {view === 'done' ? (
-                    <button type="button" onClick={() => { setRetry(true); setFormError(''); }} className="btn-primary">Đồng bộ lại</button>
+                    <button type="button" onClick={() => { setRetry(true); setFormError(''); }} disabled={importing} className="btn-primary">Đồng bộ lại</button>
                   ) : (
-                    <button type="button" onClick={handleStart} disabled={busy} className="btn-primary">Bắt đầu đồng bộ</button>
+                    <button type="button" onClick={handleStart} disabled={busy || importing} className="btn-primary">Bắt đầu đồng bộ</button>
                   )}
                 </>
               )}

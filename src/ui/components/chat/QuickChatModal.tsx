@@ -3,6 +3,7 @@
  * Luôn hiển thị trang chi tiết (không có trang danh sách riêng).
  * Tính năng: tìm người nhận inline, chọn tài khoản gửi (avatar+tên+SĐT), lịch sử chat, tin nhắn nhanh.
  */
+import { importedSenderLabel } from '../../../services/facebook/e2eeExport/importedMessage';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore, QuickChatTarget } from '@/store/appStore';
 import { useAccountStore } from '@/store/accountStore';
@@ -570,7 +571,7 @@ export default function QuickChatModal() {
       const m = g?.members?.find((x: any) => x.userId === sid);
       if (m) return m.displayName||sid;
     }
-    return sid;
+    return importedSenderLabel(sid) || sid;
   };
 
   return (

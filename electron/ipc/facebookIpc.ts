@@ -19,13 +19,26 @@ import { clearFbE2EEDeviceState } from '../../src/services/facebook/FacebookE2EE
 import FileStorageService from '../../src/services/file/FileStorageService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
+import { IMPORTED_ACTION_ERROR, touchesImportedMessage } from '../../src/services/facebook/e2eeExport/importedMessage';
 import FacebookService from "../../src/services/facebook/FacebookService";
 import { resolveFBCookie, resolveFBProxyId } from '../../src/services/facebook/FacebookAccountCookie';
 import { forgetProxyChangeFailure, reconnectPageChildren } from '../../src/services/facebook/facebookProxyChange';
 import { fetchManagedPages, mergePageList, stripPageCookie, buildPageCookie } from '../../src/services/facebook/FacebookPages';
 
+// Tin nhập từ tệp sao lưu (mã `e2ee-export.…`) không có mã tin Facebook: mọi thao tác theo mã tin bị từ chối tại đây,
+// trước khi chạm tới Facebook hoặc bridge. Cũng chặn gửi có trích dẫn tin đó (từ chối thay vì lặng lẽ bỏ trích dẫn).
+const refusingImportedMessages: typeof electronIpcMain = new Proxy(electronIpcMain, {
+  get(t, prop) {
+    if (prop === 'handle') {
+      return (channel: string, listener: any) => t.handle(channel, async (event: any, params: any, ...rest: any[]) =>
+        touchesImportedMessage(channel, params) ? { success: false, error: IMPORTED_ACTION_ERROR } : listener(event, params, ...rest));
+    }
+    const value = (t as any)[prop];
+    return typeof value === 'function' ? value.bind(t) : value;
+  },
+});
 // Employee machine: Page-inbox commands go to the Boss instead of the local (empty) database.
-const ipcMain = employeeRoutedIpcMain(electronIpcMain);
+const ipcMain = employeeRoutedIpcMain(refusingImportedMessages);
 
 // ─── Cookie secure storage helpers ───────────────────────────────────────────
 

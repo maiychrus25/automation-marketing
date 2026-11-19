@@ -164,3 +164,5 @@ Chỗ mã khác với thân spec ở trên (thân spec giữ nguyên):
 ## Ghi chú sau phát hành (26.49.0)
 
 Từ 26.49.0, chat Messenger 1-1 mã hoá có nút "Thử tải tin từ trước khi mã hoá" cạnh dòng ghi chú mã hoá (chỉ máy chủ tài khoản cá nhân): bấm nút mới gửi một yêu cầu lịch sử thường qua bridge (cờ `probeE2ee`) để xem Facebook còn trả tin từ trước khi chat được mã hoá không; tải tự động (kéo lên, tự tải khi mở) và đồng bộ hàng loạt không bao giờ thử. Mỗi hội thoại chỉ được gửi một yêu cầu cho tới khi instance dịch vụ Facebook bị tạo lại, trừ khi trang trả về có tin được lưu (khi đó bấm tiếp để tải trang cũ hơn), gặp lỗi rủi ro (`RISK`) hoặc bridge rớt giữa chừng. Nhóm chỉ được nhận ra khi hàng `fb_threads` của nó có `type = 'group'`. Đây là thử nghiệm chưa kiểm chứng với Facebook thật; tải toàn bộ lịch sử mã hoá (kho lưu trữ an toàn của Messenger, mã PIN) vẫn chưa làm.
+
+Từ 26.50.0, tin cũ của hội thoại mã hoá đầu cuối còn có thể lấy bằng cách nhập tệp sao lưu đoạn chat do Facebook xuất, không gửi yêu cầu nào tới Facebook: xem `docs/specs/2026-11-19-messenger-e2ee-export-import.md`.

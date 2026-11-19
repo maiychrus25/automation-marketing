@@ -42,8 +42,8 @@ beforeEach(() => {
 });
 
 describe('fbHistory IPC', () => {
-    it('registers the five channels', () => {
-        expect([...handlers.keys()].sort()).toEqual(['fb:fetchOlderMessages', 'fb:historySync:cancel', 'fb:historySync:start', 'fb:historySync:status', 'fb:isEncryptedThread'].sort());
+    it('registers the six channels', () => {
+        expect([...handlers.keys()].sort()).toEqual(['fb:fetchOlderMessages', 'fb:historySync:cancel', 'fb:historySync:start', 'fb:historySync:status', 'fb:importE2eeExport', 'fb:isEncryptedThread'].sort());
     });
 
     it('forwards fetchOlderMessages to the boss and refuses the sync channels in employee mode', async () => {

@@ -379,6 +379,7 @@ declare global {
         start: (accountId: string, range: FbHistoryRange) => Promise<{ success: boolean; status?: FbHistorySyncStatus; error?: string }>;
         cancel: (accountId: string) => Promise<{ success: boolean; status?: FbHistorySyncStatus | null; error?: string }>;
         getStatus: (accountId: string) => Promise<{ success: boolean; status?: FbHistorySyncStatus | null; error?: string }>;
+        importE2eeExport: (accountId: string) => Promise<{ success: boolean; canceled?: boolean; summary?: any; code?: string; error?: string }>;
       };
       library: {
         getItems:    (params: any) => Promise<any>;

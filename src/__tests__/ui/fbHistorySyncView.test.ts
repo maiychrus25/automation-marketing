@@ -1,5 +1,5 @@
 import {
-  isFbSyncRunning, isFbSyncTerminal, fbSyncProgress, fbSyncNotes, isFbSyncWaiting, reduceFbSyncStatus,
+  isFbSyncRunning, isFbSyncTerminal, fbSyncProgress, fbSyncNotes, isFbSyncWaiting, reduceFbSyncStatus, fbImportResultText, fbImportTone,
 } from '../../ui/lib/chat/fbHistorySyncView';
 import { emptyFbHistorySyncStatus, type FbHistorySyncStage, type FbHistorySyncStatus } from '../../services/facebook/facebookHistory';
 
@@ -85,5 +85,47 @@ describe('reduceFbSyncStatus', () => {
     const prev = make({ stage: 'completed', startedAt: 200 });
     const next = make({ stage: 'listing', startedAt: 300 });
     expect(reduceFbSyncStatus(prev, next, 'fb1')).toBe(next);
+  });
+});
+
+describe('fbImportResultText', () => {
+  const summary = { chatsInFile: 3, chatsMatched: 2, chatsUnmatched: 0, messagesInFile: 10, imported: 8, alreadyPresent: 0, withoutSenderId: 0, mediaImported: 0, mediaSkipped: 0, malformedSkipped: 0 };
+  it('reports what was imported', () => {
+    expect(fbImportResultText({ success: true, summary })).toBe('Đã nhập 8 tin vào 2 hội thoại.');
+  });
+  it('appends each non-zero count', () => {
+    expect(fbImportResultText({ success: true, summary: { ...summary, alreadyPresent: 4, chatsUnmatched: 1, withoutSenderId: 2, mediaSkipped: 3 } })).toBe(
+      'Đã nhập 8 tin vào 2 hội thoại. 4 tin đã có sẵn. 1 hội thoại trong tệp không ghép được với hội thoại nào trên máy. 2 tin nhóm chỉ có tên người gửi. 3 tệp đính kèm không nhập được.');
+  });
+  it('says nothing new when everything was already there', () => {
+    expect(fbImportResultText({ success: true, summary: { ...summary, imported: 0, alreadyPresent: 5 } })).toBe('Không có tin mới: 5 tin trong tệp đã có sẵn.');
+  });
+  it('reports a wrong format when there are no chats', () => {
+    expect(fbImportResultText({ success: true, summary: { ...summary, chatsInFile: 0, chatsMatched: 0 } })).toBe('Tệp không đúng định dạng bản sao lưu đoạn chat của Facebook.');
+  });
+  it('maps failures by code', () => {
+    expect(fbImportResultText({ success: false, code: 'LIMIT', error: 'FILE_TOO_LARGE' })).toBe('Tệp quá lớn để nhập.');
+    expect(fbImportResultText({ success: false, code: 'IMPORT_IN_PROGRESS', error: 'IMPORT_IN_PROGRESS' })).toBe('Đang nhập một tệp khác cho tài khoản này.');
+    expect(fbImportResultText({ success: false, code: 'FAILED', error: 'IMPORT_FAILED' })).toBe('Không nhập được tệp. Thử lại sau.');
+    expect(fbImportResultText(undefined)).toBe('Không nhập được tệp. Thử lại sau.');
+  });
+});
+
+describe('fbSyncNotes import hint', () => {
+  const status: any = { skippedE2EE: 2, failedThreads: 0 };
+  it('appends the import hint to the encrypted-chat note only when asked', () => {
+    expect(fbSyncNotes(status)).toEqual(['2 hội thoại mã hoá đầu cuối được bỏ qua']);
+    expect(fbSyncNotes(status, true)).toEqual(['2 hội thoại mã hoá đầu cuối được bỏ qua. Dùng "Nhập từ tệp Facebook (.zip)" để lấy tin cũ của các hội thoại này.']);
+  });
+});
+
+describe('fbImportTone', () => {
+  const summary = { chatsInFile: 2, chatsMatched: 1, chatsUnmatched: 1, messagesInFile: 5, imported: 3, alreadyPresent: 0, withoutSenderId: 0, mediaImported: 0, mediaSkipped: 0, malformedSkipped: 0 };
+  it('is green only when something was imported, neutral when nothing new, red on errors', () => {
+    expect(fbImportTone({ success: true, summary })).toBe('success');
+    expect(fbImportTone({ success: true, summary: { ...summary, imported: 0, alreadyPresent: 4 } })).toBe('neutral');
+    expect(fbImportTone({ success: true, summary: { ...summary, chatsInFile: 0, imported: 0 } })).toBe('error');
+    expect(fbImportTone({ success: false, code: 'FAILED' })).toBe('error');
+    expect(fbImportTone(undefined)).toBe('error');
   });
 });

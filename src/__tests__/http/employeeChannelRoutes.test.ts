@@ -52,7 +52,7 @@ describe('FACEBOOK_CHANNEL_ROUTES', () => {
   });
 
   test.each(['fb:updateCookie', 'fb:addAccount', 'fb:removeAccount', 'fb:connect', 'fb:setPageEnabled', 'fb:toggleE2EE',
-    'fb:historySync:start', 'fb:unsendMessage', 'fb:editMessage', 'fb:scanGroupMembers'])
+    'fb:historySync:start', 'fb:importE2eeExport', 'fb:unsendMessage', 'fb:editMessage', 'fb:scanGroupMembers'])
   ('%s is boss only', (channel) => {
     expect(employeeChannelSpec(channel)!.route).toBe('boss_only');
   });

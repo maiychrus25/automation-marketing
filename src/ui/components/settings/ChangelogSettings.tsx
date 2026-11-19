@@ -15,6 +15,29 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.50.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '📥 Lấy lại tin cũ của hội thoại Messenger mã hoá bằng tệp sao lưu đoạn chat tải từ Facebook',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Hội thoại Messenger mã hoá đầu cuối không cho MaiHub tải tin cũ từ Facebook. Giờ bạn có thể tải "bản sao lưu đoạn chat" từ Facebook rồi bấm "Nhập từ tệp Facebook (.zip)" trong hộp thoại đồng bộ lịch sử Facebook để đưa tin cũ vào. Nút này chỉ có với tài khoản Facebook cá nhân và chỉ trên máy Boss.',
+          'MaiHub chỉ đọc tệp trên máy bạn, không gửi yêu cầu nào tới Facebook. Tin đã có sẵn không bị nhập trùng, nên bạn có thể nhập lại tệp mới hơn bất cứ lúc nào. Tin do chính bạn gửi từ MaiHub không có trong tệp sao lưu của Facebook, nên chúng giữ nguyên như đang có trên máy.',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Giới hạn đã biết: hội thoại chưa có tin nào trên máy thì chưa ghép được với tệp. Tin nhập từ tệp chưa thả cảm xúc, trả lời, thu hồi hay chuyển tiếp được. Với hội thoại nhóm, một số tin có thể chỉ hiện tên người gửi trong tệp mà không gắn được với thành viên của nhóm.',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.49.1',
     date: '11/2026',
     type: 'patch',

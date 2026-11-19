@@ -25,6 +25,8 @@ import FBVideoThumb from './FBVideoThumb';
 import DataAccessor from '@/lib/data/DataAccessor';
 import ipc, { buildZaloAuth } from '@/lib/ipc';
 import { toLocalMediaUrl } from '@/lib/localMedia';
+import { importedActionRefusal } from '../../lib/chat/importedMessageGuard';
+import { canLookUpSender, senderDisplayName, showsSenderLabel } from '../../lib/chat/importedSenderView';
 import { useEmployeeStore } from '@/store/employeeStore';
 import { ChatIcon } from '@/components/common/icons';
 import { handleAvatarError } from '@/lib/avatarRetry';
@@ -1282,7 +1284,7 @@ export default function ChatWindow() {
 
     const unknownSenders = new Set<string>();
     for (const msg of msgs) {
-      if (msg.is_sent === 1 || !msg.sender_id) continue;
+      if (msg.is_sent === 1 || !msg.sender_id || !canLookUpSender(msg.sender_id)) continue; // người gửi nhập từ tệp: không hỏi ai
       const senderId = String(msg.sender_id);
       const senderKey = `${activeAccountId}__${senderId}__${activeThreadId}`;
 
@@ -1903,6 +1905,7 @@ export default function ChatWindow() {
   };
 
   const handleUndo = async (msg: any) => {
+    { const refusal = importedActionRefusal(msg); if (refusal) { showNotification(refusal, 'error'); return; } } // tin nhập từ tệp: không gọi, không đổi trạng thái
     const auth = getAuth();
     if (!auth) return;
     try {
@@ -1946,6 +1949,7 @@ export default function ChatWindow() {
   };
 
   const handleDelete = async (msg: any) => {
+    { const refusal = importedActionRefusal(msg); if (refusal) { showNotification(refusal, 'error'); return; } } // tin nhập từ tệp: không gọi, không đổi trạng thái
     const auth = getAuth();
     if (!auth) return;
     try {
@@ -1987,6 +1991,7 @@ export default function ChatWindow() {
   };
 
   const handleReact = async (msg: any, emoji: string) => {
+    { const refusal = importedActionRefusal(msg); if (refusal) { showNotification(refusal, 'error'); return; } } // tin nhập từ tệp: không gọi, không đổi trạng thái
     try {
       const contactList = contacts[activeAccountId || ''] || [];
       const contact = contactList.find(c => c.contact_id === msg.thread_id);
@@ -2041,6 +2046,7 @@ export default function ChatWindow() {
 
   // Huỷ reaction: gửi Reactions.NONE = "" để xoá
   const handleCancelReaction = async (msg: any) => {
+    { const refusal = importedActionRefusal(msg); if (refusal) { showNotification(refusal, 'error'); return; } } // tin nhập từ tệp: không gọi, không đổi trạng thái
     try {
       const contactList = contacts[activeAccountId || ''] || [];
       const contact = contactList.find(c => c.contact_id === msg.thread_id);
@@ -2072,6 +2078,13 @@ export default function ChatWindow() {
         await ipc.zalo?.addReaction({ auth, reactionType: 'NONE', message: messagePayload });
       }
     } catch {}
+  };
+
+  // Trả lời = trích dẫn bằng mã tin Facebook, tin nhập từ tệp không có: chặn từ lúc chọn tin để không gửi dở.
+  const replyToMessage = (msg: any) => {
+    const refusal = importedActionRefusal(msg);
+    if (refusal) { showNotification(refusal, 'error'); return; }
+    setReplyTo(msg);
   };
 
   const handleForward = (msg: any) => {
@@ -2888,7 +2901,7 @@ export default function ChatWindow() {
           const contactName = contact?.alias || contact?.display_name || '';
           const preferredContactName = contactName && contactName !== msg.sender_id ? contactName : '';
           const avatarUrl = toLocalMediaUrl(contact?.avatar_url || groupMember?.avatar || '');
-          const displayName = preferredContactName || groupMember?.displayName || contactName || msg.sender_id;
+          const displayName = senderDisplayName(msg.sender_id, preferredContactName || groupMember?.displayName || contactName || msg.sender_id);
 
           const isRecalled = msg.is_recalled === 1 || msg.status === 'recalled' || msg.msg_type === 'recalled';
 
@@ -2918,7 +2931,7 @@ export default function ChatWindow() {
                           title={`Xem thông tin: ${displayName}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setUserProfilePopup({ userId: msg.sender_id, x: e.clientX, y: e.clientY });
+                            if (canLookUpSender(msg.sender_id)) setUserProfilePopup({ userId: msg.sender_id, x: e.clientX, y: e.clientY });
                           }}
                         >
                           {avatarUrl && !failedMsgAvatars.has(msg.sender_id) ? (
@@ -3070,7 +3083,7 @@ export default function ChatWindow() {
                           title={`Xem thông tin: ${displayName}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setUserProfilePopup({ userId: msg.sender_id, x: e.clientX, y: e.clientY });
+                            if (canLookUpSender(msg.sender_id)) setUserProfilePopup({ userId: msg.sender_id, x: e.clientX, y: e.clientY });
                           }}
                         >
                           {avatarUrl && !failedMsgAvatars.has(msg.sender_id) ? (
@@ -3118,7 +3131,7 @@ export default function ChatWindow() {
 
                   <div className={`flex flex-col ${isEcardMsg ? 'w-full items-center' : isSent ? 'items-end' : 'items-start'} relative min-w-0${hasReactions && !isGroupedStickerFirst ? ' mb-3' : ''}`}>
                     {/* Sender name in group chats */}
-                    {!isSent && !isEcardMsg && msg.thread_type === 1 && showTime && displayName && displayName !== msg.sender_id && (
+                    {showsSenderLabel({ isSent, isEcard: isEcardMsg, threadType: msg.thread_type, senderId: msg.sender_id, showTime, displayName }) && (
                       <p className="text-xs text-gray-400 mb-0.5 px-1 truncate max-w-full">{displayName}</p>
                     )}
                     <div className={`rounded-2xl text-sm break-words min-w-0 max-w-full overflow-hidden ${
@@ -3267,7 +3280,7 @@ export default function ChatWindow() {
                       senderName={!isSent ? displayName : undefined}
                       onManage={() => setManageGroupOpen(true)}
                       onView={openViewer}
-                      onOpenProfile={(userId, e) => setUserProfilePopup({ userId, x: e.clientX, y: e.clientY })}
+                      onOpenProfile={(userId, e) => { if (canLookUpSender(userId)) setUserProfilePopup({ userId, x: e.clientX, y: e.clientY }); }}
                       inlineButtons={(() => {
                         try { return msg.inline_buttons ? JSON.parse(msg.inline_buttons) : undefined; } catch { return undefined; }
                       })()}
@@ -3344,7 +3357,7 @@ export default function ChatWindow() {
                         <CardBubble
                           msg={msg}
                           isSent={isSent}
-                          onOpenProfile={(userId, e) => setUserProfilePopup({ userId, x: e.clientX, y: e.clientY })}
+                          onOpenProfile={(userId, e) => { if (canLookUpSender(userId)) setUserProfilePopup({ userId, x: e.clientX, y: e.clientY }); }}
                         />
                       )}
                       renderBankCard={() => <BankCardBubble msg={msg} />}
@@ -3610,7 +3623,7 @@ export default function ChatWindow() {
                 {!isEcardMsg && !isGroupedStickerFirst && !isSelecting && (
                 <div className="flex items-center gap-0.5 self-end mb-1 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-100 flex-shrink-0 flex-nowrap">
                   {/* Reply */}
-                  <MsgActionBtn title="Trả lời" onClick={() => setReplyTo(msg)}>
+                  <MsgActionBtn title="Trả lời" onClick={() => replyToMessage(msg)}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
                     </svg>
@@ -3833,7 +3846,7 @@ export default function ChatWindow() {
           isGroupAdmin={contextMenu.isGroupAdmin}
           channelCap={channelCap}
           onClose={() => setContextMenu(null)}
-          onReply={(m) => setReplyTo(m)}
+          onReply={(m) => replyToMessage(m)}
           onForward={(m) => { setForwardMsgs([m]); }}
           onSelectMessages={(m) => { setIsSelecting(true); setSelectedMsgIds(new Set([m.msg_id])); }}
           onUndo={handleUndo}
@@ -3842,6 +3855,8 @@ export default function ChatWindow() {
           onReact={handleReact}
           onPin={handlePin}
           onEdit={(m) => {
+            const refusal = importedActionRefusal(m);
+            if (refusal) { showNotification(refusal, 'error'); setContextMenu(null); return; }
             setEditingMsg(m);
             setContextMenu(null);
           }}
