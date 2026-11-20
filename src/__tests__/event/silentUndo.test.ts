@@ -24,6 +24,18 @@ describe('undo control payload on the message stream', () => {
     expect(sendAware).not.toHaveBeenCalled();
   });
 
+  test('aFailingDatabaseStepStillTellsTheWindowTheMessageWasRecalled', () => {
+    fakeDb.markMessageRecalled.mockImplementation(() => { throw new Error('db down'); });
+    expect(() => EventBroadcaster.broadcastUndo('z1', 'g1', 't1')).not.toThrow();
+    expect(sendAware).toHaveBeenCalledWith('event:undo', { zaloId: 'z1', msgId: 'g1', threadId: 't1' });
+  });
+
+  test('aFailingDatabaseStepStillTellsTheWindowTheMessagesWereDeleted', () => {
+    fakeDb.markMessageRecalled.mockImplementation(() => { throw new Error('db down'); });
+    expect(() => EventBroadcaster.broadcastDeleteMessages('z1', ['g1'], 't1')).not.toThrow();
+    expect(sendAware).toHaveBeenCalledWith('event:delete', { zaloId: 'z1', msgIds: ['g1'], threadId: 't1' });
+  });
+
   test('realtime still broadcasts event:undo', async () => {
     await EventBroadcaster.broadcastMessage('z1', undoMessage);
     expect(fakeDb.markMessageRecalled).toHaveBeenCalledWith('z1', 'g1');

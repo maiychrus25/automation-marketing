@@ -1,3 +1,4 @@
+import { zaloReactionIconToEmoji } from '../../utils/zaloReactions';
 import * as http from 'http';
 import * as crypto from 'crypto';
 import Logger from '../../utils/Logger';
@@ -678,16 +679,7 @@ class HttpClientService {
                 ? String(rMsg[0].gMsgID || rMsg[0].cMsgID || '')
                 : String(rData.msgId || reaction.msgId || '');
             const rawIcon: string = rData.content?.rIcon || reaction.content?.rIcon || reaction.rIcon || rData.rIcon || '';
-            const ICON_MAP: Record<string, string> = {
-                '/-heart': '❤️', '/-strong': '👍', ':>': '😆', ':o': '😮',
-                ':-((':  '😢', ':-h': '😡', ':-*': '😘', ":')": '😂',
-                '/-shit': '💩', '/-rose': '🌹', '/-break': '💔', '/-weak': '👎',
-                ';xx': '😍', ';-/': '😕', ';-)': '😉', '/-fade': '🥱',
-                '_()_': '🙏', '/-no': '🙅', '/-ok': '👌', '/-v': '✌️',
-                '/-thanks': '🙏', '/-punch': '👊', ':-bye': '👋', ':((': '😭',
-                ':))': '😁', '$-)': '🤑',
-            };
-            const emoji = ICON_MAP[rawIcon] || rawIcon;
+            const emoji = zaloReactionIconToEmoji(rawIcon);
 
             if (!userId || !targetMsgId) {
                 Logger.warn(`[HttpClientService] saveRelayReaction: missing userId or targetMsgId`);

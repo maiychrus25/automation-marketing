@@ -26,7 +26,7 @@ interface MessageContextMenuProps {
   showNotification?: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
-const QUICK_REACTIONS = ['❤️', '😆', '😯', '😢', '😡', '👍'];
+const QUICK_REACTIONS = ['❤️', '😆', '😮', '😢', '😡', '👍'];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

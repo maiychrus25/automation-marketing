@@ -4804,22 +4804,22 @@ class DatabaseService {
         if (!this.initialized || !msgId) return;
         const recalledContent = DatabaseService.RECALLED_CONTENT;
 
-        // Lưu nội dung gốc vào recalled_content trước khi ghi đè
-        const existing = this.queryOne<any>(
-            'SELECT msg_id, content FROM messages WHERE owner_zalo_id = ? AND msg_id = ?',
+        // Chỉ tin chưa thu hồi: cùng một lệnh thu hồi thường tới hai lần (bấm ở MaiHub rồi Zalo gửi lại),
+        // lần hai không được ghi đè nội dung gốc trong recalled_content bằng dòng "đã thu hồi".
+        const NOT_RECALLED = "is_recalled = 0 AND msg_type != 'recalled'";
+        const existing = this.queryOne<{ id: number; content: string }>(
+            `SELECT id, content FROM messages WHERE owner_zalo_id = ? AND msg_id = ? AND ${NOT_RECALLED}`,
             [ownerZaloId, String(msgId)]
-        ) || this.queryOne<any>(
-            'SELECT msg_id, content FROM messages WHERE owner_zalo_id = ? AND cli_msg_id = ? AND msg_type != \'recalled\'',
+        ) || this.queryOne<{ id: number; content: string }>(
+            `SELECT id, content FROM messages WHERE owner_zalo_id = ? AND cli_msg_id = ? AND ${NOT_RECALLED}`,
             [ownerZaloId, String(msgId)]
         );
-        const originalContent = existing?.content ?? null;
+        if (!existing) return;
 
-        const SQL = 'UPDATE messages SET is_recalled = 1, msg_type = "recalled", content = ?, recalled_content = ? WHERE owner_zalo_id = ? AND ';
-        if (this.queryOne<any>('SELECT 1 FROM messages WHERE owner_zalo_id = ? AND msg_id = ?', [ownerZaloId, String(msgId)])) {
-            this.run(SQL + `msg_id = ?`, [recalledContent, originalContent, ownerZaloId, String(msgId)]);
-        } else {
-            this.run(SQL + `cli_msg_id = ? AND msg_type != 'recalled'`, [recalledContent, originalContent, ownerZaloId, String(msgId)]);
-        }
+        this.run(
+            "UPDATE messages SET is_recalled = 1, msg_type = 'recalled', content = ?, recalled_content = ? WHERE id = ?",
+            [recalledContent, existing.content ?? null, existing.id]
+        );
     }
 
     /** Nếu tin nhắn bị thu hồi là last_message của conversation, cập nhật preview */

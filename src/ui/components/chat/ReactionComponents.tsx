@@ -106,7 +106,7 @@ function parseReactionsFull(raw: any, channel?: string): { total: number; emoji:
 // ─── Reaction Context Menu ────────────────────────────────────────────────────
 // Right-click on a reaction pill: pick emoji to react or X to cancel current reaction
 
-const REACTION_EMOJIS = ['❤️', '👍', '😄', '😮', '😢', '😡', '😘', '😂', '💩', '🌹', '💔', '👎', '😍', '👌', '✌️', '🙏', '😉', '👋', '🫶', '😭'];
+const REACTION_EMOJIS = ['❤️', '👍', '😆', '😮', '😢', '😡', '😘', '😂', '💩', '🌹', '💔', '👎', '😍', '👌', '✌️', '🙏', '😉', '👋', '🫶', '😭'];
 
 function ReactionContextMenu({ x, y, msg, myEmoji, onClose, onReact, onCancel }: {
   x: number; y: number; msg: any; myEmoji: string | null;

@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useAccountStore } from '@/store/accountStore';
-import { getMessageCacheKey, MessageItem, useChatStore } from '@/store/chatStore';
+import { getMessageCacheKey, getMessageCacheKeysForThread, MessageItem, useChatStore } from '@/store/chatStore';
 import { useAppStore, CachedGroupInfo } from '@/store/appStore';
 import { useCRMStore } from '@/store/crmStore';
 import { useEmployeeStore } from '@/store/employeeStore';
@@ -22,6 +22,8 @@ import Logger from "../../utils/Logger";
 import { extractUserProfile } from "../../utils/profileUtils";
 import { BellIcon, ChartIcon, EditIcon, ImageIcon, LinkIcon, SendIcon, UserCheckIcon, WaveIcon, WifiIcon } from '@/components/common/icons';
 import { toZaloJpgUrl } from '../../utils/zaloImageUrl';
+import { zaloReactionEchoPlan, zaloReactionIconToEmoji } from '../../utils/zaloReactions';
+import { takeSentZaloReaction, windowShowsReaction } from '@/lib/chat/sentZaloReactions';
 
 // ─── Contact fetch cache (7 ngày) ────────────────────────────────────────────
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -111,20 +113,6 @@ async function loadAliases(zaloId: string) {
   }
 }
 
-// ─── Reactions: map từ Zalo Reactions enum value → emoji hiển thị ──────────
-const REACTION_ICON_TO_EMOJI: Record<string, string> = {
-  '/-heart': '❤️', '/-strong': '👍', ':>': '😆', ':o': '😮',
-  ':-((':  '😢', ':-h': '😡', ':-*': '😘', ":')": '😂',
-  '/-shit': '💩', '/-rose': '🌹', '/-break': '💔', '/-weak': '👎',
-  ';xx': '😍', ';-/': '😕', ';-)': '😉', '/-fade': '🥱',
-  '_()_': '🙏', '/-no': '🙅', '/-ok': '👌', '/-v': '✌️',
-  '/-thanks': '🙏', '/-punch': '👊', ':-bye': '👋', ':((':  '😭',
-  ':))': '😁', '$-)': '🤑',
-};
-
-function reactionIconToEmoji(icon: string): string {
-  return REACTION_ICON_TO_EMOJI[icon] || icon;
-}
 
 /**
  * Lấy tên hiển thị của account từ accountStore.
@@ -1406,18 +1394,24 @@ export function useZaloEvents() {
 
       // rIcon: icon reaction (vd: ":>", "/-heart")
       const rawIcon = rData.content?.rIcon || reaction.content?.rIcon || reaction.rIcon || rData.rIcon || '';
-      const emoji = reactionIconToEmoji(rawIcon);
+      const emoji = zaloReactionIconToEmoji(rawIcon);
 
       console.log(`[useZaloEvents] 🎭 reaction: thread=${threadId} targetMsg=${targetMsgId} user=${userId} icon=${rawIcon} → ${emoji}`);
 
       if (threadId && targetMsgId) {
-        // Skip UI update for self-reactions — handleReact() already did optimistic update.
-        // The Zalo webhook echo arrives later and would double the count if we update again.
-        if (!reaction.isSelf) {
-          updateMessageReaction(zaloId, threadId, targetMsgId, userId, emoji);
-        }
-        // Always persist to DB (both self and incoming reactions)
-        DataAccessor.updateReaction({ zaloId, msgId: targetMsgId, userId, emoji: emoji }).catch(() => {});
+        // Bỏ qua cửa sổ chỉ khi chính cửa sổ này vừa gửi cảm xúc đó và vẫn đang hiện nó; chỉ máy Boss ghi DB (xem zaloReactionEchoPlan).
+        const all = useChatStore.getState().messages;
+        const shown = getMessageCacheKeysForThread(all, zaloId, threadId)
+          .flatMap(k => all[k] || []).find(m => String(m.msg_id) === targetMsgId);
+        const plan = zaloReactionEchoPlan({
+          // Chỉ cảm xúc của chính tài khoản mới khớp lần gửi từ đây (cảm xúc của người khác không được lấy mất lượt).
+          sentHere: !!emoji && userId === String(zaloId) && takeSentZaloReaction(zaloId, targetMsgId, emoji),
+          windowShowsIt: windowShowsReaction(shown?.reactions, userId, emoji),
+          emoji,
+          employeeMode: useEmployeeStore.getState().mode === 'employee',
+        });
+        if (plan.updateWindow) updateMessageReaction(zaloId, threadId, targetMsgId, userId, emoji);
+        if (plan.persist) DataAccessor.updateReaction({ zaloId, msgId: targetMsgId, userId, emoji: emoji }).catch(() => {});
       }
     });
 

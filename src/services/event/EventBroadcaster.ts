@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron';
 import * as path from 'path';
+import { zaloReactionIconToEmoji } from '../../utils/zaloReactions';
 import Logger from '../../utils/Logger';
 import { getUndoControlPayload } from './undoControlPayload';
 import DatabaseService from '../database/DatabaseService';
@@ -859,16 +860,7 @@ class EventBroadcaster {
                     ? String(rMsg[0].gMsgID || rMsg[0].cMsgID || '')
                     : String(rData.msgId || reaction.msgId || '');
                 const rawIcon: string = rData.content?.rIcon || reaction.content?.rIcon || reaction.rIcon || rData.rIcon || '';
-                const ICON_MAP: Record<string, string> = {
-                    '/-heart': '❤️', '/-strong': '👍', ':>': '😆', ':o': '😮',
-                    ':-((':  '😢', ':-h': '😡', ':-*': '😘', ":')": '😂',
-                    '/-shit': '💩', '/-rose': '🌹', '/-break': '💔', '/-weak': '👎',
-                    ';xx': '😍', ';-/': '😕', ';-)': '😉', '/-fade': '🥱',
-                    '_()_': '🙏', '/-no': '🙅', '/-ok': '👌', '/-v': '✌️',
-                    '/-thanks': '🙏', '/-punch': '👊', ':-bye': '👋', ':((': '😭',
-                    ':))': '😁', '$-)': '🤑',
-                };
-                const emoji = ICON_MAP[rawIcon] || rawIcon;
+                const emoji = zaloReactionIconToEmoji(rawIcon);
                 if (userId && targetMsgId) {
                     this.runOnBossDb((db) => {
                         db.updateMessageReaction(zaloId, targetMsgId, userId, emoji);
@@ -1334,7 +1326,10 @@ class EventBroadcaster {
      * Broadcast undo message - marks as recalled in DB (keeps the row, changes status/type)
      */
     public static broadcastUndo(zaloId: string, msgId: string, threadId?: string): void {
-        this.markRecalledInBossDb(zaloId, msgId, threadId);
+        // Lỗi ghi DB không được chặn việc báo cửa sổ chat: tin vẫn phải hiện "đã thu hồi" ngay.
+        try { this.markRecalledInBossDb(zaloId, msgId, threadId); } catch (err: any) {
+            Logger.error(`[EventBroadcaster] broadcastUndo DB error: ${err?.message}`);
+        }
         this.sendAware('event:undo', { zaloId, msgId, threadId });
     }
 
@@ -1354,13 +1349,18 @@ class EventBroadcaster {
      */
     public static broadcastDeleteMessages(zaloId: string, msgIds: string[], threadId: string): void {
         if (msgIds.length > 0) {
-            this.runOnBossDb((db) => {
-                for (const msgId of msgIds) {
-                    db.markMessageRecalled(zaloId, String(msgId));
-                    try { db.updateLastMessageIfRecalled(zaloId, threadId, String(msgId)); } catch {}
-                }
-            });
-            Logger.log(`[EventBroadcaster] broadcastDeleteMessages: marked ${msgIds.length} msgs as recalled in thread=${threadId}`);
+            // Như broadcastUndo: lỗi ghi DB không được chặn việc báo cửa sổ chat.
+            try {
+                this.runOnBossDb((db) => {
+                    for (const msgId of msgIds) {
+                        db.markMessageRecalled(zaloId, String(msgId));
+                        try { db.updateLastMessageIfRecalled(zaloId, threadId, String(msgId)); } catch {}
+                    }
+                });
+                Logger.log(`[EventBroadcaster] broadcastDeleteMessages: marked ${msgIds.length} msgs as recalled in thread=${threadId}`);
+            } catch (err: any) {
+                Logger.error(`[EventBroadcaster] broadcastDeleteMessages DB error: ${err?.message}`);
+            }
         }
         this.sendAware('event:delete', { zaloId, msgIds, threadId });
     }

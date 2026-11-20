@@ -30,7 +30,8 @@ import { canLookUpSender, senderDisplayName, showsSenderLabel } from '../../lib/
 import { useEmployeeStore } from '@/store/employeeStore';
 import { ChatIcon } from '@/components/common/icons';
 import { handleAvatarError } from '@/lib/avatarRetry';
-import { EMOJI_TO_REACTION } from '@/lib/chat/emojiUtils';
+import { persistsReactionBeforeEcho, zaloReactionForEmoji } from '../../../utils/zaloReactions';
+import { reactionsSnapshot, rememberSentZaloReaction, takeSentZaloReaction } from '@/lib/chat/sentZaloReactions';
 import { parseContent, parseQuoteMsg, extractQuoteImage, extractMediaUrl, formatMsgTime, extractMsgText, getTelegramMentionRanges } from '@/lib/chat/messageParser';
 import { isCardType, isEcardType, isFileType, isStickerType, isRtfMsg, isMediaType, isVideoType, isVoiceType, isBankCardType } from '@/lib/chat/messageTypeUtils';
 import { NoteViewModal } from './NoteViewModal';
@@ -1997,14 +1998,21 @@ export default function ChatWindow() {
       const contact = contactList.find(c => c.contact_id === msg.thread_id);
       const ch = msg.channel || contact?.channel || CHANNEL.ZALO;
 
+      // Zalo: gửi đúng mã, và hiện tạm đúng emoji Zalo sẽ gửi lại (😄 → 😆); emoji Zalo không có thì không gửi.
+      const zaloReaction = isZalo(ch) ? zaloReactionForEmoji(emoji) : null;
+      if (isZalo(ch) && !zaloReaction) return;
+      if (zaloReaction) emoji = zaloReaction.emoji;
+
       // Optimistic update: show reaction immediately in UI
       const accId = activeAccountId || '';
+      const reactionsBefore = reactionsSnapshot(msg.reactions);
       useChatStore.getState().updateMessageReaction(accId, msg.thread_id, msg.msg_id, accId, emoji);
+      if (zaloReaction) rememberSentZaloReaction(accId, String(msg.msg_id), emoji);
 
-      // Persist reaction to DB immediately (so it survives conversation switch).
-      // Máy nhân viên + Telegram: chờ kết quả lệnh rồi mới ghi vào DB của boss (lệnh lỗi thì không ghi).
+      // Ghi DB ngay để còn khi chuyển hội thoại — trừ Zalo (lần Zalo gửi lại được ghi, ghi ở đây nữa là đếm hai lần)
+      // và Telegram trên máy nhân viên (chờ kết quả lệnh rồi mới ghi vào DB của boss).
       const persistAfterResult = isEmployeeMode && isTelegramChannel(ch);
-      if (!persistAfterResult) DataAccessor.updateReaction?.({ zaloId: accId, msgId: msg.msg_id, userId: accId, emoji }).catch(() => {});
+      if (persistsReactionBeforeEcho(ch, isEmployeeMode)) DataAccessor.updateReaction?.({ zaloId: accId, msgId: msg.msg_id, userId: accId, emoji }).catch(() => {});
 
       if (isNonZalo(ch)) {
         const res = await channelIpc.addReaction(ch, {
@@ -2030,15 +2038,25 @@ export default function ChatWindow() {
           }
         }
       } else if (isZalo(ch)) {
+        // Zalo không nhận (chưa kết nối, lỗi, từ chối): trả cảm xúc của tin về đúng như trước khi bấm và báo.
+        // DB chưa được ghi vì chỉ ghi khi Zalo gửi lại.
+        const undoZaloReaction = (reason: string) => {
+          takeSentZaloReaction(accId, String(msg.msg_id), emoji);
+          useChatStore.getState().replaceMessageReactions(accId, msg.thread_id, msg.msg_id, reactionsBefore);
+          showNotification(`Không thả được cảm xúc: ${reason}`, 'error');
+        };
         const auth = getAuth();
-        if (!auth) return;
-        const reactionKey = EMOJI_TO_REACTION[emoji] || 'HEART';
+        if (!auth) { undoZaloReaction('tài khoản Zalo chưa kết nối'); return; }
+        const reactionKey = zaloReaction!.key;
         const messagePayload = JSON.stringify({
           data: { msgId: msg.msg_id, cliMsgId: msg.cli_msg_id || msg.msg_id },
           threadId: msg.thread_id,
           type: msg.thread_type,
         });
-        await ipc.zalo?.addReaction({ auth, reactionType: reactionKey, message: messagePayload });
+        let zaloRes: any;
+        try { zaloRes = await ipc.zalo?.addReaction({ auth, reactionType: reactionKey, message: messagePayload }); }
+        catch (err: any) { undoZaloReaction(err?.message || 'lỗi kết nối'); return; }
+        if (zaloRes?.success !== true) undoZaloReaction(zaloRes?.error || 'Zalo từ chối');
       }
 
     } catch {}
@@ -3484,7 +3502,7 @@ export default function ChatWindow() {
                             <div className="flex items-center gap-0.5">
                               {(isTelegramCh(msg.channel)
                                 ? ['👍', '👎', '❤️', '🔥', '🥰', '👏', '😁', '🤔', '🤯', '😢', '🎉']
-                                : ['❤️', '😄', '😮', '😢', '😡', '👍']).map((e) => (
+                                : ['❤️', '😆', '😮', '😢', '😡', '👍']).map((e) => (
                                 <button key={e}
                                   onClick={() => { handleReact(msg, e); setReactionPickerMsgId(null); }}
                                   className={`text-xl p-1 rounded-lg hover:bg-gray-700 hover:scale-125 transition-all ${myEmoji === e ? 'bg-gray-700 ring-1 ring-blue-400' : ''}`}

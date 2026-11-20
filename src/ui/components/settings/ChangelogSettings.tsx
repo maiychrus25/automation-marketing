@@ -15,6 +15,25 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.50.1',
+    date: '11/2026',
+    type: 'patch',
+    highlights: [
+      '🛠️ Zalo: tin bị thu hồi không còn hiện nội dung, cảm xúc không bị đếm trùng, tin thoại gửi đi nghe được',
+    ],
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Khi người khác thu hồi tin nhắn Zalo, MaiHub vẫn hiện nguyên nội dung. Giờ tin chuyển ngay thành "Tin nhắn đã bị thu hồi". Tin bạn thu hồi từ MaiHub cũng không còn hiện lại khi mở lại hội thoại. Các tin đã bị thu hồi trước bản này vẫn giữ nội dung cũ.',
+          'Thả một cảm xúc Zalo nhưng MaiHub hiện số 2: MaiHub ghi cảm xúc của bạn hai lần (lúc bấm và lúc Zalo xác nhận). Giờ mỗi cảm xúc chỉ được tính một lần. Cảm xúc bạn thả từ điện thoại cũng hiện ngay trong MaiHub. Nếu Zalo không nhận cảm xúc, MaiHub gỡ nó và báo cho bạn. Số đếm đã sai trước bản này không được sửa lại.',
+          'Chọn 😆 hoặc 😯 trong menu chuột phải từng gửi đi thành ❤️. Giờ gửi đúng cảm xúc bạn chọn, và cảm xúc hiện trên máy khớp với cảm xúc Zalo ghi nhận.',
+          'Tin thoại gửi từ MaiHub sang Zalo không phát được vì sai định dạng âm thanh. Giờ MaiHub tự chuyển đoạn ghi âm sang định dạng Zalo dùng trước khi gửi.',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.50.0',
     date: '11/2026',
     type: 'minor',

@@ -79,6 +79,7 @@ import {GetGroupLinkDetailResponse} from "zca-js/dist/apis/getGroupLinkDetail";
 import {imageSize} from "image-size";
 import {convertThreadType, isImageFile} from "../../utils/Utils";
 import Logger from "../../utils/Logger";
+import {voiceFileForZalo} from "./voiceToAac";
 
 
 interface Auth {
@@ -1296,14 +1297,17 @@ export default class ZaloService {
      */
     public async uploadVoiceFile(voicePath: string, threadId: string, type?: ThreadType): Promise<any> {
         if (!this.api) throw new Error("API not initialized");
+        const voice = await voiceFileForZalo(voicePath);
         try {
             const threadType = convertThreadType(type);
-            const result = await this.api.uploadAttachment([voicePath], threadId, threadType);
+            const result = await this.api.uploadAttachment([voice.path], threadId, threadType);
             const resp = Array.isArray(result) ? result[0] : result;
             Logger.info(`[ZaloService] uploadVoiceFile raw result: ${JSON.stringify(resp)}`);
             return resp;
         } catch (error: any) {
             throw new Error('uploadVoiceFile error: ' + error.message);
+        } finally {
+            voice.cleanup();
         }
     }
 
