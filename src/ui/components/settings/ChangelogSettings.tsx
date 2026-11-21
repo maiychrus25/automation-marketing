@@ -15,6 +15,25 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.52.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🔒 Mật khẩu proxy và khoá phiên nhân viên được cất mã hoá trên máy; bỏ bản sao cookie Facebook dạng thô',
+    ],
+    changes: [
+      {
+        category: 'security',
+        items: [
+          'Mật khẩu proxy và khoá đăng nhập của nhân viên giờ được lưu mã hoá trên máy bạn, không còn nằm dạng chữ thường trong dữ liệu của MaiHub. Bản sao cookie Facebook dạng chữ thường cũng đã bị bỏ; cookie chỉ còn trong kho mã hoá. Dữ liệu cũ được chuyển đổi tự động, chỉ khi kho mật khẩu của máy đang dùng được; nếu chưa thì MaiHub thử lại ở lần mở sau.',
+          'Lưu ý với Facebook: nếu kho mật khẩu của máy bị mất (cài lại hệ điều hành, đổi tài khoản người dùng, đặt lại chuỗi khoá), bạn cần đăng nhập lại Facebook bằng nút "Đăng nhập bằng trình duyệt"; không còn bản sao thô để dự phòng.',
+          'Cửa sổ chính của MaiHub chạy trong chế độ cách ly (sandbox) để giảm thiệt hại nếu có nội dung độc hại lọt vào.',
+          'Lưu ý: nếu sau này quay về bản cũ hơn 26.52.0, bạn cần nhập lại mật khẩu proxy.',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.51.0',
     date: '11/2026',
     type: 'minor',

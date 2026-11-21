@@ -4,11 +4,8 @@
  * Data được mã hóa bởi OS (Windows Credential Manager / macOS Keychain).
  * Chỉ app này trên đúng máy này mới giải mã được.
  */
-import { safeStorage } from 'electron';
 import DatabaseService from '../database/DatabaseService';
-import Logger from '../../utils/Logger';
-
-const ENC_PREFIX = 'enc:';
+import { encryptSecret, decryptSecret } from './secretCodec';
 
 /** Cho phép ghi/đọc vào DB khác DB mặc định (vd. DB boss). */
 export type SettingsDb = Pick<DatabaseService, 'getSetting' | 'setSetting'>;
@@ -21,20 +18,7 @@ export function secureSet(key: string, value: string, db: SettingsDb = DatabaseS
         db.setSetting(key, '');
         return;
     }
-    if (!safeStorage.isEncryptionAvailable()) {
-        // Fallback: lưu plaintext với warning (hiếm gặp - OS không hỗ trợ keychain)
-        Logger.warn(`[SecureSettings] safeStorage unavailable - storing "${key}" as plaintext`);
-        db.setSetting(key, value);
-        return;
-    }
-    try {
-        const encrypted = safeStorage.encryptString(value).toString('base64');
-        db.setSetting(key, `${ENC_PREFIX}${encrypted}`);
-    } catch (err: any) {
-        Logger.error(`[SecureSettings] Encrypt failed for "${key}": ${err.message}`);
-        // Fallback to plaintext rather than losing data
-        db.setSetting(key, value);
-    }
+    db.setSetting(key, encryptSecret(value));
 }
 
 /**
@@ -45,18 +29,8 @@ export function secureGet(key: string, db: SettingsDb = DatabaseService.getInsta
     const raw = db.getSetting(key);
     if (!raw) return null;
 
-    if (raw.startsWith(ENC_PREFIX)) {
-        try {
-            const buf = Buffer.from(raw.slice(ENC_PREFIX.length), 'base64');
-            return safeStorage.decryptString(buf);
-        } catch (err: any) {
-            Logger.warn(`[SecureSettings] Decrypt failed for "${key}" - may be from different machine: ${err.message}`);
-            return null;
-        }
-    }
-
-    // Plaintext cũ (chưa migrate) - trả về nguyên
-    return raw;
+    // Plaintext cũ (chưa migrate) được trả nguyên; `enc:` lỗi giải mã → null
+    return decryptSecret(raw);
 }
 
 /**

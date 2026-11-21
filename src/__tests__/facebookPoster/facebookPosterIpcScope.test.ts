@@ -45,7 +45,7 @@ let mockDatabaseInstance = {
 };
 
 jest.mock('uuid', () => ({ v4: () => 'test-uuid' }));
-jest.mock('electron', () => ({ dialog: {}, ipcMain: { handle: jest.fn() } }));
+jest.mock('electron', () => ({ dialog: {}, ipcMain: { handle: jest.fn() }, safeStorage: { isEncryptionAvailable: () => false } }));
 jest.mock('../../services/database/DatabaseService', () => ({
     __esModule: true,
     default: {

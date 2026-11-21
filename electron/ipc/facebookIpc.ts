@@ -252,13 +252,6 @@ export async function applyFbAccountCookie(accountId: string, rawCookie: string,
     // Update cookie in secure storage
     secureSet(fbCookieKey(internalId), cookie);
 
-    // Update cookie_encrypted fallback (raw cookie) để reconnect vẫn hoạt động
-    // khi safeStorage key thay đổi
-    DatabaseService.getInstance().run(
-      `UPDATE fb_accounts SET cookie_encrypted = ?, updated_at = ? WHERE id = ?`,
-      [cookie, Date.now(), internalId]
-    );
-
     // Update session + profile
     DatabaseService.getInstance().updateFBAccountSession(internalId, JSON.stringify(sessionData));
     DatabaseService.getInstance().updateFBAccountProfile(internalId, name, avatarUrl, fbId);
@@ -355,7 +348,7 @@ export function registerFacebookIpc(): void {
       facebook_id: fbId,
       name,
       avatar_url: avatarUrl,
-      cookie_encrypted: cookie,
+      cookie_encrypted: '', // cookie chỉ nằm trong kho bảo mật fb_cookie_<id>
       session_data: JSON.stringify(sessionData),
       status: 'disconnected',
     });

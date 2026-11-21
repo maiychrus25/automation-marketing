@@ -3,6 +3,8 @@ import * as jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import DatabaseService from '../database/DatabaseService';
 import Logger from '../../utils/Logger';
+import { secureGet, secureSet } from '../secure/SecureSettingsService';
+import { ENC_PREFIX } from '../secure/secretCodec';
 import { JWT_SECRET_VERSION, planJwtSecretInit, tokenIssuedAtMs, evaluateEmployeeToken, nextRevocationMark } from './employeeTokenPolicy';
 import type { Employee, EmployeePermission, EmployeeWithDetails, EmployeeModule } from '../../models';
 
@@ -28,17 +30,25 @@ class EmployeeService {
 
     private initJwtSecret(): void {
         this.runOnDb((db) => {
-            const existing = db.getSetting?.('employee_jwt_secret') || null;
+            const stored = db.getSetting?.('employee_jwt_secret') || null;
+            const existing = secureGet('employee_jwt_secret', db);
+            if (stored && !existing && stored.startsWith(ENC_PREFIX)) {
+                // Kho khoá có thể đang khoá: không ghi đè khoá thật, chỉ dùng khoá tạm cho phiên này.
+                this.jwtSecret = uuidv4() + '-' + uuidv4();
+                Logger.warn('[EmployeeService] Employee signing key unreadable (key store locked?) - using a temporary key for this session');
+                return;
+            }
             const rawVersion = db.getSetting?.('employee_jwt_secret_version');
             const version = rawVersion ? Number(rawVersion) : null;
             const plan = planJwtSecretInit(existing, version !== null && Number.isFinite(version) ? version : null);
             if (plan === 'keep') {
                 this.jwtSecret = existing as string;
+                if (stored && !stored.startsWith(ENC_PREFIX)) secureSet('employee_jwt_secret', this.jwtSecret, db); // encrypt a legacy plain key in place
                 return;
             }
             // Khoá cũ từng đọc được qua relay nên coi là đã lộ: đổi đúng một lần cho mỗi cơ sở dữ liệu.
             this.jwtSecret = uuidv4() + '-' + uuidv4();
-            db.setSetting?.('employee_jwt_secret', this.jwtSecret);
+            secureSet('employee_jwt_secret', this.jwtSecret, db);
             db.setSetting?.('employee_jwt_secret_version', String(JWT_SECRET_VERSION));
             if (plan === 'rotate') Logger.warn('[EmployeeService] Employee signing key rotated (reason=legacy_key)');
         });

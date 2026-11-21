@@ -1,5 +1,7 @@
 import * as jwt from 'jsonwebtoken';
 
+jest.mock('electron', () => ({ safeStorage: { isEncryptionAvailable: () => false } }));
+
 // Cơ sở dữ liệu giả trong bộ nhớ: chỉ những phương thức mà EmployeeService gọi.
 const mockSettings = new Map<string, string>();
 const mockEmployees = new Map<string, any>();

@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { app, safeStorage } from 'electron';
 import Logger from '../../utils/Logger';
+import { ENC_PREFIX, encryptSecret, decryptSecret } from '../secure/secretCodec';
 import { toZaloJpgUrl } from '../../utils/zaloImageUrl';
 import BetterSqlite3 from 'better-sqlite3';
 import type { Account, Message, Contact, CRMNote, CRMCampaign, CRMCampaignContact, CRMSendLog, CRMCampaignStatus, CRMContactStatus } from '../../models';
@@ -140,6 +141,7 @@ class DatabaseService {
             this.migrate();
             this.migrateFTS5();
             this.migrateMediaLibrary();
+            this.migrateSecretsAtRest();
             this.initErpSchema();
             this.initialized = true;
             Logger.log(`[DatabaseService] Initialized at ${this.dbPath} (better-sqlite3, WAL mode)`);
@@ -176,6 +178,7 @@ class DatabaseService {
                         this.migrate();
                         this.migrateFTS5();
                         this.migrateMediaLibrary();
+                        this.migrateSecretsAtRest();
                         this.initErpSchema();
                         this.initialized = true;
                         Logger.warn(`[DatabaseService] Created fresh DB after recovery. Backup at: ${backupPath}`);
@@ -330,6 +333,7 @@ class DatabaseService {
             this.migrate();
             this.migrateFTS5();
             this.migrateMediaLibrary();
+            this.migrateSecretsAtRest();
             this.initErpSchema();
             this.initialized = true;
 
@@ -3074,7 +3078,7 @@ class DatabaseService {
         const result = db!.prepare(
             `INSERT INTO proxies (name, type, host, port, username, password, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(proxy.name, proxy.type, proxy.host, proxy.port, proxy.username || '', proxy.password || '', now, now);
+        ).run(proxy.name, proxy.type, proxy.host, proxy.port, proxy.username || '', encryptSecret(proxy.password || ''), now, now);
         return result.lastInsertRowid as number;
     }
 
@@ -3088,7 +3092,7 @@ class DatabaseService {
         if (proxy.host !== undefined) { sets.push('host = ?'); vals.push(proxy.host); }
         if (proxy.port !== undefined) { sets.push('port = ?'); vals.push(proxy.port); }
         if (proxy.username !== undefined) { sets.push('username = ?'); vals.push(proxy.username); }
-        if (proxy.password !== undefined) { sets.push('password = ?'); vals.push(proxy.password); }
+        if (proxy.password !== undefined) { sets.push('password = ?'); vals.push(encryptSecret(proxy.password)); }
         if (sets.length === 0) return;
         sets.push('updated_at = ?'); vals.push(now);
         vals.push(id);
@@ -3102,6 +3106,14 @@ class DatabaseService {
         db!.prepare(`DELETE FROM proxies WHERE id = ?`).run(id);
     }
 
+    /** Giải mã mật khẩu proxy khi đọc; lỗi giải mã → '' (không bao giờ trả chuỗi `enc:`). */
+    private decryptProxyRow<T extends { id?: number; password?: string } | null | undefined>(row: T): T {
+        if (!row) return row;
+        const plain = decryptSecret(row.password);
+        if (plain === null) Logger.warn(`[DatabaseService] proxy password could not be decrypted (id=${row.id})`);
+        return { ...row, password: plain ?? '' };
+    }
+
     /** Lấy danh sách proxies kèm số tài khoản đang dùng */
     public getProxies(): any[] {
         return this.query<any>(
@@ -3110,12 +3122,12 @@ class DatabaseService {
              LEFT JOIN accounts a ON a.proxy_id = p.id AND a.is_active = 1
              GROUP BY p.id
              ORDER BY p.created_at DESC`
-        );
+        ).map(r => this.decryptProxyRow(r));
     }
 
     /** Lấy proxy theo id */
     public getProxyById(id: number): any | null {
-        return this.queryOne<any>('SELECT * FROM proxies WHERE id = ?', [id]) || null;
+        return this.decryptProxyRow(this.queryOne<any>('SELECT * FROM proxies WHERE id = ?', [id])) || null;
     }
 
     /** Gắn/gỡ proxy cho tài khoản */
@@ -3125,12 +3137,12 @@ class DatabaseService {
 
     /** Lấy proxy đang gắn với tài khoản (null nếu không có) */
     public getAccountProxy(zaloId: string): any | null {
-        return this.queryOne<any>(
+        return this.decryptProxyRow(this.queryOne<any>(
             `SELECT p.* FROM proxies p
              INNER JOIN accounts a ON a.proxy_id = p.id
              WHERE a.zalo_id = ?`,
             [zaloId]
-        ) || null;
+        )) || null;
     }
 
     // ─── Browser profiles ─────────────────────────────────────────────────────
@@ -4881,6 +4893,44 @@ class DatabaseService {
     }
 
     // ─── Settings Operations ──────────────────────────────────────────────
+
+    /**
+     * Mã hoá bí mật còn ở dạng thô trong DB (một lần, một transaction). Chạy trước khi `initialized`
+     * nên dùng queryOne/run trực tiếp. Lỗi chỉ ghi cảnh báo, không chặn mở app. Mở rộng: thêm phần mới vào transaction.
+     */
+    public migrateSecretsAtRest(): void {
+        const key = 'secrets_at_rest_migrated';
+        try {
+            if (this.queryOne<{ value: string }>('SELECT value FROM app_settings WHERE key = ?', [key])?.value === 'done') return;
+            if (!safeStorage.isEncryptionAvailable()) return;
+            let deferred = false;
+            this.transaction(() => {
+                const rows = this.query<{ id: number; password: string }>(
+                    `SELECT id, password FROM proxies WHERE password != '' AND password NOT LIKE '${ENC_PREFIX}%'`);
+                for (const r of rows) this.run('UPDATE proxies SET password = ? WHERE id = ?', [encryptSecret(r.password), r.id]);
+                const fbRows = this.query<{ id: string; cookie_encrypted: string }>(
+                    `SELECT id, cookie_encrypted FROM fb_accounts WHERE cookie_encrypted != ''`);
+                for (const r of fbRows) {
+                    const storeKey = `fb_cookie_${r.id}`;
+                    const stored = this.queryOne<{ value: string }>('SELECT value FROM app_settings WHERE key = ?', [storeKey])?.value;
+                    if (stored?.startsWith(ENC_PREFIX) && !decryptSecret(stored)) { deferred = true; continue; } // kho chưa đọc được: giữ nguyên, thử lại lần mở sau
+                    if (!decryptSecret(stored)) {
+                        this.run(
+                            `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+                             ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+                            [storeKey, encryptSecret(r.cookie_encrypted)]);
+                    }
+                    this.run(`UPDATE fb_accounts SET cookie_encrypted = '' WHERE id = ?`, [r.id]);
+                }
+                if (deferred) return;
+                this.run(
+                    `INSERT INTO app_settings (key, value, updated_at) VALUES (?, 'done', datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value='done', updated_at=datetime('now')`, [key]);
+            });
+        } catch (err: any) {
+            Logger.warn(`[DatabaseService] secrets-at-rest migration failed: ${err.message}`);
+        }
+    }
 
     public getSetting(key: string): string | null {
         if (!this.initialized) return null;
@@ -8123,6 +8173,7 @@ class DatabaseService {
 
     // ── FB Accounts ──
 
+    // cookie_encrypted bị bỏ qua: cookie chỉ nằm trong kho mã hoá `fb_cookie_<id>`.
     public saveFBAccount(account: {
         id: string; facebook_id: string; name: string; avatar_url: string;
         cookie_encrypted: string; session_data: string; status: string;
@@ -8136,7 +8187,7 @@ class DatabaseService {
               cookie_encrypted = excluded.cookie_encrypted, session_data = excluded.session_data,
               status = excluded.status, updated_at = excluded.updated_at
         `, [account.id, account.facebook_id, account.name, account.avatar_url,
-            account.cookie_encrypted, account.session_data, account.status, now, now, now]);
+            '' /* không lưu cookie thô; cookie nằm ở app_settings fb_cookie_<id> */, account.session_data, account.status, now, now, now]);
     }
 
     public getFBAccounts(): any[] {

@@ -69,4 +69,11 @@ describe('Facebook cookie update', () => {
     expect(mockSecureSet).toHaveBeenCalledWith(`fb_cookie_${ACC}`, COOKIE);
     expect(mockRecordEvent).toHaveBeenCalledWith({ accountId: ACC, kind: 'cookie_updated', detail: 'by=browser' });
   });
+
+  test('applyFbAccountCookieNoLongerWritesThePlainCopy', async () => {
+    await expect(call({ accountId: ACC, cookie: COOKIE })).resolves.toEqual({ success: true });
+    const sqls = mockDb.run.mock.calls.map(c => String(c[0]));
+    expect(sqls.some(q => q.includes('cookie_encrypted'))).toBe(false);
+    expect(JSON.stringify(mockDb.run.mock.calls)).not.toContain(COOKIE);
+  });
 });
