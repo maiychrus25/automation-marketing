@@ -7,6 +7,10 @@
 import { ipcMain as electronIpcMain } from 'electron';
 import { employeeRoutedIpcMain } from './proxyHelper';
 import { v4 as uuid } from 'uuid';
+import { randomUUID } from 'crypto';
+import { BOSS_ONLY_CHANNEL_CODE, BOSS_ONLY_CHANNEL_ERROR } from '../../src/services/http/employeeChannelRoutes';
+import { ensureLoginProfile } from '../../src/services/facebook/browserLogin/loginProfile';
+import { runBrowserLogin } from '../../src/services/facebook/browserLogin/runBrowserLogin';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import FacebookHistorySyncService from '../../src/services/facebook/FacebookHistorySyncService';
 import FacebookConnectionManager from '../../src/utils/FacebookConnectionManager';
@@ -59,6 +63,82 @@ function cancelHistorySync(internalId: string, facebookId?: string | null): void
     const sync = FacebookHistorySyncService.getInstance();
     for (const key of new Set([facebookId, internalId])) if (key) sync.cancel(String(key));
   } catch { /* best-effort */ }
+}
+
+/** Mỗi tài khoản chỉ một lần đăng nhập bằng trình duyệt tại một thời điểm. */
+const browserLogins = new Map<string, AbortController>();
+
+const abortableSleep = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done);
+  });
+
+async function loginWithBrowser(p: any): Promise<any> {
+  if (p?._fromRelay === true) return { success: false, code: BOSS_ONLY_CHANNEL_CODE, error: BOSS_ONLY_CHANNEL_ERROR };
+  const invalid = { success: false, code: 'INVALID', error: 'Tham số không hợp lệ' };
+  if (typeof p?.accountId !== 'string') return invalid;
+  const accountId: string = p.accountId;
+  const db = DatabaseService.getInstance();
+  const internalId = resolveInternalId(accountId);
+  const account = db.getFBAccount(internalId);
+  if (!account || !/^\d+$/.test(String(account.facebook_id ?? ''))) return invalid;
+  if (account.parent_facebook_id) {
+    return { success: false, code: 'PAGE_ACCOUNT', error: 'Page dùng cookie của tài khoản cá nhân. Hãy đăng nhập ở tài khoản cá nhân.' };
+  }
+  if (browserLogins.has(internalId)) return { success: false, code: 'IN_PROGRESS', error: 'Đang đăng nhập bằng trình duyệt cho tài khoản này' };
+
+  // Nạp muộn để browserProfileIpc không nằm trong đồ thị import của facebookIpc.
+  const { getBrowserProfileService, isBrowserEngineInstalled } = require('./browserProfileIpc');
+  if (!isBrowserEngineInstalled()) {
+    return { success: false, code: 'ENGINE_MISSING', error: 'Chưa cài trình duyệt của MaiHub. Vào mục Hồ sơ trình duyệt để cài.' };
+  }
+  const controller = new AbortController();
+  browserLogins.set(internalId, controller);
+  try {
+    const profileId = ensureLoginProfile({
+      db, internalId, accountName: account.name || String(account.facebook_id), proxyId: resolveFBProxyId(account), newId: randomUUID,
+    });
+    const service = getBrowserProfileService();
+    if (service.isRunning(profileId)) {
+      return { success: false, code: 'PROFILE_BUSY', error: 'Hồ sơ đăng nhập đang mở. Đóng cửa sổ đó rồi thử lại.' };
+    }
+    const result = await runBrowserLogin({
+      expectedFacebookId: String(account.facebook_id),
+      signal: controller.signal,
+      sleep: (ms) => abortableSleep(ms, controller.signal),
+      now: Date.now,
+      applyCookie: (cookie) => applyFbAccountCookie(internalId, cookie, 'browser'),
+      onStatus: (status, detail) => EventBroadcaster.emit('fb:browserLoginStatus', { accountId, status, ...(detail ? { detail } : {}) }),
+      open: async () => {
+        const session = await service.openForAutomation(profileId);
+        try {
+          const { context } = session;
+          let closed = false;
+          context.on('close', () => { closed = true; });
+          const page = context.pages()[0] ?? await context.newPage();
+          await page.goto('https://www.facebook.com/').catch(() => undefined);
+          return {
+            readCookies: () => context.cookies('https://www.facebook.com'),
+            isClosed: () => closed,
+            close: () => session.close(),
+          };
+        } catch (e) {
+          await session.close().catch(() => undefined); // không để cửa sổ mở và hồ sơ kẹt "đang chạy"
+          throw e;
+        }
+      },
+    });
+    Logger.log(`[facebookIpc] fb:loginWithBrowser ${internalId}: ${'code' in result ? result.code : 'OK'}`);
+    return result;
+  } catch (err: any) {
+    Logger.error(`[facebookIpc] fb:loginWithBrowser ${internalId} failed: ${err?.code ?? 'ERROR'}`);
+    return { success: false, code: 'OPEN_FAILED', error: err?.message || 'Không mở được trình duyệt' };
+  } finally {
+    browserLogins.delete(internalId);
+  }
 }
 
 export function resolveInternalId(accountId: string): string {
@@ -125,6 +205,78 @@ function proxyAgentFor(proxyId: number | null | undefined): any {
     }
   } catch {}
   return undefined;
+}
+
+/**
+ * Lưu cookie mới cho tài khoản Facebook cá nhân: kiểm cookie còn sống, ghi kho bảo mật + DB, kết nối lại các Page con.
+ * `by` ghi vào sự kiện phiên: 'user' = dán tay, 'browser' = đăng nhập bằng trình duyệt.
+ */
+export async function applyFbAccountCookie(accountId: string, rawCookie: string, by: 'user' | 'browser'): Promise<{ success: boolean; error?: string; problem?: string }> {
+  try {
+    const internalId = resolveInternalId(accountId);
+    const account = DatabaseService.getInstance().getFBAccount(internalId);
+    if (!account) return { success: false, error: 'Tài khoản không tồn tại' };
+    if (account.parent_facebook_id) {
+      return { success: false, error: 'Page dùng cookie của tài khoản cha. Hãy cập nhật cookie ở tài khoản cá nhân.' };
+    }
+    const cookie = stripPageCookie(rawCookie);
+
+    // Verify cookie alive + init session
+    // Mọi yêu cầu bằng cookie của tài khoản đi qua proxy của chính tài khoản đó (kể cả lần kiểm tra trước khi kết nối).
+    const httpsAgent = proxyAgentFor(resolveFBProxyId(account));
+    let sessionData: Awaited<ReturnType<typeof initSession>>;
+    try {
+      sessionData = await initSession(cookie, httpsAgent);
+    } catch (initErr: any) {
+      const problem = initErr?.fbSessionProblem;
+      recordCookieCheck(internalId, cookieCheckDetail(isTransientFacebookError(initErr) ? { state: 'unknown' } : { state: 'expired', problem }));
+      Logger.error(`[facebookIpc] fb:updateCookie error: ${initErr.message}`);
+      return { success: false, error: initErr.message, ...(problem ? { problem } : {}) };
+    }
+    recordCookieCheck(internalId, 'alive');
+    const fbId = sessionData.FacebookID;
+    if (!fbId || !fbId.match(/^\d+$/) || fbId.includes('Unable')) {
+      return { success: false, error: 'Cookie không hợp lệ hoặc đã hết hạn' };
+    }
+
+    // Fetch updated profile
+    let name = account.name || fbId;
+    let avatarUrl = account.avatar_url || '';
+    try {
+      const html = await fetchFBHomepage(cookie, httpsAgent);
+      const profile = await fetchBasicProfileFromHome(html);
+      if (profile.name) name = profile.name;
+      if (profile.avatarUrl) avatarUrl = profile.avatarUrl;
+    } catch {}
+
+    // Update cookie in secure storage
+    secureSet(fbCookieKey(internalId), cookie);
+
+    // Update cookie_encrypted fallback (raw cookie) để reconnect vẫn hoạt động
+    // khi safeStorage key thay đổi
+    DatabaseService.getInstance().run(
+      `UPDATE fb_accounts SET cookie_encrypted = ?, updated_at = ? WHERE id = ?`,
+      [cookie, Date.now(), internalId]
+    );
+
+    // Update session + profile
+    DatabaseService.getInstance().updateFBAccountSession(internalId, JSON.stringify(sessionData));
+    DatabaseService.getInstance().updateFBAccountProfile(internalId, name, avatarUrl, fbId);
+
+    // Update unified accounts table (zalo_id = fbId)
+    DatabaseService.getInstance()['run'](
+      `UPDATE accounts SET full_name = ?, avatar_url = ? WHERE zalo_id = ?`,
+      [name, avatarUrl, fbId]
+    );
+
+    reconnectPageChildren(account.facebook_id).catch(() => {});
+    recordFbSessionEvent({ accountId: internalId, kind: 'cookie_updated', detail: `by=${by}` });
+    Logger.log(`[facebookIpc] fb:updateCookie success for ${internalId}`);
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[facebookIpc] fb:updateCookie error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
 }
 
 /**
@@ -324,72 +476,13 @@ export function registerFacebookIpc(): void {
   /**
    * Cập nhật cookie cho tài khoản Facebook hiện có
    */
-  ipcMain.handle('fb:updateCookie', async (_event, { accountId, cookie }: { accountId: string; cookie: string }) => {
-    try {
-      const internalId = resolveInternalId(accountId);
-      const account = DatabaseService.getInstance().getFBAccount(internalId);
-      if (!account) return { success: false, error: 'Tài khoản không tồn tại' };
-      if (account.parent_facebook_id) {
-        return { success: false, error: 'Page dùng cookie của tài khoản cha. Hãy cập nhật cookie ở tài khoản cá nhân.' };
-      }
-      cookie = stripPageCookie(cookie);
+  ipcMain.handle('fb:updateCookie', async (_event, { accountId, cookie }: { accountId: string; cookie: string }) =>
+    applyFbAccountCookie(accountId, cookie, 'user'));
 
-      // Verify cookie alive + init session
-      // Mọi yêu cầu bằng cookie của tài khoản đi qua proxy của chính tài khoản đó (kể cả lần kiểm tra trước khi kết nối).
-      const httpsAgent = proxyAgentFor(resolveFBProxyId(account));
-      let sessionData: Awaited<ReturnType<typeof initSession>>;
-      try {
-        sessionData = await initSession(cookie, httpsAgent);
-      } catch (initErr: any) {
-        const problem = initErr?.fbSessionProblem;
-        recordCookieCheck(internalId, cookieCheckDetail(isTransientFacebookError(initErr) ? { state: 'unknown' } : { state: 'expired', problem }));
-        Logger.error(`[facebookIpc] fb:updateCookie error: ${initErr.message}`);
-        return { success: false, error: initErr.message, ...(problem ? { problem } : {}) };
-      }
-      recordCookieCheck(internalId, 'alive');
-      const fbId = sessionData.FacebookID;
-      if (!fbId || !fbId.match(/^\d+$/) || fbId.includes('Unable')) {
-        return { success: false, error: 'Cookie không hợp lệ hoặc đã hết hạn' };
-      }
-
-      // Fetch updated profile
-      let name = account.name || fbId;
-      let avatarUrl = account.avatar_url || '';
-      try {
-        const html = await fetchFBHomepage(cookie, httpsAgent);
-        const profile = await fetchBasicProfileFromHome(html);
-        if (profile.name) name = profile.name;
-        if (profile.avatarUrl) avatarUrl = profile.avatarUrl;
-      } catch {}
-
-      // Update cookie in secure storage
-      secureSet(fbCookieKey(internalId), cookie);
-
-      // Update cookie_encrypted fallback (raw cookie) để reconnect vẫn hoạt động
-      // khi safeStorage key thay đổi
-      DatabaseService.getInstance().run(
-        `UPDATE fb_accounts SET cookie_encrypted = ?, updated_at = ? WHERE id = ?`,
-        [cookie, Date.now(), internalId]
-      );
-
-      // Update session + profile
-      DatabaseService.getInstance().updateFBAccountSession(internalId, JSON.stringify(sessionData));
-      DatabaseService.getInstance().updateFBAccountProfile(internalId, name, avatarUrl, fbId);
-
-      // Update unified accounts table (zalo_id = fbId)
-      DatabaseService.getInstance()['run'](
-        `UPDATE accounts SET full_name = ?, avatar_url = ? WHERE zalo_id = ?`,
-        [name, avatarUrl, fbId]
-      );
-
-      reconnectPageChildren(account.facebook_id).catch(() => {});
-      recordFbSessionEvent({ accountId: internalId, kind: 'cookie_updated', detail: 'by=user' });
-      Logger.log(`[facebookIpc] fb:updateCookie success for ${internalId}`);
-      return { success: true };
-    } catch (err: any) {
-      Logger.error(`[facebookIpc] fb:updateCookie error: ${err.message}`);
-      return { success: false, error: err.message };
-    }
+  ipcMain.handle('fb:loginWithBrowser', (_event, p) => loginWithBrowser(p));
+  ipcMain.handle('fb:cancelBrowserLogin', (_event, p) => {
+    if (typeof p?.accountId === 'string') browserLogins.get(resolveInternalId(p.accountId))?.abort();
+    return { success: true };
   });
 
   /**

@@ -56,7 +56,7 @@ const LOCAL_NAMES = [
 ];
 
 const BOSS_ONLY_NAMES = [
-    'addAccount', 'addAccountWithCredentials', 'removeAccount', 'updateCookie', 'refreshProfile', 'getAccounts', 'listPages',
+    'addAccount', 'addAccountWithCredentials', 'removeAccount', 'updateCookie', 'loginWithBrowser', 'cancelBrowserLogin', 'refreshProfile', 'getAccounts', 'listPages',
     'setPageEnabled', 'connect', 'disconnect', 'checkHealth', 'loginWithCredentials',
     'unsendMessage', 'editMessage', 'forwardMessage', 'pinMessage', 'unpinMessage', 'createPoll', 'votePoll', 'createNote',
     'changeThreadName', 'changeThreadEmoji', 'changeThreadTheme', 'changeNickname', 'blockUser', 'unblockUser',

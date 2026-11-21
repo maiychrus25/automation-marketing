@@ -531,6 +531,8 @@ declare global {
         addAccountWithCredentials: (params: { username: string; password: string; twoFASecret?: string; proxyId?: number | null }) => Promise<{ success: boolean; need2FA?: boolean; account?: any; facebookId?: string; name?: string; error?: string; errorTitle?: string }>;
         removeAccount:        (params: { accountId: string }) => Promise<{ success: boolean; error?: string }>;
         updateCookie:         (params: { accountId: string; cookie: string }) => Promise<{ success: boolean; error?: string; problem?: FbSessionProblem }>;
+        loginWithBrowser:     (params: { accountId: string }) => Promise<{ success: true } | { success: false; code: string; error: string }>;
+        cancelBrowserLogin:   (params: { accountId: string }) => Promise<{ success: true }>;
         refreshProfile:       (params: { accountId: string }) => Promise<{ success: boolean; name?: string; avatarUrl?: string; error?: string, facebookId?: string }>;
         listPages:            (params: { accountId: string }) => Promise<{ success: boolean; pages?: Array<{ profileId: string; name: string; delegatePageId: string | null; avatarUrl: string | null; enabled: boolean }>; error?: string }>;
         setPageEnabled:       (params: { accountId: string; profileId: string; enabled: boolean }) => Promise<{ success: boolean; error?: string }>;

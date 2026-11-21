@@ -473,6 +473,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addAccountWithCredentials: (params: { username: string; password: string; twoFASecret?: string; proxyId?: number | null }) => ipcRenderer.invoke('fb:addAccountWithCredentials', params),
     removeAccount:       (params: { accountId: string }) => ipcRenderer.invoke('fb:removeAccount', params),
     updateCookie:        (params: { accountId: string; cookie: string }) => ipcRenderer.invoke('fb:updateCookie', params),
+    loginWithBrowser:    (params: { accountId: string }) => ipcRenderer.invoke('fb:loginWithBrowser', params),
+    cancelBrowserLogin:  (params: { accountId: string }) => ipcRenderer.invoke('fb:cancelBrowserLogin', params),
     refreshProfile:      (params: { accountId: string }) => ipcRenderer.invoke('fb:refreshProfile', params),
     listPages:           (params: { accountId: string }) => ipcRenderer.invoke('fb:listPages', params),
     setPageEnabled:      (params: { accountId: string; profileId: string; enabled: boolean }) => ipcRenderer.invoke('fb:setPageEnabled', params),
@@ -810,6 +812,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'employee:modeChanged',
       // ─── Facebook events ─────────────────────────────────────────────
       'fb:onMessage',
+      'fb:browserLoginStatus',
       'fb:onReaction',
       'fb:onEdit',
       'fb:onUnsend',

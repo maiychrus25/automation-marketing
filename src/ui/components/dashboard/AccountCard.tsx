@@ -19,6 +19,8 @@ import type { Channel } from '@/../configs/channelConfig';
 import { channelSupports, resolveAccountChannel, getChannelLabel } from '@/../configs/channelConfig';
 import * as channelIpc from '@/lib/channelIpc';
 import { fbCookieExpiredMessage } from '@/lib/employeeAccounts';
+import { useEmployeeStore } from '@/store/employeeStore';
+import { browserLoginStatusText } from '@/lib/facebook/browserLoginView';
 
 interface AccountCardProps {
   account: AccountInfo;
@@ -32,6 +34,48 @@ function FBUpdateCookieModal({ accountId, name, onClose }: { accountId: string; 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { showNotification } = useAppStore();
+  const isEmployee = useEmployeeStore(s => s.mode) === 'employee';
+  const [browserStatus, setBrowserStatus] = useState('');
+  const browserRunning = useRef(false);
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    const off = ipc.on?.('fb:browserLoginStatus', (d: { accountId: string; status: string; detail?: string }) => {
+      if (d?.accountId === accountId) setBrowserStatus(browserLoginStatusText(d.status, d.detail));
+    });
+    return () => {
+      off?.();
+      if (browserRunning.current) ipc.fb?.cancelBrowserLogin({ accountId }).catch(() => {});
+    };
+  }, [accountId]);
+
+  const handleBrowserLogin = async () => {
+    browserRunning.current = true;
+    setRunning(true);
+    setError('');
+    setBrowserStatus(browserLoginStatusText('opening'));
+    try {
+      const res = await ipc.fb?.loginWithBrowser({ accountId });
+      if (res?.success) {
+        showNotification('Cập nhật cookie Facebook thành công!', 'success');
+        ipc.fb?.connect({ accountId }).catch(() => {});
+        onClose();
+      } else if (res && res.success === false && res.code !== 'CANCELLED') {
+        setError(res.error || 'Đăng nhập bằng trình duyệt thất bại');
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      browserRunning.current = false;
+      setRunning(false);
+      setBrowserStatus('');
+    }
+  };
+
+  const handleCancel = () => {
+    if (browserRunning.current) ipc.fb?.cancelBrowserLogin({ accountId }).catch(() => {});
+    onClose();
+  };
 
   const handleSave = async () => {
     if (!cookie.trim()) { setError('Vui lòng dán cookie mới'); return; }
@@ -54,21 +98,29 @@ function FBUpdateCookieModal({ accountId, name, onClose }: { accountId: string; 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]" onClick={running ? undefined : handleCancel}>
       <div className="bg-gray-800 rounded-xl w-full max-w-sm p-5 border border-gray-700 shadow-2xl" onClick={e => e.stopPropagation()}>
         <h3 className="text-white font-semibold mb-3">Cập nhật Cookie Facebook</h3>
+        {!isEmployee && (
+          <>
+            <button onClick={handleBrowserLogin} disabled={running || loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 rounded-lg mb-2 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">
+              {running ? 'Đang chờ đăng nhập...' : 'Đăng nhập bằng trình duyệt'}
+            </button>
+            <p aria-live="polite" className="text-gray-300 text-xs mb-2 break-words empty:hidden">{browserStatus}</p>
+          </>
+        )}
         <textarea
           value={cookie}
           onChange={e => { setCookie(e.target.value); setError(''); }}
           placeholder="c_user=...; xs=...; datr=..."
           rows={5}
           className="input-field text-xs resize-none font-mono w-full"
-          disabled={loading}
+          disabled={loading || running}
         />
         {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
         <div className="flex gap-2 mt-3">
-          <button onClick={onClose} className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs py-2 rounded-lg">Hủy</button>
-          <button onClick={handleSave} disabled={loading || !cookie.trim()} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 rounded-lg disabled:opacity-50">
+          <button onClick={handleCancel} className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs py-2 rounded-lg">Hủy</button>
+          <button onClick={handleSave} disabled={loading || running || !cookie.trim()} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 rounded-lg disabled:opacity-50">
             {loading ? 'Đang lưu...' : 'Lưu'}
           </button>
         </div>

@@ -15,6 +15,22 @@ interface VersionEntry {
 // ─── Changelog data - thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.51.0',
+    date: '11/2026',
+    type: 'minor',
+    highlights: [
+      '🌐 Facebook: cập nhật cookie bằng cách đăng nhập trong trình duyệt, không cần tự dán',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Trong hộp thoại "Cập nhật Cookie Facebook" có nút "Đăng nhập bằng trình duyệt". Bấm vào, MaiHub mở một cửa sổ trình duyệt riêng cho tài khoản, bạn đăng nhập Facebook ở đó và MaiHub tự lấy cookie rồi lưu lại. MaiHub không lưu mật khẩu của bạn. Nếu bạn đăng nhập nhầm tài khoản, MaiHub sẽ nhắc đăng nhập lại đúng tài khoản. Chờ tối đa 10 phút; lần sau trình duyệt vẫn nhớ phiên đăng nhập cũ. Chỉ Boss dùng được, và cần bộ máy trình duyệt của MaiHub (cài trong mục "Hồ sơ trình duyệt").',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.50.1',
     date: '11/2026',
     type: 'patch',
